@@ -1,0 +1,7 @@
+__pycache__/
+config/
+models/
+outputs/
+secrets/
+temp/
+.env

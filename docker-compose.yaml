@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    volumes:
+      - open-webui:/app/backend/data
+    ports:
+      - 3000:8080
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - local-network
+
+volumes:
+  open-webui:
+
+networks:
+  local-network:
+    external: true
