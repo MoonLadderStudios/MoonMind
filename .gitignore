@@ -5,3 +5,6 @@ outputs/
 secrets/
 temp/
 .env
+
+# Temp exclude
+chatchat-server/
