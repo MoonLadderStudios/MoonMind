@@ -17,7 +17,6 @@ def test_integration_invoke():
         pytest.skip("No GOOGLE_API_KEY set; skipping integration test.")
 
     # Initialize the GoogleLLM with no explicit api_key to pull from env
-    # Or pass `api_key=api_key` if you prefer to do so explicitly.
     google_llm = GoogleLLM(model_name="gemini-2.0-flash-exp")
 
     # Minimal test messages
@@ -28,10 +27,16 @@ def test_integration_invoke():
 
     # Invoke the real API
     response = google_llm.invoke(messages)
-    print(f"Integration test response: {response}")
 
-    # We expect a non-empty response
+    # Print the full response object and its components
+    print("Integration test response (invoke):")
+    print(f"  Content: {response.content}")
+    print(f"  Additional kwargs: {response.additional_kwargs}")
+    print(f"  Metadata: {response.response_metadata}")
+
+    # Assert that a response was returned
     assert response is not None, "Expected a non-empty response from the API."
+
 
 @pytest.mark.integration
 def test_integration_stream():
@@ -50,13 +55,19 @@ def test_integration_stream():
         ("human", "Hello! Please respond with a short multi-sentence reply so we can test streaming.")
     ]
 
+    # Stream the response from the real API
     stream_generator = google_llm.stream(messages)
 
-    # Collect chunks for verification
-    chunks = list(stream_generator)
     print("Integration test stream chunks:")
-    for idx, chunk in enumerate(chunks, start=1):
-        print(f"Chunk {idx}: {chunk}")
+    chunks = []  # Collect chunks here
 
-    # We expect at least one chunk
+    for idx, chunk in enumerate(stream_generator, start=1):
+        # Print each chunk with its details
+        print(f"  Chunk {idx}:")
+        print(f"    Content: {chunk.content}")
+        print(f"    Additional kwargs: {chunk.additional_kwargs}")
+        print(f"    Metadata: {chunk.response_metadata}")
+        chunks.append(chunk)  # Collect chunk for later assertions
+
+    # Assert that at least one chunk was returned
     assert len(chunks) > 0, "Expected at least one chunk from the streaming response."
