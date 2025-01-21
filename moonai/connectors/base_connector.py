@@ -4,6 +4,9 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, Generator, List, Optional
 
+# Optional: If you want to type-hint specifically for LangChain Document:
+from langchain.schema import Document as LangChainDocument
+
 
 class BaseDocument:
     """Standardized document format across all connectors"""
@@ -32,12 +35,38 @@ class BaseDocument:
         }) + "\n"
 
     @classmethod
-    def from_llama_document(cls, doc, source: str = None):
-        """Convert a LlamaIndex document to BaseDocument"""
+    def from_llama_document(cls, doc, source: Optional[str] = None):
+        """
+        Convert a LlamaIndex Document into a BaseDocument.
+        Retained here for backward compatibility with any LlamaIndex-based flows.
+        """
         return cls(
             text=doc.text,
             metadata=doc.metadata or {},
             id=doc.id_ if hasattr(doc, 'id_') else None,
+            source=source
+        )
+
+    @classmethod
+    def from_langchain_document(cls, doc, source: Optional[str] = None, doc_id: Optional[str] = None):
+        """
+        Convert a LangChain Document (langchain.schema.Document) into a BaseDocument.
+        :param doc: LangChain Document instance
+        :param source: Overwrite or set the "source" field in metadata
+        :param doc_id: Optionally specify an ID; if not provided, we'll look in doc.metadata
+        """
+        # A typical LangChain Document has "page_content" for text, and "metadata" for the rest.
+        text = getattr(doc, "page_content", "")
+        metadata = getattr(doc, "metadata", {}) or {}
+
+        # If doc_id is not explicitly provided, try to pull from metadata["id"] or default to None.
+        if not doc_id:
+            doc_id = metadata.get("id")
+
+        return cls(
+            text=text,
+            metadata=metadata,
+            id=doc_id,
             source=source
         )
 
@@ -47,10 +76,10 @@ class BaseConnector(ABC):
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
 
-    # @abstractmethod
-    # def stream_documents(self, **kwargs) -> Generator[BaseDocument, None, None]:
-    #     """Stream documents from the source"""
-    #     pass
+    @abstractmethod
+    def stream_documents(self, **kwargs) -> Generator[BaseDocument, None, None]:
+        """Stream documents from the source"""
+        pass
 
     def to_ndjson_stream(self, **kwargs) -> Generator[str, None, None]:
         """Convert document stream to NDJSON format"""
@@ -64,8 +93,14 @@ class BaseConnector(ABC):
     ) -> Generator[List[BaseDocument], None, None]:
         """Batch documents from the stream"""
         batch = []
+        count = 0
+
         for doc in self.stream_documents(**kwargs):
             batch.append(doc)
+            count += 1
+            # Log progress optionally
+            self._log_progress(count)
+
             if len(batch) >= batch_size:
                 yield batch
                 batch = []
@@ -73,10 +108,13 @@ class BaseConnector(ABC):
             yield batch
 
     def test_connection(self) -> tuple[bool, Optional[str]]:
-        """Test connection to the source"""
+        """Test connection to the source by attempting to retrieve one document."""
         try:
-            # Try to get one document to test connection
             next(self.stream_documents())
+            return True, None
+        except StopIteration:
+            # If your connector doesn't always guarantee documents,
+            # you may treat an empty source as a success or handle differently.
             return True, None
         except Exception as e:
             return False, str(e)
