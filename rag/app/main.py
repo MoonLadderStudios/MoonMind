@@ -8,17 +8,16 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from llama_index.core import Document as LlamaDocument
-from moonai.config.logging import logger
-from moonai.config.settings import settings
-from moonai.connectors.qdrant_connector import QdrantConnector
 from pydantic import BaseModel, Field
-
 from routers.chat import router as chat_router
 from routers.common import init_router
 from routers.index import router as index_router
 from routers.models import router as models_router
 from routers.multimodal import router as multimodal_router
+
+from moonai.config.logging import logger
+from moonai.config.settings import settings
+from moonai.connectors.qdrant_connector import QdrantConnector
 
 logger.info("Starting FastAPI...")
 

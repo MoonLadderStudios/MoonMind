@@ -81,6 +81,20 @@ class BaseConnector(ABC):
         """Stream documents from the source"""
         pass
 
+    def index_documents(self, documents: List[BaseDocument], **kwargs):
+        """
+        Optional method for connectors that support document indexing.
+        Vector stores should implement this.
+        """
+        raise NotImplementedError("This connector does not support document indexing")
+
+    def query(self, query_string: str, **kwargs):
+        """
+        Optional method for connectors that support querying.
+        Vector stores should implement this.
+        """
+        raise NotImplementedError("This connector does not support querying")
+
     def to_ndjson_stream(self, **kwargs) -> Generator[str, None, None]:
         """Convert document stream to NDJSON format"""
         for doc in self.stream_documents(**kwargs):

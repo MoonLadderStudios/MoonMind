@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  pytest:
+  downloader:
     build:
       context: .
       dockerfile: ./rag/Dockerfile
@@ -10,10 +10,11 @@ services:
     environment:
       - PYTHONPATH=/app
     volumes:
+      - ./models:/app/models
       - ./moonai:/app/moonai
-      - ./tests:/app/tests
+      - ./scripts:/app/scripts
     working_dir: /app
-    command: ["bash", "-c", "pip install pytest && pytest -s /app/tests/${TEST_TYPE}"]
+    entrypoint: ["bash", "-c", "/app/scripts/get-qwen.sh"]
     networks:
       - local-network
 

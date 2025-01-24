@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import List, Optional, Tuple
+from typing import Generator, List, Optional, Tuple
 
 from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import Qdrant
@@ -9,23 +9,8 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Distance, VectorParams
 from urllib3.exceptions import TimeoutError
 
+from .base_connector import BaseConnector, BaseDocument
 
-# Suppose you have a base connector and base document:
-# from .base_connector import BaseConnector, BaseDocument
-# For demonstration, we'll just define stubs here.
-class BaseConnector:
-    def __init__(self, logger=None):
-        self.logger = logger or logging.getLogger(__name__)
-
-class BaseDocument:
-    def __init__(self, id: str, text: str, metadata: dict = None):
-        self.id = id
-        self.text = text
-        self.metadata = metadata or {}
-
-########################################
-# 1) Custom Embeddings Implementation  #
-########################################
 
 class CustomLangChainEmbeddings(Embeddings):
     """
@@ -44,10 +29,6 @@ class CustomLangChainEmbeddings(Embeddings):
     def embed_query(self, text: str) -> List[float]:
         return self.model.get_text_embedding(text)
 
-
-########################################
-# 2) QdrantConnector (LangChain-based) #
-########################################
 
 class QdrantConnector(BaseConnector):
     def __init__(
@@ -262,3 +243,22 @@ class QdrantConnector(BaseConnector):
                 if attempt == self.retries - 1:
                     return False, str(e)
                 time.sleep(self.retry_delay)
+
+    def stream_documents(self, **kwargs) -> Generator[BaseDocument, None, None]:
+        """
+        Implement the abstract method from BaseConnector.
+        This will be used to stream documents from Qdrant.
+        """
+        if not self.model_loaded:
+            self.load_model()
+
+        # Get search parameters from kwargs
+        query = kwargs.get('query', '')
+        top_k = kwargs.get('top_k', 5)
+
+        # Get documents from Qdrant
+        results = self.qdrant.similarity_search(query, k=top_k)
+
+        # Convert LangChain documents to BaseDocuments
+        for doc in results:
+            yield BaseDocument.from_langchain_document(doc)

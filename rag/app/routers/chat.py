@@ -6,9 +6,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from llama_index.core.llms import ChatMessage
+from langchain.schema import (AIMessage, BaseMessage, HumanMessage,
+                              SystemMessage)
+
 from moonai.config.logging import logger
-from moonai.llms.gemini import GeminiLLM
+from moonai.llms.google_llm import GoogleLLM
 from moonai.models.models import ChatCompletionRequest
 
 from .common import extract_node_content, get_qdrant
@@ -16,6 +18,7 @@ from .common import extract_node_content, get_qdrant
 router = APIRouter()
 
 GEMINI_MODEL = getenv("GEMINI_MODEL", "gemini/gemini-2.0-flash-exp")
+
 
 async def _enrich_query(request: ChatCompletionRequest) -> tuple[str, str, int, int]:
     """
@@ -25,28 +28,19 @@ async def _enrich_query(request: ChatCompletionRequest) -> tuple[str, str, int, 
     # Validate messages in the request
     messages = request.messages
     if not messages:
-        raise HTTPException(
-            status_code=400,
-            detail="No messages provided in the request"
-        )
+        raise HTTPException(status_code=400, detail="No messages provided in the request")
 
     # Find the last user message
     user_messages = [msg for msg in messages if msg["role"].lower() == "user"]
     if not user_messages:
-        raise HTTPException(
-            status_code=400,
-            detail="No user messages found in the request"
-        )
+        raise HTTPException(status_code=400, detail="No user messages found in the request")
 
     query = user_messages[-1]["content"]
     logger.info(f"Starting Qdrant query with input: {query}")
 
     # Ensure Qdrant is initialized
     if not get_qdrant():
-        raise HTTPException(
-            status_code=500,
-            detail="Qdrant connector not initialized"
-        )
+        raise HTTPException(status_code=500, detail="Qdrant connector not initialized")
 
     # Query Qdrant and extract results
     result1, result2 = get_qdrant().dual_query(query)
@@ -80,6 +74,7 @@ async def _enrich_query(request: ChatCompletionRequest) -> tuple[str, str, int, 
 
     return content, prompt_tokens, completion_tokens
 
+
 @router.post("/chat/completions")
 @router.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, authorization: Optional[str] = Header(None)):
@@ -99,39 +94,32 @@ async def chat_completions(request: ChatCompletionRequest, authorization: Option
         }
 
         # Initialize GeminiLLM with the correct model name format
-        llm = GeminiLLM(
+        llm = GoogleLLM(
             model=GEMINI_MODEL,
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7
         )
 
         # Update system message to use content directly
         messages = request.messages.copy()
-        system_message = {
-            "role": "system",
-            "content": f"Here is some relevant context for the conversation:\n\n{content}"
-        }
-        messages.insert(0, system_message)
-
-        # Convert messages to LlamaIndex ChatMessage format
-        chat_messages = [
-            ChatMessage(
-                role="model" if msg["role"] == "assistant" else msg["role"],  # Gemini expects "model" instead of "assistant"
-                content=msg["content"]
-            ) for msg in messages
+        system_message = SystemMessage(content=f"Here is some relevant context for the conversation:\n\n{content}")
+        langchain_messages = [
+            system_message,
+            *[HumanMessage(content=msg["content"]) if msg["role"] == "user" else AIMessage(content=msg["content"])
+              for msg in messages]
         ]
 
         if request.stream:
             async def stream_generator():
                 try:
-                    async for chunk in llm.stream_chat(chat_messages):
-                        if chunk.delta is not None:
+                    async for chunk in llm.stream(langchain_messages):
+                        if chunk:
                             data = {
                                 'id': context['id'],
                                 'object': 'chat.completion.chunk',
                                 'created': context['created'],
                                 'model': request.model,
                                 'choices': [{
-                                    'delta': {'content': str(chunk.delta)},
+                                    'delta': {'content': str(chunk)},
                                     'index': 0,
                                     'finish_reason': None
                                 }]
@@ -139,7 +127,6 @@ async def chat_completions(request: ChatCompletionRequest, authorization: Option
                             yield f"data: {json.dumps(data)}\n\n"
 
                     # Send the final chunk with [DONE]
-                    yield f"data: {json.dumps(data)}\n\n"
                     yield "data: [DONE]\n\n"
                 except Exception as e:
                     logger.error(f"Error in stream_generator: {str(e)}")
@@ -148,7 +135,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: Option
             return StreamingResponse(stream_generator(), media_type="text/event-stream")
         else:
             # Get response from Gemini
-            response = await llm.achat(chat_messages)
+            response = await llm.invoke(langchain_messages)
 
             # Format response in OpenAI-compatible format
             return {
@@ -160,7 +147,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: Option
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": response.message.content
+                        "content": response.content
                     },
                     "finish_reason": "stop"
                 }],
@@ -170,6 +157,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: Option
     except Exception as e:
         logger.error(f"Error in chat_completions: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/chat/enrich-query")
 @router.get("/v1/chat/enrich-query")
