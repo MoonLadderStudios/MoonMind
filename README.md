@@ -20,7 +20,7 @@ If using the default Ollama container, an NVIDIA GPU with appropriate drivers is
 The API container is an OpenAI-compatible REST API, powered by FastAPI andLangChain, that employs Dependency Injection with abstract interfaces to enable modular service selection.
 
 Pydantic settings allow you to configure:
-- one chat model, e.g. gemini-2.O-flash-thinking-exp-01-21
+- one chat model, e.g. gemini-2.0-flash-thinking-exp-01-21
 - one embedding model, e.g. hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K
 - one vector store, e.g. Qdrant
 - multiple document loaders
