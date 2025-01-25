@@ -1,8 +1,7 @@
 import os
 
 import pytest
-
-from moonai.llms.google_llm import GoogleLLM
+from moonmind.llms.google_llm import GoogleLLM
 
 
 @pytest.mark.integration

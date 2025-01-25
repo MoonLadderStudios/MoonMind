@@ -5,8 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain.schema import Document as LangChainDocument
-
-from moonai.connectors.base_connector import BaseConnector, BaseDocument
+from moonmind.connectors.base_connector import BaseConnector, BaseDocument
 
 #
 # Tests for BaseDocument

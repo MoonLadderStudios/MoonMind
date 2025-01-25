@@ -4,14 +4,14 @@ services:
   downloader:
     build:
       context: .
-      dockerfile: ./rag/Dockerfile
+      dockerfile: ./fastapi/Dockerfile
     env_file:
       - .env
     environment:
       - PYTHONPATH=/app
     volumes:
       - ./models:/app/models
-      - ./moonai:/app/moonai
+      - ./moonmind:/app/moonmind
       - ./scripts:/app/scripts
     working_dir: /app
     entrypoint: ["bash", "-c", "/app/scripts/get-qwen.sh"]

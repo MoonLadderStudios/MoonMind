@@ -1,1 +1,1 @@
-docker-compose run --rm --entrypoint "python /app/moonai/download_models.py" rag
+docker-compose run --rm --entrypoint "python /app/moonmind/download_models.py" rag

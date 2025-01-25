@@ -8,7 +8,7 @@ services:
     ports:
       - 8080:8080
     environment:
-      - OPENAI_API_BASE_URL=http://rag:8000/v1
+      - OPENAI_API_BASE_URL=http://api:8000/v1
       # - OPENAI_API_KEY=dummy-key
     env_file:
       - .env
@@ -16,10 +16,10 @@ services:
     networks:
       - local-network
 
-  rag:
+  api:
     build:
       context: .
-      dockerfile: ./rag/Dockerfile
+      dockerfile: ./fastapi/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -30,23 +30,9 @@ services:
       - .env
     volumes:
       - ./models:/app/models
-      - ./rag/app/main.py:/app/main.py:ro
-      - ./rag/app/routers:/app/routers:ro
-      - ./moonai:/app/moonai:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    shm_size: "2g"
-    ipc: host
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      stack: 67108864
+      - ./fastapi/api:/app/api:ro
+      - ./fastapi/main.py:/app/main.py:ro
+      - ./moonmind:/app/moonmind:ro
     command: >
       sh -c "
       if [ \"$FASTAPI_RELOAD\" = \"True\" ]; then

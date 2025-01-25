@@ -5,8 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-from moonai.llms.google_llm import GoogleLLM
+from moonmind.llms.google_llm import GoogleLLM
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/pytorch:24.10-py3
+FROM python:3.12-slim-bookworm
 
 # Set working directory in the container
 WORKDIR /app
@@ -7,7 +7,7 @@ WORKDIR /app
 RUN pip install watchfiles
 
 # Copy requirements and install dependencies
-COPY requirements.txt .
+COPY fastapi/requirements.txt .
 RUN pip install -r requirements.txt
 
 # Expose the port the API will run on

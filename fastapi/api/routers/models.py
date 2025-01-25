@@ -2,7 +2,7 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
-from .common import get_qdrant
+from moonmind.config.settings import settings
 
 router = APIRouter(tags=["models"])
 
@@ -19,14 +19,14 @@ async def models():
             "object": "list",
             "data": [
                 {
-                    "id": "Local",
+                    "id": settings.app_name,
                     "object": "model",
                     "created": int(time.time()),
-                    "owned_by": "moonquery",
+                    "owned_by": settings.app_name,
                     "permission": [],
-                    "root": "Local",
+                    "root": settings.app_name,
                     "parent": None,
-                    "context_window": 4096,
+                    "context_window": 4096, # TODO: get from somewhere
                     "capabilities": {
                         "chat_completion": True,
                         "text_completion": True
@@ -34,14 +34,5 @@ async def models():
                 }
             ]
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/models/load")
-@router.get("/v1/models/load")
-async def load_models():
-    try:
-        get_qdrant().load_models()
-        return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

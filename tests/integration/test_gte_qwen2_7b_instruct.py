@@ -1,7 +1,6 @@
 import pytest
 import requests
-
-from moonai.embeddings.gte_qwen2_7b_instruct import GTEQwen27BInstruct
+from moonmind.embeddings.ollama_embeddings import GTEQwen27BInstruct
 
 
 @pytest.fixture(scope="module")
