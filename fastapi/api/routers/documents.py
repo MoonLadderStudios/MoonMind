@@ -1,10 +1,10 @@
+import logging
 from typing import Dict, List, Optional
 
 from langchain.vectorstores import VectorStore
 from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException
-from moonmind.config.logging import logger
 from moonmind.config.settings import settings
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.models.documents_models import ConfluenceLoadRequest
@@ -12,6 +12,7 @@ from moonmind.models.documents_models import ConfluenceLoadRequest
 from ..dependencies import get_vector_store
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # TODO: There should be a way to load specific documents or load a space
 
@@ -28,7 +29,8 @@ async def load_confluence_documents(
             username=settings.confluence.confluence_username,
             space_key=request.space_key,
             include_attachments=request.include_attachments,
-            limit=request.limit
+            limit=request.limit,
+            logger=logger
         )
 
         ids = confluence_indexer.index_space(vector_store=vector_store)
@@ -38,5 +40,5 @@ async def load_confluence_documents(
             "message": f"Loaded {len(ids)} documents from Confluence workspace {request.space_key}"
         }
     except Exception as e:
-        logger.error(f"Error loading Confluence documents: {str(e)}")
+        logger.exception(f"Error loading Confluence documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))

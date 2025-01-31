@@ -1,4 +1,12 @@
+# main.py
+import logging
 from uuid import uuid4
+
+# Configure logging before any other imports that may use logging.
+from moonmind.config.logging import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 from api.routers.chat import router as chat_router
 from api.routers.documents import router as documents_router
@@ -6,7 +14,6 @@ from api.routers.models import router as models_router
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from moonmind.config.logging import logger
 from moonmind.config.settings import settings
 from moonmind.factories.chat_factory import build_chat_provider
 from moonmind.factories.embeddings_factory import build_embeddings_provider
@@ -32,7 +39,7 @@ app.add_middleware(
 )
 
 @app.middleware("http")
-async def add_debug_headers(request, call_next):
+async def add_debug_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Debug-Stream"] = str(getattr(request.state, "stream", False))
     response.headers["X-Debug-ContentType"] = response.headers.get("content-type", "none")
@@ -68,4 +75,3 @@ def teardown_providers():
     Optional: If your providers need explicit cleanup, do it here.
     """
     pass
-

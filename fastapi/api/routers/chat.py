@@ -1,14 +1,15 @@
+import logging
 import time
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from moonmind.config.logging import logger
 from moonmind.factories.google_factory import get_google_model
 from moonmind.models.chat_models import (ChatCompletionRequest,
                                          ChatCompletionResponse, Choice,
                                          ChoiceMessage, Usage)
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
@@ -56,7 +57,7 @@ async def chat_completions(request: ChatCompletionRequest):
         return response
 
     except Exception as e:
-        logger.error(f"Error in chat_completions: {e}")
+        logger.exception(f"Error in chat_completions: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"An internal error occurred: {str(e)}"

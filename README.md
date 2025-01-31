@@ -29,6 +29,8 @@ Pydantic settings allow you to configure:
 - one vector store, e.g. Qdrant
 - multiple document loaders
 
+Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
+
 ## Roadmap
 
 The long-term goal of MoonMind is to provide strong defaults that support a one-click deployment, while also offering modularity and runtime configurability. Generally speaking, we prioritize customizability over extremely low latency due to our focus on internal company use cases over consumer applications.

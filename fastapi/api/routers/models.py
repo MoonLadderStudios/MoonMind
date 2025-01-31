@@ -1,10 +1,11 @@
+import logging
 import time
 
 from fastapi import APIRouter, HTTPException
-
 from moonmind.config.settings import settings
 
 router = APIRouter(tags=["models"])
+logger = logging.getLogger(__name__)
 
 @router.get("/health")
 @router.head("/health")
@@ -35,4 +36,5 @@ async def models():
             ]
         }
     except Exception as e:
+        logger.exception(f"Error getting models: {e}")
         raise HTTPException(status_code=500, detail=str(e))
