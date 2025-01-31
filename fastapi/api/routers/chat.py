@@ -4,9 +4,9 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from moonmind.config.logging import logger
 from moonmind.factories.google_factory import get_google_model
-from moonmind.models.models import (ChatCompletionRequest,
-                                    ChatCompletionResponse, Choice,
-                                    ChoiceMessage, Usage)
+from moonmind.models.chat_models import (ChatCompletionRequest,
+                                         ChatCompletionResponse, Choice,
+                                         ChoiceMessage, Usage)
 
 router = APIRouter()
 

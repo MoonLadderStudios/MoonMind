@@ -14,6 +14,7 @@ def build_vector_store_provider(settings: AppSettings, embeddings):
 
 
 def build_qdrant_provider(settings: AppSettings, embeddings):
+    # TODO: Do we want to support multiple collections per deployment?
     # Initialize Qdrant client
     client = QdrantClient(host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port)
 

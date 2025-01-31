@@ -9,6 +9,7 @@ from moonmind.config.logging import logger
 from moonmind.config.settings import settings
 from moonmind.factories.chat_factory import build_chat_provider
 from moonmind.factories.embeddings_factory import build_embeddings_provider
+from moonmind.factories.indexers_factory import build_indexers
 from moonmind.factories.vector_store_factory import build_vector_store_provider
 
 logger.info("Starting FastAPI...")
@@ -50,6 +51,9 @@ async def setup():
         app.state.chat_provider = build_chat_provider(settings)
         app.state.embeddings_provider = build_embeddings_provider(settings)
         app.state.vector_store_provider = build_vector_store_provider(settings, app.state.embeddings_provider)
+
+        # Setup document loaders
+        app.state.indexers = build_indexers(settings)
 
         # Setup routers
         app.include_router(chat_router)
