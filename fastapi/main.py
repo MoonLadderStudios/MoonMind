@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from api.routers.chat import router as chat_router
+from api.routers.documents import router as documents_router
 from api.routers.models import router as models_router
 
 from fastapi import FastAPI, Request
@@ -10,7 +11,7 @@ from moonmind.config.settings import settings
 from moonmind.factories.chat_factory import build_chat_provider
 from moonmind.factories.embeddings_factory import build_embeddings_provider
 from moonmind.factories.indexers_factory import build_indexers
-from moonmind.factories.vector_store_factory import build_vector_store_provider
+from moonmind.factories.vector_store_factory import build_vector_store
 
 logger.info("Starting FastAPI...")
 
@@ -50,13 +51,11 @@ async def setup():
         # Setup providers
         app.state.chat_provider = build_chat_provider(settings)
         app.state.embeddings_provider = build_embeddings_provider(settings)
-        app.state.vector_store_provider = build_vector_store_provider(settings, app.state.embeddings_provider)
-
-        # Setup document loaders
-        app.state.indexers = build_indexers(settings)
+        app.state.vector_store = build_vector_store(settings, app.state.embeddings_provider)
 
         # Setup routers
         app.include_router(chat_router)
+        app.include_router(documents_router)
         app.include_router(models_router)
 
     except Exception as e:

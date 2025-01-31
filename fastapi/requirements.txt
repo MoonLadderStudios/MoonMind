@@ -12,6 +12,7 @@ langchain-ollama
 langchain-openai
 langchain-qdrant
 langsmith
+lxml
 pydantic
 pydantic-settings
 pytest

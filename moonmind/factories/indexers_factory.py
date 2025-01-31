@@ -1,3 +1,4 @@
+from moonmind.config.settings import AppSettings
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 
 

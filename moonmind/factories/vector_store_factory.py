@@ -6,14 +6,14 @@ from qdrant_client.http.models import Distance, VectorParams
 from ..config.settings import AppSettings
 
 
-def build_vector_store_provider(settings: AppSettings, embeddings):
+def build_vector_store(settings: AppSettings, embeddings):
     if settings.vector_store_provider == "qdrant":
-        return build_qdrant_provider(settings, embeddings)
+        return build_qdrant(settings, embeddings)
     else:
         raise ValueError(f"Unsupported vector store provider: {settings.vector_store_provider}")
 
 
-def build_qdrant_provider(settings: AppSettings, embeddings):
+def build_qdrant(settings: AppSettings, embeddings):
     # TODO: Do we want to support multiple collections per deployment?
     # Initialize Qdrant client
     client = QdrantClient(host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port)

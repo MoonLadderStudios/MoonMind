@@ -2,6 +2,10 @@
 
 **MoonMind is a Retrieval-Augmented Generation (RAG) app built with LangChain, FastAPI, Open-WebUI, Qdrant, and docker-compose. The API adheres to the OpenAI architecture, so Open-WebUI can be swapped for any OpenAI-compatible UI. In a future release, it will suport easy swapping between different vector databases.**.
 
+## Quick Start
+
+TODO
+
 ## Microservices
 
 MoonMind uses a modular microservices architecture with the following containers:
@@ -25,15 +29,20 @@ Pydantic settings allow you to configure:
 - one vector store, e.g. Qdrant
 - multiple document loaders
 
-In the future, we intend to add limited agent functionality and include configuration for:
-- multiple retrievers
-- multiple tools
+## Roadmap
 
-## Multiple Models
+The long-term goal of MoonMind is to provide strong defaults that support a one-click deployment, while also offering modularity and runtime configurability. Generally speaking, we prioritize customizability over extremely low latency due to our focus on internal company use cases over consumer applications.
 
-TODO: We can choose a provider based on the model name and have multiple providers active.
+In the future, we will support:
+- multiple chat models available without redeployment
+- multiple embedding models available without redeployment
+- the ability to change many settings at runtime
+- the ability to pass API credentials with requests
+- the ability to choose a provider based on the model name and have multiple providers active
+- the ability to enable or disable multiple model providers
 
-TODO: Each model provider can be enabled or disabled.
+We may add support for:
+- multiple projects with different settings in one deployment, e.g. different collection names and vector store configurations
 
 ## Gemini
 
