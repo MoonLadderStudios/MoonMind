@@ -18,13 +18,6 @@ async def load_confluence_documents(
     indexers: Dict = Depends(get_indexers)
 ):
     """Load documents from Confluence workspace"""
-
-    if request.space_key is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Space key is required"
-        )
-
     try:
         if "confluence" not in indexers:
             raise HTTPException(
