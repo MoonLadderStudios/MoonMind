@@ -8,11 +8,17 @@ langchain
 langchain-community
 langchain-google-community
 langchain-google-genai
+langchain-googledrive
 langchain-ollama
 langchain-openai
 langchain-qdrant
 langsmith
+llama-index
+llama-index-readers-confluence
+llama-index-embeddings-ollama
+llama-index-vector-stores-qdrant
 lxml
+ollama
 pydantic
 pydantic-settings
 pytest

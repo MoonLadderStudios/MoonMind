@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Optional
 
-from langchain.vectorstores import VectorStore
+from llama_index.vector_stores.qdrant import QdrantVectorStore
 from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,8 +19,11 @@ logger = logging.getLogger(__name__)
 @router.post("/documents/confluence/load")
 async def load_confluence_documents(
     request: ConfluenceLoadRequest,
-    vector_store: VectorStore = Depends(get_vector_store)
+    vector_store: QdrantVectorStore = Depends(get_vector_store)
 ):
+    if not settings.confluence.confluence_enabled:
+        raise HTTPException(status_code=500, detail="Confluence is not enabled")
+
     """Load documents from Confluence workspace"""
     try:
         confluence_indexer = ConfluenceIndexer(
@@ -32,8 +35,7 @@ async def load_confluence_documents(
             limit=request.limit,
             logger=logger
         )
-
-        ids = confluence_indexer.index_space(vector_store=vector_store)
+        ids = confluence_indexer.index(vector_store=vector_store)
 
         return {
             "status": "success",

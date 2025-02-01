@@ -1,66 +1,102 @@
 import logging
+from typing import Generator, List
 
-from langchain.vectorstores import VectorStore
-from langchain_community.document_loaders import ConfluenceLoader
+from llama_index.core.schema import TextNode
+from llama_index.readers.confluence import ConfluenceReader
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+
+from .base_connector import BaseConnector, BaseDocument
 
 
 class ConfluenceIndexer:
     def __init__(
         self,
-        url: str,
-        api_key: str,
-        username: str,
-        space_key: str,
-        include_attachments: bool = False,
-        limit: int = 50,
+        base_url: str,
+        api_token: str,
+        user_name: str,
+        cloud: bool = True,
         logger: logging.Logger = None
     ):
-        # Use the provided logger or fall back to a module-specific logger
         self.logger = logger or logging.getLogger(__name__)
-        self.set_loader(url, api_key, username, space_key, include_attachments, limit)
+        if not base_url:
+            raise ValueError("Confluence URL is required to set up Confluence")
+        if not api_token:
+            raise ValueError("Confluence API key is required to set up Confluence")
+        if not user_name:
+            raise ValueError("Confluence username is required to set up Confluence")
 
-    def set_loader(
-        self,
-        url: str,
-        api_key: str,
-        username: str,
-        space_key: str,
-        include_attachments: bool = False,
-        limit: int = 50
-    ):
-        if not url:
-            raise ValueError("Confluence URL is required to set up confluence")
-        if not api_key:
-            raise ValueError("Confluence API key is required to set up confluence")
-        if not username:
-            raise ValueError("Confluence username is required to set up confluence")
-        if not space_key:
-            raise ValueError("Confluence space key is required to set up confluence")
+        self.base_url = base_url
+        self.api_token = api_token
+        self.user_name = user_name
+        self.cloud = cloud
+        self.reader = None
 
-        self.loader = ConfluenceLoader(
-            url=url,
-            api_key=api_key,
-            username=username,
-            space_key=space_key,
-            include_attachments=include_attachments,
-            limit=limit
+        self.reader = ConfluenceReader(
+            base_url=self.base_url,
+            user_name=self.user_name,
+            password=self.api_token,
+            cloud=self.cloud
         )
-        self.url = url
-        self.api_key = api_key
-        self.username = username
-        self.space_key = space_key
-        self.include_attachments = include_attachments
-        self.limit = limit
 
-    def index_space(self, vector_store: VectorStore, space_key: str = None):
-        # If a new space key is provided, update the loader
-        if space_key is not None and space_key != self.space_key:
-            self.set_loader(self.url, self.api_key, self.username, space_key, self.include_attachments, self.limit)
+
+    def stream_space(self, space_key: str) -> Generator[BaseDocument, None, None]:
+        """Stream documents from a Confluence space."""
+
         try:
-            documents = self.loader.load()
-            ids = vector_store.add_documents(documents)
-            self.logger.info(f"Loaded {len(documents)} documents from Confluence space {space_key or self.space_key}")
-            return ids
+            self.logger.info(f"Streaming documents from space: {space_key}")
+            document_count = 0
+            documents = self.reader.load_data(space_key=space_key)
+
+            for doc in documents:
+                document_count += 1
+
+                # Convert Confluence page ID to integer
+                try:
+                    doc_id = int(doc.id_)
+                except (ValueError, TypeError):
+                    self.logger.error(f"Invalid document ID format from Confluence: {doc.id_}")
+                    raise ValueError(f"Document ID must be a valid integer. Got: {doc.id_}")
+
+                yield BaseDocument(
+                    text=doc.text,
+                    metadata={
+                        **doc.metadata,
+                        "space_key": space_key,
+                        "source": "confluence",
+                        "url": doc.metadata.get("url"),
+                        "title": doc.metadata.get("title"),
+                    },
+                    id=doc_id  # Now passing as integer
+                )
+
+            self.logger.info(f"Completed streaming {document_count} total documents from {space_key}")
+
         except Exception as e:
-            self.logger.exception(f"Error indexing space {space_key or self.space_key}: {e}")
+            self.logger.error(f"Error streaming documents: {str(e)}")
             raise
+
+    def index_space(self, vector_store, embedder, space_key: str):
+        """Index a Confluence space."""
+        try:
+            # Stream each document from the Confluence space
+            for doc in self.stream_space(space_key):
+                # Convert the streamed BaseDocument to a LlamaIndex TextNode
+                node = TextNode(
+                    text=doc.text,
+                    id_=str(doc.id),
+                    metadata=doc.metadata
+                )
+
+                embedding = embedder.get_text_embedding(doc.text)
+
+                vector_store.add(
+                    nodes=[node],
+                    embeddings=[embedding]
+                )
+
+                self.logger.info(f"Indexed document ID {doc.id} with embeddings.")
+
+        except Exception as e:
+            self.logger.error(f"Error while indexing Confluence space {space_key}: {str(e)}")
+            raise
+

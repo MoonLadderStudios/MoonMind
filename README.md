@@ -46,6 +46,8 @@ In the future, we will support:
 We may add support for:
 - multiple projects with different settings in one deployment, e.g. different collection names and vector store configurations
 
+TODO: Add a notion of a collection which tracks the vector store and embedder. Once created, when you choose a collection, the vector store and embedder are selected for you.
+
 ## Gemini
 
 LangChain does not currently support the latest experimental Gemini models, so using Gemini requires using the Google provider.
