@@ -16,8 +16,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from moonmind.config.settings import settings
 from moonmind.factories.chat_factory import build_chat_provider
-from moonmind.factories.embedder_factory import build_embedder
+from moonmind.factories.embed_model_factory import build_embed_model
 from moonmind.factories.indexers_factory import build_indexers
+from moonmind.factories.service_context_factory import build_service_context
+from moonmind.factories.storage_context_factory import build_storage_context
 from moonmind.factories.vector_store_factory import build_vector_store
 
 logger.info("Starting FastAPI...")
@@ -56,9 +58,10 @@ async def add_request_id(request: Request, call_next):
 async def setup():
     try:
         # Setup providers
-        app.state.chat_provider = build_chat_provider(settings)
-        app.state.embedder = build_embedder(settings)
-        app.state.vector_store = build_vector_store(settings, app.state.embedder)
+        app.state.embed_model, app.state.embed_dimensions = build_embed_model(settings)
+        app.state.vector_store = build_vector_store(settings, app.state.embed_model, app.state.embed_dimensions)
+        app.state.storage_context = build_storage_context(settings, app.state.vector_store)
+        app.state.service_context = build_service_context(settings, app.state.embed_model)
 
         # Setup routers
         app.include_router(chat_router)

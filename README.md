@@ -6,6 +6,15 @@
 
 TODO
 
+## Configuration
+Pydantic settings allow you to configure:
+- one embedding model, e.g. hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K
+- one vector store, e.g. Qdrant
+- multiple chat models, e.g. gemini-2.0-flash-thinking-exp-01-21, gpt-4o
+- multiple document loaders, e.g. Confluence, Google Drive, GitHub, etc.
+
+Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
+
 ## Microservices
 
 MoonMind uses a modular microservices architecture with the following containers:
@@ -19,17 +28,16 @@ It is possible to run inference with Ollama, with third-party AI providers, or w
 
 If using the default Ollama container, an NVIDIA GPU with appropriate drivers is required.
 
-## API Architecture
+The API container is an OpenAI-compatible REST API, powered by FastAPI andLangChain, employing Dependency Injection with abstract interfaces to enable modular service selection.
 
-The API container is an OpenAI-compatible REST API, powered by FastAPI andLangChain, that employs Dependency Injection with abstract interfaces to enable modular service selection.
+## Component Definitions
 
-Pydantic settings allow you to configure:
-- one chat model, e.g. gemini-2.0-flash-thinking-exp-01-21
-- one embedding model, e.g. hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K
-- one vector store, e.g. Qdrant
-- multiple document loaders
+TODO...
 
-Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
+Embedding model:
+Vector Store:
+Storage Context:
+Service Context:
 
 ## Roadmap
 
@@ -37,7 +45,7 @@ The long-term goal of MoonMind is to provide strong defaults that support a one-
 
 In the future, we will support:
 - multiple chat models available without redeployment
-- multiple embedding models available without redeployment
+- multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model
 - the ability to change many settings at runtime
 - the ability to pass API credentials with requests
 - the ability to choose a provider based on the model name and have multiple providers active

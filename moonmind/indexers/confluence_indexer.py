@@ -1,8 +1,13 @@
 import logging
-from typing import Generator, List
+import os
+from typing import List
 
+from llama_index import (ServiceContext, StorageContext, VectorStoreIndex,
+                         load_index_from_storage)
 from llama_index.core.schema import TextNode
+from llama_index.embeddings import BaseEmbedding
 from llama_index.readers.confluence import ConfluenceReader
+from llama_index.vector_stores import VectorStore
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 from .base_connector import BaseConnector, BaseDocument
@@ -29,74 +34,72 @@ class ConfluenceIndexer:
         self.api_token = api_token
         self.user_name = user_name
         self.cloud = cloud
-        self.reader = None
-
         self.reader = ConfluenceReader(
-            base_url=self.base_url,
-            user_name=self.user_name,
-            password=self.api_token,
-            cloud=self.cloud
+            base_url=base_url,
+            user_name=user_name,
+            password=api_token,
+            cloud=cloud
         )
 
+    def index(
+        self,
+        space_key: str,
+        storage_context: StorageContext,
+        service_context: ServiceContext,
+        batch_size: int = 100
+    ) -> VectorStoreIndex:
+        """
+        Reads Confluence pages from the specified space in batches,
+        converts them into nodes, and incrementally builds a vector index using
+        the provided storage and service contexts.
+        """
+        # Initialize an empty index (with no initial documents)
+        index = VectorStoreIndex.from_documents(
+            [],
+            storage_context=storage_context,
+            service_context=service_context
+        )
+        start = 0
+        total_nodes_indexed = 0
 
-    def stream_space(self, space_key: str) -> Generator[BaseDocument, None, None]:
-        """Stream documents from a Confluence space."""
-
+        # Use the node parser from the service context if provided; otherwise create a default parser.
         try:
-            self.logger.info(f"Streaming documents from space: {space_key}")
-            document_count = 0
-            documents = self.reader.load_data(space_key=space_key)
+            node_parser = service_context.node_parser
+        except AttributeError:
+            from llama_index.core.node_parser import SimpleNodeParser
+            node_parser = SimpleNodeParser.from_defaults()
 
-            for doc in documents:
-                document_count += 1
+        while True:
+            self.logger.info(
+                f"Fetching documents from Confluence space '{space_key}' starting at {start} with batch size {batch_size}"
+            )
+            # Load a batch of documents using the ConfluenceReader.
+            docs = self.reader.load_data(
+                space_key=space_key,
+                start=start,
+                max_num_results=batch_size
+            )
+            if not docs:
+                self.logger.info("No more documents returned; ending batch fetch.")
+                break
 
-                # Convert Confluence page ID to integer
-                try:
-                    doc_id = int(doc.id_)
-                except (ValueError, TypeError):
-                    self.logger.error(f"Invalid document ID format from Confluence: {doc.id_}")
-                    raise ValueError(f"Document ID must be a valid integer. Got: {doc.id_}")
+            self.logger.info(f"Fetched {len(docs)} documents; converting documents to nodes.")
+            # Convert the documents to nodes.
+            nodes = node_parser.get_nodes_from_documents(docs)
+            self.logger.info(f"Converted to {len(nodes)} nodes; inserting batch into index.")
+            # Insert the batch of nodes.
+            index.insert_nodes(nodes)
+            total_nodes_indexed += len(nodes)
 
-                yield BaseDocument(
-                    text=doc.text,
-                    metadata={
-                        **doc.metadata,
-                        "space_key": space_key,
-                        "source": "confluence",
-                        "url": doc.metadata.get("url"),
-                        "title": doc.metadata.get("title"),
-                    },
-                    id=doc_id  # Now passing as integer
-                )
+            if len(docs) < batch_size:
+                self.logger.info("Final batch fetched.")
+                break
 
-            self.logger.info(f"Completed streaming {document_count} total documents from {space_key}")
+            start += batch_size
 
-        except Exception as e:
-            self.logger.error(f"Error streaming documents: {str(e)}")
-            raise
+        self.logger.info(f"Total nodes indexed: {total_nodes_indexed}")
+        # Persist the storage context so that the index is saved.
+        storage_context.persist()
+        self.logger.info("Indexing complete and storage context persisted.")
 
-    def index_space(self, vector_store, embedder, space_key: str):
-        """Index a Confluence space."""
-        try:
-            # Stream each document from the Confluence space
-            for doc in self.stream_space(space_key):
-                # Convert the streamed BaseDocument to a LlamaIndex TextNode
-                node = TextNode(
-                    text=doc.text,
-                    id_=str(doc.id),
-                    metadata=doc.metadata
-                )
-
-                embedding = embedder.get_text_embedding(doc.text)
-
-                vector_store.add(
-                    nodes=[node],
-                    embeddings=[embedding]
-                )
-
-                self.logger.info(f"Indexed document ID {doc.id} with embeddings.")
-
-        except Exception as e:
-            self.logger.error(f"Error while indexing Confluence space {space_key}: {str(e)}")
-            raise
-
+        return index
