@@ -41,67 +41,72 @@ class TestConfluenceIndexer(unittest.TestCase):
 
     @patch('llama_index.VectorStoreIndex.from_documents')
     def test_index_by_space_key(self, mock_from_documents, mock_simple_node_parser_from_defaults):
-        mock_index_instance = MagicMock()
-        mock_from_documents.return_value = mock_index_instance
+        mock_index_instance = mock_from_documents.return_value # This is the mock for VectorStoreIndex
+        mock_index_instance.insert_nodes = MagicMock() # Ensure insert_nodes on this instance is a mock
 
-        mock_doc1 = Document(text="Doc 1 content", doc_id="doc1")
-        mock_doc2 = Document(text="Doc 2 content", doc_id="doc2")
-        mock_doc3 = Document(text="Doc 3 content", doc_id="doc3")
-
-        # Simulate batching: first call returns 2 docs, second call returns 1, third returns empty
+        # Simulate reader returning 2 batches of documents, then an empty batch
+        mock_doc_batch1 = [Document(text="Doc 1 batch 1"), Document(text="Doc 2 batch 1")]
+        mock_doc_batch2 = [Document(text="Doc 1 batch 2")]
         self.indexer.reader.load_data.side_effect = [
-            [mock_doc1, mock_doc2],
-            [mock_doc3],
-            []
+            mock_doc_batch1,  # First call returns 2 docs
+            mock_doc_batch2,  # Second call returns 1 doc
+            []                # Third call returns empty, stopping pagination
+        ]
+
+        # Simulate node parser converting these batches of docs into batches of nodes
+        mock_nodes_batch1 = [MagicMock(name="node1_batch1"), MagicMock(name="node2_batch1")]
+        mock_nodes_batch2 = [MagicMock(name="node1_batch2")]
+        self.mock_service_context.node_parser.get_nodes_from_documents.side_effect = [
+            mock_nodes_batch1, # Corresponds to mock_doc_batch1
+            mock_nodes_batch2  # Corresponds to mock_doc_batch2
         ]
         
-        # Simulate node parsing
-        # Let's say 2 docs become 2 nodes, and 1 doc becomes 1 node.
-        def mock_get_nodes(docs):
-            return [MagicMock() for _ in docs] # Each doc maps to one node
-        self.mock_service_context.node_parser.get_nodes_from_documents.side_effect = mock_get_nodes
-
-
+        # Act
         result = self.indexer.index(
             space_key="TEST_SPACE",
             storage_context=self.mock_storage_context,
             service_context=self.mock_service_context,
-            confluence_fetch_batch_size=2 # Set batch size to 2 for testing pagination
+            confluence_fetch_batch_size=2 # Example batch size
         )
 
+        # Assert
+        self.assertEqual(result["total_nodes_indexed"], 3) # 2 nodes from batch1 + 1 node from batch2
+        self.assertEqual(result["index"], mock_index_instance)
+
+        # Check calls to ConfluenceReader.load_data
         self.assertEqual(self.indexer.reader.load_data.call_count, 3)
         self.indexer.reader.load_data.assert_any_call(space_key="TEST_SPACE", start=0, max_num_results=2)
         self.indexer.reader.load_data.assert_any_call(space_key="TEST_SPACE", start=2, max_num_results=2)
-        self.indexer.reader.load_data.assert_any_call(space_key="TEST_SPACE", start=4, max_num_results=2) # Last call that returns []
+        self.indexer.reader.load_data.assert_any_call(space_key="TEST_SPACE", start=4, max_num_results=2)
 
-        # Check node parsing calls
-        self.mock_service_context.node_parser.get_nodes_from_documents.assert_any_call([mock_doc1, mock_doc2, mock_doc3])
+
+        # Check calls to node_parser.get_nodes_from_documents
+        self.assertEqual(self.mock_service_context.node_parser.get_nodes_from_documents.call_count, 2)
+        self.mock_service_context.node_parser.get_nodes_from_documents.assert_any_call(mock_doc_batch1)
+        self.mock_service_context.node_parser.get_nodes_from_documents.assert_any_call(mock_doc_batch2)
+
+        # Check calls to index.insert_nodes
+        self.assertEqual(mock_index_instance.insert_nodes.call_count, 2)
+        mock_index_instance.insert_nodes.assert_any_call(mock_nodes_batch1)
+        mock_index_instance.insert_nodes.assert_any_call(mock_nodes_batch2)
         
-        # Check nodes insertion
-        # The current implementation fetches all docs then converts and inserts.
-        mock_index_instance.insert_nodes.assert_called_once() 
-        self.assertEqual(len(mock_index_instance.insert_nodes.call_args[0][0]), 3) # 3 nodes inserted
-
-        self.assertEqual(result["total_nodes_indexed"], 3)
-        self.assertEqual(result["index"], mock_index_instance)
         self.mock_storage_context.persist.assert_called_once()
 
     @patch('llama_index.VectorStoreIndex.from_documents')
     def test_index_by_page_ids(self, mock_from_documents, mock_simple_node_parser_from_defaults):
-        mock_index_instance = MagicMock()
-        mock_from_documents.return_value = mock_index_instance
+        mock_index_instance = mock_from_documents.return_value
+        mock_index_instance.insert_nodes = MagicMock() # Ensure insert_nodes is a mock
 
         mock_doc1 = Document(text="Page 1 content", doc_id="page1")
         mock_doc2 = Document(text="Page 2 content", doc_id="page2")
         
         self.indexer.reader.load_data.return_value = [mock_doc1, mock_doc2]
         
-        def mock_get_nodes(docs):
-            return [MagicMock() for _ in docs]
-        self.mock_service_context.node_parser.get_nodes_from_documents.side_effect = mock_get_nodes
+        mock_nodes_from_pages = [MagicMock(name="node_page1"), MagicMock(name="node_page2")]
+        self.mock_service_context.node_parser.get_nodes_from_documents.return_value = mock_nodes_from_pages
 
         result = self.indexer.index(
-            space_key="ANY_SPACE_KEY_BUT_SHOULD_BE_IGNORED", # space_key is mandatory in model, but logic should ignore
+            space_key="ANY_SPACE_KEY_BUT_SHOULD_BE_IGNORED", 
             page_ids=["page1", "page2"],
             storage_context=self.mock_storage_context,
             service_context=self.mock_service_context
@@ -109,8 +114,7 @@ class TestConfluenceIndexer(unittest.TestCase):
 
         self.indexer.reader.load_data.assert_called_once_with(page_ids=["page1", "page2"])
         self.mock_service_context.node_parser.get_nodes_from_documents.assert_called_once_with([mock_doc1, mock_doc2])
-        mock_index_instance.insert_nodes.assert_called_once()
-        self.assertEqual(len(mock_index_instance.insert_nodes.call_args[0][0]), 2)
+        mock_index_instance.insert_nodes.assert_called_once_with(mock_nodes_from_pages)
 
 
         self.assertEqual(result["total_nodes_indexed"], 2)
@@ -119,8 +123,8 @@ class TestConfluenceIndexer(unittest.TestCase):
 
     @patch('llama_index.VectorStoreIndex.from_documents')
     def test_index_no_documents_by_space_key(self, mock_from_documents, mock_simple_node_parser_from_defaults):
-        mock_index_instance = MagicMock()
-        mock_from_documents.return_value = mock_index_instance
+        mock_index_instance = mock_from_documents.return_value
+        mock_index_instance.insert_nodes = MagicMock()
         
         self.indexer.reader.load_data.return_value = [] # No documents found
 
@@ -130,20 +134,23 @@ class TestConfluenceIndexer(unittest.TestCase):
             service_context=self.mock_service_context
         )
         
-        self.indexer.reader.load_data.assert_called_once_with(space_key="NO_DOCS_SPACE", start=0, max_num_results=100) # Default batch size
-        self.mock_service_context.node_parser.get_nodes_from_documents.assert_not_called() # Should not be called if no docs
+        self.indexer.reader.load_data.assert_called_once_with(space_key="NO_DOCS_SPACE", start=0, max_num_results=100) 
+        self.mock_service_context.node_parser.get_nodes_from_documents.assert_not_called() 
         mock_index_instance.insert_nodes.assert_not_called()
 
         self.assertEqual(result["total_nodes_indexed"], 0)
-        self.assertEqual(result["index"], mock_index_instance) # Index is still returned
-        self.mock_storage_context.persist.assert_called_once() # Persist is called even if no docs
+        self.assertEqual(result["index"], mock_index_instance) 
+        self.mock_storage_context.persist.assert_called_once() 
 
     @patch('llama_index.VectorStoreIndex.from_documents')
     def test_index_no_documents_by_page_id(self, mock_from_documents, mock_simple_node_parser_from_defaults):
-        mock_index_instance = MagicMock()
-        mock_from_documents.return_value = mock_index_instance
+        mock_index_instance = mock_from_documents.return_value
+        mock_index_instance.insert_nodes = MagicMock()
         
         self.indexer.reader.load_data.return_value = [] # No documents found
+        # If load_data returns empty, get_nodes_from_documents for page_ids path should still be called with empty list
+        self.mock_service_context.node_parser.get_nodes_from_documents.return_value = []
+
 
         result = self.indexer.index(
             space_key="ANY_SPACE",
@@ -153,8 +160,9 @@ class TestConfluenceIndexer(unittest.TestCase):
         )
         
         self.indexer.reader.load_data.assert_called_once_with(page_ids=["nonexistent1", "nonexistent2"])
-        self.mock_service_context.node_parser.get_nodes_from_documents.assert_not_called()
-        mock_index_instance.insert_nodes.assert_not_called()
+        # It will be called with an empty list if docs is empty in page_ids path
+        self.mock_service_context.node_parser.get_nodes_from_documents.assert_called_once_with([])
+        mock_index_instance.insert_nodes.assert_not_called() # Because nodes list will be empty
 
         self.assertEqual(result["total_nodes_indexed"], 0)
         self.assertEqual(result["index"], mock_index_instance)

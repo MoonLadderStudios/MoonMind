@@ -61,8 +61,7 @@ class ConfluenceIndexer:
             service_context=service_context
         )
         total_nodes_indexed = 0
-        docs = []
-
+        
         # Use the node parser from the service context if provided; otherwise create a default parser.
         try:
             node_parser = service_context.node_parser
@@ -72,18 +71,24 @@ class ConfluenceIndexer:
 
         if page_ids:
             self.logger.info(f"Fetching {len(page_ids)} specific pages from Confluence: {page_ids}")
-            docs = self.reader.load_data(page_ids=page_ids)
+            docs = self.reader.load_data(page_ids=page_ids) # Fetches all at once
             self.logger.info(f"Fetched {len(docs)} documents by page_ids.")
-        else:
-            self.logger.info(
-                f"Fetching documents from Confluence space '{space_key}' using pagination."
-            )
+            if docs:
+                self.logger.info(f"Converting {len(docs)} documents (from page_ids) to nodes.")
+                nodes = node_parser.get_nodes_from_documents(docs)
+                self.logger.info(f"Converted to {len(nodes)} nodes; inserting into index.")
+                if nodes: # Ensure there are nodes to insert
+                    index.insert_nodes(nodes)
+                    total_nodes_indexed = len(nodes) 
+            else:
+                self.logger.info("No documents found for the given page_ids.")
+        else: # space_key processing
+            self.logger.info(f"Fetching documents from Confluence space '{space_key}' using pagination.")
             start = 0
             while True:
                 self.logger.info(
                     f"Fetching documents from Confluence space '{space_key}' starting at {start} with batch size {confluence_fetch_batch_size}"
                 )
-                # Load a batch of documents using the ConfluenceReader.
                 batch_docs = self.reader.load_data(
                     space_key=space_key,
                     start=start,
@@ -91,35 +96,25 @@ class ConfluenceIndexer:
                 )
                 if not batch_docs:
                     self.logger.info("No more documents returned; ending batch fetch for space_key.")
-                    break
+                    break 
                 
-                docs.extend(batch_docs)
-                self.logger.info(f"Fetched {len(batch_docs)} documents in this batch.")
-
+                self.logger.info(f"Fetched {len(batch_docs)} documents in this batch. Converting to nodes.")
+                batch_nodes = node_parser.get_nodes_from_documents(batch_docs)
+                self.logger.info(f"Converted to {len(batch_nodes)} nodes; inserting batch into index.")
+                if batch_nodes: # Ensure there are nodes to insert
+                    index.insert_nodes(batch_nodes)
+                    total_nodes_indexed += len(batch_nodes)
+                
                 if len(batch_docs) < confluence_fetch_batch_size:
                     self.logger.info("Final batch fetched for space_key.")
                     break
                 start += confluence_fetch_batch_size
-            self.logger.info(f"Total documents fetched for space '{space_key}': {len(docs)}")
+            self.logger.info(f"Total documents processed in batches for space '{space_key}'.")
 
-        if not docs:
-            self.logger.info("No documents found to index.")
-            # Persist the storage context even if no documents are found to ensure consistency.
-            storage_context.persist()
-            self.logger.info("Indexing complete (no documents) and storage context persisted.")
-            return {"index": index, "total_nodes_indexed": total_nodes_indexed}
-
-        self.logger.info(f"Converting {len(docs)} fetched documents to nodes.")
-        # Convert the documents to nodes.
-        nodes = node_parser.get_nodes_from_documents(docs)
-        self.logger.info(f"Converted to {len(nodes)} nodes; inserting into index.")
-        # Insert the nodes.
-        index.insert_nodes(nodes)
-        total_nodes_indexed = len(nodes) # Since we insert all nodes at once after fetching
-
-        self.logger.info(f"Total nodes indexed: {total_nodes_indexed}")
-        # Persist the storage context so that the index is saved.
+        # Common exit logic
+        if total_nodes_indexed == 0:
+            self.logger.info("No documents were indexed overall.")
+        
         storage_context.persist()
-        self.logger.info("Indexing complete and storage context persisted.")
-
+        self.logger.info(f"Indexing complete. Total nodes indexed: {total_nodes_indexed}. Storage context persisted.")
         return {"index": index, "total_nodes_indexed": total_nodes_indexed}
