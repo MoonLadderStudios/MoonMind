@@ -146,7 +146,8 @@ def summarize_repo_for_readme(repo_path: str, model_factory: callable, text_summ
                 potential_path = os.path.join(repo_path, fname)
                 with open(potential_path, 'r', encoding='utf-8', errors='ignore') as f:
                     # Read a snippet: first 20 lines or up to ~1000 chars to keep it manageable
-                    lines = [next(f) for _ in range(20)]
+                    from itertools import islice
+                    lines = list(islice(f, 20))
                     existing_readme_content = "".join(lines)
                     if len(existing_readme_content) > 1000: # Further truncate if very long lines
                         existing_readme_content = existing_readme_content[:1000] + "..."
