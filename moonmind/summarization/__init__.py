@@ -1,1 +1,1 @@
-from .summarization import summarize_text, update_summaries
+from .summarization import summarize_text_gemini, update_summaries

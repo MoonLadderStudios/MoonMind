@@ -8,7 +8,7 @@ import time # Keep time import as it was in original, though not directly used i
 from moonmind.config.logging import configure_logging
 
 from moonmind.factories.google_factory import get_google_model
-from moonmind.summarization import summarize_text, update_summaries
+from moonmind.summarization import summarize_text_gemini, update_summaries
 
 # Call configure_logging early, as in the original script
 configure_logging()
@@ -48,7 +48,7 @@ if __name__ == "__main__":
             output_dir=output_directory,
             prompt_file_path=args.prompt_file,
             model_factory=get_google_model,
-            text_summarizer=summarize_text,
+            text_summarizer=summarize_text_gemini,
             replace_existing=args.replace_existing
         )
         logger.info("Summarizer job process completed.")
