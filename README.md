@@ -198,9 +198,6 @@ Storage Context:
 Service Context:
 
 ## Roadmap
-
-The long-term goal of MoonMind is to provide strong defaults that support a one-click deployment, while also offering modularity and runtime configurability. Generally speaking, we prioritize customizability over extremely low latency due to our focus on internal company use cases over consumer applications.
-
 In the future, we will support:
 - multiple chat models available without redeployment
 - multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model
