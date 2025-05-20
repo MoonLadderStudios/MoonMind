@@ -59,3 +59,43 @@ TODO: Add a notion of a collection which tracks the vector store and embedder. O
 ## Gemini
 
 LangChain does not currently support the latest experimental Gemini models, so using Gemini requires using the Google provider.
+
+## Running Tests
+
+### Unit Tests
+
+To run unit tests:
+```bash
+pytest tests/ # Or specific paths like tests/indexers, tests/api
+```
+
+### Confluence Integration Tests
+
+These tests verify the end-to-end functionality of loading documents from a real Confluence space into the Qdrant vector database and then querying Qdrant.
+
+**Prerequisites:**
+*   A running Confluence instance accessible with the credentials provided in the `.env` file.
+*   A running Qdrant instance, configured as specified in the `.env` file.
+
+**Setup:**
+1.  Create a `.env` file in the root of the project if you haven't already.
+2.  Add the following environment variables to your `.env` file, replacing placeholder values with your actual Confluence and Qdrant details:
+
+    ```env
+    CONFLUENCE_URL=https://your-confluence-domain.atlassian.net/wiki
+    CONFLUENCE_USERNAME=your_email@example.com
+    CONFLUENCE_API_KEY=your_confluence_api_token
+    TEST_CONFLUENCE_SPACE_KEY=YOUR_TEST_SPACE_KEY  # A space with a few test documents that the provided user can access
+    
+    QDRANT_HOST=localhost
+    QDRANT_PORT=6333
+    QDRANT_COLLECTION_NAME=moonmind_documents # Ensure this matches your application's Qdrant collection name (default in tests)
+    ```
+    *Note: `QDRANT_HOST`, `QDRANT_PORT`, and `QDRANT_COLLECTION_NAME` should match the settings your application uses for the Qdrant instance being tested against. The default collection name in the integration test setup is `moonmind_documents`.*
+
+**Running the Tests:**
+To execute the Confluence integration tests, run the following command from the project root:
+```bash
+pytest tests/integration/test_confluence_e2e.py
+```
+The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.

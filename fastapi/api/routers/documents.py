@@ -29,17 +29,33 @@ async def load_confluence_documents(
     try:
         confluence_indexer = ConfluenceIndexer(
             base_url=settings.confluence.confluence_url,
-            username=settings.confluence.confluence_username,
-            api_key=settings.confluence.confluence_api_key,
+            user_name=settings.confluence.confluence_username, # Corrected parameter name
+            api_token=settings.confluence.confluence_api_key, # Corrected parameter name
             logger=logger
         )
 
-        # TODO: max_num_results should be a parameter
-        index = confluence_indexer.index(space_key=request.space_key, storage_context=storage_context, service_context=service_context)
+        # Pass page_ids and max_num_results from the request
+        index_result = confluence_indexer.index(
+            space_key=request.space_key,
+            storage_context=storage_context,
+            service_context=service_context,
+            page_ids=request.page_ids,
+            confluence_fetch_batch_size=request.max_num_results
+        )
+
+        total_nodes_indexed = index_result["total_nodes_indexed"]
+        # The index object itself can be accessed via index_result["index"] if needed later
+
+        message = ""
+        if request.page_ids:
+            message = f"Successfully loaded {total_nodes_indexed} nodes from {len(request.page_ids)} specified page IDs."
+        else:
+            message = f"Successfully loaded {total_nodes_indexed} nodes from Confluence space {request.space_key}."
 
         return {
             "status": "success",
-            "message": f"Loaded {len(ids)} documents from Confluence workspace {request.space_key}"
+            "message": message,
+            "total_nodes_indexed": total_nodes_indexed
         }
     except Exception as e:
         logger.exception(f"Error loading Confluence documents: {e}")
