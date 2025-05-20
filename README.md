@@ -6,6 +6,11 @@
 
 TODO
 
+## Design Principles
+1. One-click deployment with smart defaults
+2. Powerful runtime configurability
+3. Modular and extensible architecture
+
 ## Configuration
 Pydantic settings allow you to configure:
 - one embedding model, e.g. hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K
