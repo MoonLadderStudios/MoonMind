@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 # Assuming settings are accessible like this for mocking
 from moonmind.config import settings as app_settings
 # Models for request bodies
-from moonmind.models.documents_models import ConfluenceLoadRequest, GitHubLoadRequest
+from moonmind.schemas.documents_models import ConfluenceLoadRequest, GitHubLoadRequest, GoogleDriveLoadRequest # Updated import path
 # The router from your application
 from fastapi.api.routers.documents import router as documents_router
 from fastapi import HTTPException # For testing exceptions
@@ -41,6 +41,11 @@ class TestDocumentsAPI(unittest.TestCase):
         self.patch_github_indexer = patch('fastapi.api.routers.documents.GitHubIndexer', return_value=self.mock_github_indexer_instance)
         self.mock_github_indexer_class = self.patch_github_indexer.start()
 
+        # Mock GoogleDriveIndexer
+        self.mock_gdrive_indexer_instance = MagicMock()
+        self.patch_gdrive_indexer = patch('fastapi.api.routers.documents.GoogleDriveIndexer', return_value=self.mock_gdrive_indexer_instance)
+        self.mock_gdrive_indexer_class = self.patch_gdrive_indexer.start()
+
 
         self.client = TestClient(self.app)
 
@@ -48,7 +53,8 @@ class TestDocumentsAPI(unittest.TestCase):
         self.patch_get_storage_context.stop()
         self.patch_get_service_context.stop()
         self.patch_confluence_indexer.stop()
-        self.patch_github_indexer.stop() # Stop GitHubIndexer patch
+        self.patch_github_indexer.stop() 
+        self.patch_gdrive_indexer.stop() # Stop GoogleDriveIndexer patch
         # Reset settings if they were changed for specific tests
         try:
             del app_settings.confluence.__dict__['_confluence_enabled_original']
@@ -219,6 +225,104 @@ class TestDocumentsAPI(unittest.TestCase):
         data = response.json()
         self.assertIn("An unexpected error occurred while processing owner/repo", data["detail"])
         self.assertIn("Some unexpected internal error in indexer", data["detail"])
+
+    # --- Tests for Google Drive Endpoint ---
+
+    def test_load_google_drive_success_with_folder_id(self):
+        self.mock_gdrive_indexer_instance.index.return_value = {"index": MagicMock(), "total_nodes_indexed": 3}
+        
+        payload = {"folder_id": "gdrive_folder_123"}
+        response = self.client.post("/api/documents/google_drive/load", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["total_nodes_indexed"], 3)
+        self.assertEqual(data["folder_id"], "gdrive_folder_123")
+        self.assertIn("Successfully loaded 3 nodes from Google Drive (folder ID gdrive_folder_123)", data["message"])
+
+        self.mock_gdrive_indexer_class.assert_called_once_with(service_account_key_path=None, logger=ANY)
+        self.mock_gdrive_indexer_instance.index.assert_called_once_with(
+            storage_context=self.mock_storage_context,
+            service_context=self.mock_service_context,
+            folder_id="gdrive_folder_123",
+            file_ids=None # Default from model
+        )
+
+    def test_load_google_drive_success_with_file_ids_and_key_path(self):
+        self.mock_gdrive_indexer_instance.index.return_value = {"index": MagicMock(), "total_nodes_indexed": 2}
+        
+        payload = {"file_ids": ["file_abc", "file_xyz"], "service_account_key_path": "path/to/key.json"}
+        response = self.client.post("/api/documents/google_drive/load", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["total_nodes_indexed"], 2)
+        self.assertEqual(data["file_ids"], ["file_abc", "file_xyz"])
+
+        self.mock_gdrive_indexer_class.assert_called_once_with(service_account_key_path="path/to/key.json", logger=ANY)
+        self.mock_gdrive_indexer_instance.index.assert_called_once_with(
+            storage_context=self.mock_storage_context,
+            service_context=self.mock_service_context,
+            folder_id=None, # Default from model
+            file_ids=["file_abc", "file_xyz"]
+        )
+
+    @patch('fastapi.api.routers.documents.settings') # Patch settings where it's used
+    def test_load_google_drive_with_default_sa_key_from_settings(self, MockSettings):
+        # Configure the mock settings object
+        MockSettings.google.google_account_file = "default/path.json"
+        # Ensure the 'google' attribute itself exists on MockSettings if it's accessed directly first
+        # This is usually handled if MockSettings is a deep mock or configured properly.
+        # If settings.google is accessed before settings.google.google_account_file, 
+        # ensure MockSettings.google is also a mock that has a google_account_file attribute.
+        # For this case, assuming settings.google.google_account_file is accessed directly.
+
+        self.mock_gdrive_indexer_instance.index.return_value = {"index": MagicMock(), "total_nodes_indexed": 1}
+        
+        payload = {"folder_id": "folder_789"} # No SA key in request
+        response = self.client.post("/api/documents/google_drive/load", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.mock_gdrive_indexer_class.assert_called_once_with(service_account_key_path="default/path.json", logger=ANY)
+        self.mock_gdrive_indexer_instance.index.assert_called_once_with(
+            storage_context=self.mock_storage_context,
+            service_context=self.mock_service_context,
+            folder_id="folder_789",
+            file_ids=None
+        )
+    
+    def test_load_google_drive_missing_folder_and_file_ids(self):
+        self.mock_gdrive_indexer_instance.index.side_effect = ValueError("Either folder_id or file_ids must be provided")
+        
+        payload = {} # Empty payload
+        response = self.client.post("/api/documents/google_drive/load", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn("Either folder_id or file_ids must be provided", data["detail"])
+
+    def test_load_google_drive_indexer_raises_http_exception(self):
+        self.mock_gdrive_indexer_instance.index.side_effect = HTTPException(status_code=503, detail="Drive API unavailable")
+        
+        payload = {"folder_id": "test_folder"}
+        response = self.client.post("/api/documents/google_drive/load", json=payload)
+
+        self.assertEqual(response.status_code, 503)
+        data = response.json()
+        self.assertIn("Drive API unavailable", data["detail"])
+
+    def test_load_google_drive_indexer_raises_unexpected_exception(self):
+        self.mock_gdrive_indexer_instance.index.side_effect = Exception("Unexpected error")
+        
+        payload = {"folder_id": "test_folder"}
+        response = self.client.post("/api/documents/google_drive/load", json=payload)
+
+        self.assertEqual(response.status_code, 500)
+        data = response.json()
+        self.assertIn("An unexpected error occurred while loading from Google Drive", data["detail"])
+        self.assertIn("Unexpected error", data["detail"])
 
 
 if __name__ == '__main__':

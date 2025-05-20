@@ -111,6 +111,63 @@ The endpoint will return appropriate HTTP status codes and error messages for is
 *   Other errors during document processing.
 
 
+### Google Drive Loader
+
+This loader enables you to ingest documents from Google Drive, either from a specified folder or by listing individual file IDs.
+
+**Endpoint:** `POST /documents/google_drive/load`
+
+**Request Body:**
+
+The request body should be a JSON object with the following fields:
+
+*   `folder_id` (string, optional): The ID of the Google Drive folder from which to load documents.
+*   `file_ids` (array of strings, optional): A list of specific Google Drive file IDs to load.
+    *   *Note: You must provide either `folder_id` or `file_ids`.*
+*   `recursive` (boolean, optional, default: `False`): This field is available in the request. The underlying LlamaIndex Google Drive reader, when given a `folder_id`, typically processes all files within that folder.
+*   `service_account_key_path` (string, optional, default: `null`): The server-side path to your Google Cloud service account JSON key file.
+
+**Authentication:**
+
+To access your Google Drive files, the application needs Google Cloud credentials:
+1.  **Service Account Key Path:** You can provide the full path to a service account key JSON file using the `service_account_key_path` field in your request. Ensure this file is accessible on the server where the application is running.
+2.  **Application Default Credentials (ADC):** If `service_account_key_path` is not provided in the request, the application will attempt to use ADC. This typically involves setting the `GOOGLE_APPLICATION_CREDENTIALS` environment variable on the server to point to your service account key file. Refer to Google Cloud documentation for details on setting up ADC.
+3.  **Default Server Configuration:** Alternatively, a default service account key path can be configured in the application's settings (`settings.google.google_account_file`) by the server administrator.
+
+**Example Requests:**
+
+*Loading from a folder (using ADC or a server-configured default key):*
+```json
+{
+    "folder_id": "1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345"
+}
+```
+
+*Loading specific files using a provided service account key path:*
+```json
+{
+    "file_ids": ["1_abcdefgHIJKLMNOPQRSTUVWXYZabcdefg", "1_anotherFileIDJKLMNOPQRSTUVW"],
+    "service_account_key_path": "/etc/gcp_keys/my_project_sa_key.json"
+}
+```
+
+**Success Response:**
+
+A successful response will include the number of nodes indexed:
+```json
+{
+    "status": "success",
+    "message": "Successfully loaded 75 nodes from Google Drive (folder ID 1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345).",
+    "total_nodes_indexed": 75,
+    "folder_id": "1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345",
+    "file_ids": null
+}
+```
+
+**Error Handling:**
+The API will return appropriate error messages for issues like missing `folder_id`/`file_ids`, authentication problems, or errors from the Google Drive API.
+
+
 ## Microservices
 
 MoonMind uses a modular microservices architecture with the following containers:
