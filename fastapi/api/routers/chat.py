@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from moonmind.factories.google_factory import get_google_model
-from moonmind.models.chat_models import (ChatCompletionRequest,
+from moonmind.schemas.chat_models import (ChatCompletionRequest, # Updated import path
                                          ChatCompletionResponse, Choice,
                                          ChoiceMessage, Usage)
 

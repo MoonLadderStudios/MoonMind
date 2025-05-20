@@ -20,6 +20,159 @@ Pydantic settings allow you to configure:
 
 Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
 
+## Document Loaders
+
+This section describes the available document loaders and how to use their respective API endpoints.
+
+### Confluence Loader
+
+The Confluence loader ingests documents from a specified Confluence space or specific page IDs.
+
+**Endpoint:** `POST /documents/confluence/load`
+
+**Request Body:**
+
+*   `space_key` (string, mandatory): The key of the Confluence space to load documents from.
+*   `page_ids` (array of strings, optional, default: `null`): A list of specific Confluence page IDs to load. If provided, only these pages will be fetched.
+*   `max_num_results` (integer, optional, default: `100`): The maximum number of results to fetch per batch when loading by `space_key`.
+
+**Example Request (Space Key):**
+```json
+{
+    "space_key": "MYSPACEKEY",
+    "max_num_results": 50
+}
+```
+
+**Example Request (Page IDs):**
+```json
+{
+    "space_key": "ANYKEY", // Still required by model, but ignored if page_ids are present
+    "page_ids": ["12345", "67890"]
+}
+```
+
+**Success Response:**
+```json
+{
+    "status": "success",
+    "message": "Successfully loaded 75 nodes from Confluence space MYSPACEKEY.", // Or from X specified page IDs.
+    "total_nodes_indexed": 75
+}
+```
+
+**Error Handling:**
+The endpoint returns appropriate HTTP status codes for errors such as Confluence being disabled, authentication issues, or space/page not found.
+
+
+### GitHub Repository Loader
+
+This loader allows you to ingest documents directly from a GitHub repository.
+
+**Endpoint:** `POST /documents/github/load`
+
+**Request Body:**
+
+The request body should be a JSON object with the following fields:
+
+*   `repo` (string, mandatory): The full path to the repository in the format `"owner_username/repository_name"`.
+*   `branch` (string, optional, default: `"main"`): The specific branch of the repository to load documents from.
+*   `filter_extensions` (array of strings, optional, default: `null`): A list of file extensions to specifically include in the loading process (e.g., `[".py", ".md", ".java"]`). If omitted or `null`, all files encountered will be processed.
+*   `github_token` (string, optional, default: `null`): A GitHub Personal Access Token (PAT). This is required for accessing private repositories. It's also recommended for public repositories to avoid potential rate limiting by GitHub.
+
+**Security Note:** The `github_token` grants access to your GitHub repositories. Ensure it's handled securely. It's best practice to use a token with the minimum necessary permissions (e.g., read-only access to the specific repositories you intend to load).
+
+**Example Request:**
+
+```json
+{
+    "repo": "my-org/my-awesome-project",
+    "branch": "feature/new-docs",
+    "filter_extensions": [".md", ".txt"],
+    "github_token": "ghp_YourGitHubPersonalAccessTokenIfPrivateOrForRateLimits"
+}
+```
+
+**Success Response:**
+
+On successful loading, the API will return a JSON object similar to this:
+
+```json
+{
+    "status": "success",
+    "message": "Successfully loaded 153 nodes from GitHub repository my-org/my-awesome-project on branch feature/new-docs",
+    "total_nodes_indexed": 153,
+    "repository": "my-org/my-awesome-project",
+    "branch": "feature/new-docs"
+}
+```
+
+**Error Handling:**
+
+The endpoint will return appropriate HTTP status codes and error messages for issues such as:
+*   Invalid `repo` format.
+*   Missing or invalid `github_token` for private repositories.
+*   Repository not found or inaccessible.
+*   Other errors during document processing.
+
+
+### Google Drive Loader
+
+This loader enables you to ingest documents from Google Drive, either from a specified folder or by listing individual file IDs.
+
+**Endpoint:** `POST /documents/google_drive/load`
+
+**Request Body:**
+
+The request body should be a JSON object with the following fields:
+
+*   `folder_id` (string, optional): The ID of the Google Drive folder from which to load documents.
+*   `file_ids` (array of strings, optional): A list of specific Google Drive file IDs to load.
+    *   *Note: You must provide either `folder_id` or `file_ids`.*
+*   `recursive` (boolean, optional, default: `False`): This field is available in the request. The underlying LlamaIndex Google Drive reader, when given a `folder_id`, typically processes all files within that folder.
+*   `service_account_key_path` (string, optional, default: `null`): The server-side path to your Google Cloud service account JSON key file.
+
+**Authentication:**
+
+To access your Google Drive files, the application needs Google Cloud credentials:
+1.  **Service Account Key Path:** You can provide the full path to a service account key JSON file using the `service_account_key_path` field in your request. Ensure this file is accessible on the server where the application is running.
+2.  **Application Default Credentials (ADC):** If `service_account_key_path` is not provided in the request, the application will attempt to use ADC. This typically involves setting the `GOOGLE_APPLICATION_CREDENTIALS` environment variable on the server to point to your service account key file. Refer to Google Cloud documentation for details on setting up ADC.
+3.  **Default Server Configuration:** Alternatively, a default service account key path can be configured in the application's settings (`settings.google.google_account_file`) by the server administrator.
+
+**Example Requests:**
+
+*Loading from a folder (using ADC or a server-configured default key):*
+```json
+{
+    "folder_id": "1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345"
+}
+```
+
+*Loading specific files using a provided service account key path:*
+```json
+{
+    "file_ids": ["1_abcdefgHIJKLMNOPQRSTUVWXYZabcdefg", "1_anotherFileIDJKLMNOPQRSTUVW"],
+    "service_account_key_path": "/etc/gcp_keys/my_project_sa_key.json"
+}
+```
+
+**Success Response:**
+
+A successful response will include the number of nodes indexed:
+```json
+{
+    "status": "success",
+    "message": "Successfully loaded 75 nodes from Google Drive (folder ID 1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345).",
+    "total_nodes_indexed": 75,
+    "folder_id": "1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345",
+    "file_ids": null
+}
+```
+
+**Error Handling:**
+The API will return appropriate error messages for issues like missing `folder_id`/`file_ids`, authentication problems, or errors from the Google Drive API.
+
+
 ## Microservices
 
 MoonMind uses a modular microservices architecture with the following containers:
@@ -64,3 +217,43 @@ TODO: Add a notion of a collection which tracks the vector store and embedder. O
 ## Gemini
 
 LangChain does not currently support the latest experimental Gemini models, so using Gemini requires using the Google provider.
+
+## Running Tests
+
+### Unit Tests
+
+To run unit tests:
+```bash
+pytest tests/ # Or specific paths like tests/indexers, tests/api
+```
+
+### Confluence Integration Tests
+
+These tests verify the end-to-end functionality of loading documents from a real Confluence space into the Qdrant vector database and then querying Qdrant.
+
+**Prerequisites:**
+*   A running Confluence instance accessible with the credentials provided in the `.env` file.
+*   A running Qdrant instance, configured as specified in the `.env` file.
+
+**Setup:**
+1.  Create a `.env` file in the root of the project if you haven't already.
+2.  Add the following environment variables to your `.env` file, replacing placeholder values with your actual Confluence and Qdrant details:
+
+    ```env
+    CONFLUENCE_URL=https://your-confluence-domain.atlassian.net/wiki
+    CONFLUENCE_USERNAME=your_email@example.com
+    CONFLUENCE_API_KEY=your_confluence_api_token
+    TEST_CONFLUENCE_SPACE_KEY=YOUR_TEST_SPACE_KEY  # A space with a few test documents that the provided user can access
+    
+    QDRANT_HOST=localhost
+    QDRANT_PORT=6333
+    QDRANT_COLLECTION_NAME=moonmind_documents # Ensure this matches your application's Qdrant collection name (default in tests)
+    ```
+    *Note: `QDRANT_HOST`, `QDRANT_PORT`, and `QDRANT_COLLECTION_NAME` should match the settings your application uses for the Qdrant instance being tested against. The default collection name in the integration test setup is `moonmind_documents`.*
+
+**Running the Tests:**
+To execute the Confluence integration tests, run the following command from the project root:
+```bash
+pytest tests/integration/test_confluence_e2e.py
+```
+The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.
