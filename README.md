@@ -15,6 +15,102 @@ Pydantic settings allow you to configure:
 
 Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
 
+## Document Loaders
+
+This section describes the available document loaders and how to use their respective API endpoints.
+
+### Confluence Loader
+
+The Confluence loader ingests documents from a specified Confluence space or specific page IDs.
+
+**Endpoint:** `POST /documents/confluence/load`
+
+**Request Body:**
+
+*   `space_key` (string, mandatory): The key of the Confluence space to load documents from.
+*   `page_ids` (array of strings, optional, default: `null`): A list of specific Confluence page IDs to load. If provided, only these pages will be fetched.
+*   `max_num_results` (integer, optional, default: `100`): The maximum number of results to fetch per batch when loading by `space_key`.
+
+**Example Request (Space Key):**
+```json
+{
+    "space_key": "MYSPACEKEY",
+    "max_num_results": 50
+}
+```
+
+**Example Request (Page IDs):**
+```json
+{
+    "space_key": "ANYKEY", // Still required by model, but ignored if page_ids are present
+    "page_ids": ["12345", "67890"]
+}
+```
+
+**Success Response:**
+```json
+{
+    "status": "success",
+    "message": "Successfully loaded 75 nodes from Confluence space MYSPACEKEY.", // Or from X specified page IDs.
+    "total_nodes_indexed": 75
+}
+```
+
+**Error Handling:**
+The endpoint returns appropriate HTTP status codes for errors such as Confluence being disabled, authentication issues, or space/page not found.
+
+
+### GitHub Repository Loader
+
+This loader allows you to ingest documents directly from a GitHub repository.
+
+**Endpoint:** `POST /documents/github/load`
+
+**Request Body:**
+
+The request body should be a JSON object with the following fields:
+
+*   `repo` (string, mandatory): The full path to the repository in the format `"owner_username/repository_name"`.
+*   `branch` (string, optional, default: `"main"`): The specific branch of the repository to load documents from.
+*   `filter_extensions` (array of strings, optional, default: `null`): A list of file extensions to specifically include in the loading process (e.g., `[".py", ".md", ".java"]`). If omitted or `null`, all files encountered will be processed.
+*   `github_token` (string, optional, default: `null`): A GitHub Personal Access Token (PAT). This is required for accessing private repositories. It's also recommended for public repositories to avoid potential rate limiting by GitHub.
+
+**Security Note:** The `github_token` grants access to your GitHub repositories. Ensure it's handled securely. It's best practice to use a token with the minimum necessary permissions (e.g., read-only access to the specific repositories you intend to load).
+
+**Example Request:**
+
+```json
+{
+    "repo": "my-org/my-awesome-project",
+    "branch": "feature/new-docs",
+    "filter_extensions": [".md", ".txt"],
+    "github_token": "ghp_YourGitHubPersonalAccessTokenIfPrivateOrForRateLimits"
+}
+```
+
+**Success Response:**
+
+On successful loading, the API will return a JSON object similar to this:
+
+```json
+{
+    "status": "success",
+    "message": "Successfully loaded 153 nodes from GitHub repository my-org/my-awesome-project on branch feature/new-docs",
+    "total_nodes_indexed": 153,
+    "repository": "my-org/my-awesome-project",
+    "branch": "feature/new-docs"
+}
+```
+
+**Error Handling:**
+
+The endpoint will return appropriate HTTP status codes and error messages for issues such as:
+*   Invalid `repo` format.
+*   Missing or invalid `github_token` for private repositories.
+*   Repository not found or inaccessible.
+*   Other errors during document processing.
+
+
 ## Microservices
 
 MoonMind uses a modular microservices architecture with the following containers:

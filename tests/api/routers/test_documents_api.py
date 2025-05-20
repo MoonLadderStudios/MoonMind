@@ -5,10 +5,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Assuming settings are accessible like this for mocking
-from moonmind.config import settings as app_settings 
-from moonmind.models.documents_models import ConfluenceLoadRequest
+from moonmind.config import settings as app_settings
+# Models for request bodies
+from moonmind.models.documents_models import ConfluenceLoadRequest, GitHubLoadRequest
 # The router from your application
-from fastapi.api.routers.documents import router as documents_router 
+from fastapi.api.routers.documents import router as documents_router
+from fastapi import HTTPException # For testing exceptions
 
 
 class TestDocumentsAPI(unittest.TestCase):
@@ -34,12 +36,19 @@ class TestDocumentsAPI(unittest.TestCase):
         self.patch_confluence_indexer = patch('fastapi.api.routers.documents.ConfluenceIndexer', return_value=self.mock_confluence_indexer_instance)
         self.mock_confluence_indexer_class = self.patch_confluence_indexer.start()
 
+        # Mock GitHubIndexer
+        self.mock_github_indexer_instance = MagicMock()
+        self.patch_github_indexer = patch('fastapi.api.routers.documents.GitHubIndexer', return_value=self.mock_github_indexer_instance)
+        self.mock_github_indexer_class = self.patch_github_indexer.start()
+
+
         self.client = TestClient(self.app)
 
     def tearDown(self):
         self.patch_get_storage_context.stop()
         self.patch_get_service_context.stop()
         self.patch_confluence_indexer.stop()
+        self.patch_github_indexer.stop() # Stop GitHubIndexer patch
         # Reset settings if they were changed for specific tests
         try:
             del app_settings.confluence.__dict__['_confluence_enabled_original']
@@ -126,6 +135,91 @@ class TestDocumentsAPI(unittest.TestCase):
         # Restore original setting
         app_settings.confluence.confluence_enabled = app_settings.confluence.__dict__['_confluence_enabled_original']
         del app_settings.confluence.__dict__['_confluence_enabled_original']
+
+
+    # --- Tests for GitHub Endpoint ---
+
+    def test_load_github_repo_success(self):
+        self.mock_github_indexer_instance.index.return_value = {"index": MagicMock(), "total_nodes_indexed": 5}
+        
+        payload = {"repo": "test/repo", "branch": "dev"}
+        response = self.client.post("/api/documents/github/load", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["total_nodes_indexed"], 5)
+        self.assertEqual(data["repository"], "test/repo")
+        self.assertEqual(data["branch"], "dev")
+        self.assertIn("Successfully loaded 5 nodes from GitHub repository test/repo on branch dev", data["message"])
+
+        self.mock_github_indexer_class.assert_called_once_with(github_token=None, logger=ANY)
+        self.mock_github_indexer_instance.index.assert_called_once_with(
+            repo_full_name="test/repo",
+            branch="dev",
+            filter_extensions=None, # Default from model
+            storage_context=self.mock_storage_context,
+            service_context=self.mock_service_context
+        )
+
+    def test_load_github_repo_with_token_and_filters(self):
+        self.mock_github_indexer_instance.index.return_value = {"index": MagicMock(), "total_nodes_indexed": 3}
+        
+        payload = {
+            "repo": "secure/repo", 
+            "branch": "main", 
+            "github_token": "secret_token", 
+            "filter_extensions": [".py", ".md"]
+        }
+        response = self.client.post("/api/documents/github/load", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["total_nodes_indexed"], 3)
+        self.assertEqual(data["repository"], "secure/repo")
+
+        self.mock_github_indexer_class.assert_called_once_with(github_token="secret_token", logger=ANY)
+        self.mock_github_indexer_instance.index.assert_called_once_with(
+            repo_full_name="secure/repo",
+            branch="main",
+            filter_extensions=[".py", ".md"],
+            storage_context=self.mock_storage_context,
+            service_context=self.mock_service_context
+        )
+
+    def test_load_github_repo_invalid_repo_format(self):
+        # This error is raised by GitHubIndexer and caught by the endpoint
+        self.mock_github_indexer_instance.index.side_effect = ValueError("Invalid repo format from indexer")
+        
+        payload = {"repo": "invalid-format", "branch": "main"} # API model validation passes
+        response = self.client.post("/api/documents/github/load", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn("Invalid repo format from indexer", data["detail"])
+
+    def test_load_github_repo_indexer_raises_http_exception(self):
+        self.mock_github_indexer_instance.index.side_effect = HTTPException(status_code=502, detail="Git upstream error from indexer")
+        
+        payload = {"repo": "owner/repo", "branch": "main"}
+        response = self.client.post("/api/documents/github/load", json=payload)
+
+        self.assertEqual(response.status_code, 502)
+        data = response.json()
+        self.assertIn("Git upstream error from indexer", data["detail"])
+
+    def test_load_github_repo_indexer_raises_unexpected_exception(self):
+        self.mock_github_indexer_instance.index.side_effect = Exception("Some unexpected internal error in indexer")
+        
+        payload = {"repo": "owner/repo", "branch": "main"}
+        response = self.client.post("/api/documents/github/load", json=payload)
+
+        self.assertEqual(response.status_code, 500)
+        data = response.json()
+        self.assertIn("An unexpected error occurred while processing owner/repo", data["detail"])
+        self.assertIn("Some unexpected internal error in indexer", data["detail"])
+
 
 if __name__ == '__main__':
     unittest.main()
