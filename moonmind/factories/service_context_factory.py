@@ -1,4 +1,4 @@
-from llama_index import ServiceContext
+from llama_index.core import ServiceContext
 
 from ..config.settings import AppSettings
 

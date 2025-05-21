@@ -15,7 +15,6 @@ from api.routers.models import router as models_router
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from moonmind.config.settings import settings
-from moonmind.factories.chat_factory import build_chat_provider
 from moonmind.factories.embed_model_factory import build_embed_model
 from moonmind.factories.indexers_factory import build_indexers
 from moonmind.factories.service_context_factory import build_service_context
@@ -25,11 +24,15 @@ from moonmind.factories.vector_store_factory import build_vector_store
 logger.info("Starting FastAPI...")
 
 app = FastAPI(
-    title="MoonMind",
-    version="0.1.0",
-    docs_url="/",
-    redoc_url=None,
+    title="MoonMind API",
+    description="API for MoonMind - LLM-powered documentation search and chat interface",
+    version="0.1.0"
 )
+
+# Include all routers
+app.include_router(documents_router, prefix="/documents")
+app.include_router(chat_router, prefix="/chat")
+app.include_router(models_router, prefix="/models")
 
 app.add_middleware(
     CORSMiddleware,

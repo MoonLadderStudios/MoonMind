@@ -8,10 +8,10 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.readers.confluence import ConfluenceReader
 
 from moonmind.config.settings import settings
-from moonmind.factories.embedder_factory import build_embeddings_provider
+from moonmind.factories.embed_model_factory import build_embed_model
 
 # Configure settings for tests
-settings.embeddings_provider = "ollama"
+settings.default_embeddings_provider = "ollama"
 settings.ollama.ollama_base_url = "http://ollama:11434"
 settings.ollama.ollama_embeddings_model = "hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"
 settings.ollama.ollama_embeddings_dimensions = -1
@@ -44,7 +44,8 @@ def ollama_embeddings_instance(ollama_running):
     """Fixture to create an Ollama embeddings instance."""
     if not ollama_running:
         pytest.skip(f"Ollama is not running at {settings.ollama.ollama_base_url}. Skipping Ollama embeddings tests.")
-    return build_embeddings_provider(settings)
+    embed_model, _ = build_embed_model(settings)
+    return embed_model
 
 
 def test_ollama_embeddings_generation(ollama_embeddings_instance):
