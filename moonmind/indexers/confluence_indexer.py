@@ -1,20 +1,14 @@
 import logging
 import os
-from typing import Dict, List, Optional, Any, Union
+from typing import Any, Dict, List, Optional, Union
 
-from llama_index.core import (
-    ServiceContext,
-    StorageContext,
-    VectorStoreIndex,
-    load_index_from_storage
-)
+from llama_index.core import (ServiceContext, StorageContext, VectorStoreIndex,
+                              load_index_from_storage)
+from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.schema import TextNode
-from llama_index.embeddings import BaseEmbedding
 from llama_index.readers.confluence import ConfluenceReader
-from llama_index.vector_stores import VectorStore
+# from llama_index.vector_stores import VectorStore # This line will be removed
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-
-from .base_connector import BaseConnector, BaseDocument
 
 
 class ConfluenceIndexer:
@@ -65,7 +59,7 @@ class ConfluenceIndexer:
             service_context=service_context
         )
         total_nodes_indexed = 0
-        
+
         # Use the node parser from the service context if provided; otherwise create a default parser.
         try:
             node_parser = service_context.node_parser
@@ -83,7 +77,7 @@ class ConfluenceIndexer:
                 self.logger.info(f"Converted to {len(nodes)} nodes; inserting into index.")
                 if nodes: # Ensure there are nodes to insert
                     index.insert_nodes(nodes)
-                    total_nodes_indexed = len(nodes) 
+                    total_nodes_indexed = len(nodes)
             else:
                 self.logger.info("No documents found for the given page_ids.")
         else: # space_key processing
@@ -100,15 +94,15 @@ class ConfluenceIndexer:
                 )
                 if not batch_docs:
                     self.logger.info("No more documents returned; ending batch fetch for space_key.")
-                    break 
-                
+                    break
+
                 self.logger.info(f"Fetched {len(batch_docs)} documents in this batch. Converting to nodes.")
                 batch_nodes = node_parser.get_nodes_from_documents(batch_docs)
                 self.logger.info(f"Converted to {len(batch_nodes)} nodes; inserting batch into index.")
                 if batch_nodes: # Ensure there are nodes to insert
                     index.insert_nodes(batch_nodes)
                     total_nodes_indexed += len(batch_nodes)
-                
+
                 if len(batch_docs) < confluence_fetch_batch_size:
                     self.logger.info("Final batch fetched for space_key.")
                     break
@@ -118,7 +112,7 @@ class ConfluenceIndexer:
         # Common exit logic
         if total_nodes_indexed == 0:
             self.logger.info("No documents were indexed overall.")
-        
+
         storage_context.persist()
         self.logger.info(f"Indexing complete. Total nodes indexed: {total_nodes_indexed}. Storage context persisted.")
         return {"index": index, "total_nodes_indexed": total_nodes_indexed}

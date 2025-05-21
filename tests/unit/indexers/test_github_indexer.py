@@ -1,21 +1,23 @@
 import unittest
-from unittest.mock import MagicMock, patch, ANY
-from llama_index.core import ServiceContext, StorageContext
-from llama_index_readers_github import GithubRepositoryReader # For type hinting and spec for MagicMock
-from llama_index.readers.github.utils import FilterType
-from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.core.schema import Document # For creating mock documents
-from fastapi import HTTPException
+from unittest.mock import ANY, MagicMock, patch
 
+from llama_index.core import ServiceContext, StorageContext
+from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.core.schema import Document  # For creating mock documents
+from llama_index.readers.github import GithubRepositoryReader
+
+from fastapi import HTTPException
 from moonmind.indexers.github_indexer import GitHubIndexer
+
 
 @patch('moonmind.indexers.github_indexer.GithubRepositoryReader') # Patch where it's used
 class TestGitHubIndexer(unittest.TestCase):
 
     def setUp(self):
         self.mock_storage_context = MagicMock(spec=StorageContext)
+        self.mock_storage_context.docstore = MagicMock()
         self.mock_service_context = MagicMock(spec=ServiceContext)
-        
+
         # Setup mock node parser and attach to service_context
         self.mock_node_parser = MagicMock(spec=SimpleNodeParser)
         self.mock_service_context.node_parser = self.mock_node_parser
@@ -23,12 +25,14 @@ class TestGitHubIndexer(unittest.TestCase):
         self.indexer = GitHubIndexer(logger=MagicMock())
         self.indexer_with_token = GitHubIndexer(github_token="test_token", logger=MagicMock())
 
-    def test_index_success_public_repo(self, MockGithubReader):
+    @patch('llama_index.core.VectorStoreIndex.from_documents')
+    def test_index_success_public_repo(self, mock_vs_from_docs, MockGithubReader):
+        mock_vs_from_docs.return_value = MagicMock()
         # Configure mock reader
         mock_reader_instance = MockGithubReader.return_value
         mock_doc = Document(text="Doc content", doc_id="doc1")
         mock_reader_instance.load_data.return_value = [mock_doc]
-        
+
         # Configure mock node parser
         mock_node = MagicMock() # Represents a processed node
         self.mock_node_parser.get_nodes_from_documents.return_value = [mock_node]
@@ -52,7 +56,7 @@ class TestGitHubIndexer(unittest.TestCase):
         mock_reader_instance.load_data.assert_called_once_with(branch="main")
         self.mock_node_parser.get_nodes_from_documents.assert_called_once_with([mock_doc])
         self.mock_storage_context.persist.assert_called_once()
-        
+
         self.assertIsNotNone(result["index"]) # Index object should be created
         self.assertEqual(result["total_nodes_indexed"], 1)
         # Check if insert_nodes was called on the index
@@ -60,11 +64,13 @@ class TestGitHubIndexer(unittest.TestCase):
         # For simplicity, we trust the LlamaIndex components and focus on our logic.
         # If VectorStoreIndex.from_documents and index.insert_nodes need to be checked, more patching is required.
 
-    def test_index_success_private_repo_with_token(self, MockGithubReader):
+    @patch('llama_index.core.VectorStoreIndex.from_documents')
+    def test_index_success_private_repo_with_token(self, mock_vs_from_docs, MockGithubReader):
+        mock_vs_from_docs.return_value = MagicMock()
         mock_reader_instance = MockGithubReader.return_value
         mock_doc = Document(text="Private doc content", doc_id="priv_doc1")
         mock_reader_instance.load_data.return_value = [mock_doc]
-        
+
         mock_node = MagicMock()
         self.mock_node_parser.get_nodes_from_documents.return_value = [mock_node]
 
@@ -88,10 +94,12 @@ class TestGitHubIndexer(unittest.TestCase):
         self.assertEqual(result["total_nodes_indexed"], 1)
         self.mock_storage_context.persist.assert_called_once()
 
-    def test_index_with_filter_extensions(self, MockGithubReader):
+    @patch('llama_index.core.VectorStoreIndex.from_documents')
+    def test_index_with_filter_extensions(self, mock_vs_from_docs, MockGithubReader):
+        mock_vs_from_docs.return_value = MagicMock()
         mock_reader_instance = MockGithubReader.return_value
         mock_reader_instance.load_data.return_value = [Document(text="Filtered doc")] # Assume one doc matches
-        
+
         self.mock_node_parser.get_nodes_from_documents.return_value = [MagicMock()]
 
         filter_exts = [".py", ".md"]
@@ -107,11 +115,11 @@ class TestGitHubIndexer(unittest.TestCase):
             owner="owner",
             repo="repo",
             github_token=None,
-            filter_file_extensions=(filter_exts, FilterType.INCLUDE), # Check filter applied
+            filter_file_extensions=(filter_exts, "INCLUDE"), # Check filter applied
             verbose=False,
             concurrent_requests=5
         )
-        self.assertEqual(MockGithubReader.call_args[1]['filter_file_extensions'][1], FilterType.INCLUDE)
+        self.assertEqual(MockGithubReader.call_args[1]['filter_file_extensions'][1], "INCLUDE")
 
 
     def test_index_invalid_repo_format(self, MockGithubReader):
@@ -158,7 +166,7 @@ class TestGitHubIndexer(unittest.TestCase):
     def test_index_no_documents_found(self, MockGithubReader):
         mock_reader_instance = MockGithubReader.return_value
         mock_reader_instance.load_data.return_value = [] # No documents found
-        
+
         # Node parser should not be called if there are no documents
         self.mock_node_parser.get_nodes_from_documents.return_value = []
 
@@ -185,7 +193,7 @@ class TestGitHubIndexer(unittest.TestCase):
             mock_empty_index.insert_nodes.assert_not_called() # No nodes to insert
 
         self.assertEqual(result["total_nodes_indexed"], 0)
-        self.assertEqual(result["index"], mock_empty_index) 
+        self.assertEqual(result["index"], mock_empty_index)
         self.mock_storage_context.persist.assert_called_once()
 
 if __name__ == '__main__':

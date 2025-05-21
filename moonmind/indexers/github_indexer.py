@@ -1,11 +1,12 @@
 import logging
 import os
-from typing import List, Optional, Dict, Union
+from typing import Dict, List, Optional, Union
 
-from llama_index.core import VectorStoreIndex, ServiceContext, StorageContext
+from llama_index.core import ServiceContext, StorageContext, VectorStoreIndex
+from llama_index.core.node_parser import \
+    SimpleNodeParser  # Default node parser
 from llama_index.readers.github import GithubRepositoryReader
-from llama_index.readers.github.utils import FilterType # For filtering
-from llama_index.core.node_parser import SimpleNodeParser # Default node parser
+
 from fastapi import HTTPException
 
 
@@ -43,7 +44,7 @@ class GitHubIndexer:
             if not isinstance(filter_extensions, list) or not all(isinstance(ext, str) for ext in filter_extensions):
                 self.logger.warning(f"Invalid filter_extensions format: {filter_extensions}. Should be List[str]. Ignoring.")
             else:
-                reader_filter_extensions_tuple = (filter_extensions, FilterType.INCLUDE)
+                reader_filter_extensions_tuple = (filter_extensions, "INCLUDE")
                 self.logger.info(f"Filtering for extensions: {filter_extensions}")
 
 
@@ -56,7 +57,7 @@ class GitHubIndexer:
                 filter_file_extensions=reader_filter_extensions_tuple,
                 # filter_directories=None, # Example: (["lib", "docs"], FilterType.INCLUDE)
                 verbose=False, # Set to False to avoid duplicate logging if our logger is sufficient
-                concurrent_requests=5 
+                concurrent_requests=5
             )
         except Exception as e:
             self.logger.error(f"Failed to initialize GithubRepositoryReader for {repo_full_name}: {e}")
@@ -89,13 +90,13 @@ class GitHubIndexer:
             return {"index": index, "total_nodes_indexed": total_nodes_indexed}
 
         self.logger.info(f"Loaded {len(docs)} documents from GitHub. Converting to nodes.")
-        
+
         try:
             node_parser = service_context.node_parser
         except AttributeError:
             self.logger.info("No node_parser found in service_context, using SimpleNodeParser.from_defaults().")
             node_parser = SimpleNodeParser.from_defaults()
-        
+
         nodes = node_parser.get_nodes_from_documents(docs)
         total_nodes_indexed = len(nodes)
         self.logger.info(f"Converted to {total_nodes_indexed} nodes.")
@@ -108,7 +109,7 @@ class GitHubIndexer:
             self.logger.info(f"No nodes were generated from the loaded documents for {repo_full_name}.")
 
 
-        storage_context.persist() 
+        storage_context.persist()
         self.logger.info("GitHub indexing complete and storage context persisted.")
-        
+
         return {"index": index, "total_nodes_indexed": total_nodes_indexed}
