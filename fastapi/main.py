@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 from api.routers.chat import router as chat_router
 from api.routers.documents import router as documents_router
 from api.routers.models import router as models_router
+from api.routers.context_protocol import router as context_protocol_router
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,6 +71,7 @@ async def setup():
         app.include_router(chat_router)
         app.include_router(documents_router)
         app.include_router(models_router)
+        app.include_router(context_protocol_router)
 
     except Exception as e:
         logger.error(f"Failed to initialize providers: {str(e)}")
