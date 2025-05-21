@@ -19,7 +19,8 @@ COPY pyproject.toml /app/pyproject.toml
 COPY moonmind /app/moonmind/
 # Copy the API specific parts of fastapi
 COPY fastapi/api /app/api/
-COPY fastapi/main.py /app/main.py # Ensure main.py for the CMD is at /app/main.py
+# Ensure main.py for the CMD is at /app/main.py
+COPY fastapi/main.py /app/main.py
 
 # Install the project in editable mode using the pyproject.toml in /app
 # This makes 'moonmind' package importable.
@@ -29,6 +30,8 @@ RUN pip install --no-cache-dir -e /app
 # Install hot reloading library (can be here or with other pip installs)
 # If it's already in requirements.txt, this might be redundant but harmless.
 RUN pip install --no-cache-dir watchfiles
+
+RUN echo "Installed LlamaIndex packages:" && pip list | grep llama || true
 
 EXPOSE 8000
 
