@@ -9,7 +9,7 @@ services:
       - 8080:8080
     environment:
       - OPENAI_API_BASE_URL=http://api:8000/v1
-      # - OPENAI_API_KEY=dummy-key
+      - WEBUI_AUTH=false
     env_file:
       - .env
     restart: unless-stopped
