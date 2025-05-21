@@ -177,7 +177,9 @@ The API will return appropriate error messages for issues like missing `folder_i
 
 MoonMind uses a modular microservices architecture with the following containers:
 
-- **API**: A FastAPI service that provides an OpenAI-compatible REST API for Retrieval-Augmented Generation
+- **API**: A FastAPI service that provides:
+  - An OpenAI-compatible REST API for Retrieval-Augmented Generation
+  - A Model Context Protocol server for agent interactions
 - **UI**: An Open-WebUI container that provides a UI for Retrieval-Augmented Generation
 - **Qdrant**: A Qdrant container that provides a vector database
 - **Ollama**: An Ollama container that handles local LLM inference (optional)
@@ -186,7 +188,7 @@ It is possible to run inference with Ollama, with third-party AI providers, or w
 
 If using the default Ollama container, an NVIDIA GPU with appropriate drivers is required.
 
-The API container is an OpenAI-compatible REST API, powered by FastAPI andLangChain, employing Dependency Injection with abstract interfaces to enable modular service selection.
+The API container is powered by FastAPI and LangChain, employing Dependency Injection with abstract interfaces to enable modular service selection. It supports both OpenAI-compatible endpoints and the Model Context Protocol, making it versatile for different client applications and AI agents.
 
 ## Component Definitions
 
@@ -197,9 +199,26 @@ Vector Store:
 Storage Context:
 Service Context:
 
+## Model Context Protocol Support
+
+MoonMind now supports the Model Context Protocol, allowing it to act as a server that OpenHands and other agents can make client requests to. This provides a standardized way for AI agents to communicate with language models through MoonMind.
+
+The Model Context Protocol is exposed via the `/context` endpoint, which accepts POST requests with messages and other parameters. For detailed information about the protocol implementation, see [Model Context Protocol Documentation](docs/model_context_protocol.md).
+
+### Example Client
+
+An example client is provided in `/examples/context_protocol_client.py` to demonstrate how to interact with the Model Context Protocol endpoint:
+
+```bash
+# Run with default model (gemini-pro)
+python examples/context_protocol_client.py
+
+# Run with a specific model
+python examples/context_protocol_client.py gemini-pro-vision
+```
+
 ## Roadmap
 In the future, we will support:
-- mcp protocol and server mode
 - multiple chat models available without redeployment
 - multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model
 - the ability to change many settings at runtime

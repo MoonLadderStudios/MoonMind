@@ -26,6 +26,9 @@ services:
       - LOG_LEVEL=DEBUG
       - PYTHONUNBUFFERED=1
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-0}
+      - MODEL_CONTEXT_PROTOCOL_ENABLED=true
+      - MODEL_CONTEXT_PROTOCOL_PORT=8000
+      - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
     env_file:
       - .env
     volumes:
@@ -42,6 +45,9 @@ services:
       fi"
     networks:
       - local-network
+    labels:
+      - "ai.model.context.protocol.version=0.1"
+      - "ai.model.context.protocol.endpoint=/context"
 
 volumes:
   open-webui:
