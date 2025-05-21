@@ -2,8 +2,12 @@ import logging
 import os
 from typing import Dict, List, Optional, Any, Union
 
-from llama_index import (ServiceContext, StorageContext, VectorStoreIndex,
-                         load_index_from_storage)
+from llama_index.core import (
+    ServiceContext,
+    StorageContext,
+    VectorStoreIndex,
+    load_index_from_storage
+)
 from llama_index.core.schema import TextNode
 from llama_index.embeddings import BaseEmbedding
 from llama_index.readers.confluence import ConfluenceReader

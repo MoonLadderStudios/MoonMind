@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Optional
 
-from llama_index.core.contexts import ServiceContext, StorageContext
+from llama_index.core import ServiceContext, StorageContext
 from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException
