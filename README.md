@@ -199,6 +199,7 @@ Service Context:
 
 ## Roadmap
 In the future, we will support:
+- mcp protocol and server mode
 - multiple chat models available without redeployment
 - multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model
 - the ability to change many settings at runtime
