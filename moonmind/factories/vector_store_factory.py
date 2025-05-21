@@ -1,4 +1,4 @@
-from llama_index import ServiceContext, StorageContext
+from llama_index.core import ServiceContext, StorageContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse

@@ -8,7 +8,7 @@ services:
     env_file:
       - .env
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/moonmind
     volumes:
       - ./moonmind:/app/moonmind
       - ./tests:/app/tests

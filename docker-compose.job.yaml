@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  job:
+    build:
+      context: .
+      dockerfile: ./fastapi/Dockerfile
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - FASTAPI_RELOAD=${FASTAPI_RELOAD:-0}
+    env_file:
+      - .env
+    volumes:
+      - ./jobs:/app/jobs
+      - ./models:/app/models
+      - ./moonmind:/app/moonmind:ro
+      - ./prompts:/app/prompts
+      # - ${DATA_MOUNT_SOURCE:-./data}:${DATA_MOUNT_TARGET:-/app/data}
+      - D:\Unreal\Tactics:/app/data
+    command: echo "This is the YAML command, should NOT run if overridden"
+    networks:
+      - local-network
+
+networks:
+  local-network:
+    external: true

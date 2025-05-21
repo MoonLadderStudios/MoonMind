@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import CountRequest # Added import
 from fastapi.testclient import TestClient
-from moonmind.application import app # Assuming your FastAPI app instance is here
+from main import app
 # from moonmind.config.settings import settings # If needed directly
 # from moonmind.models.documents_models import ConfluenceLoadRequest # If needed for payload construction outside TestClient json
 

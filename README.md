@@ -221,8 +221,8 @@ LangChain does not currently support the latest experimental Gemini models, so u
 ### Unit Tests
 
 To run unit tests:
-```bash
-pytest tests/ # Or specific paths like tests/indexers, tests/api
+```powershell
+.\scripts\test-unit.ps1
 ```
 
 ### Confluence Integration Tests
@@ -242,7 +242,7 @@ These tests verify the end-to-end functionality of loading documents from a real
     CONFLUENCE_USERNAME=your_email@example.com
     CONFLUENCE_API_KEY=your_confluence_api_token
     TEST_CONFLUENCE_SPACE_KEY=YOUR_TEST_SPACE_KEY  # A space with a few test documents that the provided user can access
-    
+
     QDRANT_HOST=localhost
     QDRANT_PORT=6333
     QDRANT_COLLECTION_NAME=moonmind_documents # Ensure this matches your application's Qdrant collection name (default in tests)
@@ -251,7 +251,7 @@ These tests verify the end-to-end functionality of loading documents from a real
 
 **Running the Tests:**
 To execute the Confluence integration tests, run the following command from the project root:
-```bash
-pytest tests/integration/test_confluence_e2e.py
+```powershell
+.\scripts\test-integration.ps1
 ```
 The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.

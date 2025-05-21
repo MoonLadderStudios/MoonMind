@@ -14,8 +14,10 @@ langchain-openai
 langchain-qdrant
 langsmith
 llama-index
-llama-index-readers-confluence
 llama-index-embeddings-ollama
+llama-index-readers-confluence
+llama-index-readers-github
+llama-index-readers-google
 llama-index-vector-stores-qdrant
 lxml
 ollama

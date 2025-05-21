@@ -1,4 +1,4 @@
-from llama_index import StorageContext
+from llama_index.core import StorageContext
 
 from ..config.settings import AppSettings
 

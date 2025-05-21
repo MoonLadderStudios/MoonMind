@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moonmind-project"
+version = "0.1.0"
+description = "MoonMind RAG application and supporting tools."
+readme = "README.md"
+license = { file = "LICENSE" }
+
+# This tells setuptools where to find packages when building.
+# For an editable install (`pip install -e .`), it helps ensure that
+# Python's import system can find these packages from the project root.
+[tool.setuptools.packages.find]
+where = ["."]  # Search for packages in the current directory (project root)
+include = ["moonmind*"]  # Include 'moonmind' and its sub-packages
+exclude = ["tests*", "scripts*"] # Exclude tests and scripts from being top-level packages
