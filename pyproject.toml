@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "moonmind-project"
 version = "0.1.0"
-description = "MoonMind project, including the core library and FastAPI application."
+description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
-# license = { file = "LICENSE" } # Assuming LICENSE file exists at root
+license = { file = "LICENSE" }
 
 # This tells setuptools where to find packages when building.
 # For an editable install (`pip install -e .`), it helps ensure that
