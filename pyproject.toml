@@ -14,5 +14,5 @@ readme = "README.md"
 # Python's import system can find these packages from the project root.
 [tool.setuptools.packages.find]
 where = ["."]  # Search for packages in the current directory (project root)
-include = ["moonmind*", "fastapi*"]  # Include 'moonmind' and 'fastapi' and their sub-packages
+include = ["moonmind*"]  # Include 'moonmind' and its sub-packages
 exclude = ["tests*", "scripts*"] # Exclude tests and scripts from being top-level packages

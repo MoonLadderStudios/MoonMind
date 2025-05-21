@@ -2,7 +2,7 @@ import unittest
 import logging
 from unittest.mock import MagicMock, patch, ANY
 from llama_index.core import ServiceContext, StorageContext
-from llama_index.readers.google import GoogleDriveReader # For spec for MagicMock
+from llama_index_readers_google import GoogleDriveReader # For spec for MagicMock
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.schema import Document # For creating mock documents
 from fastapi import HTTPException

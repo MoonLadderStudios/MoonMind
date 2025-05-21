@@ -17,15 +17,13 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY pyproject.toml /app/pyproject.toml
 # moonmind directory is copied from the root of the build context
 COPY moonmind /app/moonmind/
-# fastapi directory is copied from the root of the build context
-COPY fastapi /app/fastapi/
-
-# Ensure main.py for the CMD is at /app/main.py
-# This main.py is originally located at fastapi/main.py in the source repo
-COPY fastapi/main.py /app/main.py
+# Copy the API specific parts of fastapi
+COPY fastapi/api /app/api/
+COPY fastapi/main.py /app/main.py # Ensure main.py for the CMD is at /app/main.py
 
 # Install the project in editable mode using the pyproject.toml in /app
-# This makes 'moonmind' and 'fastapi' packages importable from anywhere
+# This makes 'moonmind' package importable.
+# The 'api' and 'main.py' are directly placed in /app for FastAPI.
 RUN pip install --no-cache-dir -e /app
 
 # Install hot reloading library (can be here or with other pip installs)

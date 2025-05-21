@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch, ANY
 from llama_index.core import ServiceContext, StorageContext
-from llama_index.readers.github import GithubRepositoryReader # For type hinting and spec for MagicMock
+from llama_index_readers_github import GithubRepositoryReader # For type hinting and spec for MagicMock
 from llama_index.readers.github.utils import FilterType
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.schema import Document # For creating mock documents

@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from llama_index import ServiceContext, StorageContext
+from llama_index.core.service_context import ServiceContext
+from llama_index.core.storage_context import StorageContext
 from llama_index.readers.confluence import ConfluenceReader # For type hinting if needed, but will be mocked
 from llama_index.core.schema import Document # For creating mock documents
 

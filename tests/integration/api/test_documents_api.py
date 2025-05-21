@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Assuming settings are accessible like this for mocking
@@ -9,15 +8,15 @@ from moonmind.config import settings as app_settings
 # Models for request bodies
 from moonmind.schemas.documents_models import ConfluenceLoadRequest, GitHubLoadRequest, GoogleDriveLoadRequest # Updated import path
 # The router from your application
-from fastapi.api.routers.documents import router as documents_router
+from api.routers.documents import router as documents_router
 from fastapi import HTTPException # For testing exceptions
 
 
 class TestDocumentsAPI(unittest.TestCase):
 
     def setUp(self):
-        self.app = FastAPI()
-        self.app.include_router(documents_router, prefix="/api") # Assuming a prefix if any
+        from main import app as main_app # Import the actual app
+        self.app = main_app
         
         # Mock dependencies: get_storage_context and get_service_context
         # These are module-level functions in fastapi.api.dependencies
@@ -25,25 +24,25 @@ class TestDocumentsAPI(unittest.TestCase):
         self.mock_service_context = MagicMock()
 
         # Apply patches for dependencies
-        self.patch_get_storage_context = patch('fastapi.api.dependencies.get_storage_context', return_value=self.mock_storage_context)
-        self.patch_get_service_context = patch('fastapi.api.dependencies.get_service_context', return_value=self.mock_service_context)
+        self.patch_get_storage_context = patch('api.dependencies.get_storage_context', return_value=self.mock_storage_context)
+        self.patch_get_service_context = patch('api.dependencies.get_service_context', return_value=self.mock_service_context)
         
         self.mock_get_storage_context = self.patch_get_storage_context.start()
         self.mock_get_service_context = self.patch_get_service_context.start()
 
         # Mock ConfluenceIndexer
         self.mock_confluence_indexer_instance = MagicMock()
-        self.patch_confluence_indexer = patch('fastapi.api.routers.documents.ConfluenceIndexer', return_value=self.mock_confluence_indexer_instance)
+        self.patch_confluence_indexer = patch('api.routers.documents.ConfluenceIndexer', return_value=self.mock_confluence_indexer_instance)
         self.mock_confluence_indexer_class = self.patch_confluence_indexer.start()
 
         # Mock GitHubIndexer
         self.mock_github_indexer_instance = MagicMock()
-        self.patch_github_indexer = patch('fastapi.api.routers.documents.GitHubIndexer', return_value=self.mock_github_indexer_instance)
+        self.patch_github_indexer = patch('api.routers.documents.GitHubIndexer', return_value=self.mock_github_indexer_instance)
         self.mock_github_indexer_class = self.patch_github_indexer.start()
 
         # Mock GoogleDriveIndexer
         self.mock_gdrive_indexer_instance = MagicMock()
-        self.patch_gdrive_indexer = patch('fastapi.api.routers.documents.GoogleDriveIndexer', return_value=self.mock_gdrive_indexer_instance)
+        self.patch_gdrive_indexer = patch('api.routers.documents.GoogleDriveIndexer', return_value=self.mock_gdrive_indexer_instance)
         self.mock_gdrive_indexer_class = self.patch_gdrive_indexer.start()
 
 
