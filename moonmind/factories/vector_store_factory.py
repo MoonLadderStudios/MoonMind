@@ -1,4 +1,4 @@
-from llama_index.core import ServiceContext, StorageContext
+from llama_index.core import Settings, StorageContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -20,9 +20,8 @@ def build_vector_store(settings: AppSettings, embed_model, embed_dimensions: int
 
 def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1):
     """
-    Builds and returns a Qdrant-based vector store, along with a ServiceContext
-    for embeddings. Allows the user to configure different embed models by passing
-    `embed_model` directly into this function.
+    Builds and returns a Qdrant-based vector store. Allows the user to configure 
+    different embed models by passing `embed_model` directly into this function.
     """
 
     client = QdrantClient(

@@ -65,7 +65,8 @@ async def setup():
         app.state.embed_model, app.state.embed_dimensions = build_embed_model(settings)
         app.state.vector_store = build_vector_store(settings, app.state.embed_model, app.state.embed_dimensions)
         app.state.storage_context = build_storage_context(settings, app.state.vector_store)
-        app.state.service_context = build_service_context(settings, app.state.embed_model)
+        # Configure global Settings instead of using ServiceContext
+        app.state.settings = build_service_context(settings, app.state.embed_model)
 
         # Setup routers
         app.include_router(chat_router)

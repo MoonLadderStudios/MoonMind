@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Union
 
-from llama_index.core import (ServiceContext, StorageContext, VectorStoreIndex,
+from llama_index.core import (Settings, StorageContext, VectorStoreIndex,
                               load_index_from_storage)
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.schema import TextNode
@@ -43,7 +43,7 @@ class ConfluenceIndexer:
         self,
         space_key: str,
         storage_context: StorageContext,
-        service_context: ServiceContext,
+        service_context: Settings,
         page_ids: Optional[List[str]] = None,
         confluence_fetch_batch_size: int = 100
     ) -> Dict[str, Union[VectorStoreIndex, int]]:
@@ -53,14 +53,15 @@ class ConfluenceIndexer:
         the provided storage and service contexts.
         """
         # Initialize an empty index (with no initial documents)
+        # Use the embed_model from Settings instead of passing service_context
         index = VectorStoreIndex.from_documents(
             [],
             storage_context=storage_context,
-            service_context=service_context
+            embed_model=service_context.embed_model
         )
         total_nodes_indexed = 0
 
-        # Use the node parser from the service context if provided; otherwise create a default parser.
+        # Use the node parser from the Settings if provided; otherwise create a default parser.
         try:
             node_parser = service_context.node_parser
         except AttributeError:
