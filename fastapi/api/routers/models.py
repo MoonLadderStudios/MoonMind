@@ -17,22 +17,7 @@ async def health_check():
 @router.get("/v1/models")
 async def models():
     try:
-        data = [
-            {
-                "id": settings.app_name,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": settings.app_name,
-                "permission": [],
-                "root": settings.app_name,
-                "parent": None,
-                "context_window": 4096,  # TODO: get from somewhere
-                "capabilities": {
-                    "chat_completion": True,
-                    "text_completion": True
-                }
-            }
-        ]
+        data = []
 
         google_models = list_google_models()
         for model in google_models:
@@ -42,7 +27,7 @@ async def models():
                     context_window = 1024
                 else:
                     context_window = 8192
-            
+
             capabilities = {
                 "chat_completion": False,
                 "text_completion": False,
