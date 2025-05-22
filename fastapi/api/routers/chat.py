@@ -4,15 +4,17 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from moonmind.factories.google_factory import get_google_model
-from moonmind.schemas.chat_models import (ChatCompletionRequest, # Updated import path
-                                         ChatCompletionResponse, Choice,
-                                         ChoiceMessage, Usage)
+from moonmind.schemas.chat_models import \
+    ChatCompletionRequest  # Updated import path
+from moonmind.schemas.chat_models import (ChatCompletionResponse, Choice,
+                                          ChoiceMessage, Usage)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
+    # TODO: Conditionally use Gemini, OpenAI, or other LLMs based on the model selected
     try:
         # Convert OpenAI-style messages to Google LLM format
         contents = []
@@ -24,7 +26,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 gemini_role = "model"
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid message role: {msg.role}")
-            
+
             contents.append({"role": gemini_role, "parts": [msg.content]})
 
         logger.info(f"Requested model was: {request.model}")
