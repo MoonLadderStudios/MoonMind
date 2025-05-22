@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Union
 
-from llama_index.core import ServiceContext, StorageContext, VectorStoreIndex
+from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import \
     SimpleNodeParser  # Default node parser
 from llama_index.readers.github import GithubRepositoryReader
@@ -26,7 +26,7 @@ class GitHubIndexer:
         branch: str,
         filter_extensions: Optional[List[str]],
         storage_context: StorageContext,
-        service_context: ServiceContext,
+        service_context: Settings,
     ) -> Dict[str, Union[VectorStoreIndex, int]]:
         self.logger.info(f"Starting GitHub indexing for repo: {repo_full_name} on branch: {branch}")
 
@@ -78,7 +78,7 @@ class GitHubIndexer:
         index = VectorStoreIndex.from_documents(
             [], # No initial documents
             storage_context=storage_context,
-            service_context=service_context
+            embed_model=service_context.embed_model
         )
         total_nodes_indexed = 0
 

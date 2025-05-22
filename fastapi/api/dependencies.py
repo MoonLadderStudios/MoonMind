@@ -17,4 +17,5 @@ def get_storage_context(request: Request):
     return request.app.state.storage_context
 
 def get_service_context(request: Request):
-    return request.app.state.service_context
+    # Return the global Settings object instead of ServiceContext
+    return request.app.state.settings

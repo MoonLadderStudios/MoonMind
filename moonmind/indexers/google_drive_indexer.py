@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional, Dict, Union
 
-from llama_index.core import VectorStoreIndex, ServiceContext, StorageContext
+from llama_index.core import VectorStoreIndex, Settings, StorageContext
 from llama_index.readers.google import GoogleDriveReader
 from llama_index.core.node_parser import SimpleNodeParser
 from fastapi import HTTPException
@@ -20,7 +20,7 @@ class GoogleDriveIndexer:
     def index(
         self,
         storage_context: StorageContext,
-        service_context: ServiceContext,
+        service_context: Settings,
         folder_id: Optional[str] = None,
         file_ids: Optional[List[str]] = None,
         # recursive: bool = False, # LlamaIndex GoogleDriveReader loads all files from a folder_id.
@@ -60,7 +60,7 @@ class GoogleDriveIndexer:
         index = VectorStoreIndex.from_documents(
             [], # No initial documents
             storage_context=storage_context,
-            service_context=service_context
+            embed_model=service_context.embed_model
         )
         total_nodes_indexed = 0
 

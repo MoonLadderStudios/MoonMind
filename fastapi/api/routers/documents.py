@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Optional
 
-from llama_index.core import ServiceContext, StorageContext
+from llama_index.core import Settings, StorageContext
 from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 async def load_confluence_documents(
     request: ConfluenceLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
-    service_context: ServiceContext = Depends(get_service_context)
+    service_context: Settings = Depends(get_service_context)
 ):
     if not settings.confluence.confluence_enabled:
         raise HTTPException(status_code=500, detail="Confluence is not enabled")
@@ -68,7 +68,7 @@ async def load_confluence_documents(
 async def load_github_repo(
     request: GitHubLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
-    service_context: ServiceContext = Depends(get_service_context)
+    service_context: Settings = Depends(get_service_context)
 ):
     """Load documents from a GitHub repository."""
     try:
@@ -110,7 +110,7 @@ async def load_github_repo(
 async def load_google_drive_documents(
     request: GoogleDriveLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
-    service_context: ServiceContext = Depends(get_service_context)
+    service_context: Settings = Depends(get_service_context)
 ):
     """Load documents from Google Drive."""
     try:
