@@ -17,16 +17,32 @@ async def chat_completions(request: ChatCompletionRequest):
         # Convert OpenAI-style messages to Google LLM format
         contents = []
         for msg in request.messages:
-            if msg.role in {"system", "user", "assistant"}:
-                contents.append({"role": msg.role, "parts": [msg.content]})
+            # Map OpenAI roles to Gemini roles (Gemini only accepts "user" and "model" roles)
+            if msg.role == "user":
+                gemini_role = "user"
+            elif msg.role in {"system", "assistant"}:
+                gemini_role = "model"
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid message role: {msg.role}")
+            
+            contents.append({"role": gemini_role, "parts": [msg.content]})
 
         logger.info(f"Requested model was: {request.model}")
+        logger.debug(f"Converted messages format: {contents}")
 
         # Fetch the Google LLM and generate content
         chat_model = get_google_model(request.model)
-        response_gemini = chat_model.generate_content(contents)
+        try:
+            response_gemini = chat_model.generate_content(contents)
+        except Exception as e:
+            logger.error(f"Error generating content with Gemini: {e}")
+            # Check if this is a role-related error and provide a more helpful message
+            if "Please use a valid role" in str(e):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Role error with Gemini API: {str(e)}. Note that Gemini only accepts 'user' and 'model' roles."
+                )
+            raise
 
         # Extract the response from the Google LLM
         if not response_gemini.candidates or not response_gemini.candidates[0].content.parts:
