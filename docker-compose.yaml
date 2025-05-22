@@ -5,7 +5,7 @@ services:
     image: ghcr.io/open-webui/open-webui:main
     build:
       context: ./open-webui
-      dockerfile: ./open-webui/Dockerfile
+      dockerfile: ./Dockerfile
     volumes:
       - open-webui:/app/backend/data
     ports:
