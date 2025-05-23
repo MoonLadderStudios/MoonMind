@@ -22,32 +22,44 @@ Document indexers and routes are available, but if documents have already been i
 
 ### Ollama Model Configuration
 
-If you are using the provided Ollama service for local LLM inference, you can control which model is loaded by default at startup. This is useful for choosing between a general chat model or a specialized embedding model.
+If you are using the provided Ollama service for local LLM inference, you can control which model or models (chat and/or embedding) are loaded by default at startup.
 
 The following environment variables in your `.env` file are used:
 
-*   `OLLAMA_CHAT_MODEL`: Specifies the chat model to be used. Defaults to `"devstral:24b"`.
+*   `OLLAMA_CHAT_MODEL`: Specifies the chat model. Defaults to `"devstral:24b"`.
 *   `OLLAMA_EMBEDDING_MODEL`: Specifies the embedding model. Defaults to `"hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"`.
-*   `OLLAMA_MODEL_TYPE`: Determines which type of model to load by default. Can be set to `"chat"` or `"embedding"`. If not set, it defaults to `"chat"`.
+*   `OLLAMA_MODES`: Determines which model(s) to load by default. This is a comma-separated string. Valid values are "chat", "embed", or "chat,embed". If not set, it defaults to "chat".
 
-**Launching with a Specific Model Type:**
+**Launching with Specific Models:**
 
-You can also specify the model type at launch time using the `scripts/ollama.ps1` script with the `-ModelType` parameter. This will override the `OLLAMA_MODEL_TYPE` value in your `.env` file for that specific run.
+You can specify which models to load at launch time using the `scripts/ollama.ps1` script with its new switch parameters. This will override the `OLLAMA_MODES` value in your `.env` file for that specific run.
+
+*   `-LoadChatModel`: Use this switch to load the chat model specified by `OLLAMA_CHAT_MODEL`.
+*   `-LoadEmbeddingModel`: Use this switch to load the embedding model specified by `OLLAMA_EMBEDDING_MODEL`.
+
+If neither switch is provided, the script defaults to loading only the chat model (equivalent to `OLLAMA_MODES="chat"`).
 
 Examples:
 
-*   To launch Ollama and load the configured chat model (`devstral:24b`):
+*   To launch Ollama and load only the configured chat model:
     ```powershell
-    .\scripts\ollama.ps1 -ModelType chat
+    .\scripts\ollama.ps1 -LoadChatModel
     ```
-    (or simply `.\scripts\ollama.ps1` as "chat" is the default)
+    (or simply `.\scripts\ollama.ps1` as this is the default if no switches are passed)
 
-*   To launch Ollama and load the configured embedding model (`hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K`):
+*   To launch Ollama and load only the configured embedding model:
     ```powershell
-    .\scripts\ollama.ps1 -ModelType embedding
+    .\scripts\ollama.ps1 -LoadEmbeddingModel
     ```
 
-The script will automatically pull the selected model if it's not already available locally and then make it active within the Ollama server.
+*   To launch Ollama and load both the chat and embedding models:
+    ```powershell
+    .\scripts\ollama.ps1 -LoadChatModel -LoadEmbeddingModel
+    ```
+
+The script will automatically attempt to pull the selected model(s) if not already available locally and then make them active within the Ollama server.
+
+**Note on Resource Usage:** Loading multiple models simultaneously (e.g., both chat and embedding) will consume more system resources (CPU, RAM, VRAM). Ensure your system has adequate resources if you choose to load multiple models.
 
 ## Document Loaders
 

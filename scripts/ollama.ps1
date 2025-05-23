@@ -1,10 +1,25 @@
 param (
-    [ValidateSet("chat", "embedding")]
-    [string]$ModelType = "chat"
+    [switch]$LoadChatModel,
+    [switch]$LoadEmbeddingModel
 )
 
-$env:OLLAMA_MODEL_TYPE = $ModelType
-Write-Host "OLLAMA_MODEL_TYPE set to: $env:OLLAMA_MODEL_TYPE" # Inform the user
+$modes = [System.Collections.Generic.List[string]]::new()
+if ($LoadChatModel) {
+    $modes.Add("chat")
+}
+if ($LoadEmbeddingModel) {
+    $modes.Add("embed")
+}
+
+# Default to chat if no specific mode is selected
+if ($modes.Count -eq 0) {
+    $modes.Add("chat")
+    Write-Host "No specific model type selected, defaulting to OLLAMA_MODES=chat"
+}
+$OLLAMA_MODES_VALUE = $modes -join ","
+
+$env:OLLAMA_MODES = $OLLAMA_MODES_VALUE
+Write-Host "OLLAMA_MODES set to: $env:OLLAMA_MODES"
 
 # Stop existing services
 docker-compose -f docker-compose.ollama.yaml down
