@@ -1,9 +1,6 @@
 import logging
-import time
-
 from fastapi import APIRouter, HTTPException
-from moonmind.config.settings import settings
-from moonmind.factories.google_factory import list_google_models
+from moonmind.models_cache import model_cache # Import the model cache
 
 router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
@@ -17,45 +14,20 @@ async def health_check():
 @router.get("/v1/models")
 async def models():
     try:
-        data = []
-
-        google_models = list_google_models()
-        for model in google_models:
-            context_window = model.input_token_limit
-            if context_window is None:
-                if 'embedContent' in model.supported_generation_methods:
-                    context_window = 1024
-                else:
-                    context_window = 8192
-
-            capabilities = {
-                "chat_completion": False,
-                "text_completion": False,
-                "embedding": False,
-            }
-            if 'generateContent' in model.supported_generation_methods:
-                capabilities["chat_completion"] = True
-                capabilities["text_completion"] = True
-            if 'embedContent' in model.supported_generation_methods:
-                capabilities["embedding"] = True
-
-            model_data = {
-                "id": model.name,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": "Google",
-                "permission": [],
-                "root": model.name,
-                "parent": None,
-                "context_window": context_window,
-                "capabilities": capabilities,
-            }
-            data.append(model_data)
+        # Get all models from the cache
+        # The data is already formatted by the cache's _fetch_all_models method
+        all_cached_models = model_cache.get_all_models()
+        
+        if not all_cached_models:
+            logger.warning("Model cache returned no models. This might be due to API key issues or errors during cache refresh.")
+            # Depending on desired behavior, you might raise an error or return empty list
+            # For now, return empty list as per current behavior if both providers fail.
 
         return {
             "object": "list",
-            "data": data
+            "data": all_cached_models
         }
     except Exception as e:
-        logger.exception(f"Error getting models: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error retrieving models from cache: {e}")
+        # This is a more general error, perhaps the cache itself failed unexpectedly.
+        raise HTTPException(status_code=500, detail=f"An error occurred while retrieving models: {str(e)}")

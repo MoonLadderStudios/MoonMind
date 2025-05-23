@@ -1,0 +1,163 @@
+import logging
+import time
+from threading import Lock, Thread
+from typing import Any, Dict, List, Optional, Tuple
+
+from moonmind.factories.google_factory import list_google_models
+from moonmind.factories.openai_factory import list_openai_models
+from moonmind.config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+class ModelCache:
+    _instance = None
+    _lock = Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._lock:
+                if not cls._instance:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, refresh_interval_seconds: Optional[int] = None):
+        # Ensure __init__ is only run once for the singleton
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+        with self._lock:
+            if hasattr(self, '_initialized') and self._initialized:
+                return
+
+            self.models_data: List[Dict[str, Any]] = []
+            self.model_to_provider: Dict[str, str] = {}
+            self.last_refresh_time: float = 0
+            # Use the value from settings if no specific interval is passed during instantiation
+            self.refresh_interval_seconds: int = refresh_interval_seconds if refresh_interval_seconds is not None else settings.model_cache_refresh_interval_seconds
+            self._initialized: bool = True
+            self._refresh_thread = Thread(target=self._periodic_refresh, daemon=True)
+            self._refresh_in_progress = False # Flag to prevent concurrent refreshes
+            
+            logger.info("ModelCache initialized. Starting refresh thread.")
+            self._refresh_thread.start()
+
+    def _fetch_all_models(self) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        logger.info("Attempting to fetch all models for cache refresh.")
+        all_models_data = []
+        model_to_provider_map = {}
+        
+        # Fetch Google Models
+        try:
+            if settings.google.google_api_key:
+                google_models_raw = list_google_models()
+                logger.info(f"Fetched {len(google_models_raw)} raw Google models.")
+                for model in google_models_raw:
+                    context_window = model.input_token_limit
+                    if context_window is None: # Default context window
+                        context_window = 1024 if 'embedContent' in model.supported_generation_methods else 8192
+                    
+                    capabilities = {
+                        "chat_completion": 'generateContent' in model.supported_generation_methods,
+                        "text_completion": 'generateContent' in model.supported_generation_methods,
+                        "embedding": 'embedContent' in model.supported_generation_methods,
+                    }
+                    model_entry = {
+                        "id": model.name, "object": "model", "created": int(time.time()),
+                        "owned_by": "Google", "permission": [], "root": model.name, "parent": None,
+                        "context_window": context_window, "capabilities": capabilities,
+                    }
+                    all_models_data.append(model_entry)
+                    model_to_provider_map[model.name] = "Google"
+            else:
+                logger.warning("Google API key not set. Skipping Google models.")
+        except Exception as e:
+            logger.exception(f"Error fetching Google models: {e}")
+
+        # Fetch OpenAI Models
+        try:
+            if settings.openai.openai_api_key:
+                openai_models_raw = list_openai_models() # This should return a list of model objects/dicts
+                logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
+                for model in openai_models_raw: # Assuming model is an object with an 'id' attribute
+                    model_id = model.id 
+                    # Determine context window (these are common defaults, might need adjustment)
+                    if "gpt-4" in model_id: # Covers gpt-4, gpt-4-32k etc.
+                        context_window = 8192 
+                        if "32k" in model_id: context_window = 32768
+                        if "turbo-2024-04-09" in model_id or "128k" in model_id : context_window = 128000
+                    elif "gpt-3.5-turbo" in model_id:
+                        context_window = 4096
+                        if "16k" in model_id: context_window = 16384
+                    else: # Default for other OpenAI models
+                        context_window = 4096 
+
+                    capabilities = { # Assume chat models are for chat/text completion
+                        "chat_completion": True, "text_completion": True, "embedding": "embedding" in model_id,
+                    }
+                    model_entry = {
+                        "id": model_id, "object": "model", "created": int(getattr(model, 'created', time.time())),
+                        "owned_by": "OpenAI", "permission": [], "root": model_id, "parent": None,
+                        "context_window": context_window, "capabilities": capabilities,
+                    }
+                    all_models_data.append(model_entry)
+                    model_to_provider_map[model_id] = "OpenAI"
+            else:
+                logger.warning("OpenAI API key not set. Skipping OpenAI models.")
+        except Exception as e:
+            logger.exception(f"Error fetching OpenAI models: {e}")
+        
+        logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
+        return all_models_data, model_to_provider_map
+
+    def refresh_models_sync(self):
+        with self._lock:
+            if self._refresh_in_progress:
+                logger.info("Refresh already in progress. Skipping.")
+                return
+            self._refresh_in_progress = True
+        
+        logger.info("Starting synchronous model cache refresh.")
+        try:
+            self.models_data, self.model_to_provider = self._fetch_all_models()
+            self.last_refresh_time = time.time()
+            logger.info(f"Model cache refreshed. {len(self.models_data)} models loaded. Last refresh: {self.last_refresh_time}")
+        except Exception as e:
+            logger.error(f"Failed to refresh model cache: {e}")
+        finally:
+            with self._lock:
+                self._refresh_in_progress = False
+
+    def _periodic_refresh(self):
+        # Initial refresh immediately after thread starts
+        self.refresh_models_sync()
+        while True:
+            time_since_last_refresh = time.time() - self.last_refresh_time
+            if time_since_last_refresh >= self.refresh_interval_seconds:
+                logger.info(f"Scheduled refresh interval reached ({self.refresh_interval_seconds}s). Refreshing models.")
+                self.refresh_models_sync()
+            # Sleep for a short duration before checking again.
+            # This determines how frequently the thread wakes up to check if a refresh is needed
+            # and also allows the thread to respond to shutdown signals more gracefully
+            # rather than sleeping for the entire refresh_interval_seconds.
+            time.sleep(min(60, self.refresh_interval_seconds / 10 if self.refresh_interval_seconds > 0 else 60))
+
+
+    def get_all_models(self) -> List[Dict[str, Any]]:
+        if not self.models_data and (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
+            logger.info("Models data is empty or stale, attempting synchronous refresh before returning.")
+            self.refresh_models_sync()
+        return self.models_data
+
+    def get_model_provider(self, model_id: str) -> Optional[str]:
+        if not self.model_to_provider and (time.time() - self.last_refresh_time > self.refresh_interval_seconds):
+             logger.info("Model to provider map is empty or stale, attempting synchronous refresh.")
+             self.refresh_models_sync()
+        return self.model_to_provider.get(model_id)
+
+# Global instance of the cache
+# When ModelCache() is called here without arguments, __init__ will use settings.model_cache_refresh_interval_seconds
+model_cache = ModelCache()
+
+# Optional: function to explicitly trigger a refresh if needed, e.g. for tests or admin endpoint
+def force_refresh_model_cache():
+    logger.info("Force refreshing model cache.")
+    model_cache.refresh_models_sync()
