@@ -64,6 +64,9 @@ class TestModelCache(unittest.TestCase):
                 # A simple approach for now, assuming tests are quick enough not to overlap badly.
                 pass # Cannot reliably stop daemon threads, rely on re-patching for new instances.
         ModelCache._instance = None # Forces re-creation on next ModelCache() call
+        # Also ensure the settings object itself is restored if tests modify its attributes directly
+        # For pydantic BaseSettings, this usually means ensuring env vars are clean or re-evaluating `settings = Settings()`
+        # For this test suite, direct patching of settings attributes is restored in tearDown.
 
 
     def tearDown(self):
@@ -71,25 +74,58 @@ class TestModelCache(unittest.TestCase):
         self.mock_openai_models_patch.stop()
         patch.stopall() # Stop any other patches that might have been started
 
-        # Restore original settings
+        # Restore original settings by direct assignment
         settings.google.google_api_key = self.original_google_api_key
         settings.openai.openai_api_key = self.original_openai_api_key
-        if hasattr(settings, 'model_cache_refresh_interval'):
-             settings.model_cache_refresh_interval = self.original_refresh_interval
+        # Ensure this attribute exists on settings before trying to set it.
+        # The settings object is a module global, so changes persist if not restored.
+        settings.model_cache_refresh_interval_seconds = self.original_refresh_interval
         
         # Clean up the singleton instance to prevent state leakage between tests
         ModelCache._instance = None
 
 
-    def test_singleton_behavior(self):
-        # Disable thread for this test to avoid side effects if it runs too quickly
-        with patch.object(ModelCache, '_periodic_refresh', MagicMock()) as mock_periodic_refresh:
-            cache1 = ModelCache(refresh_interval_seconds=1000) # High interval
-            cache2 = ModelCache(refresh_interval_seconds=1000)
-            self.assertIs(cache1, cache2)
-            # mock_periodic_refresh.assert_called_once() # Check if thread was started (or its mock)
+    @patch.object(ModelCache, '_periodic_refresh', MagicMock()) # Prevent thread start
+    def test_singleton_behavior(self, mock_periodic_refresh_disabled):
+        cache1 = ModelCache(refresh_interval_seconds=1000) 
+        cache2 = ModelCache(refresh_interval_seconds=1000)
+        self.assertIs(cache1, cache2)
+        # Ensure _periodic_refresh (and thus the thread) wasn't called due to the outer patch
+        mock_periodic_refresh_disabled.assert_not_called() 
+
+
+    @patch.object(ModelCache, '_periodic_refresh', MagicMock()) # Prevent thread start for this specific test too
+    def test_default_refresh_interval_from_settings(self, mock_periodic_refresh_disabled):
+        # Ensure settings.model_cache_refresh_interval_seconds has its default or a known value
+        # The actual default is 43200, set in settings.py
+        # Here, we explicitly patch it to ensure the test condition.
+        with patch.object(settings, 'model_cache_refresh_interval_seconds', 43200):
+            # ModelCache._instance is None due to setUp
+            cache = ModelCache() # Instantiate without arguments
+            self.assertEqual(cache.refresh_interval_seconds, 43200)
+
+    @patch.object(ModelCache, '_periodic_refresh', MagicMock())
+    def test_override_refresh_interval_via_patched_settings(self, mock_periodic_refresh_disabled):
+        test_interval = 100
+        # Patch the settings value that ModelCache constructor will read
+        with patch.object(settings, 'model_cache_refresh_interval_seconds', test_interval):
+            # ModelCache._instance is None due to setUp
+            cache = ModelCache() # Instantiate without arguments
+            self.assertEqual(cache.refresh_interval_seconds, test_interval)
+
+    @patch.object(ModelCache, '_periodic_refresh', MagicMock())
+    def test_override_refresh_interval_via_constructor_argument(self, mock_periodic_refresh_disabled):
+        constructor_interval = 50
+        # For this test, set settings.model_cache_refresh_interval_seconds to something different
+        # to ensure the constructor argument takes precedence.
+        with patch.object(settings, 'model_cache_refresh_interval_seconds', 9999):
+            # ModelCache._instance is None due to setUp
+            cache = ModelCache(refresh_interval_seconds=constructor_interval)
+            self.assertEqual(cache.refresh_interval_seconds, constructor_interval)
+
 
     def test_initial_refresh_populates_data(self):
+        # This test specifically checks the threaded initial refresh.
         # The ModelCache constructor now starts a thread that calls refresh_models_sync.
         # We need to allow time for this or mock the threading part.
         # For simplicity, let's test refresh_models_sync directly first, then address threading.

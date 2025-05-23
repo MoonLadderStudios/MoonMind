@@ -20,7 +20,7 @@ class ModelCache:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, refresh_interval_seconds: int = 3600):
+    def __init__(self, refresh_interval_seconds: Optional[int] = None):
         # Ensure __init__ is only run once for the singleton
         if hasattr(self, '_initialized') and self._initialized:
             return
@@ -31,7 +31,8 @@ class ModelCache:
             self.models_data: List[Dict[str, Any]] = []
             self.model_to_provider: Dict[str, str] = {}
             self.last_refresh_time: float = 0
-            self.refresh_interval_seconds: int = refresh_interval_seconds
+            # Use the value from settings if no specific interval is passed during instantiation
+            self.refresh_interval_seconds: int = refresh_interval_seconds if refresh_interval_seconds is not None else settings.model_cache_refresh_interval_seconds
             self._initialized: bool = True
             self._refresh_thread = Thread(target=self._periodic_refresh, daemon=True)
             self._refresh_in_progress = False # Flag to prevent concurrent refreshes
@@ -133,7 +134,10 @@ class ModelCache:
             if time_since_last_refresh >= self.refresh_interval_seconds:
                 logger.info(f"Scheduled refresh interval reached ({self.refresh_interval_seconds}s). Refreshing models.")
                 self.refresh_models_sync()
-            # Check more frequently than the refresh interval to allow for graceful shutdown if needed
+            # Sleep for a short duration before checking again.
+            # This determines how frequently the thread wakes up to check if a refresh is needed
+            # and also allows the thread to respond to shutdown signals more gracefully
+            # rather than sleeping for the entire refresh_interval_seconds.
             time.sleep(min(60, self.refresh_interval_seconds / 10 if self.refresh_interval_seconds > 0 else 60))
 
 
@@ -150,7 +154,7 @@ class ModelCache:
         return self.model_to_provider.get(model_id)
 
 # Global instance of the cache
-# The refresh interval can be configured via settings if needed, e.g. settings.model_cache_refresh_interval
+# When ModelCache() is called here without arguments, __init__ will use settings.model_cache_refresh_interval_seconds
 model_cache = ModelCache()
 
 # Optional: function to explicitly trigger a refresh if needed, e.g. for tests or admin endpoint
