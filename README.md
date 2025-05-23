@@ -222,7 +222,7 @@ python examples/context_protocol_client.py gemini-pro-vision
 
 ### `/v1/models`
 
-This endpoint lists the available chat models from all configured providers. It now returns a combined list that can include models from Google, OpenAI, and potentially others in the future.
+This endpoint lists the available chat models from all configured providers. It now returns a combined list that can include models from Google, OpenAI, and potentially others in the future. The model list is cached in memory for improved performance after the initial fetch and is refreshed periodically (defaulting to every hour, but configurable).
 
 **Example Response Snippet:**
 ```json

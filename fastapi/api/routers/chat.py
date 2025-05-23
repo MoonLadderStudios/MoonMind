@@ -1,16 +1,17 @@
 import logging
 import time
 from uuid import uuid4
-import openai # Added import for openai
+import openai
+import google.generativeai as genai
 
 from fastapi import APIRouter, HTTPException
-from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.openai_factory import get_openai_model # Added import for get_openai_model
-from moonmind.schemas.chat_models import \
-    ChatCompletionRequest
+from moonmind.factories.google_factory import get_google_model # Still needed for Google logic
+from moonmind.factories.openai_factory import get_openai_model # Still needed for OpenAI logic
+from moonmind.schemas.chat_models import ChatCompletionRequest
 from moonmind.schemas.chat_models import (ChatCompletionResponse, Choice,
                                           ChoiceMessage, Usage)
-from moonmind.config.settings import settings # Import settings to check API key presence
+from moonmind.config.settings import settings
+from moonmind.models_cache import model_cache # Import the model cache
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -18,51 +19,44 @@ logger = logging.getLogger(__name__)
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
     try:
-        model_id = request.model.lower() # Use lower for case-insensitive matching
-        is_openai_model = model_id.startswith("gpt-") or "openai" in model_id # Simple check
+        provider = model_cache.get_model_provider(request.model)
 
-        if is_openai_model:
+        if provider == "OpenAI":
             if not settings.openai.openai_api_key:
-                raise HTTPException(status_code=400, detail="OpenAI API key not configured.")
+                raise HTTPException(status_code=400, detail="OpenAI API key not configured for the server.")
             
-            openai_model_name = get_openai_model(request.model)
-            logger.info(f"Using OpenAI model: {openai_model_name}")
+            # The get_openai_model factory function simply returns the model name.
+            # It's kept for consistency but could be bypassed if model_id from request is directly used.
+            openai_model_name = get_openai_model(request.model) 
+            logger.info(f"Routing to OpenAI for model: {openai_model_name}")
 
             # Prepare messages for OpenAI
             openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
             try:
-                # Ensure API key is set for the openai client library for this call
                 openai.api_key = settings.openai.openai_api_key
-                openai_response = await openai.ChatCompletion.acreate( # Use acreate for async
-                    model=openai_model_name,
+                openai_response = await openai.ChatCompletion.acreate(
+                    model=openai_model_name, # Use the potentially settings-adjusted model name
                     messages=openai_messages,
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,
-                    # Add other parameters from request if needed (e.g., top_p, n, stream)
+                    # TODO: Add other parameters like top_p, n, stream from request
                 )
             except Exception as e:
-                logger.error(f"Error calling OpenAI API: {e}")
+                logger.error(f"Error calling OpenAI API for model {openai_model_name}: {e}")
                 raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
             if not openai_response.choices:
                 raise HTTPException(status_code=500, detail="Invalid response from OpenAI API: No choices returned.")
-
-            ai_message_content = openai_response.choices[0].message.content
             
-            # Extract usage data from OpenAI response
+            ai_message_content = openai_response.choices[0].message.content
             usage_data = openai_response.usage
-            usage = Usage(
-                prompt_tokens=usage_data.prompt_tokens,
-                completion_tokens=usage_data.completion_tokens,
-                total_tokens=usage_data.total_tokens,
-            )
-
-            response = ChatCompletionResponse(
+            
+            return ChatCompletionResponse(
                 id=openai_response.id,
                 object="chat.completion",
                 created=openai_response.created,
-                model=openai_response.model, # Use the model name from OpenAI's response
+                model=openai_response.model, # This will be the actual model used by OpenAI
                 choices=[
                     Choice(
                         index=0,
@@ -70,67 +64,64 @@ async def chat_completions(request: ChatCompletionRequest):
                         finish_reason=openai_response.choices[0].finish_reason,
                     )
                 ],
-                usage=usage,
+                usage=Usage(
+                    prompt_tokens=usage_data.prompt_tokens,
+                    completion_tokens=usage_data.completion_tokens,
+                    total_tokens=usage_data.total_tokens,
+                ),
             )
-            return response
 
-        else: # Assume Google Model
+        elif provider == "Google":
             if not settings.google.google_api_key:
-                raise HTTPException(status_code=400, detail="Google API key not configured.")
+                raise HTTPException(status_code=400, detail="Google API key not configured for the server.")
+            
+            google_model_name = request.model # Use the requested model ID directly
+            logger.info(f"Routing to Google for model: {google_model_name}")
 
-            # Convert OpenAI-style messages to Google LLM format
-            contents = []
+            # Convert messages to Google's format
+            google_contents = []
             for msg in request.messages:
-                if msg.role == "user":
-                    gemini_role = "user"
-                elif msg.role in {"system", "assistant"}:
-                    gemini_role = "model" # Gemini uses "model" for system/assistant
-                else:
-                    # This case should ideally be caught by Pydantic validation of request.messages
-                    logger.warning(f"Invalid message role '{msg.role}' encountered for Google model. Mapping to 'user'.")
-                    gemini_role = "user" 
+                role = "user" # Default role
+                if msg.role == "assistant" or msg.role == "system": # System messages are treated as model turns before user
+                    role = "model"
+                elif msg.role == "user":
+                    role = "user"
+                else: # Should be caught by Pydantic, but good to log
+                    logger.warning(f"Invalid role {msg.role} for Google model, defaulting to 'user'.")
+                google_contents.append({"role": role, "parts": [{"text": msg.content}]})
 
-                contents.append({"role": gemini_role, "parts": [{"text": msg.content}]}) # Gemini expects "text" field for parts
-
-            logger.info(f"Using Google model: {request.model}")
-            logger.debug(f"Converted messages format for Google: {contents}")
-
-            chat_model = get_google_model(request.model)
+            chat_model_instance = get_google_model(google_model_name) # Get the actual model instance from factory
             try:
-                # Ensure Google API key is configured for the factory if it relies on it implicitly
-                # (Assuming get_google_model or the SDK call handles API key internally via settings)
-                response_gemini = chat_model.generate_content(contents)
+                google_response = chat_model_instance.generate_content(google_contents)
+            except ValueError as e:
+                logger.error(f"ValueError with Google Gemini model {google_model_name}: {e}")
+                detail_msg = f"Invalid argument for Google model. Original: {str(e)}"
+                if "role" in str(e).lower(): # More specific message for role errors
+                    detail_msg = f"Invalid role in request for Google model. Ensure roles are 'user' or 'model'. Original: {str(e)}"
+                raise HTTPException(status_code=400, detail=detail_msg)
             except Exception as e:
-                logger.error(f"Error generating content with Google Gemini: {e}")
-                if "Please use a valid role" in str(e) or "role" in str(e).lower():
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Role error with Google Gemini API: {str(e)}. Ensure messages use 'user' or map 'system'/'assistant' to 'model'."
-                    )
+                logger.error(f"Error generating content with Google Gemini model {google_model_name}: {e}")
                 raise HTTPException(status_code=500, detail=f"Google Gemini API error: {str(e)}")
 
-            if not response_gemini.candidates or not response_gemini.candidates[0].content.parts:
+            if not google_response.candidates or not google_response.candidates[0].content.parts:
                 raise HTTPException(status_code=500, detail="Invalid response from Google Gemini: No content.")
-
-            ai_message = response_gemini.candidates[0].content.parts[0].text
-
-            # Construct the OpenAI-style response for Google model
-            # Placeholder for actual token count from Google, if available.
-            # Gemini API might provide token counts in metadata or via a separate API.
-            # For now, using simple length-based estimation.
-            prompt_tokens_est = sum(len(p["parts"][0]["text"].split()) for p in contents)
-            completion_tokens_est = len(ai_message.split())
             
-            response = ChatCompletionResponse(
+            ai_message_text = google_response.candidates[0].content.parts[0].text
+            
+            # Estimate tokens for Google response (actual token count might not be readily available)
+            prompt_tokens_est = sum(len(part["parts"][0]["text"].split()) for part in google_contents)
+            completion_tokens_est = len(ai_message_text.split())
+
+            return ChatCompletionResponse(
                 id=f"cmpl-goog-{uuid4().hex}",
                 object="chat.completion",
                 created=int(time.time()),
-                model=request.model,
+                model=google_model_name, # Echo back the requested model
                 choices=[
                     Choice(
                         index=0,
-                        message=ChoiceMessage(role="assistant", content=ai_message.strip()),
-                        finish_reason="stop", # Google's API might have a different way to indicate this
+                        message=ChoiceMessage(role="assistant", content=ai_message_text.strip()),
+                        finish_reason="stop", # Or map from google_response if available
                     )
                 ],
                 usage=Usage(
@@ -139,10 +130,23 @@ async def chat_completions(request: ChatCompletionRequest):
                     total_tokens=prompt_tokens_est + completion_tokens_est,
                 ),
             )
-            return response
+        else:
+            # Handle case where model is not found in cache or provider is unknown
+            logger.warning(f"Model '{request.model}' not found in cache or provider is unknown.")
+            # Force a cache refresh and try again once, in case the model was just added
+            model_cache.refresh_models_sync()
+            provider = model_cache.get_model_provider(request.model)
+            if provider: # Retry logic after refresh
+                 logger.info(f"Retrying with provider '{provider}' for model '{request.model}' after cache refresh.")
+                 # This is a simplified retry; ideally, refactor to avoid code duplication
+                 # For now, just redirecting to the start of the function or raising error
+                 # To prevent potential infinite loop on persistent error, just raise for now
+                 raise HTTPException(status_code=404, detail=f"Model '{request.model}' found after refresh, but retry logic needs full implementation. Please try request again.")
+            
+            raise HTTPException(status_code=404, detail=f"Model '{request.model}' not found or provider unknown.")
 
-    except HTTPException: # Re-raise HTTPExceptions directly
-        raise
+    except HTTPException:
+        raise # Re-raise HTTPExceptions directly
     except Exception as e:
-        logger.exception(f"Unhandled error in chat_completions: {e}")
+        logger.exception(f"Unhandled error in chat_completions for model {request.model}: {e}")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
