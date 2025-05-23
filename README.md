@@ -20,6 +20,35 @@ Pydantic settings allow you to configure:
 
 Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
 
+### Ollama Model Configuration
+
+If you are using the provided Ollama service for local LLM inference, you can control which model is loaded by default at startup. This is useful for choosing between a general chat model or a specialized embedding model.
+
+The following environment variables in your `.env` file are used:
+
+*   `OLLAMA_CHAT_MODEL`: Specifies the chat model to be used. Defaults to `"devstral:24b"`.
+*   `OLLAMA_EMBEDDING_MODEL`: Specifies the embedding model. Defaults to `"hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"`.
+*   `OLLAMA_MODEL_TYPE`: Determines which type of model to load by default. Can be set to `"chat"` or `"embedding"`. If not set, it defaults to `"chat"`.
+
+**Launching with a Specific Model Type:**
+
+You can also specify the model type at launch time using the `scripts/ollama.ps1` script with the `-ModelType` parameter. This will override the `OLLAMA_MODEL_TYPE` value in your `.env` file for that specific run.
+
+Examples:
+
+*   To launch Ollama and load the configured chat model (`devstral:24b`):
+    ```powershell
+    .\scripts\ollama.ps1 -ModelType chat
+    ```
+    (or simply `.\scripts\ollama.ps1` as "chat" is the default)
+
+*   To launch Ollama and load the configured embedding model (`hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K`):
+    ```powershell
+    .\scripts\ollama.ps1 -ModelType embedding
+    ```
+
+The script will automatically pull the selected model if it's not already available locally and then make it active within the Ollama server.
+
 ## Document Loaders
 
 This section describes the available document loaders and how to use their respective API endpoints.
