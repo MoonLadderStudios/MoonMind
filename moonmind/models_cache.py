@@ -1,13 +1,13 @@
+import asyncio
 import logging
 import time
-import asyncio
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
-from moonmind.factories.google_factory import list_google_models
-from moonmind.factories.openai_factory import list_openai_models
-from moonmind.factories.ollama_factory import list_ollama_models
 from moonmind.config.settings import settings
+from moonmind.factories.google_factory import list_google_models
+from moonmind.factories.ollama_factory import list_ollama_models
+from moonmind.factories.openai_factory import list_openai_models
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class ModelCache:
             self._initialized: bool = True
             self._refresh_thread = Thread(target=self._periodic_refresh, daemon=True)
             self._refresh_in_progress = False # Flag to prevent concurrent refreshes
-            
+
             logger.info("ModelCache initialized. Starting refresh thread.")
             self._refresh_thread.start()
 
@@ -46,17 +46,17 @@ class ModelCache:
         logger.info("Attempting to fetch all models for cache refresh.")
         all_models_data = []
         model_to_provider_map = {}
-        
+
         # Fetch Google Models
         try:
             if settings.is_provider_enabled("google"):
-                google_models_raw = list_google_models()
+                google_models_raw = list(list_google_models())  # Convert generator to list
                 logger.info(f"Fetched {len(google_models_raw)} raw Google models.")
                 for model in google_models_raw:
                     context_window = model.input_token_limit
                     if context_window is None: # Default context window
                         context_window = 1024 if 'embedContent' in model.supported_generation_methods else 8192
-                    
+
                     capabilities = {
                         "chat_completion": 'generateContent' in model.supported_generation_methods,
                         "text_completion": 'generateContent' in model.supported_generation_methods,
@@ -83,17 +83,17 @@ class ModelCache:
                 openai_models_raw = list_openai_models() # This should return a list of model objects/dicts
                 logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
                 for model in openai_models_raw: # Assuming model is an object with an 'id' attribute
-                    model_id = model.id 
+                    model_id = model.id
                     # Determine context window (these are common defaults, might need adjustment)
                     if "gpt-4" in model_id: # Covers gpt-4, gpt-4-32k etc.
-                        context_window = 8192 
+                        context_window = 8192
                         if "32k" in model_id: context_window = 32768
                         if "turbo-2024-04-09" in model_id or "128k" in model_id : context_window = 128000
                     elif "gpt-3.5-turbo" in model_id:
                         context_window = 4096
                         if "16k" in model_id: context_window = 16384
                     else: # Default for other OpenAI models
-                        context_window = 4096 
+                        context_window = 4096
 
                     capabilities = { # Assume chat models are for chat/text completion
                         "chat_completion": True, "text_completion": True, "embedding": "embedding" in model_id,
@@ -112,7 +112,7 @@ class ModelCache:
                     logger.warning("OpenAI API key not set. Skipping OpenAI models.")
         except Exception as e:
             logger.exception(f"Error fetching OpenAI models: {e}")
-        
+
         # Fetch Ollama Models
         try:
             if settings.is_provider_enabled("ollama"):
@@ -122,26 +122,26 @@ class ModelCache:
                     model_name = model.get("name", "")
                     if not model_name:
                         continue
-                    
+
                     # Ollama models typically have flexible context windows, defaulting to 8192
                     context_window = 8192
-                    
+
                     # Assume all Ollama models support chat completion and text completion
                     capabilities = {
                         "chat_completion": True,
                         "text_completion": True,
                         "embedding": False,  # Most chat models don't do embeddings
                     }
-                    
+
                     model_entry = {
-                        "id": model_name, 
-                        "object": "model", 
+                        "id": model_name,
+                        "object": "model",
                         "created": int(time.time()),
-                        "owned_by": "Ollama", 
-                        "permission": [], 
-                        "root": model_name, 
+                        "owned_by": "Ollama",
+                        "permission": [],
+                        "root": model_name,
                         "parent": None,
-                        "context_window": context_window, 
+                        "context_window": context_window,
                         "capabilities": capabilities,
                     }
                     all_models_data.append(model_entry)
@@ -153,7 +153,7 @@ class ModelCache:
                     logger.info("Ollama provider is enabled but may not be available.")
         except Exception as e:
             logger.exception(f"Error fetching Ollama models: {e}")
-        
+
         logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
         return all_models_data, model_to_provider_map
 
@@ -163,7 +163,7 @@ class ModelCache:
                 logger.info("Refresh already in progress. Skipping.")
                 return
             self._refresh_in_progress = True
-        
+
         logger.info("Starting synchronous model cache refresh.")
         try:
             self.models_data, self.model_to_provider = self._fetch_all_models()
