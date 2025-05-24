@@ -292,7 +292,7 @@ def chat_request_ollama_model():
 
 # Tests for provider enablement functionality
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('api_service.api.routers.chat.settings.is_provider_enabled')
 def test_chat_completions_openai_provider_disabled(mock_is_enabled, mock_get_provider, chat_request_openai_model):
     """Test that disabled OpenAI provider returns appropriate error"""
     settings.openai.openai_api_key = "fake_openai_key_for_test"
@@ -305,7 +305,7 @@ def test_chat_completions_openai_provider_disabled(mock_is_enabled, mock_get_pro
     assert "OpenAI provider is disabled" in json_response["detail"]
 
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('api_service.api.routers.chat.settings.is_provider_enabled')
 def test_chat_completions_google_provider_disabled(mock_is_enabled, mock_get_provider, chat_request_google_model):
     """Test that disabled Google provider returns appropriate error"""
     settings.google.google_api_key = "fake_google_key_for_test"
@@ -318,7 +318,7 @@ def test_chat_completions_google_provider_disabled(mock_is_enabled, mock_get_pro
     assert "Google provider is disabled" in json_response["detail"]
 
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('api_service.api.routers.chat.settings.is_provider_enabled')
 @patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
 def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
     """Test that disabled Ollama provider returns appropriate error"""
@@ -332,7 +332,7 @@ def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_is_ena
 
 # Test default model functionality
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.get_default_chat_model')
+@patch('api_service.api.routers.chat.settings.get_default_chat_model')
 @patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
 def test_chat_completions_uses_default_model(mock_acreate, mock_get_default, mock_get_provider, chat_request_no_model, mock_openai_chat_response):
     """Test that default model is used when no model is specified"""
@@ -361,7 +361,7 @@ def mock_ollama_chat_response():
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('api_service.api.routers.chat.settings.is_provider_enabled')
 @patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
 @patch('moonmind.factories.ollama_factory.get_ollama_model')
 def test_chat_completions_ollama_success(mock_get_ollama_model, mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model, mock_ollama_chat_response):
@@ -380,7 +380,7 @@ def test_chat_completions_ollama_success(mock_get_ollama_model, mock_chat_ollama
     mock_chat_ollama.assert_called_once()
 
 @patch('fastapi.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('api_service.api.routers.chat.settings.is_provider_enabled')
 @patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
 @patch('moonmind.factories.ollama_factory.get_ollama_model')
 def test_chat_completions_ollama_api_error(mock_get_ollama_model, mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
@@ -397,7 +397,7 @@ def test_chat_completions_ollama_api_error(mock_get_ollama_model, mock_chat_olla
     assert "Ollama API error: Ollama connection error" in json_response["detail"]
 
 @patch('fastapi.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('api_service.api.routers.chat.settings.is_provider_enabled')
 @patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
 @patch('moonmind.factories.ollama_factory.get_ollama_model')
 def test_chat_completions_ollama_invalid_response(mock_get_ollama_model, mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
