@@ -143,66 +143,67 @@ def test_chat_completions_openai_via_cache(mock_acreate, mock_get_provider, chat
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model') # Still need to mock the factory that returns the model instance
 def test_chat_completions_google_via_cache(mock_get_google_model_factory, mock_get_provider, chat_request_google_model, mock_google_chat_response):
-    settings.google.google_api_key = "fake_google_key_for_test"
+    # Directly set attributes on the imported settings instance
+    settings_in_chat_router.google.google_enabled = True
+    settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
+    # settings.google.google_api_key = "fake_google_key_for_test" # Keep this for teardown if needed, or manage teardown centrally
+    
     mock_get_provider.return_value = "Google"
-
     mock_google_chat_model_instance = MagicMock()
     mock_google_chat_model_instance.generate_content.return_value = mock_google_chat_response
     mock_get_google_model_factory.return_value = mock_google_chat_model_instance
 
-    with patch.object(settings_in_chat_router, 'is_provider_enabled', return_value=True) as mock_is_enabled_google:
-        response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
 
-        assert response.status_code == 200
-        json_response = response.json()
-        assert json_response["model"] == chat_request_google_model.model
-        assert json_response["choices"][0]["message"]["content"] == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
-        mock_get_provider.assert_called_once_with(chat_request_google_model.model)
-        mock_get_google_model_factory.assert_called_once_with(chat_request_google_model.model)
-        mock_google_chat_model_instance.generate_content.assert_called_once()
-        mock_is_enabled_google.assert_called_with("google")
+    assert response.status_code == 200
+    json_response = response.json()
+    assert json_response["model"] == chat_request_google_model.model
+    assert json_response["choices"][0]["message"]["content"] == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
+    mock_get_provider.assert_called_once_with(chat_request_google_model.model)
+    mock_get_google_model_factory.assert_called_once_with(chat_request_google_model.model)
+    mock_google_chat_model_instance.generate_content.assert_called_once()
+    # No mock_is_enabled_google to assert anymore
 
 
 # Refined Google Error Handling Tests
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model')
 def test_chat_completions_google_value_error_invalid_role(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
-    settings.google.google_api_key = "fake_google_key_for_test"
+    settings_in_chat_router.google.google_enabled = True
+    settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
+    # settings.google.google_api_key = "fake_google_key_for_test"
+
     mock_get_provider.return_value = "Google"
-    
     mock_google_chat_model_instance = MagicMock()
     error_message = "Invalid role: 'system' is not a valid role for this model. Valid roles are 'user', 'model'."
     mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
     mock_get_google_model_factory.return_value = mock_google_chat_model_instance
 
-    with patch.object(settings_in_chat_router, 'is_provider_enabled', return_value=True) as mock_is_enabled_google:
-        response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
     
-        assert response.status_code == 400 # This should be 400 based on the ValueError raised
-        json_response = response.json()
-        # The detail message comes from the handle_google_request's specific error handling for ValueError
-        assert "Role or turn order error with Gemini API" in json_response["detail"] # Adjusted expectation
-        mock_is_enabled_google.assert_called_with("google")
+    assert response.status_code == 400 
+    json_response = response.json()
+    assert "Role or turn order error with Gemini API" in json_response["detail"]
 
 
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model')
 def test_chat_completions_google_value_error_other_argument(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
-    settings.google.google_api_key = "fake_google_key_for_test"
+    settings_in_chat_router.google.google_enabled = True
+    settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
+    # settings.google.google_api_key = "fake_google_key_for_test"
+
     mock_get_provider.return_value = "Google"
-    
     mock_google_chat_model_instance = MagicMock()
     error_message = "Some other argument error not related to roles."
-    mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message) # Keep as ValueError
+    mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
     mock_get_google_model_factory.return_value = mock_google_chat_model_instance
 
-    with patch.object(settings_in_chat_router, 'is_provider_enabled', return_value=True) as mock_is_enabled_google:
-        response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
     
-        assert response.status_code == 500 # Expecting 500 as it's a general ValueError caught by the broader try-except
-        json_response = response.json()
-        assert f"Google Gemini API error: {error_message}" in json_response["detail"] # Adjusted expectation
-        mock_is_enabled_google.assert_called_with("google")
+    assert response.status_code == 500 
+    json_response = response.json()
+    assert f"Google Gemini API error: {error_message}" in json_response["detail"]
 
 
 # Cache behavior for unknown models
@@ -277,9 +278,11 @@ def test_chat_completions_openai_api_error_with_cache(mock_acreate, mock_get_pro
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model')
 def test_chat_completions_google_api_error_with_cache(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
-    settings.google.google_api_key = "fake_google_key_for_test"
+    settings_in_chat_router.google.google_enabled = True
+    settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
+    # settings.google.google_api_key = "fake_google_key_for_test" # For teardown
+
     mock_get_provider.return_value = "Google"
-    
     mock_google_chat_model_instance = MagicMock()
     mock_google_chat_model_instance.generate_content.side_effect = Exception("Google API Communication Error")
     mock_get_google_model_factory.return_value = mock_google_chat_model_instance
