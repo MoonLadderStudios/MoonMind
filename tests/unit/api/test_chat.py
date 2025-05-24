@@ -15,6 +15,19 @@ from moonmind.schemas.chat_models import ChatCompletionRequest, Message
 # Setup TestClient
 app = FastAPI()
 app.include_router(chat_router) # Router paths are already prefixed
+
+from api_service.api.dependencies import get_vector_index, get_service_context
+from unittest.mock import MagicMock
+
+# Mock the dependencies that rely on app.state
+# These can be simple MagicMocks for most router unit tests,
+# or more sophisticated mocks if specific behavior is needed from them.
+mock_vector_index_dependency = MagicMock()
+mock_llama_settings_dependency = MagicMock()
+
+app.dependency_overrides[get_vector_index] = lambda: mock_vector_index_dependency
+app.dependency_overrides[get_service_context] = lambda: mock_llama_settings_dependency
+
 client = TestClient(app)
 
 # Store original API keys and restore them after tests
