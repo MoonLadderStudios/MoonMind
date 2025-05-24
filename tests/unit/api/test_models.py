@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import time
 
 # Assuming the main app's router is imported correctly
-from fastapi.api.routers.models import router as models_router
+from api_service.api.routers.models import router as models_router
 # Assuming settings are correctly imported and used by the application
 # from moonmind.config.settings import settings # Settings might not be directly needed here anymore
 
@@ -38,7 +38,7 @@ def mock_cached_models_data():
         }
     ]
 
-@patch('fastapi.api.routers.models.model_cache.get_all_models')
+@patch('api_service.api.routers.models.model_cache.get_all_models')
 def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_data):
     """
     Test the /v1/models endpoint when the model_cache returns a list of models.
@@ -55,7 +55,7 @@ def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_d
     assert len(json_response["data"]) == len(mock_cached_models_data)
     mock_get_all_models.assert_called_once()
 
-@patch('fastapi.api.routers.models.model_cache.get_all_models')
+@patch('api_service.api.routers.models.model_cache.get_all_models')
 def test_get_models_empty_from_cache(mock_get_all_models):
     """
     Test the /v1/models endpoint when the model_cache returns an empty list.
@@ -71,7 +71,7 @@ def test_get_models_empty_from_cache(mock_get_all_models):
     assert len(json_response["data"]) == 0
     mock_get_all_models.assert_called_once()
 
-@patch('fastapi.api.routers.models.model_cache.get_all_models')
+@patch('api_service.api.routers.models.model_cache.get_all_models')
 def test_get_models_cache_exception(mock_get_all_models):
     """
     Test the /v1/models endpoint when model_cache.get_all_models() raises an exception.

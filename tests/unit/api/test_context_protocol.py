@@ -2,14 +2,14 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 
-from api.routers.context_protocol import ContextRequest, ContextMessage
-from main import app
+from api_service.api.routers.context_protocol import ContextRequest, ContextMessage
+from api_service.main import app
 
 client = TestClient(app)
 
 @pytest.fixture
 def mock_google_model():
-    with patch("api.routers.context_protocol.get_google_model") as mock:
+    with patch("api_service.api.routers.context_protocol.get_google_model") as mock:
         model_mock = MagicMock()
         response_mock = MagicMock()
         candidate_mock = MagicMock()

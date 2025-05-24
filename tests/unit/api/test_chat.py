@@ -7,8 +7,8 @@ import time
 
 # Assuming the main app's router is imported correctly
 # Ensure the path to chat_router is correct based on your project structure.
-# If chat.py is in fastapi.api.routers.chat, this should be fine.
-from fastapi.api.routers.chat import router as chat_router
+# If chat.py is in api_service.api.routers.chat, this should be fine.
+from api_service.api.routers.chat import router as chat_router
 from moonmind.config import settings # Direct import for patching
 from moonmind.schemas.chat_models import ChatCompletionRequest, Message
 
@@ -109,7 +109,7 @@ def mock_google_chat_response():
     return mock_response
 
 # Test with model_cache integration
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
 def test_chat_completions_openai_via_cache(mock_acreate, mock_get_provider, chat_request_openai_model, mock_openai_chat_response):
     settings.openai.openai_api_key = "fake_openai_key_for_test"
@@ -126,7 +126,7 @@ def test_chat_completions_openai_via_cache(mock_acreate, mock_get_provider, chat
     mock_acreate.assert_called_once()
 
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model') # Still need to mock the factory that returns the model instance
 def test_chat_completions_google_via_cache(mock_get_google_model_factory, mock_get_provider, chat_request_google_model, mock_google_chat_response):
     settings.google.google_api_key = "fake_google_key_for_test"
@@ -148,7 +148,7 @@ def test_chat_completions_google_via_cache(mock_get_google_model_factory, mock_g
 
 
 # Refined Google Error Handling Tests
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model')
 def test_chat_completions_google_value_error_invalid_role(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
     settings.google.google_api_key = "fake_google_key_for_test"
@@ -167,7 +167,7 @@ def test_chat_completions_google_value_error_invalid_role(mock_get_google_model_
     assert error_message in json_response["detail"]
 
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model')
 def test_chat_completions_google_value_error_other_argument(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
     settings.google.google_api_key = "fake_google_key_for_test"
@@ -187,8 +187,8 @@ def test_chat_completions_google_value_error_other_argument(mock_get_google_mode
 
 
 # Cache behavior for unknown models
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
-@patch('fastapi.api.routers.chat.model_cache.refresh_models_sync') # Mock the sync refresh
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.refresh_models_sync') # Mock the sync refresh
 def test_chat_completions_model_not_found_initial_and_after_refresh(mock_refresh_sync, mock_get_provider, chat_request_unknown_model):
     # Simulate provider returning None for the first call, and also for the second call after refresh
     mock_get_provider.side_effect = [None, None] 
@@ -201,8 +201,8 @@ def test_chat_completions_model_not_found_initial_and_after_refresh(mock_refresh
     assert mock_get_provider.call_count == 2
 
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
-@patch('fastapi.api.routers.chat.model_cache.refresh_models_sync')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.refresh_models_sync')
 @patch('openai.ChatCompletion.acreate', new_callable=AsyncMock) # For the retry path
 def test_chat_completions_model_found_after_refresh_openai(mock_acreate, mock_refresh_sync, mock_get_provider, chat_request_openai_model, mock_openai_chat_response):
     settings.openai.openai_api_key = "fake_openai_key_for_test"
@@ -222,7 +222,7 @@ def test_chat_completions_model_found_after_refresh_openai(mock_acreate, mock_re
 
 
 # API Key Checks (still relevant with cache)
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 def test_chat_completions_openai_no_api_key_with_cache(mock_get_provider, chat_request_openai_model):
     settings.openai.openai_api_key = None # Key not set
     mock_get_provider.return_value = "OpenAI" # Cache says it's an OpenAI model
@@ -232,7 +232,7 @@ def test_chat_completions_openai_no_api_key_with_cache(mock_get_provider, chat_r
     assert "OpenAI API key not configured" in response.json()["detail"]
 
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 def test_chat_completions_google_no_api_key_with_cache(mock_get_provider, chat_request_google_model):
     settings.google.google_api_key = None # Key not set
     mock_get_provider.return_value = "Google" # Cache says it's a Google model
@@ -243,7 +243,7 @@ def test_chat_completions_google_no_api_key_with_cache(mock_get_provider, chat_r
 
 
 # General API errors after successful routing by cache
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
 def test_chat_completions_openai_api_error_with_cache(mock_acreate, mock_get_provider, chat_request_openai_model):
     settings.openai.openai_api_key = "fake_openai_key_for_test"
@@ -255,7 +255,7 @@ def test_chat_completions_openai_api_error_with_cache(mock_acreate, mock_get_pro
     assert "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"]
 
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.factories.google_factory.get_google_model')
 def test_chat_completions_google_api_error_with_cache(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
     settings.google.google_api_key = "fake_google_key_for_test"
@@ -291,7 +291,7 @@ def chat_request_ollama_model():
 
 
 # Tests for provider enablement functionality
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.config.settings.settings.is_provider_enabled')
 def test_chat_completions_openai_provider_disabled(mock_is_enabled, mock_get_provider, chat_request_openai_model):
     """Test that disabled OpenAI provider returns appropriate error"""
@@ -304,7 +304,7 @@ def test_chat_completions_openai_provider_disabled(mock_is_enabled, mock_get_pro
     json_response = response.json()
     assert "OpenAI provider is disabled" in json_response["detail"]
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.config.settings.settings.is_provider_enabled')
 def test_chat_completions_google_provider_disabled(mock_is_enabled, mock_get_provider, chat_request_google_model):
     """Test that disabled Google provider returns appropriate error"""
@@ -317,7 +317,7 @@ def test_chat_completions_google_provider_disabled(mock_is_enabled, mock_get_pro
     json_response = response.json()
     assert "Google provider is disabled" in json_response["detail"]
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.config.settings.settings.is_provider_enabled')
 @patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
 def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
@@ -331,7 +331,7 @@ def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_is_ena
     assert "Ollama provider is disabled" in json_response["detail"]
 
 # Test default model functionality
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.config.settings.settings.get_default_chat_model')
 @patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
 def test_chat_completions_uses_default_model(mock_acreate, mock_get_default, mock_get_provider, chat_request_no_model, mock_openai_chat_response):
@@ -358,7 +358,9 @@ def mock_ollama_chat_response():
         "done": True
     }
 
-@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
 @patch('moonmind.config.settings.settings.is_provider_enabled')
 @patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
 @patch('moonmind.factories.ollama_factory.get_ollama_model')
