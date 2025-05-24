@@ -270,14 +270,143 @@ def test_chat_completions_google_api_error_with_cache(mock_get_google_model_fact
     assert "Google Gemini API error: Google API Communication Error" in response.json()["detail"]
 
 
-# Teardown function to restore original settings (already defined via teardown_module)
-# If using pytest fixtures for setup/teardown of settings, this might not be needed.
-# However, explicit teardown_module is fine.
+# Test fixtures for provider enablement tests
+@pytest.fixture
+def chat_request_no_model():
+    """Chat request without specifying a model - should use default"""
+    return ChatCompletionRequest(
+        messages=[Message(role="user", content="Hello with default model")],
+        max_tokens=50,
+        temperature=0.7,
+    )
 
-# Ensure original settings are restored after all tests in this module run
-# This is handled by teardown_module.
-# It's also good practice to use fixtures for managing settings per test if more granularity is needed.
-# For example, a fixture could set API keys and then restore them.
-# The `autouse=True` fixture `cleanup_singleton_cache` handles resetting the ModelCache instance.
-# This should prevent state leakage for the cache itself.
-# The settings are handled by setup_module/teardown_module.
+@pytest.fixture
+def chat_request_ollama_model():
+    return ChatCompletionRequest(
+        model="llama2", # A model ID that model_cache.get_model_provider would identify as Ollama
+        messages=[Message(role="user", content="Hello Ollama from cache test")],
+        max_tokens=50,
+        temperature=0.7,
+    )
+
+
+# Tests for provider enablement functionality
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.is_provider_enabled')
+def test_chat_completions_openai_provider_disabled(mock_is_enabled, mock_get_provider, chat_request_openai_model):
+    """Test that disabled OpenAI provider returns appropriate error"""
+    settings.openai.openai_api_key = "fake_openai_key_for_test"
+    mock_get_provider.return_value = "OpenAI"
+    mock_is_enabled.return_value = False
+    
+    response = client.post("/v1/chat/completions", json=chat_request_openai_model.model_dump())
+    assert response.status_code == 400
+    json_response = response.json()
+    assert "OpenAI provider is disabled" in json_response["detail"]
+
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.is_provider_enabled')
+def test_chat_completions_google_provider_disabled(mock_is_enabled, mock_get_provider, chat_request_google_model):
+    """Test that disabled Google provider returns appropriate error"""
+    settings.google.google_api_key = "fake_google_key_for_test"
+    mock_get_provider.return_value = "Google"
+    mock_is_enabled.return_value = False
+    
+    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    assert response.status_code == 400
+    json_response = response.json()
+    assert "Google provider is disabled" in json_response["detail"]
+
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
+def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
+    """Test that disabled Ollama provider returns appropriate error"""
+    mock_get_provider.return_value = "Ollama"
+    mock_is_enabled.return_value = False
+    
+    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    assert response.status_code == 400
+    json_response = response.json()
+    assert "Ollama provider is disabled" in json_response["detail"]
+
+# Test default model functionality
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.get_default_chat_model')
+@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
+def test_chat_completions_uses_default_model(mock_acreate, mock_get_default, mock_get_provider, chat_request_no_model, mock_openai_chat_response):
+    """Test that default model is used when no model is specified"""
+    settings.openai.openai_api_key = "fake_openai_key_for_test"
+    mock_get_default.return_value = "gpt-3.5-turbo"
+    mock_get_provider.return_value = "OpenAI"
+    mock_acreate.return_value = mock_openai_chat_response
+    
+    response = client.post("/v1/chat/completions", json=chat_request_no_model.model_dump())
+    
+    assert response.status_code == 200
+    mock_get_default.assert_called_once()
+    mock_get_provider.assert_called_once_with("gpt-3.5-turbo")
+
+# Test Ollama integration
+@pytest.fixture
+def mock_ollama_chat_response():
+    return {
+        "message": {
+            "content": "This is a response from Ollama (mocked).",
+            "role": "assistant"
+        },
+        "done": True
+    }
+
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
+@patch('moonmind.factories.ollama_factory.get_ollama_model')
+def test_chat_completions_ollama_success(mock_get_ollama_model, mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model, mock_ollama_chat_response):
+    """Test successful Ollama chat completion"""
+    mock_get_provider.return_value = "Ollama"
+    mock_is_enabled.return_value = True
+    mock_get_ollama_model.return_value = "llama2"
+    mock_chat_ollama.return_value = mock_ollama_chat_response
+    
+    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    
+    assert response.status_code == 200
+    json_response = response.json()
+    assert json_response["model"] == "llama2"
+    assert json_response["choices"][0]["message"]["content"] == mock_ollama_chat_response["message"]["content"]
+    mock_chat_ollama.assert_called_once()
+
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
+@patch('moonmind.factories.ollama_factory.get_ollama_model')
+def test_chat_completions_ollama_api_error(mock_get_ollama_model, mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
+    """Test Ollama API error handling"""
+    mock_get_provider.return_value = "Ollama"
+    mock_is_enabled.return_value = True
+    mock_get_ollama_model.return_value = "llama2"
+    mock_chat_ollama.side_effect = Exception("Ollama connection error")
+    
+    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    
+    assert response.status_code == 500
+    json_response = response.json()
+    assert "Ollama API error: Ollama connection error" in json_response["detail"]
+
+@patch('fastapi.api.routers.chat.model_cache.get_model_provider')
+@patch('moonmind.config.settings.settings.is_provider_enabled')
+@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
+@patch('moonmind.factories.ollama_factory.get_ollama_model')
+def test_chat_completions_ollama_invalid_response(mock_get_ollama_model, mock_chat_ollama, mock_is_enabled, mock_get_provider, chat_request_ollama_model):
+    """Test Ollama invalid response handling"""
+    mock_get_provider.return_value = "Ollama"
+    mock_is_enabled.return_value = True
+    mock_get_ollama_model.return_value = "llama2"
+    mock_chat_ollama.return_value = {"invalid": "response"}  # Missing message field
+    
+    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    
+    assert response.status_code == 500
+    json_response = response.json()
+    assert "Invalid response from Ollama API: No message returned" in json_response["detail"]

@@ -6,7 +6,7 @@ class Message(BaseModel):
     content: str = Field(..., description="The content of the message")
 
 class ChatCompletionRequest(BaseModel):
-    model: str = Field("gemini-1.5-pro", description="The model to use (currently defaults to Gemini Pro)")
+    model: Optional[str] = Field(None, description="The model to use. If not specified, the default model will be used.")
     messages: List[Message] = Field(..., description="A list of messages describing the conversation so far.")
     temperature: Optional[float] = Field(1.0, description="Sampling temperature, between 0 and 2.")
     max_tokens: Optional[int] = Field(None, description="The maximum number of tokens to generate.")
