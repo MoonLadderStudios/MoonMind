@@ -38,11 +38,11 @@ echo "${OLLAMA_MODES}" | tr ',' '\n' | while read -r MODE || [ -n "$MODE" ]; do
       echo "Error: curl command failed for chat model '${MODEL_TO_PULL}'. It might not be loaded." >&2
     fi
   elif [ "$MODE" = "embed" ]; then
-    if [ -z "${OLLAMA_EMBEDDING_MODEL}" ]; then
-      echo "Warning: OLLAMA_EMBEDDING_MODEL is not set. Skipping embed model." >&2
+    if [ -z "${OLLAMA_EMBEDDINGS_MODEL}" ]; then
+      echo "Warning: OLLAMA_EMBEDDINGS_MODEL is not set. Skipping embed model." >&2
       continue
     fi
-    MODEL_TO_PULL="${OLLAMA_EMBEDDING_MODEL}"
+    MODEL_TO_PULL="${OLLAMA_EMBEDDINGS_MODEL}"
     echo "Attempting to pull embed model: ${MODEL_TO_PULL}..."
     if ! ollama pull "${MODEL_TO_PULL}"; then
       echo "Error: Failed to pull embed model '${MODEL_TO_PULL}'. Skipping." >&2

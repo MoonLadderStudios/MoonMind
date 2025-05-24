@@ -1,5 +1,5 @@
 import logging
-import requests
+import httpx
 from typing import Dict, Any, List
 from moonmind.config.settings import settings
 
@@ -52,15 +52,16 @@ async def chat_with_ollama(model_name: str, messages: List[Dict[str, str]], **kw
         payload["options"]["num_predict"] = kwargs["max_tokens"]
     
     try:
-        response = requests.post(url, json=payload, timeout=60)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=60.0)
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
         logger.error(f"Error calling Ollama API: {e}")
         raise e
 
 
-def list_ollama_models() -> List[Any]:
+async def list_ollama_models() -> List[Any]:
     """
     List available Ollama models.
     
@@ -74,13 +75,14 @@ def list_ollama_models() -> List[Any]:
     url = f"{settings.ollama.ollama_base_url}/api/tags"
     
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Return the models list
-        models = data.get("models", [])
-        return models
-    except requests.exceptions.RequestException as e:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Return the models list
+            models = data.get("models", [])
+            return models
+    except httpx.RequestError as e:
         logger.error(f"Error listing Ollama models: {e}")
         return []

@@ -31,7 +31,6 @@ class OllamaSettings(BaseSettings):
     ollama_embeddings_dimensions: int = Field(3584, env="OLLAMA_EMBEDDINGS_DIMENSIONS")
     ollama_keep_alive: str = Field("-1m", env="OLLAMA_KEEP_ALIVE")
     ollama_chat_model: str = Field("devstral:24b", env="OLLAMA_CHAT_MODEL")
-    ollama_embedding_model: str = Field("hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K", env="OLLAMA_EMBEDDING_MODEL")
     ollama_modes: str = Field("chat", env="OLLAMA_MODES")
     ollama_enabled: bool = Field(True, env="OLLAMA_ENABLED")
     
