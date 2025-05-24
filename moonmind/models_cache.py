@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from moonmind.factories.google_factory import list_google_models
 from moonmind.factories.openai_factory import list_openai_models
+from moonmind.factories.ollama_factory import list_ollama_models
 from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class ModelCache:
         
         # Fetch Google Models
         try:
-            if settings.google.google_api_key:
+            if settings.is_provider_enabled("google"):
                 google_models_raw = list_google_models()
                 logger.info(f"Fetched {len(google_models_raw)} raw Google models.")
                 for model in google_models_raw:
@@ -68,13 +69,16 @@ class ModelCache:
                     all_models_data.append(model_entry)
                     model_to_provider_map[model.name] = "Google"
             else:
-                logger.warning("Google API key not set. Skipping Google models.")
+                if not settings.google.google_enabled:
+                    logger.info("Google provider is disabled.")
+                else:
+                    logger.warning("Google API key not set. Skipping Google models.")
         except Exception as e:
             logger.exception(f"Error fetching Google models: {e}")
 
         # Fetch OpenAI Models
         try:
-            if settings.openai.openai_api_key:
+            if settings.is_provider_enabled("openai"):
                 openai_models_raw = list_openai_models() # This should return a list of model objects/dicts
                 logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
                 for model in openai_models_raw: # Assuming model is an object with an 'id' attribute
@@ -101,9 +105,53 @@ class ModelCache:
                     all_models_data.append(model_entry)
                     model_to_provider_map[model_id] = "OpenAI"
             else:
-                logger.warning("OpenAI API key not set. Skipping OpenAI models.")
+                if not settings.openai.openai_enabled:
+                    logger.info("OpenAI provider is disabled.")
+                else:
+                    logger.warning("OpenAI API key not set. Skipping OpenAI models.")
         except Exception as e:
             logger.exception(f"Error fetching OpenAI models: {e}")
+        
+        # Fetch Ollama Models
+        try:
+            if settings.is_provider_enabled("ollama"):
+                ollama_models_raw = list_ollama_models()
+                logger.info(f"Fetched {len(ollama_models_raw)} raw Ollama models.")
+                for model in ollama_models_raw:
+                    model_name = model.get("name", "")
+                    if not model_name:
+                        continue
+                    
+                    # Ollama models typically have flexible context windows, defaulting to 8192
+                    context_window = 8192
+                    
+                    # Assume all Ollama models support chat completion and text completion
+                    capabilities = {
+                        "chat_completion": True,
+                        "text_completion": True,
+                        "embedding": False,  # Most chat models don't do embeddings
+                    }
+                    
+                    model_entry = {
+                        "id": model_name, 
+                        "object": "model", 
+                        "created": int(time.time()),
+                        "owned_by": "Ollama", 
+                        "permission": [], 
+                        "root": model_name, 
+                        "parent": None,
+                        "context_window": context_window, 
+                        "capabilities": capabilities,
+                    }
+                    all_models_data.append(model_entry)
+                    model_to_provider_map[model_name] = "Ollama"
+            else:
+                if not settings.ollama.ollama_enabled:
+                    logger.info("Ollama provider is disabled.")
+                else:
+                    logger.info("Ollama provider is enabled but may not be available.")
+        except Exception as e:
+            logger.exception(f"Error fetching Ollama models: {e}")
         
         logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
         return all_models_data, model_to_provider_map

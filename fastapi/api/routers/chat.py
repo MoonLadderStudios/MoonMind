@@ -7,6 +7,7 @@ import google.generativeai as genai
 from fastapi import APIRouter, HTTPException
 from moonmind.factories.google_factory import get_google_model # Still needed for Google logic
 from moonmind.factories.openai_factory import get_openai_model # Still needed for OpenAI logic
+from moonmind.factories.ollama_factory import get_ollama_model, chat_with_ollama # Added Ollama support
 from moonmind.schemas.chat_models import ChatCompletionRequest
 from moonmind.schemas.chat_models import (ChatCompletionResponse, Choice,
                                           ChoiceMessage, Usage)
@@ -19,15 +20,25 @@ logger = logging.getLogger(__name__)
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
     try:
-        provider = model_cache.get_model_provider(request.model)
+        # If no model specified, use the default
+        model_to_use = request.model
+        if not model_to_use:
+            model_to_use = settings.get_default_chat_model()
+            logger.info(f"No model specified, using default: {model_to_use}")
+        
+        provider = model_cache.get_model_provider(model_to_use)
 
         if provider == "OpenAI":
-            if not settings.openai.openai_api_key:
-                raise HTTPException(status_code=400, detail="OpenAI API key not configured for the server.")
+            # Check if OpenAI is enabled
+            if not settings.is_provider_enabled("openai"):
+                if not settings.openai.openai_enabled:
+                    raise HTTPException(status_code=400, detail="OpenAI provider is disabled.")
+                else:
+                    raise HTTPException(status_code=400, detail="OpenAI API key not configured for the server.")
             
             # The get_openai_model factory function simply returns the model name.
             # It's kept for consistency but could be bypassed if model_id from request is directly used.
-            openai_model_name = get_openai_model(request.model) 
+            openai_model_name = get_openai_model(model_to_use) 
             logger.info(f"Routing to OpenAI for model: {openai_model_name}")
 
             # Prepare messages for OpenAI
@@ -72,10 +83,14 @@ async def chat_completions(request: ChatCompletionRequest):
             )
 
         elif provider == "Google":
-            if not settings.google.google_api_key:
-                raise HTTPException(status_code=400, detail="Google API key not configured for the server.")
+            # Check if Google is enabled
+            if not settings.is_provider_enabled("google"):
+                if not settings.google.google_enabled:
+                    raise HTTPException(status_code=400, detail="Google provider is disabled.")
+                else:
+                    raise HTTPException(status_code=400, detail="Google API key not configured for the server.")
             
-            google_model_name = request.model # Use the requested model ID directly
+            google_model_name = model_to_use # Use the model to use (could be default)
             logger.info(f"Routing to Google for model: {google_model_name}")
 
             # Convert messages to Google's format
@@ -130,23 +145,73 @@ async def chat_completions(request: ChatCompletionRequest):
                     total_tokens=prompt_tokens_est + completion_tokens_est,
                 ),
             )
+
+        elif provider == "Ollama":
+            # Check if Ollama is enabled
+            if not settings.is_provider_enabled("ollama"):
+                raise HTTPException(status_code=400, detail="Ollama provider is disabled or not available.")
+            
+            ollama_model_name = get_ollama_model(model_to_use)
+            logger.info(f"Routing to Ollama for model: {ollama_model_name}")
+
+            # Prepare messages for Ollama
+            ollama_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+
+            try:
+                ollama_response = await chat_with_ollama(
+                    ollama_model_name,
+                    ollama_messages,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                )
+            except Exception as e:
+                logger.error(f"Error calling Ollama API for model {ollama_model_name}: {e}")
+                raise HTTPException(status_code=500, detail=f"Ollama API error: {str(e)}")
+
+            if not ollama_response.get("message"):
+                raise HTTPException(status_code=500, detail="Invalid response from Ollama API: No message returned.")
+            
+            ai_message_content = ollama_response["message"]["content"]
+            
+            # Estimate tokens for Ollama response (actual token count might not be available)
+            prompt_tokens_est = sum(len(msg.content.split()) for msg in request.messages)
+            completion_tokens_est = len(ai_message_content.split())
+
+            return ChatCompletionResponse(
+                id=f"cmpl-ollama-{uuid4().hex}",
+                object="chat.completion",
+                created=int(time.time()),
+                model=ollama_model_name,
+                choices=[
+                    Choice(
+                        index=0,
+                        message=ChoiceMessage(role="assistant", content=ai_message_content.strip()),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=Usage(
+                    prompt_tokens=prompt_tokens_est,
+                    completion_tokens=completion_tokens_est,
+                    total_tokens=prompt_tokens_est + completion_tokens_est,
+                ),
+            )
         else:
             # Handle case where model is not found in cache or provider is unknown
-            logger.warning(f"Model '{request.model}' not found in cache or provider is unknown.")
+            logger.warning(f"Model '{model_to_use}' not found in cache or provider is unknown.")
             # Force a cache refresh and try again once, in case the model was just added
             model_cache.refresh_models_sync()
-            provider = model_cache.get_model_provider(request.model)
+            provider = model_cache.get_model_provider(model_to_use)
             if provider: # Retry logic after refresh
-                 logger.info(f"Retrying with provider '{provider}' for model '{request.model}' after cache refresh.")
+                 logger.info(f"Retrying with provider '{provider}' for model '{model_to_use}' after cache refresh.")
                  # This is a simplified retry; ideally, refactor to avoid code duplication
                  # For now, just redirecting to the start of the function or raising error
                  # To prevent potential infinite loop on persistent error, just raise for now
-                 raise HTTPException(status_code=404, detail=f"Model '{request.model}' found after refresh, but retry logic needs full implementation. Please try request again.")
+                 raise HTTPException(status_code=404, detail=f"Model '{model_to_use}' found after refresh, but retry logic needs full implementation. Please try request again.")
             
-            raise HTTPException(status_code=404, detail=f"Model '{request.model}' not found or provider unknown.")
+            raise HTTPException(status_code=404, detail=f"Model '{model_to_use}' not found or provider unknown.")
 
     except HTTPException:
         raise # Re-raise HTTPExceptions directly
     except Exception as e:
-        logger.exception(f"Unhandled error in chat_completions for model {request.model}: {e}")
+        logger.exception(f"Unhandled error in chat_completions for model {model_to_use}: {e}")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
