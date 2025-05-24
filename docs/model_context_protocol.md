@@ -24,7 +24,7 @@ The Model Context Protocol is exposed via the `/context` endpoint. This endpoint
       "content": "What are the key features of the Model Context Protocol?"
     }
   ],
-  "model": "gemini-pro",
+  "model": "gpt-4o", // Can be any supported model, e.g., "gemini-pro", "gpt-3.5-turbo"
   "temperature": 0.7,
   "max_tokens": 1000,
   "stream": false,
@@ -37,7 +37,7 @@ The Model Context Protocol is exposed via the `/context` endpoint. This endpoint
 ### Request Parameters
 
 - `messages`: An array of message objects, each with a `role` and `content`. Roles can be "system", "user", or "assistant".
-- `model`: The model to use for generation (e.g., "gemini-pro").
+- `model`: The model to use for generation (e.g., "gemini-pro", "gpt-4o", "gpt-3.5-turbo"). The server will route to the appropriate provider based on the model specified.
 - `temperature`: Controls the randomness of the output. Higher values (e.g., 0.8) make the output more random, while lower values (e.g., 0.2) make it more deterministic.
 - `max_tokens`: The maximum number of tokens to generate.
 - `stream`: Whether to stream the response (not currently implemented).
@@ -49,7 +49,7 @@ The Model Context Protocol is exposed via the `/context` endpoint. This endpoint
 {
   "id": "ctx-1234567890abcdef",
   "content": "The Model Context Protocol is a standardized interface...",
-  "model": "gemini-pro",
+  "model": "gpt-4o", // Reflects the model used for the response
   "created_at": 1621234567,
   "metadata": {
     "usage": {
@@ -65,7 +65,7 @@ The Model Context Protocol is exposed via the `/context` endpoint. This endpoint
 
 - `id`: A unique identifier for the response.
 - `content`: The generated text.
-- `model`: The model used for generation.
+- `model`: The model used for generation (will match the request or the provider's specific model ID).
 - `created_at`: The timestamp when the response was created.
 - `metadata`: Additional metadata, including token usage information.
 
@@ -90,11 +90,14 @@ An example client is provided in `/examples/context_protocol_client.py` to demon
 To use the example client:
 
 ```bash
-# Run with default model (gemini-pro)
+# Run with default model (as configured in the server, e.g., gemini-pro or gpt-3.5-turbo)
 python examples/context_protocol_client.py
 
-# Run with a specific model
+# Run with a specific Google model
 python examples/context_protocol_client.py gemini-pro-vision
+
+# Run with a specific OpenAI model
+python examples/context_protocol_client.py gpt-4o
 ```
 
 ## Using with OpenHands

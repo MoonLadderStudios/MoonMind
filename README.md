@@ -15,10 +15,52 @@ TODO
 Pydantic settings allow you to configure:
 - one embedding model, e.g. hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K
 - one vector store, e.g. Qdrant
-- multiple chat models, e.g. gemini-2.0-flash-thinking-exp-01-21, gpt-4o
+- multiple chat models, e.g. Google's `gemini-pro`, `gemini-1.5-flash-latest`, and OpenAI's `gpt-3.5-turbo`, `gpt-4o`.
 - multiple document loaders, e.g. Confluence, Google Drive, GitHub, etc.
+- API keys for the respective providers (e.g., `GOOGLE_API_KEY`, `OPENAI_API_KEY`).
 
 Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
+
+### Ollama Model Configuration
+
+If you are using the provided Ollama service for local LLM inference, you can control which model or models (chat and/or embedding) are loaded by default at startup.
+
+The following environment variables in your `.env` file are used:
+
+*   `OLLAMA_CHAT_MODEL`: Specifies the chat model. Defaults to `"devstral:24b"`.
+*   `OLLAMA_EMBEDDINGS_MODEL`: Specifies the embedding model. Defaults to `"hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"`.
+*   `OLLAMA_MODES`: Determines which model(s) to load by default. This is a comma-separated string. Valid values are "chat", "embed", or "chat,embed". If not set, it defaults to "chat".
+
+**Launching with Specific Models:**
+
+You can specify which models to load at launch time using the `scripts/ollama.ps1` script with its new switch parameters. This will override the `OLLAMA_MODES` value in your `.env` file for that specific run.
+
+*   `-LoadChatModel`: Use this switch to load the chat model specified by `OLLAMA_CHAT_MODEL`.
+*   `-LoadEmbeddingModel`: Use this switch to load the embedding model specified by `OLLAMA_EMBEDDINGS_MODEL`.
+
+If neither switch is provided, the script defaults to loading only the chat model (equivalent to `OLLAMA_MODES="chat"`).
+
+Examples:
+
+*   To launch Ollama and load only the configured chat model:
+    ```powershell
+    .\scripts\ollama.ps1 -LoadChatModel
+    ```
+    (or simply `.\scripts\ollama.ps1` as this is the default if no switches are passed)
+
+*   To launch Ollama and load only the configured embedding model:
+    ```powershell
+    .\scripts\ollama.ps1 -LoadEmbeddingModel
+    ```
+
+*   To launch Ollama and load both the chat and embedding models:
+    ```powershell
+    .\scripts\ollama.ps1 -LoadChatModel -LoadEmbeddingModel
+    ```
+
+The script will automatically attempt to pull the selected model(s) if not already available locally and then make them active within the Ollama server.
+
+**Note on Resource Usage:** Loading multiple models simultaneously (e.g., both chat and embedding) will consume more system resources (CPU, RAM, VRAM). Ensure your system has adequate resources if you choose to load multiple models.
 
 ## Document Loaders
 
@@ -184,7 +226,7 @@ MoonMind uses a modular microservices architecture with the following containers
 - **Qdrant**: A Qdrant container that provides a vector database
 - **Ollama**: An Ollama container that handles local LLM inference (optional)
 
-It is possible to run inference with Ollama, with third-party AI providers, or with a hybrid approach (e.g. local embedding models with cloud LLM inference).
+It is possible to run inference with Ollama, with third-party AI providers (like Google and OpenAI), or with a hybrid approach (e.g. local embedding models with cloud LLM inference).
 
 If using the default Ollama container, an NVIDIA GPU with appropriate drivers is required.
 
@@ -217,23 +259,92 @@ python examples/context_protocol_client.py
 python examples/context_protocol_client.py gemini-pro-vision
 ```
 
+## Model Endpoints
+
+### `/v1/models`
+
+This endpoint lists the available chat models from all configured providers. It now returns a combined list that can include models from Google, OpenAI, and potentially others in the future. The model list is cached in memory for improved performance after the initial fetch and is refreshed periodically (defaulting to every hour, but configurable).
+
+**Example Response Snippet:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "models/gemini-pro",
+      "object": "model",
+      "created": 1677609600,
+      "owned_by": "Google",
+      // ... other fields
+    },
+    {
+      "id": "gpt-3.5-turbo",
+      "object": "model",
+      "created": 1677609600,
+      "owned_by": "OpenAI",
+      // ... other fields
+    }
+  ]
+}
+```
+
+### `/v1/chat/completions`
+
+This endpoint now routes chat completion requests to the appropriate provider based on the `model` field in the request body. You can specify a model ID from Google (e.g., `"gemini-pro"`) or OpenAI (e.g., `"gpt-4o"`).
+
+**Example Request (OpenAI model):**
+```json
+{
+    "model": "gpt-4o",
+    "messages": [
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "max_tokens": 50
+}
+```
+
+## Environment Variables and Settings
+
+MoonMind uses Pydantic settings, which can be configured via environment variables or a `.env` file.
+
+Key settings related to model providers include:
+
+*   **Google:**
+    *   `GOOGLE_API_KEY`: Your Google API key for accessing Gemini models.
+    *   `GOOGLE_CHAT_MODEL` (optional, default: `"gemini-pro"`): Default Google chat model to use if not specified in a request.
+*   **OpenAI:**
+    *   `OPENAI_API_KEY`: Your OpenAI API key.
+    *   `OPENAI_CHAT_MODEL` (optional, default: `"gpt-3.5-turbo"`): Default OpenAI chat model.
+
+The application will attempt to load these from environment variables. For local development, you can create a `.env` file in the project root:
+
+```env
+GOOGLE_API_KEY="your_google_api_key_here"
+# GOOGLE_CHAT_MODEL="gemini-1.5-flash-latest" # Optional
+
+OPENAI_API_KEY="your_openai_api_key_here"
+# OPENAI_CHAT_MODEL="gpt-4o" # Optional
+```
+
 ## Roadmap
-In the future, we will support:
-- multiple chat models available without redeployment
-- multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model
-- the ability to change many settings at runtime
-- the ability to pass API credentials with requests
-- the ability to choose a provider based on the model name and have multiple providers active
-- the ability to enable or disable multiple model providers
+MoonMind now supports:
+- Multiple chat models available from different providers (Google, OpenAI) without redeployment.
+- The ability to choose a provider based on the model name in API requests.
+- Enabling or disabling providers by setting their respective API keys.
+
+Future plans include:
+- Multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model.
+- The ability to change more settings at runtime.
+- The ability to pass API credentials with requests (as an alternative to server-side configuration).
 
 We may add support for:
-- multiple projects with different settings in one deployment, e.g. different collection names and vector store configurations
+- Multiple projects with different settings in one deployment, e.g. different collection names and vector store configurations.
 
 TODO: Add a notion of a collection which tracks the vector store and embedder. Once created, when you choose a collection, the vector store and embedder are selected for you.
 
 ## Gemini
 
-LangChain does not currently support the latest experimental Gemini models, so using Gemini requires using the Google provider.
+While LangChain's direct support for the newest Gemini models might vary, MoonMind integrates with Google's generative AI SDK, allowing usage of available Gemini models like `gemini-pro` and `gemini-1.5-flash-latest` when a `GOOGLE_API_KEY` is provided.
 
 ## Running Tests
 
