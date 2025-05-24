@@ -18,7 +18,7 @@ if __name__ == "__main__":
     init_db = os.getenv("INIT_DATABASE", "false").lower() == "true"
     if not init_db:
         logger.info("INIT_DATABASE environment variable is not set to 'true', exiting.")
-        sys.exit()
+        sys.exit(1)
 
     logger.info("INIT_DATABASE is 'true', proceeding with database initialization.")
 
