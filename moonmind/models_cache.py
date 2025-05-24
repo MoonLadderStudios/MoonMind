@@ -1,5 +1,6 @@
 import logging
 import time
+import asyncio
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -115,7 +116,7 @@ class ModelCache:
         # Fetch Ollama Models
         try:
             if settings.is_provider_enabled("ollama"):
-                ollama_models_raw = list_ollama_models()
+                ollama_models_raw = asyncio.run(list_ollama_models())
                 logger.info(f"Fetched {len(ollama_models_raw)} raw Ollama models.")
                 for model in ollama_models_raw:
                     model_name = model.get("name", "")
