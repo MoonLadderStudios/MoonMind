@@ -50,6 +50,15 @@ class OllamaSettings(BaseSettings):
         env_prefix = ""
 
 
+class RagSettings(BaseSettings):
+    rag_enabled: bool = Field(False, env="RAG_ENABLED")
+    similarity_top_k: int = Field(3, env="RAG_SIMILARITY_TOP_K")
+    max_context_length_chars: int = Field(4000, env="RAG_MAX_CONTEXT_LENGTH_CHARS") # Increased default
+
+    class Config:
+        env_prefix = "RAG_" # Optional: if you want to prefix RAG env vars
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
     
@@ -58,6 +67,7 @@ class AppSettings(BaseSettings):
     openai: OpenAISettings = OpenAISettings()
     ollama: OllamaSettings = OllamaSettings()
     github: GitHubSettings = GitHubSettings()
+    rag: RagSettings = RagSettings() # Add this line
     
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
