@@ -8,10 +8,10 @@ from moonmind.config.logging import configure_logging
 configure_logging()
 logger = logging.getLogger(__name__)
 
-from api.routers.chat import router as chat_router
-from api.routers.context_protocol import router as context_protocol_router
-from api.routers.documents import router as documents_router
-from api.routers.models import router as models_router
+from .api.routers.chat import router as chat_router
+from .api.routers.context_protocol import router as context_protocol_router
+from .api.routers.documents import router as documents_router
+from .api.routers.models import router as models_router
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
 from fastapi import FastAPI, Request
