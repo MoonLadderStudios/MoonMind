@@ -115,8 +115,10 @@ if __name__ == "__main__":
                     total_nodes_indexed = index_result.get('total_nodes_indexed', 0)
 
                 logger.info(f"Successfully processed space {space_key}. Nodes indexed: {total_nodes_indexed}.")
+            except (ValueError, KeyError, ConnectionError) as e:
+                logger.error(f"Known error occurred while indexing space {space_key}: {e}", exc_info=True)
             except Exception as e:
-                logger.error(f"Error indexing space {space_key}: {e}", exc_info=True)
+                logger.error(f"Unexpected error occurred while indexing space {space_key}: {e}", exc_info=True)
         
         logger.info("Finished processing all Confluence spaces.")
 
