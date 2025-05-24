@@ -8,8 +8,20 @@ class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
     google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
     google_chat_model: str = Field("gemini-2.5-pro-exp-03-25", env="GOOGLE_CHAT_MODEL")
+    google_embeddings_model: str = Field("models/text-embedding-004", env="GOOGLE_EMBEDDINGS_MODEL")
+    google_embeddings_dimensions: int = Field(768, env="GOOGLE_EMBEDDINGS_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     
+    class Config:
+        env_prefix = ""
+
+
+class GitHubSettings(BaseSettings):
+    """GitHub settings"""
+    github_token: Optional[str] = Field(None, env="GITHUB_TOKEN")
+    github_repos: Optional[str] = Field(None, env="GITHUB_REPOS") # Comma-delimited string of repositories
+    github_enabled: bool = Field(True, env="GITHUB_ENABLED")
+
     class Config:
         env_prefix = ""
 
@@ -45,10 +57,11 @@ class AppSettings(BaseSettings):
     google: GoogleSettings = GoogleSettings()
     openai: OpenAISettings = OpenAISettings()
     ollama: OllamaSettings = OllamaSettings()
+    github: GitHubSettings = GitHubSettings()
     
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
-    default_embed_provider: str = Field("ollama", env="DEFAULT_EMBED_PROVIDER")
+    default_embed_provider: str = Field("google", env="DEFAULT_EMBED_PROVIDER")
     default_chat_model: Optional[str] = Field(None, env="DEFAULT_CHAT_MODEL")
     default_embed_model: Optional[str] = Field(None, env="DEFAULT_EMBED_MODEL")
     
@@ -69,7 +82,7 @@ class AppSettings(BaseSettings):
     confluence_enabled: bool = Field(True, env="CONFLUENCE_ENABLED")
     confluence_url: Optional[str] = Field(None, env="CONFLUENCE_URL")
     confluence_username: Optional[str] = Field(None, env="CONFLUENCE_USERNAME")
-    confluence_default_space_key: Optional[str] = Field(None, env="CONFLUENCE_DEFAULT_SPACE_KEY")
+    confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
     
     fastapi_reload: bool = Field(False, env="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, env="FERNET_KEY")
