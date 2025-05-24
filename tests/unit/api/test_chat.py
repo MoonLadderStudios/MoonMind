@@ -14,7 +14,7 @@ from moonmind.schemas.chat_models import ChatCompletionRequest, Message
 
 # Setup TestClient
 app = FastAPI()
-app.include_router(chat_router, prefix="/v1") # Match the prefix
+app.include_router(chat_router) # Router paths are already prefixed
 client = TestClient(app)
 
 # Store original API keys and restore them after tests
