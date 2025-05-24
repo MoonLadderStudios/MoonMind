@@ -3,6 +3,7 @@ import sys
 import logging
 import qdrant_client
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
+from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.config.settings import settings
 from llama_index.core import StorageContext, ServiceContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -18,7 +19,7 @@ if __name__ == "__main__":
     init_db = os.getenv("INIT_DATABASE", "false").lower() == "true"
     if not init_db:
         logger.info("INIT_DATABASE environment variable is not set to 'true', exiting.")
-        sys.exit(1)
+        sys.exit()
 
     logger.info("INIT_DATABASE is 'true', proceeding with database initialization.")
 
@@ -115,15 +116,66 @@ if __name__ == "__main__":
                     total_nodes_indexed = index_result.get('total_nodes_indexed', 0)
 
                 logger.info(f"Successfully processed space {space_key}. Nodes indexed: {total_nodes_indexed}.")
-            except (ValueError, KeyError, ConnectionError) as e:
-                logger.error(f"Known error occurred while indexing space {space_key}: {e}", exc_info=True)
             except Exception as e:
-                logger.error(f"Unexpected error occurred while indexing space {space_key}: {e}", exc_info=True)
+                logger.error(f"Error indexing space {space_key}: {e}", exc_info=True)
         
         logger.info("Finished processing all Confluence spaces.")
+
+        # 9. GitHub Repository Indexing
+        logger.info("Starting GitHub repository indexing process...")
+        if not settings.github.github_enabled:
+            logger.info("GitHub integration is not enabled via settings. Skipping GitHub indexing.")
+        elif not settings.github.github_token:
+            logger.warning("GITHUB_TOKEN is not configured. Skipping GitHub indexing.")
+        elif not settings.github.github_repos:
+            logger.info("No GitHub repositories configured in GITHUB_REPOS. Skipping GitHub indexing.")
+        else:
+            repos_str = settings.github.github_repos
+            github_repo_list = [repo.strip() for repo in repos_str.split(',') if repo.strip()]
+            if not github_repo_list:
+                logger.info("No valid GitHub repository names found after parsing GITHUB_REPOS. Skipping GitHub indexing.")
+            else:
+                logger.info(f"Found GitHub repositories to index: {github_repo_list}")
+                logger.info("Initializing GitHubIndexer...")
+                try:
+                    github_indexer = GitHubIndexer(github_token=settings.github.github_token, logger=logger)
+                    logger.info("GitHubIndexer initialized.")
+
+                    default_branch = "main" # Or "master", or make this configurable later
+                    for repo_full_name in github_repo_list:
+                        logger.info(f"Processing GitHub repository: {repo_full_name} (branch: {default_branch})")
+                        try:
+                            # The existing storage_context and service_context should be reused
+                            index_result = github_indexer.index(
+                                repo_full_name=repo_full_name,
+                                branch=default_branch,
+                                storage_context=storage_context, # Reused from earlier in the script
+                                service_context=service_context, # Reused from earlier in the script
+                                filter_extensions=None # Or a default list if preferred
+                            )
+                            # Ensure index_result is a dict and has the key before accessing
+                            nodes_indexed_count = 0
+                            if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
+                                nodes_indexed_count = index_result.get('total_nodes_indexed', 0)
+                            logger.info(f"Successfully indexed {nodes_indexed_count} nodes from GitHub repository {repo_full_name}.")
+                        except Exception as e:
+                            logger.error(f"Error indexing GitHub repository {repo_full_name}: {e}", exc_info=True)
+                    logger.info("Finished processing all configured GitHub repositories.")
+                except Exception as e:
+                    logger.error(f"Error initializing GitHubIndexer or during repo processing setup: {e}", exc_info=True)
+        
+        # Check if any indexing was attempted
+        confluence_skipped = not (settings.confluence.confluence_enabled and settings.confluence.confluence_space_keys)
+        github_skipped = not (settings.github.github_enabled and settings.github.github_token and settings.github.github_repos)
+
+        if confluence_skipped and github_skipped:
+            logger.info("No data sources were configured or enabled for indexing. Exiting.")
+        else:
+            logger.info("Finished processing all configured data sources.")
+
 
     except Exception as e:
         logger.error(f"An unexpected error occurred during vector database initialization: {e}", exc_info=True)
         sys.exit(1)
 
-    logger.info("Vector database initialization script finished successfully.")
+    logger.info("Vector database initialization script process completed.")

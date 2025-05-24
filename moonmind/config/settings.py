@@ -16,6 +16,16 @@ class GoogleSettings(BaseSettings):
         env_prefix = ""
 
 
+class GitHubSettings(BaseSettings):
+    """GitHub settings"""
+    github_token: Optional[str] = Field(None, env="GITHUB_TOKEN")
+    github_repos: Optional[str] = Field(None, env="GITHUB_REPOS") # Comma-delimited string of repositories
+    github_enabled: bool = Field(True, env="GITHUB_ENABLED")
+
+    class Config:
+        env_prefix = ""
+
+
 class OpenAISettings(BaseSettings):
     """OpenAI API settings"""
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
@@ -47,6 +57,7 @@ class AppSettings(BaseSettings):
     google: GoogleSettings = GoogleSettings()
     openai: OpenAISettings = OpenAISettings()
     ollama: OllamaSettings = OllamaSettings()
+    github: GitHubSettings = GitHubSettings()
     
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
