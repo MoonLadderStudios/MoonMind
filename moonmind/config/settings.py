@@ -81,6 +81,7 @@ class AppSettings(BaseSettings):
     # Model cache settings
     model_cache_refresh_interval: int = Field(3600, env="MODEL_CACHE_REFRESH_INTERVAL")
     model_cache_refresh_interval_seconds: int = Field(3600, env="MODEL_CACHE_REFRESH_INTERVAL_SECONDS")
+    vector_store_provider: str = Field("qdrant", env="VECTOR_STORE_PROVIDER") # Added field
     
     # Vector store settings
     qdrant_host: str = Field("qdrant", env="QDRANT_HOST")

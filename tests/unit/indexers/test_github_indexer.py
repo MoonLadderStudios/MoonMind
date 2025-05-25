@@ -17,6 +17,7 @@ class TestGitHubIndexer(unittest.TestCase):
         self.mock_storage_context = MagicMock(spec=StorageContext)
         self.mock_storage_context.docstore = MagicMock()
         self.mock_service_context = MagicMock(spec=ServiceContext)
+        self.mock_service_context.embed_model = MagicMock() # Added embed_model attribute
 
         # Setup mock node parser and attach to service_context
         self.mock_node_parser = MagicMock(spec=SimpleNodeParser)
@@ -187,7 +188,7 @@ class TestGitHubIndexer(unittest.TestCase):
             mock_vs_from_docs.assert_called_once_with(
                 [], # Called with empty list
                 storage_context=self.mock_storage_context,
-                service_context=self.mock_service_context
+                embed_model=self.mock_service_context.embed_model # Changed from service_context
             )
             self.mock_node_parser.get_nodes_from_documents.assert_not_called() # Because docs list is empty
             mock_empty_index.insert_nodes.assert_not_called() # No nodes to insert

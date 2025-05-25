@@ -35,7 +35,7 @@ app = FastAPI(
 app.include_router(chat_router, prefix="/v1/chat")
 app.include_router(models_router, prefix="/v1/models")
 app.include_router(documents_router, prefix="/v1/documents")
-app.include_router(context_protocol_router, prefix="/context")
+app.include_router(context_protocol_router) # Removed prefix="/context"
 
 app.add_middleware(
     CORSMiddleware,
@@ -94,8 +94,8 @@ async def setup():
         logger.info("Created a new empty VectorStoreIndex.")
     except Exception as e_startup: # Catch any other exception during startup
         logger.error(f"A critical error occurred during application startup: {e_startup}")
-        # Not re-raising to allow app to start for testing routes.
-        # Underlying issues need to be addressed (e.g. mocking in tests, factory error handling).
+        # Re-raise to make startup failures explicit during testing
+        raise
 
 @app.on_event("shutdown")
 def teardown_providers():

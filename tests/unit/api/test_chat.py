@@ -140,18 +140,24 @@ def test_chat_completions_openai_via_cache(mock_acreate, mock_get_provider, chat
     mock_acreate.assert_called_once()
 
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.factories.google_factory.get_google_model') # Still need to mock the factory that returns the model instance
-def test_chat_completions_google_via_cache(mock_get_google_model_factory, mock_get_provider, chat_request_google_model, mock_google_chat_response):
+@patch('google.generativeai.configure') # Outermost mock
+@patch('api_service.api.routers.chat.get_google_model') # Middle mock - CORRECTED TARGET
+@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Innermost mock
+def test_chat_completions_google_via_cache(
+    mock_get_model_provider,         # Corresponds to model_cache.get_model_provider
+    mock_router_get_google_model,    # Corresponds to chat.get_google_model
+    mock_genai_configure,            # Corresponds to genai.configure
+    chat_request_google_model,
+    mock_google_chat_response
+):
     # Directly set attributes on the imported settings instance
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
-    # settings.google.google_api_key = "fake_google_key_for_test" # Keep this for teardown if needed, or manage teardown centrally
     
-    mock_get_provider.return_value = "Google"
+    mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
     mock_google_chat_model_instance.generate_content.return_value = mock_google_chat_response
-    mock_get_google_model_factory.return_value = mock_google_chat_model_instance
+    mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
     response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
 
@@ -159,25 +165,30 @@ def test_chat_completions_google_via_cache(mock_get_google_model_factory, mock_g
     json_response = response.json()
     assert json_response["model"] == chat_request_google_model.model
     assert json_response["choices"][0]["message"]["content"] == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
-    mock_get_provider.assert_called_once_with(chat_request_google_model.model)
-    mock_get_google_model_factory.assert_called_once_with(chat_request_google_model.model)
+    mock_get_model_provider.assert_called_once_with(chat_request_google_model.model)
+    mock_router_get_google_model.assert_called_once_with(chat_request_google_model.model)
     mock_google_chat_model_instance.generate_content.assert_called_once()
     # No mock_is_enabled_google to assert anymore
 
 
 # Refined Google Error Handling Tests
+@patch('google.generativeai.configure')
+@patch('api_service.api.routers.chat.get_google_model') # CORRECTED TARGET
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.factories.google_factory.get_google_model')
-def test_chat_completions_google_value_error_invalid_role(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
+def test_chat_completions_google_value_error_invalid_role(
+    mock_get_model_provider,
+    mock_router_get_google_model,
+    mock_genai_configure,
+    chat_request_google_model
+):
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
-    # settings.google.google_api_key = "fake_google_key_for_test"
 
-    mock_get_provider.return_value = "Google"
+    mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
     error_message = "Invalid role: 'system' is not a valid role for this model. Valid roles are 'user', 'model'."
     mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
-    mock_get_google_model_factory.return_value = mock_google_chat_model_instance
+    mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
     response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
     
@@ -186,18 +197,23 @@ def test_chat_completions_google_value_error_invalid_role(mock_get_google_model_
     assert "Role or turn order error with Gemini API" in json_response["detail"]
 
 
+@patch('google.generativeai.configure')
+@patch('api_service.api.routers.chat.get_google_model') # CORRECTED TARGET
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.factories.google_factory.get_google_model')
-def test_chat_completions_google_value_error_other_argument(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
+def test_chat_completions_google_value_error_other_argument(
+    mock_get_model_provider,
+    mock_router_get_google_model,
+    mock_genai_configure,
+    chat_request_google_model
+):
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
-    # settings.google.google_api_key = "fake_google_key_for_test"
 
-    mock_get_provider.return_value = "Google"
+    mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
     error_message = "Some other argument error not related to roles."
     mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
-    mock_get_google_model_factory.return_value = mock_google_chat_model_instance
+    mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
     response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
     
@@ -275,17 +291,22 @@ def test_chat_completions_openai_api_error_with_cache(mock_acreate, mock_get_pro
     assert "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"]
 
 
+@patch('google.generativeai.configure')
+@patch('api_service.api.routers.chat.get_google_model') # CORRECTED TARGET
 @patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.factories.google_factory.get_google_model')
-def test_chat_completions_google_api_error_with_cache(mock_get_google_model_factory, mock_get_provider, chat_request_google_model):
+def test_chat_completions_google_api_error_with_cache(
+    mock_get_model_provider,
+    mock_router_get_google_model,
+    mock_genai_configure,
+    chat_request_google_model
+):
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
-    # settings.google.google_api_key = "fake_google_key_for_test" # For teardown
 
-    mock_get_provider.return_value = "Google"
+    mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
-    mock_google_chat_model_instance.generate_content.side_effect = Exception("Google API Communication Error")
-    mock_get_google_model_factory.return_value = mock_google_chat_model_instance
+    mock_google_chat_model_instance.generate_content.side_effect = Exception("Google API Communication Error") # Corrected typo
+    mock_router_get_google_model.return_value = mock_google_chat_model_instance
     
     response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 500
@@ -396,16 +417,25 @@ def mock_ollama_chat_response():
         "done": True
     }
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
-@patch('moonmind.factories.ollama_factory.get_ollama_model')
-def test_chat_completions_ollama_success(mock_get_ollama_model, mock_chat_ollama, mock_get_provider, chat_request_ollama_model, mock_ollama_chat_response):
+@patch('moonmind.factories.ollama_factory.list_ollama_models', new_callable=AsyncMock) # Outermost
+@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Middle
+@patch('api_service.api.routers.chat.chat_with_ollama', new_callable=AsyncMock) # Middle - CORRECTED TARGET
+@patch('api_service.api.routers.chat.get_ollama_model') # Innermost - CORRECTED TARGET
+def test_chat_completions_ollama_success(
+    mock_router_get_ollama_model,    # Innermost
+    mock_router_chat_with_ollama,    # Middle
+    mock_get_provider,               # Middle
+    mock_list_ollama_models,         # Outermost
+    chat_request_ollama_model,
+    mock_ollama_chat_response
+):
     """Test successful Ollama chat completion"""
     settings_in_chat_router.ollama.ollama_enabled = True
     
+    mock_list_ollama_models.return_value = [] # Prevent ModelCache network call
     mock_get_provider.return_value = "Ollama"
-    mock_get_ollama_model.return_value = "llama2"
-    mock_chat_ollama.return_value = mock_ollama_chat_response
+    mock_router_get_ollama_model.return_value = "llama2"
+    mock_router_chat_with_ollama.return_value = mock_ollama_chat_response
     
     response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
     
@@ -413,18 +443,26 @@ def test_chat_completions_ollama_success(mock_get_ollama_model, mock_chat_ollama
     json_response = response.json()
     assert json_response["model"] == "llama2"
     assert json_response["choices"][0]["message"]["content"] == mock_ollama_chat_response["message"]["content"]
-    mock_chat_ollama.assert_called_once()
+    mock_router_chat_with_ollama.assert_called_once()
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider') 
-@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
-@patch('moonmind.factories.ollama_factory.get_ollama_model')
-def test_chat_completions_ollama_api_error(mock_get_ollama_model, mock_chat_ollama, mock_get_provider, chat_request_ollama_model):
+@patch('moonmind.factories.ollama_factory.list_ollama_models', new_callable=AsyncMock) # Outermost
+@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Middle
+@patch('api_service.api.routers.chat.chat_with_ollama', new_callable=AsyncMock) # Middle - CORRECTED TARGET
+@patch('api_service.api.routers.chat.get_ollama_model') # Innermost - CORRECTED TARGET
+def test_chat_completions_ollama_api_error(
+    mock_router_get_ollama_model,    # Innermost
+    mock_router_chat_with_ollama,    # Middle
+    mock_get_provider,               # Middle
+    mock_list_ollama_models,         # Outermost
+    chat_request_ollama_model
+):
     """Test Ollama API error handling"""
     settings_in_chat_router.ollama.ollama_enabled = True
 
+    mock_list_ollama_models.return_value = [] # Prevent ModelCache network call
     mock_get_provider.return_value = "Ollama"
-    mock_get_ollama_model.return_value = "llama2"
-    mock_chat_ollama.side_effect = Exception("Ollama connection error")
+    mock_router_get_ollama_model.return_value = "llama2"
+    mock_router_chat_with_ollama.side_effect = Exception("Ollama connection error")
     
     response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
     
@@ -432,16 +470,24 @@ def test_chat_completions_ollama_api_error(mock_get_ollama_model, mock_chat_olla
     json_response = response.json()
     assert "Ollama API error: Ollama connection error" in json_response["detail"]
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider') 
-@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
-@patch('moonmind.factories.ollama_factory.get_ollama_model')
-def test_chat_completions_ollama_invalid_response(mock_get_ollama_model, mock_chat_ollama, mock_get_provider, chat_request_ollama_model):
+@patch('moonmind.factories.ollama_factory.list_ollama_models', new_callable=AsyncMock) # Outermost
+@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Middle
+@patch('api_service.api.routers.chat.chat_with_ollama', new_callable=AsyncMock) # Middle - CORRECTED TARGET
+@patch('api_service.api.routers.chat.get_ollama_model') # Innermost - CORRECTED TARGET
+def test_chat_completions_ollama_invalid_response(
+    mock_router_get_ollama_model,    # Innermost
+    mock_router_chat_with_ollama,    # Middle
+    mock_get_provider,               # Middle
+    mock_list_ollama_models,         # Outermost
+    chat_request_ollama_model
+):
     """Test Ollama invalid response handling"""
     settings_in_chat_router.ollama.ollama_enabled = True
 
+    mock_list_ollama_models.return_value = [] # Prevent ModelCache network call
     mock_get_provider.return_value = "Ollama"
-    mock_get_ollama_model.return_value = "llama2"
-    mock_chat_ollama.return_value = {"invalid": "response"}  # Missing message field
+    mock_router_get_ollama_model.return_value = "llama2"
+    mock_router_chat_with_ollama.return_value = {"invalid": "response"}  # Missing message field
     
     response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
     
