@@ -8,4 +8,3 @@ jobs/
 
 *.code-workspace
 .env
-.openhands-state-data

@@ -5,13 +5,13 @@ from fastapi.testclient import TestClient
 import time
 
 # Assuming the main app's router is imported correctly
-from fastapi.api.routers.models import router as models_router
+from api_service.api.routers.models import router as models_router
 # Assuming settings are correctly imported and used by the application
 # from moonmind.config.settings import settings # Settings might not be directly needed here anymore
 
 # Setup TestClient
 app = FastAPI()
-app.include_router(models_router, prefix="/v1") 
+app.include_router(models_router, prefix="/v1/models") 
 client = TestClient(app)
 
 # Fixture for a sample list of models as would be returned by model_cache.get_all_models()
@@ -38,14 +38,14 @@ def mock_cached_models_data():
         }
     ]
 
-@patch('fastapi.api.routers.models.model_cache.get_all_models')
+@patch('api_service.api.routers.models.model_cache.get_all_models')
 def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_data):
     """
     Test the /v1/models endpoint when the model_cache returns a list of models.
     """
     mock_get_all_models.return_value = mock_cached_models_data
     
-    response = client.get("/v1/models")
+    response = client.get("/v1/models/") # Updated path
     assert response.status_code == 200
     json_response = response.json()
     
@@ -55,14 +55,14 @@ def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_d
     assert len(json_response["data"]) == len(mock_cached_models_data)
     mock_get_all_models.assert_called_once()
 
-@patch('fastapi.api.routers.models.model_cache.get_all_models')
+@patch('api_service.api.routers.models.model_cache.get_all_models')
 def test_get_models_empty_from_cache(mock_get_all_models):
     """
     Test the /v1/models endpoint when the model_cache returns an empty list.
     """
     mock_get_all_models.return_value = [] # Cache returns no models
     
-    response = client.get("/v1/models")
+    response = client.get("/v1/models/") # Updated path
     assert response.status_code == 200
     json_response = response.json()
     
@@ -71,7 +71,7 @@ def test_get_models_empty_from_cache(mock_get_all_models):
     assert len(json_response["data"]) == 0
     mock_get_all_models.assert_called_once()
 
-@patch('fastapi.api.routers.models.model_cache.get_all_models')
+@patch('api_service.api.routers.models.model_cache.get_all_models')
 def test_get_models_cache_exception(mock_get_all_models):
     """
     Test the /v1/models endpoint when model_cache.get_all_models() raises an exception.
@@ -79,7 +79,7 @@ def test_get_models_cache_exception(mock_get_all_models):
     error_message = "Cache internal error"
     mock_get_all_models.side_effect = Exception(error_message)
     
-    response = client.get("/v1/models")
+    response = client.get("/v1/models/") # Updated path
     
     # The router should catch this and return a 500 error
     assert response.status_code == 500
@@ -106,7 +106,7 @@ def test_health_check_main_app(): # Renamed to distinguish if app has own /healt
 
 def test_router_health_check():
     # This tests the health check defined within the models_router
-    response = client.get("/v1/health") 
+    response = client.get("/v1/models/health") # Updated path
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
 

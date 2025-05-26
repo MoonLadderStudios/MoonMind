@@ -17,6 +17,7 @@ class TestGoogleDriveIndexer(unittest.TestCase):
     def setUp(self):
         self.mock_storage_context = MagicMock(spec=StorageContext)
         self.mock_service_context = MagicMock(spec=ServiceContext)
+        self.mock_service_context.embed_model = MagicMock() # Added embed_model attribute
 
         self.mock_node_parser = MagicMock(spec=SimpleNodeParser)
         self.mock_service_context.node_parser = self.mock_node_parser
@@ -148,7 +149,7 @@ class TestGoogleDriveIndexer(unittest.TestCase):
             mock_vs_from_docs.assert_called_once_with(
                 [],
                 storage_context=self.mock_storage_context,
-                service_context=self.mock_service_context
+                embed_model=self.mock_service_context.embed_model # Changed from service_context
             )
             self.mock_node_parser.get_nodes_from_documents.assert_not_called() # Corrected: should not be called if docs is empty
             mock_empty_index.insert_nodes.assert_not_called()
