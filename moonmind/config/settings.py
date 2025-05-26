@@ -60,6 +60,16 @@ class QdrantSettings(BaseSettings):
         env_prefix = ""
 
 
+class RAGSettings(BaseSettings):
+    """RAG (Retrieval-Augmented Generation) settings"""
+    rag_enabled: bool = Field(True, env="RAG_ENABLED")
+    similarity_top_k: int = Field(5, env="RAG_SIMILARITY_TOP_K")
+    max_context_length_chars: int = Field(8000, env="RAG_MAX_CONTEXT_LENGTH_CHARS")
+
+    class Config:
+        env_prefix = ""
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -69,6 +79,7 @@ class AppSettings(BaseSettings):
     ollama: OllamaSettings = OllamaSettings()
     github: GitHubSettings = GitHubSettings()
     qdrant: QdrantSettings = QdrantSettings()
+    rag: RAGSettings = RAGSettings()
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
