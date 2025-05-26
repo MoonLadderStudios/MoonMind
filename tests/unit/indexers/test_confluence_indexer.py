@@ -14,6 +14,7 @@ class TestConfluenceIndexer(unittest.TestCase):
         self.mock_node_parser_instance = MagicMock()
         self.mock_service_context = MagicMock(spec=ServiceContext)
         self.mock_service_context.node_parser = self.mock_node_parser_instance
+        self.mock_service_context.embed_model = MagicMock() # Added embed_model attribute
         self.mock_storage_context = MagicMock(spec=StorageContext)
         self.indexer = ConfluenceIndexer(
             base_url="http://fake-confluence.com",

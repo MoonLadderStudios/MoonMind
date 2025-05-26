@@ -2,14 +2,44 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 
-from api.routers.context_protocol import ContextRequest, ContextMessage
-from main import app
+from api_service.api.routers.context_protocol import ContextRequest, ContextMessage
+from qdrant_client.http.exceptions import UnexpectedResponse # For mocking
+from qdrant_client.http.models import Distance # For mocking, if needed for detailed get_collection mock
 
-client = TestClient(app)
+from api_service.main import app
+
+# client = TestClient(app) # Removed global client
+
+@pytest.fixture
+def client():
+    # Use TestClient as a context manager to run startup/shutdown events
+    with TestClient(app) as c:
+        yield c
+
+import httpx # For creating a mock httpx.Response
+
+@pytest.fixture(autouse=True) # Apply to all tests in this module
+def mock_qdrant_client_autouse():
+    with patch("moonmind.factories.vector_store_factory.QdrantClient") as mock_qdrant:
+        mock_client_instance = MagicMock()
+        
+        # Simulate QdrantClient.get_collection raising UnexpectedResponse
+        # The TypeError indicated missing: 'reason_phrase', 'content', and 'headers'
+        # Assuming the order is status_code, reason_phrase, content, headers
+        mock_client_instance.get_collection.side_effect = UnexpectedResponse(
+            status_code=404,
+            reason_phrase=b"Not Found", # httpx.Response uses bytes for reason_phrase
+            content=b'{"status": {"error": "Collection not found"}}',
+            headers={} # Example: empty headers
+        )
+        
+        mock_qdrant.return_value = mock_client_instance
+        yield mock_qdrant
 
 @pytest.fixture
 def mock_google_model():
-    with patch("api.routers.context_protocol.get_google_model") as mock:
+    # Patch where get_google_model is looked up by the context_protocol router
+    with patch("api_service.api.routers.context_protocol.get_google_model") as mock:
         model_mock = MagicMock()
         response_mock = MagicMock()
         candidate_mock = MagicMock()
@@ -25,7 +55,7 @@ def mock_google_model():
         mock.return_value = model_mock
         yield mock
 
-def test_context_protocol_endpoint(mock_google_model):
+def test_context_protocol_endpoint(mock_google_model, client): # Added client fixture
     """Test the context protocol endpoint with a mocked Google model."""
     request_data = {
         "messages": [
@@ -37,7 +67,7 @@ def test_context_protocol_endpoint(mock_google_model):
         "max_tokens": 100
     }
     
-    response = client.post("/context", json=request_data)
+    response = client.post("/context", json=request_data) # Using client from fixture
     
     assert response.status_code == 200
     data = response.json()
@@ -62,7 +92,7 @@ def test_context_protocol_endpoint(mock_google_model):
     assert "completion_tokens" in data["metadata"]["usage"]
     assert "total_tokens" in data["metadata"]["usage"]
 
-def test_context_protocol_invalid_role():
+def test_context_protocol_invalid_role(client): # Added client fixture
     """Test the context protocol endpoint with an invalid role."""
     request_data = {
         "messages": [
@@ -72,7 +102,7 @@ def test_context_protocol_invalid_role():
         "model": "gemini-pro"
     }
     
-    response = client.post("/context", json=request_data)
+    response = client.post("/context", json=request_data) # Using client from fixture
     
     assert response.status_code == 400
     data = response.json()

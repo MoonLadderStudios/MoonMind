@@ -252,7 +252,10 @@ async def handle_google_request(request: ChatCompletionRequest, messages: List, 
         response_gemini = chat_model.generate_content(contents)
     except Exception as e:
         logger.error(f"Error generating content with Gemini: {e}")
-        if "Please use a valid role" in str(e) or "must have alternating roles" in str(e):
+        error_str = str(e).lower()
+        if "invalid role" in error_str or \
+           "please use a valid role" in error_str or \
+           "must have alternating roles" in error_str:
             raise HTTPException(
                 status_code=400,
                 detail=f"Role or turn order error with Gemini API: {str(e)}. "

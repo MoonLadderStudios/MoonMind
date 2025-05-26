@@ -1,6 +1,5 @@
 import os
 from typing import Optional
-
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -12,7 +11,7 @@ class GoogleSettings(BaseSettings):
     google_embeddings_model: str = Field("models/text-embedding-004", env="GOOGLE_EMBEDDINGS_MODEL")
     google_embeddings_dimensions: int = Field(768, env="GOOGLE_EMBEDDINGS_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
-
+    
     class Config:
         env_prefix = ""
 
@@ -32,7 +31,7 @@ class OpenAISettings(BaseSettings):
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
     openai_chat_model: str = Field("gpt-3.5-turbo", env="OPENAI_CHAT_MODEL")
     openai_enabled: bool = Field(True, env="OPENAI_ENABLED")
-
+    
     class Config:
         env_prefix = ""
 
@@ -46,64 +45,66 @@ class OllamaSettings(BaseSettings):
     ollama_chat_model: str = Field("devstral:24b", env="OLLAMA_CHAT_MODEL")
     ollama_modes: str = Field("chat", env="OLLAMA_MODES")
     ollama_enabled: bool = Field(True, env="OLLAMA_ENABLED")
-
+    
     class Config:
         env_prefix = ""
 
 
-class QdrantSettings(BaseSettings):
-    """Qdrant vector store settings"""
-    qdrant_host: str = Field("qdrant", env="QDRANT_HOST")
-    qdrant_port: int = Field(6333, env="QDRANT_PORT")
+class RagSettings(BaseSettings):
+    rag_enabled: bool = Field(False, env="RAG_ENABLED")
+    similarity_top_k: int = Field(3, env="RAG_SIMILARITY_TOP_K")
+    max_context_length_chars: int = Field(4000, env="RAG_MAX_CONTEXT_LENGTH_CHARS") # Increased default
 
     class Config:
-        env_prefix = ""
+        env_prefix = "RAG_" # Optional: if you want to prefix RAG env vars
 
 
 class AppSettings(BaseSettings):
     """Main application settings"""
-
+    
     # Sub-settings
     google: GoogleSettings = GoogleSettings()
     openai: OpenAISettings = OpenAISettings()
     ollama: OllamaSettings = OllamaSettings()
     github: GitHubSettings = GitHubSettings()
-    qdrant: QdrantSettings = QdrantSettings()
-
+    rag: RagSettings = RagSettings() # Add this line
+    
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
     default_embed_provider: str = Field("google", env="DEFAULT_EMBED_PROVIDER")
     default_chat_model: Optional[str] = Field(None, env="DEFAULT_CHAT_MODEL")
     default_embed_model: Optional[str] = Field(None, env="DEFAULT_EMBED_MODEL")
-
+    
     # Legacy settings for backwards compatibility
     default_embeddings_provider: str = Field("ollama", env="DEFAULT_EMBEDDINGS_PROVIDER")
-
+    
     # Model cache settings
     model_cache_refresh_interval: int = Field(3600, env="MODEL_CACHE_REFRESH_INTERVAL")
     model_cache_refresh_interval_seconds: int = Field(3600, env="MODEL_CACHE_REFRESH_INTERVAL_SECONDS")
-
+    vector_store_provider: str = Field("qdrant", env="VECTOR_STORE_PROVIDER") # Added field
+    
     # Vector store settings
-    vector_store_provider: str = Field("qdrant", env="VECTOR_STORE_PROVIDER")
+    qdrant_host: str = Field("qdrant", env="QDRANT_HOST")
+    qdrant_port: int = Field(6333, env="QDRANT_PORT")
     vector_store_collection_name: str = Field("moonmind", env="VECTOR_STORE_COLLECTION_NAME")
-
+    
     # Other settings
     confluence_api_key: Optional[str] = Field(None, env="CONFLUENCE_API_KEY")
     confluence_enabled: bool = Field(True, env="CONFLUENCE_ENABLED")
     confluence_url: Optional[str] = Field(None, env="CONFLUENCE_URL")
     confluence_username: Optional[str] = Field(None, env="CONFLUENCE_USERNAME")
     confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
-
+    
     fastapi_reload: bool = Field(False, env="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, env="FERNET_KEY")
     hf_access_token: Optional[str] = Field(None, env="HF_ACCESS_TOKEN")
-
+    
     langchain_api_key: Optional[str] = Field(None, env="LANGCHAIN_API_KEY")
     langchain_tracing_v2: str = Field("true", env="LANGCHAIN_TRACING_V2")
     langchain_project: str = Field("MoonMind", env="LANGCHAIN_PROJECT")
-
+    
     model_directory: str = Field("/app/models", env="MODEL_DIRECTORY")
-
+    
     # OpenHands settings
     openhands_llm_api_key: Optional[str] = Field(None, env="OPENHANDS__LLM__API_KEY")
     openhands_llm_model: str = Field("gemini/gemini-2.5-pro-exp-03-25", env="OPENHANDS__LLM__MODEL")
@@ -111,14 +112,14 @@ class AppSettings(BaseSettings):
     openhands_llm_timeout: int = Field(600, env="OPENHANDS__LLM__TIMEOUT")
     openhands_llm_embedding_model: str = Field("models/text-embedding-004", env="OPENHANDS__LLM__EMBEDDING_MODEL")
     openhands_core_workspace_base: str = Field("/workspace", env="OPENHANDS__CORE__WORKSPACE_BASE")
-
+    
     postgres_version: int = Field(14, env="POSTGRES_VERSION")
-
+    
     def get_default_chat_model(self) -> str:
         """Get the default chat model, falling back to provider defaults"""
         if self.default_chat_model:
             return self.default_chat_model
-
+        
         if self.default_chat_provider == "google":
             return self.google.google_chat_model
         elif self.default_chat_provider == "openai":
@@ -128,18 +129,18 @@ class AppSettings(BaseSettings):
         else:
             # Fallback to Google as default
             return self.google.google_chat_model
-
+    
     def get_default_embed_model(self) -> str:
         """Get the default embedding model, falling back to provider defaults"""
         if self.default_embed_model:
             return self.default_embed_model
-
+        
         if self.default_embed_provider == "ollama":
             return self.ollama.ollama_embeddings_model
         else:
             # Fallback to Ollama as default
             return self.ollama.ollama_embeddings_model
-
+    
     def is_provider_enabled(self, provider: str) -> bool:
         """Check if a provider is enabled"""
         provider = provider.lower()
@@ -151,7 +152,7 @@ class AppSettings(BaseSettings):
             return self.ollama.ollama_enabled
         else:
             return False
-
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

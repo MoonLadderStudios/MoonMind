@@ -10,8 +10,7 @@ logger = logging.getLogger(__name__)
 async def health_check():
     return {"status": "healthy"}
 
-@router.get("/models")
-@router.get("/v1/models")
+@router.get("/")
 async def models():
     try:
         # Get all models from the cache
