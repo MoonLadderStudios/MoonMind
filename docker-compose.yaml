@@ -3,9 +3,9 @@ version: '3.8'
 services:
   ui:
     image: ghcr.io/open-webui/open-webui:main
-    build:
-      context: ./open-webui
-      dockerfile: ./Dockerfile
+    # build:
+    #   context: ./open-webui
+    #   dockerfile: ./Dockerfile
     volumes:
       - open-webui:/app/backend/data
     ports:
@@ -13,6 +13,7 @@ services:
     environment:
       - OPENAI_API_BASE_URL=http://api:8000/v1
       - WEBUI_AUTH=false
+      - ENABLE_OLLAMA_API=false
     env_file:
       - .env
     restart: unless-stopped

@@ -1,0 +1,11 @@
+[core]
+workspace_base = "/workspace"
+
+[runtime]
+container_port_range_start = 52000
+container_port_range_end = 52100
+
+[llm]
+model = "devstral:24b"
+base_url = "http://ollama:11434"
+custom_llm_provider = "ollama"
