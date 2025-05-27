@@ -34,7 +34,7 @@ class ModelCache:
             self.model_to_provider: Dict[str, str] = {}
             self.last_refresh_time: float = 0
             # Use the value from settings if no specific interval is passed during instantiation
-            self.refresh_interval_seconds: int = refresh_interval_seconds if refresh_interval_seconds is not None else 3600 # Temporarily hardcoded, settings access removed
+            self.refresh_interval_seconds: int = refresh_interval_seconds if refresh_interval_seconds is not None else settings.model_cache_refresh_interval_seconds
             self._initialized: bool = True
             self._refresh_operation_lock = Lock() # New instance lock for refresh operations
             self.logger = logger # Assign module-level logger to instance attribute
@@ -191,7 +191,6 @@ class ModelCache:
             # rather than sleeping for the entire refresh_interval_seconds.
             time.sleep(min(60, self.refresh_interval_seconds / 10 if self.refresh_interval_seconds > 0 else 60))
 
-
     def get_all_models(self) -> List[Dict[str, Any]]:
         if not self.models_data and (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
             self.logger.info("Models data is empty or stale, attempting synchronous refresh before returning.")
@@ -199,16 +198,26 @@ class ModelCache:
         return self.models_data
 
     def get_model_provider(self, model_id: str) -> Optional[str]:
-        if not self.model_to_provider and (time.time() - self.last_refresh_time > self.refresh_interval_seconds):
-             self.logger.info("Model to provider map is empty or stale, attempting synchronous refresh.")
-             self.refresh_models_sync()
+        if not self.model_to_provider and (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
+            self.logger.info("Model to provider map is empty or stale, attempting synchronous refresh.")
+            self.refresh_models_sync()
         return self.model_to_provider.get(model_id)
 
-# Global instance of the cache
-# When ModelCache() is called here without arguments, __init__ will use settings.model_cache_refresh_interval_seconds
-# model_cache = ModelCache() # Commented out as per instruction
+    def get_model_details(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves detailed information for a specific model."""
+        if not self.models_data and (time.time() - self.last_refresh_time > self.refresh_interval_seconds):
+            self.logger.info("Models data is empty or stale, attempting synchronous refresh before returning details.")
+            self.refresh_models_sync()
+        for model in self.models_data:
+            if model.get("id") == model_id:
+                return model
+        return None
 
-# Optional: function to explicitly trigger a refresh if needed, e.g. for tests or admin endpoint
+# Global instance of ModelCache
+# Initialize with the refresh interval from settings
+model_cache = ModelCache(refresh_interval_seconds=settings.model_cache_refresh_interval_seconds)
+
 def force_refresh_model_cache():
-    model_cache.logger.info("Force refreshing model cache.") # Use instance logger if model_cache is guaranteed to be initialized
+    """Utility function to manually trigger a cache refresh."""
+    logger.info("Force refresh of model cache requested.")
     model_cache.refresh_models_sync()
