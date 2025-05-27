@@ -3,9 +3,6 @@ version: '3.8'
 services:
   ui:
     image: ghcr.io/open-webui/open-webui:main
-    build:
-      context: ./open-webui
-      dockerfile: ./Dockerfile
     volumes:
       - open-webui:/app/backend/data
     ports:
