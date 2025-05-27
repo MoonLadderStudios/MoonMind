@@ -232,6 +232,64 @@ If using the default Ollama container, an NVIDIA GPU with appropriate drivers is
 
 The API container is powered by FastAPI and LangChain, employing Dependency Injection with abstract interfaces to enable modular service selection. It supports both OpenAI-compatible endpoints and the Model Context Protocol, making it versatile for different client applications and AI agents.
 
+## Running the VLLM Service
+
+This project includes a Docker Compose configuration to run a VLLM (Very Large Language Model) service with GPU acceleration, providing an OpenAI-compatible API endpoint.
+
+### Prerequisites
+
+- NVIDIA GPU drivers installed on your host machine.
+- NVIDIA Container Toolkit installed to enable GPU access for Docker containers.
+- Docker and Docker Compose.
+
+### Setup
+
+1.  **Environment Configuration:**
+    You can customize the VLLM service by setting the following environment variables. Create a `.env` file in the root of the project (you can copy from `.env.vllm-template` if it exists or will be created) or set these variables in your shell environment:
+
+    - `VLLM_MODEL_NAME`: The Hugging Face model identifier to be used by VLLM.
+      (Default: `ByteDance-Seed/UI-TARS-1.5-7B`)
+    - `VLLM_DTYPE`: The data type for model weights (e.g., `float16`, `bfloat16`, `auto`).
+      (Default: `float16`)
+    - `VLLM_GPU_MEMORY_UTILIZATION`: Proportion of GPU memory to be used by VLLM (0.0 to 1.0).
+      (Default: `0.90`)
+
+    Example `.env` file content:
+    ```
+    VLLM_MODEL_NAME="mistralai/Mistral-7B-Instruct-v0.1"
+    VLLM_DTYPE="bfloat16"
+    VLLM_GPU_MEMORY_UTILIZATION="0.95"
+    ```
+
+2.  **Models Directory:**
+    The service uses a local `./models` directory to cache downloaded models. This directory is mounted into the container at `/root/.cache/huggingface/hub`. Ensure this directory exists or can be created by Docker.
+
+### Launching the Service
+
+To build (if necessary) and start the VLLM service, run:
+
+```bash
+docker-compose -f docker-compose.vllm.yaml up -d
+```
+
+The VLLM OpenAI-compatible API will be available at `http://localhost:8001/v1`. (Note: The service is mapped to port `8001` on the host to avoid conflicts with other services that might use port `8000`).
+
+### Accessing Logs
+
+To view the logs from the VLLM service:
+
+```bash
+docker-compose -f docker-compose.vllm.yaml logs -f vllm
+```
+
+### Stopping the Service
+
+To stop the VLLM service:
+
+```bash
+docker-compose -f docker-compose.vllm.yaml down
+```
+
 ## Component Definitions
 
 TODO...

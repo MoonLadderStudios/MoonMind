@@ -10,6 +10,7 @@ services:
     environment:
       - OPENAI_API_BASE_URL=http://api:8000/v1
       - WEBUI_AUTH=false
+      - ENABLE_OLLAMA_API=false
     env_file:
       - .env
     restart: unless-stopped
