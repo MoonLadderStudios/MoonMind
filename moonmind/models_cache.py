@@ -34,20 +34,21 @@ class ModelCache:
             self.model_to_provider: Dict[str, str] = {}
             self.last_refresh_time: float = 0
             # Use the value from settings if no specific interval is passed during instantiation
-            self.refresh_interval_seconds: int = refresh_interval_seconds if refresh_interval_seconds is not None else settings.model_cache_refresh_interval_seconds
+            self.refresh_interval_seconds: int = refresh_interval_seconds if refresh_interval_seconds is not None else 3600 # Temporarily hardcoded, settings access removed
             self._initialized: bool = True
+            self._refresh_operation_lock = Lock() # New instance lock for refresh operations
             self.logger = logger # Assign module-level logger to instance attribute
             self._refresh_thread = Thread(target=self._periodic_refresh, daemon=True)
             self._refresh_in_progress = False # Flag to prevent concurrent refreshes
-            
-            self.logger.info("ModelCache initialized. Starting refresh thread.")
+
+            # self.logger.info("ModelCache initialized. Starting refresh thread.") # Commented out
             self._refresh_thread.start()
 
     def _fetch_all_models(self) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
         self.logger.info("Attempting to fetch all models for cache refresh.")
         all_models_data = []
         model_to_provider_map = {}
-        
+
         # Fetch Google Models
         try:
             if settings.is_provider_enabled("google"):
@@ -57,7 +58,7 @@ class ModelCache:
                     context_window = model.input_token_limit
                     if context_window is None: # Default context window
                         context_window = 1024 if 'embedContent' in model.supported_generation_methods else 8192
-                    
+
                     capabilities = {
                         "chat_completion": 'generateContent' in model.supported_generation_methods,
                         "text_completion": 'generateContent' in model.supported_generation_methods,
@@ -84,17 +85,17 @@ class ModelCache:
                 openai_models_raw = list_openai_models() # This should return a list of model objects/dicts
                 self.logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
                 for model in openai_models_raw: # Assuming model is an object with an 'id' attribute
-                    model_id = model.id 
+                    model_id = model.id
                     # Determine context window (these are common defaults, might need adjustment)
                     if "gpt-4" in model_id: # Covers gpt-4, gpt-4-32k etc.
-                        context_window = 8192 
+                        context_window = 8192
                         if "32k" in model_id: context_window = 32768
                         if "turbo-2024-04-09" in model_id or "128k" in model_id : context_window = 128000
                     elif "gpt-3.5-turbo" in model_id:
                         context_window = 4096
                         if "16k" in model_id: context_window = 16384
                     else: # Default for other OpenAI models
-                        context_window = 4096 
+                        context_window = 4096
 
                     capabilities = { # Assume chat models are for chat/text completion
                         "chat_completion": True, "text_completion": True, "embedding": "embedding" in model_id,
@@ -113,7 +114,7 @@ class ModelCache:
                     self.logger.warning("OpenAI API key not set. Skipping OpenAI models.")
         except Exception as e:
             self.logger.exception(f"Error fetching OpenAI models: {e}")
-        
+
         # Fetch Ollama Models
         try:
             if settings.is_provider_enabled("ollama"):
@@ -123,26 +124,26 @@ class ModelCache:
                     model_name = model.get("name", "")
                     if not model_name:
                         continue
-                    
+
                     # Ollama models typically have flexible context windows, defaulting to 8192
                     context_window = 8192
-                    
+
                     # Assume all Ollama models support chat completion and text completion
                     capabilities = {
                         "chat_completion": True,
                         "text_completion": True,
                         "embedding": False,  # Most chat models don't do embeddings
                     }
-                    
+
                     model_entry = {
-                        "id": model_name, 
-                        "object": "model", 
+                        "id": model_name,
+                        "object": "model",
                         "created": int(time.time()),
-                        "owned_by": "Ollama", 
-                        "permission": [], 
-                        "root": model_name, 
+                        "owned_by": "Ollama",
+                        "permission": [],
+                        "root": model_name,
                         "parent": None,
-                        "context_window": context_window, 
+                        "context_window": context_window,
                         "capabilities": capabilities,
                     }
                     all_models_data.append(model_entry)
@@ -154,17 +155,17 @@ class ModelCache:
                     self.logger.info("Ollama provider is enabled but may not be available.")
         except Exception as e:
             self.logger.exception(f"Error fetching Ollama models: {e}")
-        
+
         self.logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
         return all_models_data, model_to_provider_map
 
     def refresh_models_sync(self):
-        with self._lock:
+        with self._refresh_operation_lock: # Changed to use new instance lock
             if self._refresh_in_progress:
                 self.logger.info("Refresh already in progress. Skipping.")
                 return
             self._refresh_in_progress = True
-        
+
         self.logger.info("Starting synchronous model cache refresh.")
         try:
             self.models_data, self.model_to_provider = self._fetch_all_models()
@@ -173,7 +174,7 @@ class ModelCache:
         except Exception as e:
             self.logger.error(f"Failed to refresh model cache: {e}")
         finally:
-            with self._lock:
+            with self._refresh_operation_lock: # Changed to use new instance lock
                 self._refresh_in_progress = False
 
     def _periodic_refresh(self):
@@ -205,7 +206,7 @@ class ModelCache:
 
 # Global instance of the cache
 # When ModelCache() is called here without arguments, __init__ will use settings.model_cache_refresh_interval_seconds
-model_cache = ModelCache()
+# model_cache = ModelCache() # Commented out as per instruction
 
 # Optional: function to explicitly trigger a refresh if needed, e.g. for tests or admin endpoint
 def force_refresh_model_cache():
