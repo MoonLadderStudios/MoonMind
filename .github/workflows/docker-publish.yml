@@ -47,5 +47,5 @@ jobs:
             ${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.version_tag }}
             ${{ steps.meta.outputs.image_name }}:latest
           platforms: linux/amd64
-          # cache-from: type=gha
-          # cache-to: type=gha,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
