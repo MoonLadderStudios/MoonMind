@@ -186,7 +186,7 @@ if __name__ == "__main__":
                 logger.info("Initializing GoogleDriveIndexer...")
                 try:
                     google_drive_indexer = GoogleDriveIndexer(
-                        service_account_key_path=settings.google.google_application_credentials,
+                        service_account_key_path=settings.google_drive.google_application_credentials,
                         logger=logger
                     )
                     logger.info("GoogleDriveIndexer initialized.")
