@@ -170,7 +170,7 @@ if __name__ == "__main__":
         google_drive_skipped = True
         if not settings.google_drive.google_drive_enabled:
             logger.info("Google Drive integration is not enabled via settings. Skipping Google Drive indexing.")
-        elif not settings.google.google_application_credentials:
+        elif not settings.google_drive.google_application_credentials:
             logger.error("GOOGLE_APPLICATION_CREDENTIALS is not configured. Skipping Google Drive indexing.")
         elif not settings.google_drive.google_drive_folder_id:
             logger.error("GOOGLE_DRIVE_FOLDER_ID is not configured. Skipping Google Drive indexing.")
