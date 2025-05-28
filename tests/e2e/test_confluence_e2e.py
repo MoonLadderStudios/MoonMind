@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import CountRequest # Added import
 from fastapi.testclient import TestClient
-from main import app
+from api_service.main import app
 # from moonmind.config.settings import settings # If needed directly
 # from moonmind.models.documents_models import ConfluenceLoadRequest # If needed for payload construction outside TestClient json
 
@@ -57,17 +57,17 @@ def test_load_and_query_confluence_documents(e2e_setup):
     payload = {
         "space_key": TEST_CONFLUENCE_SPACE_KEY,
         # Consider using a small "max_num_results" for test speed if space is large
-        # "max_num_results": 5 
+        # "max_num_results": 5
     }
 
     response = test_client.post("/documents/confluence/load", json=payload)
-    
+
     assert response.status_code == 200, f"API call failed: {response.text}"
     response_json = response.json()
     assert response_json["status"] == "success"
     assert "total_nodes_indexed" in response_json
     assert response_json["total_nodes_indexed"] > 0
-    
+
     # Optional: Give a moment for indexing if there's any async behavior not awaited by the endpoint
     # import time
     # time.sleep(2) # Usually not needed if endpoint is synchronous
@@ -75,7 +75,7 @@ def test_load_and_query_confluence_documents(e2e_setup):
     # Query Qdrant to verify documents were inserted
     # Ensure the collection name used by the qdrant_client matches the one used by the app
     # The collection_name from e2e_setup should be correct if derived from settings.
-    
+
     # It's possible the collection might not exist if no documents were indexed
     # or if the endpoint failed silently before indexing.
     # A robust test might first check collection existence or rely on the count.

@@ -3,9 +3,6 @@ version: '3.8'
 services:
   ui:
     image: ghcr.io/open-webui/open-webui:main
-    # build:
-    #   context: ./open-webui
-    #   dockerfile: ./Dockerfile
     volumes:
       - open-webui:/app/backend/data
     ports:
@@ -23,7 +20,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: ./fastapi/Dockerfile
+      dockerfile: ./api_service/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -56,7 +53,7 @@ services:
   init-vector-db:
     build:
       context: .
-      dockerfile: ./fastapi/Dockerfile
+      dockerfile: ./api_service/Dockerfile
     environment:
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1

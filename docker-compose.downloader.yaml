@@ -4,7 +4,7 @@ services:
   downloader:
     build:
       context: .
-      dockerfile: ./fastapi/Dockerfile
+      dockerfile: ./api_service/Dockerfile
     env_file:
       - .env
     environment:

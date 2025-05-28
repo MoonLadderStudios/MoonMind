@@ -20,13 +20,13 @@ def build_vector_store(settings: AppSettings, embed_model, embed_dimensions: int
 
 def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1):
     """
-    Builds and returns a Qdrant-based vector store. Allows the user to configure 
+    Builds and returns a Qdrant-based vector store. Allows the user to configure
     different embed models by passing `embed_model` directly into this function.
     """
 
     client = QdrantClient(
-        host=settings.qdrant_host, # Corrected access
-        port=settings.qdrant_port   # Corrected access
+        host=settings.qdrant.qdrant_host, # Corrected access
+        port=settings.qdrant.qdrant_port   # Corrected access
     )
 
     if embed_dimensions == -1:
