@@ -11,6 +11,8 @@ class GoogleSettings(BaseSettings):
     google_embeddings_model: str = Field("models/text-embedding-004", env="GOOGLE_EMBEDDINGS_MODEL")
     google_embeddings_dimensions: int = Field(768, env="GOOGLE_EMBEDDINGS_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
+    # google_application_credentials has been moved to GoogleDriveSettings as per requirements
+
 
     class Config:
         env_prefix = ""
@@ -21,6 +23,16 @@ class GitHubSettings(BaseSettings):
     github_token: Optional[str] = Field(None, env="GITHUB_TOKEN")
     github_repos: Optional[str] = Field(None, env="GITHUB_REPOS") # Comma-delimited string of repositories
     github_enabled: bool = Field(True, env="GITHUB_ENABLED")
+
+    class Config:
+        env_prefix = ""
+
+
+class GoogleDriveSettings(BaseSettings):
+    """Google Drive settings"""
+    google_drive_enabled: bool = Field(False, env="GOOGLE_DRIVE_ENABLED")
+    google_drive_folder_id: Optional[str] = Field(None, env="GOOGLE_DRIVE_FOLDER_ID")
+    google_application_credentials: Optional[str] = Field(None, env="GOOGLE_APPLICATION_CREDENTIALS")
 
     class Config:
         env_prefix = ""
@@ -74,6 +86,7 @@ class AppSettings(BaseSettings):
     openai: OpenAISettings = OpenAISettings()
     ollama: OllamaSettings = OllamaSettings()
     github: GitHubSettings = GitHubSettings()
+    google_drive: GoogleDriveSettings = GoogleDriveSettings()
     qdrant: QdrantSettings = QdrantSettings()
     rag: RAGSettings = RAGSettings()
 
