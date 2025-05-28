@@ -184,28 +184,27 @@ class ModelCache:
             time_since_last_refresh = time.time() - self.last_refresh_time
             if time_since_last_refresh >= self.refresh_interval_seconds:
                 self.logger.info(f"Scheduled refresh interval reached ({self.refresh_interval_seconds}s). Refreshing models.")
-                self.refresh_models_sync()
-            # Sleep for a short duration before checking again.
+                self.refresh_models_sync()            # Sleep for a short duration before checking again.
             # This determines how frequently the thread wakes up to check if a refresh is needed
             # and also allows the thread to respond to shutdown signals more gracefully
             # rather than sleeping for the entire refresh_interval_seconds.
             time.sleep(min(60, self.refresh_interval_seconds / 10 if self.refresh_interval_seconds > 0 else 60))
 
     def get_all_models(self) -> List[Dict[str, Any]]:
-        if not self.models_data and (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
+        if not self.models_data or (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
             self.logger.info("Models data is empty or stale, attempting synchronous refresh before returning.")
             self.refresh_models_sync()
         return self.models_data
 
     def get_model_provider(self, model_id: str) -> Optional[str]:
-        if not self.model_to_provider and (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
+        if not self.model_to_provider or (time.time() - self.last_refresh_time > self.refresh_interval_seconds): # also check if cache is empty
             self.logger.info("Model to provider map is empty or stale, attempting synchronous refresh.")
             self.refresh_models_sync()
         return self.model_to_provider.get(model_id)
 
     def get_model_details(self, model_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves detailed information for a specific model."""
-        if not self.models_data and (time.time() - self.last_refresh_time > self.refresh_interval_seconds):
+        if not self.models_data or (time.time() - self.last_refresh_time > self.refresh_interval_seconds):
             self.logger.info("Models data is empty or stale, attempting synchronous refresh before returning details.")
             self.refresh_models_sync()
         for model in self.models_data:

@@ -4,7 +4,7 @@ services:
   job:
     build:
       context: .
-      dockerfile: ./fastapi/Dockerfile
+      dockerfile: ./api_service/Dockerfile
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1

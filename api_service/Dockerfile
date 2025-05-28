@@ -9,15 +9,15 @@ RUN apt-get update && \
 # Install hot reloading library
 RUN pip install watchfiles
 
-COPY fastapi/requirements.txt /app/requirements.txt
+COPY api_service/requirements.txt /app/requirements.txt
 
 RUN pip install -r /app/requirements.txt
 
 # Copy directories which will be overriden by mounts during development
 COPY pyproject.toml /app/pyproject.toml
 COPY moonmind /app/moonmind/
-COPY fastapi/api /app/api/
-COPY fastapi/main.py /app/main.py
+COPY api_service/api /app/api/
+COPY api_service/main.py /app/main.py
 
 EXPOSE 8000
 
