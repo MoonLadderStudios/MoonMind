@@ -38,9 +38,9 @@ services:
       - .env
     volumes:
       - ./models:/app/models
-      - ./fastapi/api:/app/api:ro  # Ensure these paths are correct for your project
-      - ./fastapi/main.py:/app/main.py:ro # Ensure these paths are correct for your project
-      - ./moonmind:/app/moonmind:ro # Ensure these paths are correct for your project
+      - ./api_service/api:/app/api:ro
+      - ./api_service/main.py:/app/main.py:ro
+      - ./moonmind:/app/moonmind:ro
     command: >
       sh -c "
       if [ "$FASTAPI_RELOAD" = "True" ]; then
@@ -67,9 +67,9 @@ services:
     env_file:
       - .env
     volumes:
-      - ./moonmind:/app/moonmind:ro # Ensure these paths are correct
-      - ./scripts:/app/scripts:ro   # Ensure these paths are correct
-      - ./models:/app/models:ro     # Ensure these paths are correct
+      - ./moonmind:/app/moonmind:ro
+      - ./scripts:/app/scripts:ro
+      - ./models:/app/models:ro
     command: >
       sh -c "
       if [ "$INIT_DATABASE" = "true" ]; then

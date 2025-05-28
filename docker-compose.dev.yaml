@@ -35,8 +35,8 @@ services:
       - .env
     volumes:
       - ./models:/app/models
-      - ./fastapi/api:/app/api:ro
-      - ./fastapi/main.py:/app/main.py:ro
+      - ./api_service/api:/app/api:ro
+      - ./api_service/main.py:/app/main.py:ro
       - ./moonmind:/app/moonmind:ro
     command: >
       sh -c "
