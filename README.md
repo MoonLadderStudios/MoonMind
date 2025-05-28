@@ -4,7 +4,49 @@
 
 ## Quick Start
 
-TODO
+This section guides you through a one-click deployment of MoonMind using Docker Compose. This setup will start the necessary services: the User Interface (Open-WebUI), the API backend, and the Qdrant vector database.
+
+**Prerequisites:**
+
+*   **Docker:** Ensure Docker is installed and running on your system. You can download it from [Docker's official website](https://www.docker.com/products/docker-desktop).
+*   **Docker Compose:** Docker Compose is included with most Docker Desktop installations. If not, follow the [official installation guide](https://docs.docker.com/compose/install/).
+*   **Environment File:** Create a `.env` file in the root of the project by copying the `.env-template` file:
+    ```bash
+    cp .env-template .env
+    ```
+    Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc. For a basic local setup, default values might suffice.
+
+**Running MoonMind:**
+
+1.  **Open a terminal** in the root directory of the MoonMind project.
+2.  **Start the services** using the following command:
+    ```bash
+    docker-compose up -d
+    ```
+    The `-d` flag runs the containers in detached mode, meaning they will run in the background.
+
+3.  **Accessing the UI:** Once the services are up and running (this might take a few minutes the first time as images are downloaded and built), you can access the Open-WebUI by navigating to `http://localhost:8080` in your web browser.
+
+4.  **Initializing the Vector Database (Optional but Recommended):**
+    If you want to load initial data into the Qdrant vector database (e.g., from local files or other sources configured in `config.toml`), you can trigger the initialization process.
+    Set the `INIT_DATABASE` variable in your `.env` file to `true`:
+    ```env
+    INIT_DATABASE=true
+    ```
+    Then, restart your Docker Compose setup:
+    ```bash
+    docker-compose down && docker-compose up -d
+    ```
+    The `init-vector-db` service will run, attempt to load data, and then exit. You can check its logs using `docker-compose logs init-vector-db`. After initialization, you may want to set `INIT_DATABASE=false` again to prevent re-initialization on subsequent restarts.
+
+**Stopping MoonMind:**
+
+To stop all running services, execute the following command in the project root:
+```bash
+docker-compose down
+```
+
+This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration (e.g., without Qdrant or with different services), you might use `docker-compose.dev.yaml` or other specific compose files.
 
 ## Design Principles
 1. One-click deployment with smart defaults

@@ -16,8 +16,6 @@ services:
     restart: unless-stopped
     networks:
       - local-network
-    depends_on:
-      - api
 
   api:
     build:
@@ -33,17 +31,16 @@ services:
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
       - MODEL_CONTEXT_PROTOCOL_PORT=8000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
-      - QDRANT_URL=http://qdrant:6333
     env_file:
       - .env
     volumes:
       - ./models:/app/models
-      - ./fastapi/api:/app/api:ro  # Ensure these paths are correct for your project
-      - ./fastapi/main.py:/app/main.py:ro # Ensure these paths are correct for your project
-      - ./moonmind:/app/moonmind:ro # Ensure these paths are correct for your project
+      - ./fastapi/api:/app/api:ro
+      - ./fastapi/main.py:/app/main.py:ro
+      - ./moonmind:/app/moonmind:ro
     command: >
       sh -c "
-      if [ "$FASTAPI_RELOAD" = "True" ]; then
+      if [ \"$FASTAPI_RELOAD\" = \"True\" ]; then
         uvicorn main:app --host 0.0.0.0 --port 8000 --reload;
       else
         uvicorn main:app --host 0.0.0.0 --port 8000;
@@ -53,8 +50,6 @@ services:
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
-    depends_on:
-      - qdrant
 
   init-vector-db:
     build:
@@ -63,16 +58,15 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
-      - QDRANT_URL=http://qdrant:6333
     env_file:
       - .env
     volumes:
-      - ./moonmind:/app/moonmind:ro # Ensure these paths are correct
-      - ./scripts:/app/scripts:ro   # Ensure these paths are correct
-      - ./models:/app/models:ro     # Ensure these paths are correct
+      - ./moonmind:/app/moonmind:ro
+      - ./scripts:/app/scripts:ro
+      - ./models:/app/models:ro
     command: >
       sh -c "
-      if [ "$INIT_DATABASE" = "true" ]; then
+      if [ \"$$INIT_DATABASE\" = \"true\" ]; then
         echo 'Attempting to initialize vector database...'
         python /app/scripts/init_vector_db.py;
       else
@@ -81,24 +75,9 @@ services:
     networks:
       - local-network
     restart: "no"
-    depends_on:
-      - qdrant
-      - api
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_storage:/qdrant/storage
-    networks:
-      - local-network
-    restart: unless-stopped
 
 volumes:
   open-webui:
-  qdrant_storage:
 
 networks:
   local-network:
