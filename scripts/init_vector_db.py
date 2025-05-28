@@ -4,6 +4,7 @@ import logging
 import qdrant_client
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
+from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 from moonmind.config.settings import settings
 from llama_index.core import StorageContext, ServiceContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -164,14 +165,82 @@ if __name__ == "__main__":
                 except Exception as e:
                     logger.error(f"Error initializing GitHubIndexer or during repo processing setup: {e}", exc_info=True)
         
+        # 10. Google Drive Indexing
+        logger.info("Starting Google Drive indexing process...")
+        google_drive_skipped = True
+        if not settings.google_drive.google_drive_enabled:
+            logger.info("Google Drive integration is not enabled via settings. Skipping Google Drive indexing.")
+        elif not settings.google_drive.google_application_credentials:
+            logger.error("GOOGLE_APPLICATION_CREDENTIALS is not configured. Skipping Google Drive indexing.")
+        elif not settings.google_drive.google_drive_folder_id:
+            logger.error("GOOGLE_DRIVE_FOLDER_ID is not configured. Skipping Google Drive indexing.")
+        else:
+            google_drive_skipped = False
+            folder_ids_str = settings.google_drive.google_drive_folder_id
+            folder_ids = [fid.strip() for fid in folder_ids_str.split(',') if fid.strip()]
+            if not folder_ids:
+                logger.error("No valid Google Drive folder IDs found after parsing GOOGLE_DRIVE_FOLDER_ID. Skipping Google Drive indexing.")
+                google_drive_skipped = True
+            else:
+                logger.info(f"Found Google Drive folder IDs to index: {folder_ids}")
+                logger.info("Initializing GoogleDriveIndexer...")
+                try:
+                    google_drive_indexer = GoogleDriveIndexer(
+                        service_account_key_path=settings.google_drive.google_application_credentials,
+                        logger=logger
+                    )
+                    logger.info("GoogleDriveIndexer initialized.")
+
+                    for folder_id in folder_ids:
+                        logger.info(f"Processing Google Drive folder: {folder_id}")
+                        try:
+                            index_result = google_drive_indexer.index(
+                                folder_id=folder_id,
+                                storage_context=storage_context, # Reused from earlier
+                                service_context=service_context  # Reused from earlier
+                            )
+                            nodes_indexed_count = 0
+                            if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
+                                nodes_indexed_count = index_result.get('total_nodes_indexed', 0)
+                            logger.info(f"Successfully indexed {nodes_indexed_count} nodes from Google Drive folder {folder_id}.")
+                        except Exception as e:
+                            logger.error(f"Error indexing Google Drive folder {folder_id}: {e}", exc_info=True)
+                    logger.info("Finished processing all configured Google Drive folders.")
+                except Exception as e:
+                    logger.error(f"Error initializing GoogleDriveIndexer or during folder processing setup: {e}", exc_info=True)
+                    google_drive_skipped = True # Mark as skipped if setup fails
+
         # Check if any indexing was attempted
         confluence_skipped = not (settings.confluence.confluence_enabled and settings.confluence.confluence_space_keys)
         github_skipped = not (settings.github.github_enabled and settings.github.github_token and settings.github.github_repos)
+        # google_drive_skipped is already set
 
-        if confluence_skipped and github_skipped:
+        if confluence_skipped and github_skipped and google_drive_skipped:
             logger.info("No data sources were configured or enabled for indexing. Exiting.")
         else:
-            logger.info("Finished processing all configured data sources.")
+            log_messages = []
+            if not confluence_skipped:
+                log_messages.append("Confluence")
+            if not github_skipped:
+                log_messages.append("GitHub")
+            if not google_drive_skipped:
+                log_messages.append("Google Drive")
+            
+            processed_sources = ", ".join(log_messages)
+            skipped_sources = []
+            if confluence_skipped:
+                skipped_sources.append("Confluence")
+            if github_skipped:
+                skipped_sources.append("GitHub")
+            if google_drive_skipped:
+                skipped_sources.append("Google Drive")
+
+            if processed_sources:
+                logger.info(f"Finished processing for: {processed_sources}.")
+            if skipped_sources:
+                logger.info(f"Skipped processing for: {', '.join(skipped_sources)} (due to configuration or errors).")
+            else:
+                logger.info("Finished processing all configured data sources.")
 
 
     except Exception as e:
