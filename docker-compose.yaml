@@ -82,8 +82,10 @@ services:
       - local-network
     restart: "no"
     depends_on:
-      - qdrant
-      - api
+      qdrant:
+        condition: service_healthy
+      api:
+        condition: service_started
 
   qdrant:
     image: qdrant/qdrant:latest
