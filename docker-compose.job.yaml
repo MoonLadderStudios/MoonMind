@@ -13,7 +13,7 @@ services:
       - .env
     volumes:
       - ./jobs:/app/jobs
-      - ./models:/app/models
+      - ./model_data:/app/model_data
       - ./moonmind:/app/moonmind:ro
       - ./prompts:/app/prompts
       # - ${DATA_MOUNT_SOURCE:-./data}:${DATA_MOUNT_TARGET:-/app/data}

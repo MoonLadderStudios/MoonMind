@@ -10,7 +10,7 @@ services:
     environment:
       - PYTHONPATH=/app
     volumes:
-      - ./models:/app/models
+      - ./model_data:/app/model_data
       - ./moonmind:/app/moonmind
       - ./scripts:/app/scripts
     working_dir: /app
