@@ -34,7 +34,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./models:/app/models
+      - ./model_data:/app/model_data
       - ./api_service/api:/app/api:ro
       - ./api_service/main.py:/app/main.py:ro
       - ./moonmind:/app/moonmind:ro
@@ -63,7 +63,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./scripts:/app/scripts:ro
-      - ./models:/app/models:ro
+      - ./model_data:/app/model_data:ro
     command: >
       sh -c "
       if [ \"$$INIT_DATABASE\" = \"true\" ]; then

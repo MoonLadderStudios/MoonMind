@@ -13,7 +13,7 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
-      - ./models:/root/.ollama/models
+      - ./model_data:/root/.ollama/models
       - ./scripts/entrypoint-ollama.sh:/entrypoint-ollama.sh:ro
     entrypoint: ["/bin/sh", "/entrypoint-ollama.sh"]
     networks:

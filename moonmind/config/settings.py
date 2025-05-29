@@ -122,7 +122,7 @@ class AppSettings(BaseSettings):
     langchain_tracing_v2: str = Field("true", env="LANGCHAIN_TRACING_V2")
     langchain_project: str = Field("MoonMind", env="LANGCHAIN_PROJECT")
 
-    model_directory: str = Field("/app/models", env="MODEL_DIRECTORY")
+    model_directory: str = Field("/app/model_data", env="MODEL_DIRECTORY")
 
     # OpenHands settings
     openhands_llm_api_key: Optional[str] = Field(None, env="OPENHANDS__LLM__API_KEY")
