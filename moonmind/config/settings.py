@@ -114,6 +114,14 @@ class AppSettings(BaseSettings):
     confluence_username: Optional[str] = Field(None, env="CONFLUENCE_USERNAME")
     confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
 
+    # Jira Settings
+    jira_enabled: bool = Field(False, env="JIRA_ENABLED")
+    jira_url: Optional[str] = Field(None, env="JIRA_URL", description="Jira instance URL, e.g., your-domain.atlassian.net")
+    jira_username: Optional[str] = Field(None, env="JIRA_USERNAME", description="Jira username (usually email)")
+    jira_api_token: Optional[str] = Field(None, env="JIRA_API_TOKEN")
+    jira_jql_query: Optional[str] = Field(None, env="JIRA_JQL_QUERY", description="JQL query to select issues, e.g., 'project in (PROJA, PROJB)'")
+    jira_fetch_batch_size: int = Field(50, env="JIRA_FETCH_BATCH_SIZE", description="Number of issues to fetch per API call")
+
     fastapi_reload: bool = Field(False, env="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, env="FERNET_KEY")
     hf_access_token: Optional[str] = Field(None, env="HF_ACCESS_TOKEN")

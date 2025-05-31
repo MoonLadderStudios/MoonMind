@@ -18,3 +18,11 @@ google_drive_folder_id = ""
 # Optional: Path to the Google Cloud service account JSON file for authentication
 # This is also used by the Google Embeddings client if GOOGLE_API_KEY is not set.
 google_application_credentials = "/path/to/your/service-account-file.json"
+
+# [jira]
+# jira_enabled = false
+# jira_url = "your-domain.atlassian.net"
+# jira_username = "user@example.com"
+# jira_api_token = "your_jira_api_token"
+# jira_jql_query = "project = YOUR_PROJECT_KEY" # Example: "project in (PROJA, PROJB) AND status = Done"
+# jira_fetch_batch_size = 50
