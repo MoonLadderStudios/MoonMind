@@ -1,5 +1,7 @@
 # MoonMind
 
+WARNING: Still in active devwlopment. Not yet at Alpha.
+
 **MoonMind makes it easy to enhance AI chat with personal or proprietary data. It is a Retrieval-Augmented Generation (RAG) app built with LangChain, FastAPI, Open-WebUI, Qdrant, and docker-compose. The API adheres to the OpenAI architecture, so Open-WebUI can be swapped for any OpenAI-compatible UI. It can also be exposed using MCP to other tools like agents.**
 
 ## Quick Start
