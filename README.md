@@ -16,7 +16,7 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     ```bash
     cp .env-template .env
     ```
-    Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc. For a basic local setup, default values might suffice.
+    Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc. For a basic local setup, default values might suffice for most fields other than an LLM provider API key.
 
 **Running MoonMind:**
 
