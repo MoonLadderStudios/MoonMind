@@ -30,7 +30,8 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
     )
 
     if embed_dimensions == -1:
-        test_vector = embed_model.embed("test")
+        # Try _get_query_embedding as per OllamaEmbedding's own methods
+        test_vector = embed_model._get_query_embedding("test")
         embed_dimensions = len(test_vector)
         print(f"Embedding dimensions set to: {embed_dimensions}")
 

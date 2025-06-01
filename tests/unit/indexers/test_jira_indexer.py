@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch, call # Added call for checking multiple calls
+from unittest.mock import MagicMock, patch, call # Removed PropertyMock
 import logging # For silencing logger if needed, or passing a mock logger
 
 from llama_index.core import Settings, StorageContext # Use Settings
@@ -13,18 +13,39 @@ class TestJiraIndexer(unittest.TestCase):
     def setUp(self):
         self.mock_logger = MagicMock(spec=logging.Logger)
 
-        # Mock for Settings (equivalent to ServiceContext in older LlamaIndex)
+        # Patch resolve_embed_model globally to prevent OpenAI API key check
+        # The target is 'llama_index.core.settings.resolve_embed_model' as Settings class imports and uses it.
+        self.resolve_embed_model_patcher = patch('llama_index.core.settings.resolve_embed_model')
+        self.MockResolveEmbedModel = self.resolve_embed_model_patcher.start()
+        self.mock_embed_model_instance = MagicMock(name="MockEmbedModelInstance")
+        self.MockResolveEmbedModel.return_value = self.mock_embed_model_instance
+
+        # Patch resolve_llm globally to prevent OpenAI API key check
+        # The target is 'llama_index.core.settings.resolve_llm' as Settings class imports and uses it.
+        self.resolve_llm_patcher = patch('llama_index.core.settings.resolve_llm')
+        self.MockResolveLlm = self.resolve_llm_patcher.start()
+        self.mock_llm_instance = MagicMock(name="MockLlmInstance")
+        self.MockResolveLlm.return_value = self.mock_llm_instance
+
+        # Mock for Settings
+        # Now, if MagicMock(spec=Settings) internally tries to access/evaluate Settings.embed_model or Settings.llm,
+        # the calls to resolve_embed_model/resolve_llm within them will be intercepted by our patches.
         self.mock_settings_obj = MagicMock(spec=Settings)
+
+        # Explicitly set embed_model and llm on the instance to our controlled mocks
+        # This is important because the actual JiraIndexer code will access service_context.embed_model and potentially .llm
+        self.mock_settings_obj.embed_model = self.mock_embed_model_instance
+        self.mock_settings_obj.llm = self.mock_llm_instance
+
         self.mock_node_parser_instance = MagicMock()
         self.mock_settings_obj.node_parser = self.mock_node_parser_instance
-        self.mock_settings_obj.embed_model = MagicMock() # JiraIndexer uses service_context.embed_model
 
         self.mock_storage_context = MagicMock(spec=StorageContext)
 
         # Patch JiraReader within the moonmind.indexers.jira_indexer module
         # This is where JiraIndexer looks for JiraReader
-        self.patcher = patch('moonmind.indexers.jira_indexer.JiraReader')
-        self.MockJiraReaderClass = self.patcher.start()
+        self.jira_reader_patcher = patch('moonmind.indexers.jira_indexer.JiraReader')
+        self.MockJiraReaderClass = self.jira_reader_patcher.start()
         self.mock_jira_reader_instance = self.MockJiraReaderClass.return_value # Instance returned by JiraReader(...)
 
         self.indexer = JiraIndexer(
@@ -37,7 +58,9 @@ class TestJiraIndexer(unittest.TestCase):
         # due to patching JiraReader at the class level where it's imported in jira_indexer.py
 
     def tearDown(self):
-        self.patcher.stop() # Important to stop the patcher
+        self.resolve_embed_model_patcher.stop()
+        self.resolve_llm_patcher.stop() # Stop the new llm patcher
+        self.jira_reader_patcher.stop() # Stop JiraReader patcher
 
     def test_initialization_success(self):
         self.assertIsNotNone(self.indexer)

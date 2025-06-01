@@ -103,9 +103,11 @@ class JiraIndexer:
                 index.insert_nodes(batch_nodes)
                 total_nodes_indexed += len(batch_nodes)
 
-            if len(batch_docs) < jira_fetch_batch_size:
-                self.logger.info("Final batch fetched (number of docs less than batch size).")
-                break
+            # The condition 'if len(batch_docs) < jira_fetch_batch_size:' has been removed.
+            # The loop will now only break if batch_docs is empty.
+            # This ensures that even if a partial batch is received,
+            # the next iteration will attempt to fetch starting from the new 'start_at',
+            # and will only stop when JiraReader returns an empty list.
 
             start_at += jira_fetch_batch_size
 

@@ -118,22 +118,11 @@ class TestModelCache(unittest.TestCase):
 
 
     def tearDown(self):
-        self.mock_google_models_patch.stop()
-        self.mock_openai_models_patch.stop()
-        self.mock_ollama_models_patch.stop()
-        self.mock_is_provider_enabled_patch.stop()
-        self.thread_patch.stop()
-        if hasattr(self, 'time_sleep_patch') and self.time_sleep_patch.is_started: # Ensure patch was started
-            self.time_sleep_patch.stop()
-        if hasattr(self, 'periodic_refresh_patch') and self.periodic_refresh_patch.is_started:
-            self.periodic_refresh_patch.stop()
-        # if hasattr(self, 'thread_start_patch') and self.thread_start_patch.is_started: # REMOVED/COMMENTED OUT
-            # self.thread_start_patch.stop() # REMOVED/COMMENTED OUT
-        # Ensure model_cache_init_patch is stopped only if it was started
-        if hasattr(self, 'model_cache_init_patch') and hasattr(self, 'mocked_init') and self.model_cache_init_patch.is_started:
-            self.model_cache_init_patch.stop()
+        # patch.stopall() will stop all patches created by unittest.mock.patch
+        # This includes those started in setUp.
         patch.stopall()
 
+        # Restore original settings values
         settings.google.google_api_key = self.original_google_api_key
         settings.google.google_enabled = self.original_google_enabled
         settings.openai.openai_api_key = self.original_openai_api_key
@@ -423,12 +412,11 @@ class TestModelCache(unittest.TestCase):
                 self.assertGreater(cache.last_refresh_time, 0, "Last refresh time should be set")
 
             finally:
-                # Restart the global Thread patcher if it was stopped for this test
-                if not self.thread_patch.is_started:
-                     self.thread_patch.start()
-                # Restart the periodic_refresh patcher if it was stopped for this test
-                if not self.periodic_refresh_patch.is_started:
-                     self.periodic_refresh_patch.start()
+                # Patches are managed by setUp and tearDown (with patch.stopall).
+                # No need to restart them here.
+                # If self.thread_patch was stopped, it will be stopped by tearDown's patch.stopall()
+                # or re-patched in the next test's setUp.
+                pass
 
 
 if __name__ == '__main__':
