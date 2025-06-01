@@ -30,7 +30,8 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
     )
 
     if embed_dimensions == -1:
-        test_vector = embed_model.embed("test")
+        # Use a public API method to determine embedding dimensions
+        test_vector = embed_model.embed_query("test")
         embed_dimensions = len(test_vector)
         print(f"Embedding dimensions set to: {embed_dimensions}")
 

@@ -9,12 +9,32 @@ from qdrant_client.http.models import Distance # For mocking, if needed for deta
 from api_service.main import app
 
 # client = TestClient(app) # Removed global client
+from llama_index.core.embeddings import BaseEmbedding # For spec (corrected path)
 
 @pytest.fixture
 def client():
-    # Use TestClient as a context manager to run startup/shutdown events
-    with TestClient(app) as c:
-        yield c
+    # Patch build_embed_model in the context of api_service.main where the app's startup sequence calls it.
+    with patch('api_service.main.build_embed_model') as MockBuildEmbedModel:
+        # Configure the mock embed_model instance that build_embed_model will return
+        mock_embed_instance = MagicMock(spec=BaseEmbedding)
+
+        # Mock the specific methods that will be called on this instance
+        # _get_query_embedding is often called by other methods in BaseEmbedding or its users
+        mock_embed_instance._get_query_embedding = MagicMock(return_value=[0.1] * 100) # Example dimension
+
+        # Explicitly add other common embedding methods if they are directly accessed on the mock
+        # or if the spec doesn't create them automatically as callable mocks.
+        mock_embed_instance.embed_query = MagicMock(return_value=[0.1] * 100)
+        mock_embed_instance.embed_documents = MagicMock(return_value=[[0.1] * 100])
+        mock_embed_instance.get_text_embedding = MagicMock(return_value=[0.1] * 100) # Alias for query embedding often
+
+        # build_embed_model returns a tuple: (embedding_model, dimensions)
+        MockBuildEmbedModel.return_value = (mock_embed_instance, 100)
+
+        # Use TestClient as a context manager to run startup/shutdown events
+        # Now, when TestClient(app) starts up, it will use our mocked build_embed_model
+        with TestClient(app) as c:
+            yield c
 
 import httpx # For creating a mock httpx.Response
 

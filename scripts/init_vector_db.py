@@ -5,6 +5,7 @@ import qdrant_client
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
+from moonmind.indexers.jira_indexer import JiraIndexer
 from moonmind.config.settings import settings
 from llama_index.core import StorageContext, ServiceContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -210,12 +211,54 @@ if __name__ == "__main__":
                     logger.error(f"Error initializing GoogleDriveIndexer or during folder processing setup: {e}", exc_info=True)
                     google_drive_skipped = True # Mark as skipped if setup fails
 
+        # 11. Jira Indexing
+        logger.info("Starting Jira indexing process...")
+        jira_skipped = True # Assume skipped until success
+        if not settings.jira_enabled: # Direct access for jira_enabled
+            logger.info("Jira integration is not enabled via settings. Skipping Jira indexing.")
+        elif not settings.jira_url: # Direct access
+            logger.warning("JIRA_URL is not configured. Skipping Jira indexing.")
+        elif not settings.jira_username: # Direct access
+            logger.warning("JIRA_USERNAME is not configured. Skipping Jira indexing.")
+        elif not settings.jira_api_token: # Direct access
+            logger.warning("JIRA_API_TOKEN is not configured. Skipping Jira indexing.")
+        elif not settings.jira_jql_query: # Direct access
+            logger.warning("JIRA_JQL_QUERY is not configured. Skipping Jira indexing.")
+        else:
+            jira_skipped = False # Enabled and all basic settings seem present
+            logger.info(f"Found Jira JQL query to process: {settings.jira_jql_query}")
+            logger.info("Initializing JiraIndexer...")
+            try:
+                jira_indexer = JiraIndexer(
+                    jira_url=settings.jira_url,
+                    username=settings.jira_username,
+                    api_token=settings.jira_api_token,
+                    logger=logger
+                )
+                logger.info("JiraIndexer initialized.")
+
+                logger.info(f"Processing Jira query: {settings.jira_jql_query}")
+                # The existing storage_context and service_context should be reused
+                index_result = jira_indexer.index(
+                    jql_query=settings.jira_jql_query,
+                    storage_context=storage_context,
+                    service_context=service_context, # This is LlamaIndex ServiceContext
+                    jira_fetch_batch_size=settings.jira_fetch_batch_size
+                )
+                nodes_indexed_count = 0
+                if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
+                    nodes_indexed_count = index_result.get('total_nodes_indexed', 0)
+                logger.info(f"Successfully indexed {nodes_indexed_count} nodes from Jira for query: {settings.jira_jql_query}.")
+            except Exception as e:
+                logger.error(f"Error indexing Jira query {settings.jira_jql_query}: {e}", exc_info=True)
+                jira_skipped = True # Mark as skipped due to error
+
         # Check if any indexing was attempted
-        confluence_skipped = not (settings.confluence.confluence_enabled and settings.confluence.confluence_space_keys)
+        confluence_skipped = not (settings.confluence.confluence_enabled and settings.confluence.confluence_space_keys) # This line still uses .confluence. which is likely a bug in existing code
         github_skipped = not (settings.github.github_enabled and settings.github.github_token and settings.github.github_repos)
         # google_drive_skipped is already set
 
-        if confluence_skipped and github_skipped and google_drive_skipped:
+        if confluence_skipped and github_skipped and google_drive_skipped and jira_skipped:
             logger.info("No data sources were configured or enabled for indexing. Exiting.")
         else:
             log_messages = []
@@ -225,6 +268,8 @@ if __name__ == "__main__":
                 log_messages.append("GitHub")
             if not google_drive_skipped:
                 log_messages.append("Google Drive")
+            if not jira_skipped:
+                log_messages.append("Jira")
             
             processed_sources = ", ".join(log_messages)
             skipped_sources = []
@@ -234,6 +279,8 @@ if __name__ == "__main__":
                 skipped_sources.append("GitHub")
             if google_drive_skipped:
                 skipped_sources.append("Google Drive")
+            if jira_skipped:
+                skipped_sources.append("Jira")
 
             if processed_sources:
                 logger.info(f"Finished processing for: {processed_sources}.")
