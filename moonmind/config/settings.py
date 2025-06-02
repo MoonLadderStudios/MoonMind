@@ -61,6 +61,41 @@ class OllamaSettings(BaseSettings):
     class Config:
         env_prefix = ""
 
+
+class AtlassianSettings(BaseSettings):
+    """Atlassian base settings"""
+    atlassian_api_key: Optional[str] = Field(None, env="ATLASSIAN_API_KEY")
+    atlassian_username: Optional[str] = Field(None, env="ATLASSIAN_USERNAME")
+    atlassian_url: Optional[str] = Field(None, env="ATLASSIAN_URL")
+    atlassian_enabled: bool = Field(False, env="ATLASSIAN_ENABLED")
+
+    # Nested settings for Confluence and Jira
+    confluence: ConfluenceSettings = ConfluenceSettings()
+    jira: JiraSettings = JiraSettings()
+
+    class Config:
+        env_prefix = ""
+
+
+class ConfluenceSettings(BaseSettings):
+    """Confluence specific settings"""
+    confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
+    confluence_enabled: bool = Field(False, env="CONFLUENCE_ENABLED")
+
+    class Config:
+        env_prefix = ""
+
+
+class JiraSettings(BaseSettings):
+    """Jira specific settings"""
+    jira_jql_query: Optional[str] = Field(None, env="JIRA_JQL_QUERY")
+    jira_fetch_batch_size: int = Field(50, env="JIRA_FETCH_BATCH_SIZE")
+    jira_enabled: bool = Field(False, env="JIRA_ENABLED")
+
+    class Config:
+        env_prefix = ""
+
+
 class QdrantSettings(BaseSettings):
     """Qdrant settings"""
     qdrant_host: str = Field("qdrant", env="QDRANT_HOST")
@@ -89,6 +124,7 @@ class AppSettings(BaseSettings):
     google_drive: GoogleDriveSettings = GoogleDriveSettings()
     qdrant: QdrantSettings = QdrantSettings()
     rag: RAGSettings = RAGSettings()
+    atlassian: AtlassianSettings = AtlassianSettings()
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
@@ -108,20 +144,6 @@ class AppSettings(BaseSettings):
     vector_store_collection_name: str = Field("moonmind", env="VECTOR_STORE_COLLECTION_NAME")
 
     # Other settings
-    confluence_api_key: Optional[str] = Field(None, env="CONFLUENCE_API_KEY")
-    confluence_enabled: bool = Field(True, env="CONFLUENCE_ENABLED")
-    confluence_url: Optional[str] = Field(None, env="CONFLUENCE_URL")
-    confluence_username: Optional[str] = Field(None, env="CONFLUENCE_USERNAME")
-    confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
-
-    # Jira Settings
-    jira_enabled: bool = Field(False, env="JIRA_ENABLED")
-    jira_url: Optional[str] = Field(None, env="JIRA_URL", description="Jira instance URL, e.g., your-domain.atlassian.net")
-    jira_username: Optional[str] = Field(None, env="JIRA_USERNAME", description="Jira username (usually email)")
-    jira_api_token: Optional[str] = Field(None, env="JIRA_API_TOKEN")
-    jira_jql_query: Optional[str] = Field(None, env="JIRA_JQL_QUERY", description="JQL query to select issues, e.g., 'project in (PROJA, PROJB)'")
-    jira_fetch_batch_size: int = Field(50, env="JIRA_FETCH_BATCH_SIZE", description="Number of issues to fetch per API call")
-
     fastapi_reload: bool = Field(False, env="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, env="FERNET_KEY")
     hf_access_token: Optional[str] = Field(None, env="HF_ACCESS_TOKEN")
