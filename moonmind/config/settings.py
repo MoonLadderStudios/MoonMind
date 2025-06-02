@@ -62,6 +62,25 @@ class OllamaSettings(BaseSettings):
         env_prefix = ""
 
 
+class ConfluenceSettings(BaseSettings):
+    """Confluence specific settings"""
+    confluence_space_keys: Optional[str] = Field(None, env="ATLASSIAN_CONFLUENCE_SPACE_KEYS")
+    confluence_enabled: bool = Field(False, env="ATLASSIAN_CONFLUENCE_ENABLED")
+
+    class Config:
+        env_prefix = ""
+
+
+class JiraSettings(BaseSettings):
+    """Jira specific settings"""
+    jira_jql_query: Optional[str] = Field(None, env="ATLASSIAN_JIRA_JQL_QUERY")
+    jira_fetch_batch_size: int = Field(50, env="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
+    jira_enabled: bool = Field(False, env="ATLASSIAN_JIRA_ENABLED")
+
+    class Config:
+        env_prefix = ""
+
+
 class AtlassianSettings(BaseSettings):
     """Atlassian base settings"""
     atlassian_api_key: Optional[str] = Field(None, env="ATLASSIAN_API_KEY")
@@ -72,25 +91,6 @@ class AtlassianSettings(BaseSettings):
     # Nested settings for Confluence and Jira
     confluence: ConfluenceSettings = ConfluenceSettings()
     jira: JiraSettings = JiraSettings()
-
-    class Config:
-        env_prefix = ""
-
-
-class ConfluenceSettings(BaseSettings):
-    """Confluence specific settings"""
-    confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
-    confluence_enabled: bool = Field(False, env="CONFLUENCE_ENABLED")
-
-    class Config:
-        env_prefix = ""
-
-
-class JiraSettings(BaseSettings):
-    """Jira specific settings"""
-    jira_jql_query: Optional[str] = Field(None, env="JIRA_JQL_QUERY")
-    jira_fetch_batch_size: int = Field(50, env="JIRA_FETCH_BATCH_SIZE")
-    jira_enabled: bool = Field(False, env="JIRA_ENABLED")
 
     class Config:
         env_prefix = ""
