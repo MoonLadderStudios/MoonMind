@@ -8,29 +8,33 @@ from moonmind.indexers.jira_indexer import JiraIndexer # New import
 def build_indexers(settings: AppSettings):
     indexers = {}
 
-    if settings.confluence_enabled:
-        # Ensure required Confluence settings are present
-        if settings.confluence_url and settings.confluence_username and settings.confluence_api_key:
+    # Confluence Indexer
+    if settings.atlassian.atlassian_enabled and settings.atlassian.confluence.confluence_enabled:
+        if settings.atlassian.atlassian_url and \
+           settings.atlassian.atlassian_username and \
+           settings.atlassian.atlassian_api_key:
             indexers["confluence"] = ConfluenceIndexer(
-                base_url=settings.confluence_url,
-                user_name=settings.confluence_username,
-                api_token=settings.confluence_api_key
+                base_url=settings.atlassian.atlassian_url,
+                user_name=settings.atlassian.atlassian_username,
+                api_token=settings.atlassian.atlassian_api_key
                 # cloud=True is the default in ConfluenceIndexer
             )
         else:
-            # logger.warning("Confluence is enabled but missing required settings (URL, Username, API Key).")
+            # logger.warning("Confluence is enabled but missing required Atlassian settings (URL, Username, API Key).")
             pass # ConfluenceIndexer raises ValueError for missing essential params
 
-    if settings.jira_enabled:
-        # Ensure required Jira settings are present
-        if settings.jira_url and settings.jira_username and settings.jira_api_token:
+    # Jira Indexer
+    if settings.atlassian.atlassian_enabled and settings.atlassian.jira.jira_enabled:
+        if settings.atlassian.atlassian_url and \
+           settings.atlassian.atlassian_username and \
+           settings.atlassian.atlassian_api_key:
             indexers["jira"] = JiraIndexer(
-                jira_url=settings.jira_url,
-                username=settings.jira_username,
-                api_token=settings.jira_api_token
+                jira_url=settings.atlassian.atlassian_url,
+                username=settings.atlassian.atlassian_username,
+                api_token=settings.atlassian.atlassian_api_key
             )
         else:
-            # logger.warning("Jira is enabled but missing required settings (URL, Username, API Token).")
+            # logger.warning("Jira is enabled but missing required Atlassian settings (URL, Username, API Token).")
             pass # JiraIndexer raises ValueError for missing essential params
 
     return indexers
