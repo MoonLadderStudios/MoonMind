@@ -115,7 +115,7 @@ class AppSettings(BaseSettings):
     google_drive: GoogleDriveSettings = GoogleDriveSettings()
     qdrant: QdrantSettings = QdrantSettings()
     rag: RAGSettings = RAGSettings()
-    atlassian: AtlassianSettings = AtlassianSettings()
+    atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
