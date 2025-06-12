@@ -61,7 +61,7 @@ class ConfluenceSettings(BaseSettings):
     confluence_space_keys: Optional[str] = Field(None, env="ATLASSIAN_CONFLUENCE_SPACE_KEYS")
     confluence_enabled: bool = Field(False, env="ATLASSIAN_CONFLUENCE_ENABLED")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
 
 
 class JiraSettings(BaseSettings):
@@ -70,7 +70,7 @@ class JiraSettings(BaseSettings):
     jira_fetch_batch_size: int = Field(50, env="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
     jira_enabled: bool = Field(False, env="ATLASSIAN_JIRA_ENABLED")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
 
 
 class AtlassianSettings(BaseSettings):
@@ -81,10 +81,24 @@ class AtlassianSettings(BaseSettings):
     atlassian_enabled: bool = Field(False, env="ATLASSIAN_ENABLED")
 
     # Nested settings for Confluence and Jira
-    confluence: ConfluenceSettings = ConfluenceSettings()
-    jira: JiraSettings = JiraSettings()
+    confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)
+    jira: JiraSettings = Field(default_factory=JiraSettings)
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Manually load environment variables for nested settings
+        if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED") == "True":
+            self.confluence.confluence_enabled = True
+        if os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS"):
+            self.confluence.confluence_space_keys = os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS")
+        if os.environ.get("ATLASSIAN_JIRA_ENABLED") == "True":
+            self.jira.jira_enabled = True
+        if os.environ.get("ATLASSIAN_JIRA_JQL_QUERY"):
+            self.jira.jira_jql_query = os.environ.get("ATLASSIAN_JIRA_JQL_QUERY")
+        if os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"):
+            self.jira.jira_fetch_batch_size = int(os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"))
 
 
 class QdrantSettings(BaseSettings):
@@ -108,13 +122,13 @@ class AppSettings(BaseSettings):
     """Main application settings"""
 
     # Sub-settings
-    google: GoogleSettings = GoogleSettings()
-    openai: OpenAISettings = OpenAISettings()
-    ollama: OllamaSettings = OllamaSettings()
-    github: GitHubSettings = GitHubSettings()
-    google_drive: GoogleDriveSettings = GoogleDriveSettings()
-    qdrant: QdrantSettings = QdrantSettings()
-    rag: RAGSettings = RAGSettings()
+    google: GoogleSettings = Field(default_factory=GoogleSettings)
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    github: GitHubSettings = Field(default_factory=GitHubSettings)
+    google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
+    qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
+    rag: RAGSettings = Field(default_factory=RAGSettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
 
     # Default providers and models

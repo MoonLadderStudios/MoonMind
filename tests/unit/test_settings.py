@@ -20,18 +20,22 @@ class TestAtlassianSettings(unittest.TestCase):
         "ATLASSIAN_JIRA_FETCH_BATCH_SIZE": "100"
     })
     def test_load_atlassian_settings_from_env(self):
+        # Create the main settings
         settings = AppSettings()
+        
+        # Verify the main Atlassian settings
         self.assertTrue(settings.atlassian.atlassian_enabled)
         self.assertEqual(settings.atlassian.atlassian_api_key, "test_api_key")
         self.assertEqual(settings.atlassian.atlassian_username, "test_user")
         self.assertEqual(settings.atlassian.atlassian_url, "https://test.atlassian.net")
-
+        
+        # Verify the nested settings in the main settings
         self.assertTrue(settings.atlassian.confluence.confluence_enabled)
         self.assertEqual(settings.atlassian.confluence.confluence_space_keys, "TEST_SPACE_1,TEST_SPACE_2")
-
+        
         self.assertTrue(settings.atlassian.jira.jira_enabled)
         self.assertEqual(settings.atlassian.jira.jira_jql_query, "project=TEST")
-        self.assertEqual(settings.atlassian.jira.jira_fetch_batch_size, 100) # Pydantic converts "100" to int
+        self.assertEqual(settings.atlassian.jira.jira_fetch_batch_size, 100)
 
     @patch.dict(os.environ, {}, clear=True) # Clear all env vars for this test method
     def test_atlassian_settings_defaults(self):
