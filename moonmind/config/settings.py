@@ -8,8 +8,8 @@ class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
     google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
     google_chat_model: str = Field("gemini-2.5-pro-exp-03-25", env="GOOGLE_CHAT_MODEL")
-    google_embeddings_model: str = Field("models/text-embedding-004", env="GOOGLE_EMBEDDINGS_MODEL")
-    google_embeddings_dimensions: int = Field(768, env="GOOGLE_EMBEDDINGS_DIMENSIONS")
+    google_embedding_model: str = Field("models/text-embedding-004", env="GOOGLE_EMBEDDING_MODEL")
+    google_embedding_dimensions: int = Field(768, env="GOOGLE_EMBEDDING_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
 
@@ -85,7 +85,7 @@ class AtlassianSettings(BaseSettings):
     jira: JiraSettings = Field(default_factory=JiraSettings)
 
     model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
-    
+
     def __init__(self, **data):
         super().__init__(**data)
         # Manually load environment variables for nested settings
@@ -133,7 +133,7 @@ class AppSettings(BaseSettings):
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
-    default_embed_provider: str = Field("google", env="DEFAULT_EMBED_PROVIDER")
+    default_embedding_provider: str = Field("google", env="DEFAULT_EMBEDDING_PROVIDER")
     default_chat_model: Optional[str] = Field(None, env="DEFAULT_CHAT_MODEL")
     default_embed_model: Optional[str] = Field(None, env="DEFAULT_EMBED_MODEL")
 
@@ -189,7 +189,7 @@ class AppSettings(BaseSettings):
         if self.default_embed_model:
             return self.default_embed_model
 
-        if self.default_embed_provider == "ollama":
+        if self.default_embedding_provider == "ollama":
             return self.ollama.ollama_embeddings_model
         else:
             # Fallback to Ollama as default
