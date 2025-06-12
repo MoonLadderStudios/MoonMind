@@ -12,22 +12,22 @@ from api_service.main import app
 
 load_dotenv()
 
-ATLASSIAN_URL = os.getenv("ATLASSIAN_URL")
-ATLASSIAN_USERNAME = os.getenv("ATLASSIAN_USERNAME")
-ATLASSIAN_API_KEY = os.getenv("ATLASSIAN_API_KEY")
+CONFLUENCE_URL = os.getenv("CONFLUENCE_URL")
+CONFLUENCE_USERNAME = os.getenv("CONFLUENCE_USERNAME")
+CONFLUENCE_API_KEY = os.getenv("CONFLUENCE_API_KEY")
 TEST_CONFLUENCE_SPACE_KEY = os.getenv("TEST_CONFLUENCE_SPACE_KEY")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333")) # Ensure string default for int conversion
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "moonmind_documents") # Ensure this matches your actual collection name from settings
 
 skip_if_missing_env_vars = pytest.mark.skipif(
-    not all([ATLASSIAN_URL, ATLASSIAN_USERNAME, ATLASSIAN_API_KEY, TEST_CONFLUENCE_SPACE_KEY]),
+    not all([CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_KEY, TEST_CONFLUENCE_SPACE_KEY]),
     reason="Required Confluence environment variables are not set in .env"
 )
 
 @pytest.fixture(scope="module")
 def e2e_setup():
-    # ATLASSIAN_URL, ATLASSIAN_USERNAME, ATLASSIAN_API_KEY, TEST_CONFLUENCE_SPACE_KEY,
+    # CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_KEY, TEST_CONFLUENCE_SPACE_KEY,
     # QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME are loaded at module level.
     # load_dotenv() is also called at module level.
 
