@@ -93,8 +93,6 @@ class AppSettings(BaseSettings):
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
     default_embed_provider: str = Field("google", env="DEFAULT_EMBED_PROVIDER")
-    default_chat_model: Optional[str] = Field(None, env="DEFAULT_CHAT_MODEL")
-    default_embed_model: Optional[str] = Field(None, env="DEFAULT_EMBED_MODEL")
 
     # Legacy settings for backwards compatibility
     default_embeddings_provider: str = Field("ollama", env="DEFAULT_EMBEDDINGS_PROVIDER")
@@ -144,29 +142,32 @@ class AppSettings(BaseSettings):
 
     def get_default_chat_model(self) -> str:
         """Get the default chat model, falling back to provider defaults"""
-        if self.default_chat_model:
-            return self.default_chat_model
+        provider = self.default_chat_provider.lower() if self.default_chat_provider else "google"
 
-        if self.default_chat_provider == "google":
+        if provider == "google":
             return self.google.google_chat_model
-        elif self.default_chat_provider == "openai":
+        elif provider == "openai":
             return self.openai.openai_chat_model
-        elif self.default_chat_provider == "ollama":
+        elif provider == "ollama":
             return self.ollama.ollama_chat_model
         else:
-            # Fallback to Google as default
+            # Default to Google if provider is unknown or not set
             return self.google.google_chat_model
 
     def get_default_embed_model(self) -> str:
         """Get the default embedding model, falling back to provider defaults"""
-        if self.default_embed_model:
-            return self.default_embed_model
+        provider = self.default_embed_provider.lower() if self.default_embed_provider else "google"
 
-        if self.default_embed_provider == "ollama":
+        if provider == "google":
+            return self.google.google_embeddings_model
+        elif provider == "ollama": # Ollama is common for embeddings
             return self.ollama.ollama_embeddings_model
+        # Add other providers here if they become default embedding options
+        # elif provider == "openai":
+        #     return self.openai.openai_embeddings_model # Assuming future openai embed model field
         else:
-            # Fallback to Ollama as default
-            return self.ollama.ollama_embeddings_model
+            # Default to Google if provider is unknown or not set
+            return self.google.google_embeddings_model
 
     def is_provider_enabled(self, provider: str) -> bool:
         """Check if a provider is enabled"""
