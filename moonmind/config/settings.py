@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class GoogleSettings(BaseSettings):
@@ -13,9 +13,7 @@ class GoogleSettings(BaseSettings):
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
 
-
-    class Config:
-        env_prefix = ""
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class GitHubSettings(BaseSettings):
@@ -24,8 +22,7 @@ class GitHubSettings(BaseSettings):
     github_repos: Optional[str] = Field(None, env="GITHUB_REPOS") # Comma-delimited string of repositories
     github_enabled: bool = Field(True, env="GITHUB_ENABLED")
 
-    class Config:
-        env_prefix = ""
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class GoogleDriveSettings(BaseSettings):
@@ -34,8 +31,7 @@ class GoogleDriveSettings(BaseSettings):
     google_drive_folder_id: Optional[str] = Field(None, env="GOOGLE_DRIVE_FOLDER_ID")
     google_application_credentials: Optional[str] = Field(None, env="GOOGLE_APPLICATION_CREDENTIALS")
 
-    class Config:
-        env_prefix = ""
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class OpenAISettings(BaseSettings):
@@ -44,8 +40,7 @@ class OpenAISettings(BaseSettings):
     openai_chat_model: str = Field("gpt-3.5-turbo", env="OPENAI_CHAT_MODEL")
     openai_enabled: bool = Field(True, env="OPENAI_ENABLED")
 
-    class Config:
-        env_prefix = ""
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class OllamaSettings(BaseSettings):
@@ -58,8 +53,53 @@ class OllamaSettings(BaseSettings):
     ollama_modes: str = Field("chat", env="OLLAMA_MODES")
     ollama_enabled: bool = Field(True, env="OLLAMA_ENABLED")
 
-    class Config:
-        env_prefix = ""
+    model_config = SettingsConfigDict(env_prefix="")
+
+
+class ConfluenceSettings(BaseSettings):
+    """Confluence specific settings"""
+    confluence_space_keys: Optional[str] = Field(None, env="ATLASSIAN_CONFLUENCE_SPACE_KEYS")
+    confluence_enabled: bool = Field(False, env="ATLASSIAN_CONFLUENCE_ENABLED")
+
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
+
+
+class JiraSettings(BaseSettings):
+    """Jira specific settings"""
+    jira_jql_query: Optional[str] = Field(None, env="ATLASSIAN_JIRA_JQL_QUERY")
+    jira_fetch_batch_size: int = Field(50, env="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
+    jira_enabled: bool = Field(False, env="ATLASSIAN_JIRA_ENABLED")
+
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
+
+
+class AtlassianSettings(BaseSettings):
+    """Atlassian base settings"""
+    atlassian_api_key: Optional[str] = Field(None, env="ATLASSIAN_API_KEY")
+    atlassian_username: Optional[str] = Field(None, env="ATLASSIAN_USERNAME")
+    atlassian_url: Optional[str] = Field(None, env="ATLASSIAN_URL")
+    atlassian_enabled: bool = Field(False, env="ATLASSIAN_ENABLED")
+
+    # Nested settings for Confluence and Jira
+    confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)
+    jira: JiraSettings = Field(default_factory=JiraSettings)
+
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Manually load environment variables for nested settings
+        if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED") == "True":
+            self.confluence.confluence_enabled = True
+        if os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS"):
+            self.confluence.confluence_space_keys = os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS")
+        if os.environ.get("ATLASSIAN_JIRA_ENABLED") == "True":
+            self.jira.jira_enabled = True
+        if os.environ.get("ATLASSIAN_JIRA_JQL_QUERY"):
+            self.jira.jira_jql_query = os.environ.get("ATLASSIAN_JIRA_JQL_QUERY")
+        if os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"):
+            self.jira.jira_fetch_batch_size = int(os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"))
+
 
 class QdrantSettings(BaseSettings):
     """Qdrant settings"""
@@ -67,6 +107,7 @@ class QdrantSettings(BaseSettings):
     qdrant_port: int = Field(6333, env="QDRANT_PORT")
     qdrant_api_key: Optional[str] = Field(None, env="QDRANT_API_KEY")
     qdrant_enabled: bool = Field(True, env="QDRANT_ENABLED")
+    model_config = SettingsConfigDict(env_prefix="")
 
 class RAGSettings(BaseSettings):
     """RAG (Retrieval-Augmented Generation) settings"""
@@ -74,21 +115,21 @@ class RAGSettings(BaseSettings):
     similarity_top_k: int = Field(5, env="RAG_SIMILARITY_TOP_K")
     max_context_length_chars: int = Field(8000, env="RAG_MAX_CONTEXT_LENGTH_CHARS")
 
-    class Config:
-        env_prefix = ""
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class AppSettings(BaseSettings):
     """Main application settings"""
 
     # Sub-settings
-    google: GoogleSettings = GoogleSettings()
-    openai: OpenAISettings = OpenAISettings()
-    ollama: OllamaSettings = OllamaSettings()
-    github: GitHubSettings = GitHubSettings()
-    google_drive: GoogleDriveSettings = GoogleDriveSettings()
-    qdrant: QdrantSettings = QdrantSettings()
-    rag: RAGSettings = RAGSettings()
+    google: GoogleSettings = Field(default_factory=GoogleSettings)
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    github: GitHubSettings = Field(default_factory=GitHubSettings)
+    google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
+    qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
+    rag: RAGSettings = Field(default_factory=RAGSettings)
+    atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
@@ -106,20 +147,6 @@ class AppSettings(BaseSettings):
     vector_store_collection_name: str = Field("moonmind", env="VECTOR_STORE_COLLECTION_NAME")
 
     # Other settings
-    confluence_api_key: Optional[str] = Field(None, env="CONFLUENCE_API_KEY")
-    confluence_enabled: bool = Field(True, env="CONFLUENCE_ENABLED")
-    confluence_url: Optional[str] = Field(None, env="CONFLUENCE_URL")
-    confluence_username: Optional[str] = Field(None, env="CONFLUENCE_USERNAME")
-    confluence_space_keys: Optional[str] = Field(None, env="CONFLUENCE_SPACE_KEYS")
-
-    # Jira Settings
-    jira_enabled: bool = Field(False, env="JIRA_ENABLED")
-    jira_url: Optional[str] = Field(None, env="JIRA_URL", description="Jira instance URL, e.g., your-domain.atlassian.net")
-    jira_username: Optional[str] = Field(None, env="JIRA_USERNAME", description="Jira username (usually email)")
-    jira_api_token: Optional[str] = Field(None, env="JIRA_API_TOKEN")
-    jira_jql_query: Optional[str] = Field(None, env="JIRA_JQL_QUERY", description="JQL query to select issues, e.g., 'project in (PROJA, PROJB)'")
-    jira_fetch_batch_size: int = Field(50, env="JIRA_FETCH_BATCH_SIZE", description="Number of issues to fetch per API call")
-
     fastapi_reload: bool = Field(False, env="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, env="FERNET_KEY")
     hf_access_token: Optional[str] = Field(None, env="HF_ACCESS_TOKEN")
@@ -181,9 +208,7 @@ class AppSettings(BaseSettings):
         else:
             return False
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='ignore')
 
 
 # Create a global settings instance

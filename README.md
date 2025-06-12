@@ -470,9 +470,9 @@ These tests verify the end-to-end functionality of loading documents from a real
 2.  Add the following environment variables to your `.env` file, replacing placeholder values with your actual Confluence and Qdrant details:
 
     ```env
-    CONFLUENCE_URL=https://your-confluence-domain.atlassian.net/wiki
-    CONFLUENCE_USERNAME=your_email@example.com
-    CONFLUENCE_API_KEY=your_confluence_api_token
+    ATLASSIAN_API_KEY=your_confluence_api_token
+    ATLASSIAN_URL=https://your-atlassian-domain.atlassian.net
+    ATLASSIAN_USERNAME=your_email@example.com
     TEST_CONFLUENCE_SPACE_KEY=YOUR_TEST_SPACE_KEY  # A space with a few test documents that the provided user can access
 
     QDRANT_HOST=localhost
@@ -486,4 +486,4 @@ To execute the Confluence integration tests, run the following command from the 
 ```powershell
 .\scripts\test-integration.ps1
 ```
-The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.
+The tests will be skipped if the required Confluence environment variables (`ATLASSIAN_URL`, `ATLASSIAN_USERNAME`, `ATLASSIAN_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.
