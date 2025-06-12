@@ -56,13 +56,13 @@ if __name__ == "__main__":
         # 3. Set up Qdrant client and VectorStore
         logger.info(f"Initializing Qdrant client for host: {settings.qdrant_host}, port: {settings.qdrant_port}")
         client = qdrant_client.QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        
+
         logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
-        logger.info(f"Using Google embeddings dimensions for Qdrant: {settings.google.google_embeddings_dimensions}")
+        logger.info(f"Using Google embeddings dimensions for Qdrant: {settings.google.google_embedding_dimensions}")
         vector_store = QdrantVectorStore(
             client=client,
             collection_name=settings.vector_store_collection_name,
-            embed_dim=settings.google.google_embeddings_dimensions  # Using Google's dimensions
+            embed_dim=settings.google.google_embedding_dimensions  # Using Google's dimensions
         )
         logger.info("Qdrant client and vector store initialized successfully.")
 
@@ -71,13 +71,13 @@ if __name__ == "__main__":
         logger.info("StorageContext initialized successfully.")
 
         # 5. Set up Embedding Model (Google)
-        logger.info(f"Initializing Google Embeddings model: {settings.google.google_embeddings_model}")
+        logger.info(f"Initializing Google Embeddings model: {settings.google.google_embedding_model}")
         if not settings.google.google_api_key:
             logger.error("Google API key (GOOGLE_API_KEY) is not configured for embeddings. Exiting.")
             sys.exit()
-            
+
         embed_model = GoogleGenerativeAiEmbedding(
-            model_name=settings.google.google_embeddings_model,
+            model_name=settings.google.google_embedding_model,
             api_key=settings.google.google_api_key
         )
         logger.info("Google Embedding model initialized successfully.")
@@ -120,7 +120,7 @@ if __name__ == "__main__":
                 logger.info(f"Successfully processed space {space_key}. Nodes indexed: {total_nodes_indexed}.")
             except Exception as e:
                 logger.error(f"Error indexing space {space_key}: {e}", exc_info=True)
-        
+
         logger.info("Finished processing all Confluence spaces.")
 
         # 9. GitHub Repository Indexing
@@ -165,7 +165,7 @@ if __name__ == "__main__":
                     logger.info("Finished processing all configured GitHub repositories.")
                 except Exception as e:
                     logger.error(f"Error initializing GitHubIndexer or during repo processing setup: {e}", exc_info=True)
-        
+
         # 10. Google Drive Indexing
         logger.info("Starting Google Drive indexing process...")
         google_drive_skipped = True
@@ -270,7 +270,7 @@ if __name__ == "__main__":
                 log_messages.append("Google Drive")
             if not jira_skipped:
                 log_messages.append("Jira")
-            
+
             processed_sources = ", ".join(log_messages)
             skipped_sources = []
             if confluence_skipped:
