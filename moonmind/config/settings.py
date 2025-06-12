@@ -134,8 +134,6 @@ class AppSettings(BaseSettings):
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
     default_embedding_provider: str = Field("google", env="DEFAULT_EMBEDDING_PROVIDER")
-    default_chat_model: Optional[str] = Field(None, env="DEFAULT_CHAT_MODEL")
-    default_embed_model: Optional[str] = Field(None, env="DEFAULT_EMBED_MODEL")
 
     # Legacy settings for backwards compatibility
     default_embeddings_provider: str = Field("ollama", env="DEFAULT_EMBEDDINGS_PROVIDER")
@@ -168,32 +166,6 @@ class AppSettings(BaseSettings):
     openhands_core_workspace_base: str = Field("/workspace", env="OPENHANDS__CORE__WORKSPACE_BASE")
 
     postgres_version: int = Field(14, env="POSTGRES_VERSION")
-
-    def get_default_chat_model(self) -> str:
-        """Get the default chat model, falling back to provider defaults"""
-        if self.default_chat_model:
-            return self.default_chat_model
-
-        if self.default_chat_provider == "google":
-            return self.google.google_chat_model
-        elif self.default_chat_provider == "openai":
-            return self.openai.openai_chat_model
-        elif self.default_chat_provider == "ollama":
-            return self.ollama.ollama_chat_model
-        else:
-            # Fallback to Google as default
-            return self.google.google_chat_model
-
-    def get_default_embed_model(self) -> str:
-        """Get the default embedding model, falling back to provider defaults"""
-        if self.default_embed_model:
-            return self.default_embed_model
-
-        if self.default_embedding_provider == "ollama":
-            return self.ollama.ollama_embeddings_model
-        else:
-            # Fallback to Ollama as default
-            return self.ollama.ollama_embeddings_model
 
     def is_provider_enabled(self, provider: str) -> bool:
         """Check if a provider is enabled"""

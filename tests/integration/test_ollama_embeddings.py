@@ -85,12 +85,32 @@ def test_ollama_embeddings_instance_creation(ollama_embeddings_instance):
     assert ollama_embeddings_instance is not None
     assert isinstance(ollama_embeddings_instance, OllamaEmbedding)
 
+# def test_ollama_embeddings_confluence_document(ollama_embeddings_instance):
+#     """Test embedding a Confluence document."""
+#     loader = ConfluenceLoader(
+#         url=settings.confluence.confluence_url,
+#         api_key=settings.confluence.confluence_api_key,
+#         username=settings.confluence.confluence_username,
+#         space_key=settings.confluence.confluence_default_space_key,
+#         include_attachments=False,
+#         limit=50
+#     )
+#     documents = loader.load()
+#     logger.info(f"Loaded {len(documents)} documents from Confluence.") # Should now see this log
+
+#     embeddings = ollama_embeddings_instance.get_text_embedding_batch([doc.page_content for doc in documents])
+#     assert isinstance(embeddings, list)
+#     assert len(embeddings) == len(documents)
+#     for embedding in embeddings:
+#         assert isinstance(embedding, list)
+#         assert all(isinstance(e, float) for e in embedding), "Embeddings should be a list of floats."
+
 def test_ollama_embeddings_confluence_document(ollama_embeddings_instance):
     """Test embedding a Confluence document."""
     loader = ConfluenceLoader(
-        url=settings.settings.atlassian.atlassian_url+"/wiki",
-        api_key=settings.atlassian.atlassian_api_key,
-        username=settings.atlassian.atlassian_username,
+        url=settings.confluence.confluence_url,
+        api_key=settings.confluence.confluence_api_key,
+        username=settings.confluence.confluence_username,
         space_key=settings.confluence.confluence_default_space_key,
         include_attachments=False,
         limit=50

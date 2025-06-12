@@ -28,25 +28,25 @@ if __name__ == "__main__":
     try:
         # 1. Confluence Configuration Check
         logger.info("Checking Confluence configuration...")
-        if not (settings.atlassian.atlassian_enabled and settings.atlassian.confluence.confluence_enabled):
-            logger.error("Confluence is not enabled via Atlassian settings. Exiting.")
+        if not settings.confluence.confluence_enabled:
+            logger.error("Confluence is not enabled in settings. Exiting.")
             sys.exit()
-        if not settings.atlassian.atlassian_url:
-            logger.error("Atlassian URL is not configured. Exiting.")
+        if not settings.confluence.confluence_url:
+            logger.error("Confluence URL is not configured. Exiting.")
             sys.exit()
-        if not settings.atlassian.atlassian_username:
-            logger.error("Atlassian username is not configured. Exiting.")
+        if not settings.confluence.confluence_username:
+            logger.error("Confluence username is not configured. Exiting.")
             sys.exit()
-        if not settings.atlassian.atlassian_api_key:
-            logger.error("Atlassian API key is not configured. Exiting.")
+        if not settings.confluence.confluence_api_key:
+            logger.error("Confluence API key is not configured. Exiting.")
             sys.exit()
-        if not settings.atlassian.confluence.confluence_space_keys:
-            logger.error("No Confluence space keys configured (ATLASSIAN_CONFLUENCE_SPACE_KEYS). Exiting.")
+        if not settings.confluence.confluence_space_keys:
+            logger.error("No Confluence space keys configured (CONFLUENCE_SPACE_KEYS). Exiting.")
             sys.exit()
         logger.info("Confluence configuration check passed.")
 
         # 2. Parse Confluence Space Keys
-        space_keys_str = settings.atlassian.confluence.confluence_space_keys
+        space_keys_str = settings.confluence.confluence_space_keys
         space_keys = [key.strip() for key in space_keys_str.split(',') if key.strip()]
         if not space_keys:
             logger.error("No valid Confluence space keys found after parsing. Exiting.")
@@ -90,9 +90,9 @@ if __name__ == "__main__":
         # 7. Instantiate ConfluenceIndexer
         logger.info("Initializing ConfluenceIndexer...")
         confluence_indexer = ConfluenceIndexer(
-            base_url=settings.atlassian.atlassian_url,
-            user_name=settings.atlassian.atlassian_username,
-            api_token=settings.atlassian.atlassian_api_key,
+            base_url=settings.confluence.confluence_url,
+            user_name=settings.confluence.confluence_username,
+            api_token=settings.confluence.confluence_api_key,
             logger=logger  # Pass the logger instance
         )
         logger.info("ConfluenceIndexer initialized successfully.")
@@ -214,47 +214,47 @@ if __name__ == "__main__":
         # 11. Jira Indexing
         logger.info("Starting Jira indexing process...")
         jira_skipped = True # Assume skipped until success
-        if not (settings.atlassian.atlassian_enabled and settings.atlassian.jira.jira_enabled):
-            logger.info("Jira integration is not enabled via Atlassian settings. Skipping Jira indexing.")
-        elif not settings.atlassian.atlassian_url:
-            logger.warning("Atlassian URL (for Jira) is not configured. Skipping Jira indexing.")
-        elif not settings.atlassian.atlassian_username:
-            logger.warning("Atlassian username (for Jira) is not configured. Skipping Jira indexing.")
-        elif not settings.atlassian.atlassian_api_key:
-            logger.warning("Atlassian API key (for Jira) is not configured. Skipping Jira indexing.")
-        elif not settings.atlassian.jira.jira_jql_query:
-            logger.warning("Jira JQL query (ATLASSIAN_JIRA_JQL_QUERY) is not configured. Skipping Jira indexing.")
+        if not settings.jira_enabled: # Direct access for jira_enabled
+            logger.info("Jira integration is not enabled via settings. Skipping Jira indexing.")
+        elif not settings.jira_url: # Direct access
+            logger.warning("JIRA_URL is not configured. Skipping Jira indexing.")
+        elif not settings.jira_username: # Direct access
+            logger.warning("JIRA_USERNAME is not configured. Skipping Jira indexing.")
+        elif not settings.jira_api_token: # Direct access
+            logger.warning("JIRA_API_TOKEN is not configured. Skipping Jira indexing.")
+        elif not settings.jira_jql_query: # Direct access
+            logger.warning("JIRA_JQL_QUERY is not configured. Skipping Jira indexing.")
         else:
             jira_skipped = False # Enabled and all basic settings seem present
-            logger.info(f"Found Jira JQL query to process: {settings.atlassian.jira.jira_jql_query}")
+            logger.info(f"Found Jira JQL query to process: {settings.jira_jql_query}")
             logger.info("Initializing JiraIndexer...")
             try:
                 jira_indexer = JiraIndexer(
-                    jira_url=settings.atlassian.atlassian_url,
-                    username=settings.atlassian.atlassian_username,
-                    api_token=settings.atlassian.atlassian_api_key,
+                    jira_url=settings.jira_url,
+                    username=settings.jira_username,
+                    api_token=settings.jira_api_token,
                     logger=logger
                 )
                 logger.info("JiraIndexer initialized.")
 
-                logger.info(f"Processing Jira query: {settings.atlassian.jira.jira_jql_query}")
+                logger.info(f"Processing Jira query: {settings.jira_jql_query}")
                 # The existing storage_context and service_context should be reused
                 index_result = jira_indexer.index(
-                    jql_query=settings.atlassian.jira.jira_jql_query,
+                    jql_query=settings.jira_jql_query,
                     storage_context=storage_context,
                     service_context=service_context, # This is LlamaIndex ServiceContext
-                    jira_fetch_batch_size=settings.atlassian.jira.jira_fetch_batch_size
+                    jira_fetch_batch_size=settings.jira_fetch_batch_size
                 )
                 nodes_indexed_count = 0
                 if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
                     nodes_indexed_count = index_result.get('total_nodes_indexed', 0)
-                logger.info(f"Successfully indexed {nodes_indexed_count} nodes from Jira for query: {settings.atlassian.jira.jira_jql_query}.")
+                logger.info(f"Successfully indexed {nodes_indexed_count} nodes from Jira for query: {settings.jira_jql_query}.")
             except Exception as e:
-                logger.error(f"Error indexing Jira query {settings.atlassian.jira.jira_jql_query}: {e}", exc_info=True)
+                logger.error(f"Error indexing Jira query {settings.jira_jql_query}: {e}", exc_info=True)
                 jira_skipped = True # Mark as skipped due to error
 
         # Check if any indexing was attempted
-        confluence_skipped = not (settings.atlassian.atlassian_enabled and settings.atlassian.confluence.confluence_enabled and settings.atlassian.confluence.confluence_space_keys)
+        confluence_skipped = not (settings.confluence.confluence_enabled and settings.confluence.confluence_space_keys) # This line still uses .confluence. which is likely a bug in existing code
         github_skipped = not (settings.github.github_enabled and settings.github.github_token and settings.github.github_repos)
         # google_drive_skipped is already set
 

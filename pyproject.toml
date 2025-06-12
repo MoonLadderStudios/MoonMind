@@ -8,6 +8,36 @@ version = "0.1.0"
 description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
 license = { file = "LICENSE" }
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pydantic-settings",
+    "langchain",
+    "langchain-community",
+    "langchain-google-community",
+    "langchain-google-genai",
+    "langchain-ollama",
+    "langchain-openai",
+    "langchain-qdrant",
+    "llama-index",
+    "llama-index-embeddings-google",
+    "llama-index-embeddings-ollama",
+    "llama-index-readers-confluence",
+    "llama-index-readers-github",
+    "llama-index-readers-google",
+    "llama-index-readers-jira",
+    "llama-index-vector-stores-qdrant",
+    "qdrant-client",
+    "google-generativeai",
+    "openai",
+    "ollama",
+    "httpx",
+    "atlassian-python-api",
+    "beautifulsoup4",
+    "html2text",
+    "lxml"
+]
 
 # This tells setuptools where to find packages when building.
 # For an editable install (`pip install -e .`), it helps ensure that

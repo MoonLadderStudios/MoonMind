@@ -30,9 +30,9 @@ async def load_confluence_documents(
     """Load documents from Confluence workspace"""
     try:
         confluence_indexer = ConfluenceIndexer(
-            base_url=settings.atlassian.atlassian_url+"/wiki",
-            user_name=settings.atlassian.atlassian_username,
-            api_token=settings.atlassian.atlassian_api_key,
+            base_url=settings.confluence.confluence_url,
+            user_name=settings.confluence.confluence_username, # Corrected parameter name
+            api_token=settings.confluence.confluence_api_key, # Corrected parameter name
             logger=logger
         )
 
