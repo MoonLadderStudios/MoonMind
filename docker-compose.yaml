@@ -61,6 +61,7 @@ services:
       context: .
       dockerfile: ./api_service/Dockerfile
     environment:
+      - PYTHONPATH=/app
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
       - QDRANT_URL=http://qdrant:6333
