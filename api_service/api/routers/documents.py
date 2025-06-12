@@ -30,9 +30,9 @@ async def load_confluence_documents(
     """Load documents from Confluence workspace"""
     try:
         confluence_indexer = ConfluenceIndexer(
-            base_url=settings.confluence.confluence_url,
-            user_name=settings.confluence.confluence_username, # Corrected parameter name
-            api_token=settings.confluence.confluence_api_key, # Corrected parameter name
+            base_url=settings.atlassian.atlassian_url+"/wiki",
+            user_name=settings.atlassian.atlassian_username,
+            api_token=settings.atlassian.atlassian_api_key,
             logger=logger
         )
 
@@ -74,7 +74,7 @@ async def load_github_repo(
     try:
         github_indexer = GitHubIndexer(
             github_token=request.github_token,
-            logger=logger 
+            logger=logger
         )
 
         # GitHubIndexer.index is synchronous
@@ -85,7 +85,7 @@ async def load_github_repo(
             storage_context=storage_context,
             service_context=service_context
         )
-        
+
         total_nodes_indexed = index_result["total_nodes_indexed"]
 
         return {
@@ -117,7 +117,7 @@ async def load_google_drive_documents(
         sa_key_path = request.service_account_key_path
         if not sa_key_path and hasattr(settings, 'google') and hasattr(settings.google, 'google_account_file'): # Ensure 'google_account_file' is used
             sa_key_path = settings.google.google_account_file
-        
+
         if sa_key_path: # Add a log if a path is found/used
             logger.info(f"Using Google service account key path: {sa_key_path}")
         else:
@@ -136,9 +136,9 @@ async def load_google_drive_documents(
             file_ids=request.file_ids
             # 'recursive' from request is noted in Pydantic model, but not directly used by the current indexer logic
         )
-        
+
         total_nodes_indexed = index_result["total_nodes_indexed"]
-        
+
         source_description = ""
         if request.file_ids:
             source_description = f"file IDs {request.file_ids}"
