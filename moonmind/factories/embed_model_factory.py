@@ -34,4 +34,4 @@ def build_embed_model(settings: AppSettings):
     #     ), settings.openai.openai_embed_dimensions # if defined
     else:
         # Fallback or error if provider is not supported for embeddings
-        raise ValueError(f"Unsupported default embed provider: {provider}. Or Google provider selected but API key missing.")
+        raise ValueError(f"Unsupported default embed provider: {provider}.")
