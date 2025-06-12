@@ -27,6 +27,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - PYTHONPATH=/app
       - LOG_LEVEL=DEBUG
       - PYTHONUNBUFFERED=1
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-0}
