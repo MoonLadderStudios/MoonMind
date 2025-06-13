@@ -7,4 +7,4 @@ prompts/
 jobs/
 *.code-workspace
 .env
-.openhands-state-data/*.egg-info/
+.openhands-state-data/
