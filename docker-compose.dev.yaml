@@ -56,8 +56,10 @@ services:
       context: .
       dockerfile: ./api_service/Dockerfile
     environment:
+      - PYTHONPATH=/app
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
+      - QDRANT_URL=http://qdrant:6333
     env_file:
       - .env
     volumes:
@@ -66,15 +68,18 @@ services:
       - ./model_data:/app/model_data:ro
     command: >
       sh -c "
-      if [ \"$$INIT_DATABASE\" = \"true\" ]; then
+      if [ "$INIT_DATABASE" = "true" ]; then
         echo 'Attempting to initialize vector database...'
-        python /app/scripts/init_vector_db.py;
+        export PYTHONPATH=/app && python /app/scripts/init_vector_db.py;
       else
         echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
       fi"
     networks:
       - local-network
     restart: "no"
+    depends_on:
+      api:
+        condition: service_started
 
 volumes:
   open-webui:
