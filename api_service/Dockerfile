@@ -9,21 +9,26 @@ RUN apt-get update && \
 # Install hot reloading library
 RUN pip install watchfiles
 
-# Copy project configuration and core package code FIRST
+COPY api_service/requirements.txt /app/requirements.txt
+
+RUN pip install -r /app/requirements.txt
+
+# Diagnostic commands
+RUN echo "==== PIP LIST OUTPUT ====" && \
+    pip list && \
+    echo "==== PIP SHOW llama-index-embeddings-google ====" && \
+    pip show llama-index-embeddings-google && \
+    echo "==== PYTHON SYS.PATH ====" && \
+    python -c "import sys; print(sys.path)" && \
+    echo "==== ATTEMPTING DIRECT IMPORT OF llama_index_embeddings_google ====" && \
+    python -c "print('Attempting to import llama_index_embeddings_google directly...'); import llama_index_embeddings_google; print('Import successful. Path:', llama_index_embeddings_google.__file__)" && \
+    echo "==== DIAGNOSTICS COMPLETE ===="
+
+# Copy other project files (pyproject.toml, moonmind, api_service/api, api_service/main.py)
 COPY pyproject.toml /app/pyproject.toml
 COPY moonmind /app/moonmind/
-# Add any other files/directories needed for 'pip install /app' if they are part of the project structure
-# defined in pyproject.toml (e.g. setup.cfg, MANIFEST.in if they exist and are used)
-
-# Install the project and its dependencies from pyproject.toml
-# This assumes 'moonmind' is the primary package to be installed, as suggested by pyproject.toml's find settings.
-RUN pip install /app
-
-# Copy other application-specific code that might not be part of the installable package
-# or are meant for development overrides.
 COPY api_service/api /app/api/
 COPY api_service/main.py /app/main.py
-# Note: Removed COPY api_service/requirements.txt and the corresponding pip install command.
 
 EXPOSE 8000
 
