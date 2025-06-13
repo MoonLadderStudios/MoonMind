@@ -26,7 +26,6 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r api_service/requirements.txt
-        python -m pip install pytest
         python -m pip install -e .
     - name: Run pytest unit tests
       run: |
