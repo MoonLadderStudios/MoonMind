@@ -9,7 +9,7 @@ from moonmind.indexers.jira_indexer import JiraIndexer
 from moonmind.config.settings import settings
 from llama_index.core import StorageContext, ServiceContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.embeddings.google import GoogleGenerativeAiEmbedding
+from llama_index_embeddings_google import GoogleGenerativeAiEmbedding
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
