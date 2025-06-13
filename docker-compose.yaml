@@ -27,6 +27,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - PYTHONPATH=/app
       - LOG_LEVEL=DEBUG
       - PYTHONUNBUFFERED=1
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-0}
@@ -61,6 +62,7 @@ services:
       context: .
       dockerfile: ./api_service/Dockerfile
     environment:
+      - PYTHONPATH=/app
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
       - QDRANT_URL=http://qdrant:6333
@@ -74,7 +76,7 @@ services:
       sh -c "
       if [ "$INIT_DATABASE" = "true" ]; then
         echo 'Attempting to initialize vector database...'
-        python /app/scripts/init_vector_db.py;
+        export PYTHONPATH=/app && python /app/scripts/init_vector_db.py;
       else
         echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
       fi"
