@@ -7,9 +7,10 @@ from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 from moonmind.indexers.jira_indexer import JiraIndexer
 from moonmind.config.settings import settings
+from moonmind.factories.embed_model_factory import build_embed_model # ADDED
 from llama_index.core import StorageContext, ServiceContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.embeddings.google import GoogleGenerativeAiEmbedding
+# REMOVE: from llama_index.embeddings.google import GoogleGenerativeAiEmbedding
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,38 +54,31 @@ if __name__ == "__main__":
             sys.exit()
         logger.info(f"Found Confluence space keys to process: {space_keys}")
 
-        # 3. Set up Qdrant client and VectorStore
+        # 3. Get Embedding Model and Dimensions (formerly step 5)
+        logger.info(f"Building embedding model using factory for default provider...")
+        # This call assumes settings are appropriately configured for the default embed provider.
+        # The factory handles API key checks internally based on provider.
+        embed_model, embed_dimensions = build_embed_model(settings) # CHANGED
+        logger.info(f"Embedding model built successfully. Provider: {settings.default_embedding_provider}, Dimensions: {embed_dimensions}")
+
+        # 4. Set up Qdrant client and VectorStore (formerly step 3, using new embed_dimensions)
         logger.info(f"Initializing Qdrant client for host: {settings.qdrant_host}, port: {settings.qdrant_port}")
         client = qdrant_client.QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-
         logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
-        logger.info(f"Using Google embeddings dimensions for Qdrant: {settings.google.google_embedding_dimensions}")
         vector_store = QdrantVectorStore(
             client=client,
             collection_name=settings.vector_store_collection_name,
-            embed_dim=settings.google.google_embedding_dimensions  # Using Google's dimensions
+            embed_dim=embed_dimensions  # Use dimensions from factory
         )
         logger.info("Qdrant client and vector store initialized successfully.")
 
-        # 4. Set up StorageContext
+        # 5. StorageContext setup (formerly step 4)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         logger.info("StorageContext initialized successfully.")
 
-        # 5. Set up Embedding Model (Google)
-        logger.info(f"Initializing Google Embeddings model: {settings.google.google_embedding_model}")
-        if not settings.google.google_api_key:
-            logger.error("Google API key (GOOGLE_API_KEY) is not configured for embeddings. Exiting.")
-            sys.exit()
-
-        embed_model = GoogleGenerativeAiEmbedding(
-            model_name=settings.google.google_embedding_model,
-            api_key=settings.google.google_api_key
-        )
-        logger.info("Google Embedding model initialized successfully.")
-
-        # 6. Set up ServiceContext
+        # 6. Set up ServiceContext (formerly step 6)
         # LLM is set to None as we are only performing indexing operations.
-        service_context = ServiceContext.from_defaults(embed_model=embed_model, llm=None)
+        service_context = ServiceContext.from_defaults(embed_model=embed_model, llm=None) # embed_model is now from factory
         logger.info("ServiceContext initialized successfully (LLM is None for indexing).")
 
         # 7. Instantiate ConfluenceIndexer
