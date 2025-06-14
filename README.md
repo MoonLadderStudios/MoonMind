@@ -72,7 +72,7 @@ If you are using the provided Ollama service for local LLM inference, you can co
 The following environment variables in your `.env` file are used:
 
 *   `OLLAMA_CHAT_MODEL`: Specifies the chat model. Defaults to `"devstral:24b"`.
-*   `OLLAMA_EMBEDDINGS_MODEL`: Specifies the embedding model. Defaults to `"hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"`.
+*   `OLLAMA_EMBEDDING_MODEL`: Specifies the embedding model. Defaults to `"hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"`.
 *   `OLLAMA_MODES`: Determines which model(s) to load by default. This is a comma-separated string. Valid values are "chat", "embed", or "chat,embed". If not set, it defaults to "chat".
 
 **Launching with Specific Models:**
@@ -80,7 +80,7 @@ The following environment variables in your `.env` file are used:
 You can specify which models to load at launch time using the `scripts/ollama.ps1` script with its new switch parameters. This will override the `OLLAMA_MODES` value in your `.env` file for that specific run.
 
 *   `-LoadChatModel`: Use this switch to load the chat model specified by `OLLAMA_CHAT_MODEL`.
-*   `-LoadEmbeddingModel`: Use this switch to load the embedding model specified by `OLLAMA_EMBEDDINGS_MODEL`.
+*   `-LoadEmbeddingModel`: Use this switch to load the embedding model specified by `OLLAMA_EMBEDDING_MODEL`.
 
 If neither switch is provided, the script defaults to loading only the chat model (equivalent to `OLLAMA_MODES="chat"`).
 

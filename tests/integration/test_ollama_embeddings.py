@@ -13,7 +13,7 @@ from moonmind.factories.embed_model_factory import build_embed_model
 # Configure settings for tests
 settings.default_embeddings_provider = "ollama"
 settings.ollama.ollama_base_url = "http://ollama:11434"
-settings.ollama.ollama_embeddings_model = "hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"
+settings.ollama.ollama_embedding_model = "hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"
 settings.ollama.ollama_embeddings_dimensions = -1
 settings.ollama.ollama_keep_alive = "-1m"
 

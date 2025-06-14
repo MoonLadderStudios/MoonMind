@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +12,7 @@ class GoogleSettings(BaseSettings):
     google_embedding_model: str = Field("models/text-embedding-004", env="GOOGLE_EMBEDDING_MODEL")
     google_embedding_dimensions: int = Field(768, env="GOOGLE_EMBEDDING_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
+    google_embed_batch_size: int = Field(100, env="GOOGLE_EMBED_BATCH_SIZE")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
 
     model_config = SettingsConfigDict(env_prefix="")
@@ -46,7 +48,7 @@ class OpenAISettings(BaseSettings):
 class OllamaSettings(BaseSettings):
     """Ollama settings"""
     ollama_base_url: str = Field("http://ollama:11434", env="OLLAMA_BASE_URL")
-    ollama_embeddings_model: str = Field("hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K", env="OLLAMA_EMBEDDINGS_MODEL")
+    ollama_embedding_model: str = Field("hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K", env="OLLAMA_EMBEDDING_MODEL")
     ollama_embeddings_dimensions: int = Field(3584, env="OLLAMA_EMBEDDINGS_DIMENSIONS")
     ollama_keep_alive: str = Field("-1m", env="OLLAMA_KEEP_ALIVE")
     ollama_chat_model: str = Field("devstral:24b", env="OLLAMA_CHAT_MODEL")

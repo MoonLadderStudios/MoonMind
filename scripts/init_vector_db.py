@@ -1,15 +1,18 @@
+import logging
 import os
 import sys
-import logging
+
 import qdrant_client
+from google.genai.types import EmbedContentConfig
+from llama_index.core import ServiceContext, StorageContext
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+
+from moonmind.config.settings import settings
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 from moonmind.indexers.jira_indexer import JiraIndexer
-from moonmind.config.settings import settings
-from llama_index.core import StorageContext, ServiceContext
-from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index_embeddings_google import GoogleGenerativeAiEmbedding
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -76,8 +79,9 @@ if __name__ == "__main__":
             logger.error("Google API key (GOOGLE_API_KEY) is not configured for embeddings. Exiting.")
             sys.exit()
 
-        embed_model = GoogleGenerativeAiEmbedding(
+        embed_model = GoogleGenAIEmbedding(
             model_name=settings.google.google_embedding_model,
+            google_embed_batch_size=settings.google.google_embed_batch_size,
             api_key=settings.google.google_api_key
         )
         logger.info("Google Embedding model initialized successfully.")

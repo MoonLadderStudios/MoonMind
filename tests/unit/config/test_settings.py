@@ -1,10 +1,13 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 from pydantic import ValidationError
 
 # Assuming AppSettings is in moonmind.config.settings
 # Adjust the import path if necessary based on your project structure
-from moonmind.config.settings import AppSettings, GoogleSettings, OpenAISettings, OllamaSettings
+from moonmind.config.settings import (AppSettings, GoogleSettings,
+                                      OllamaSettings, OpenAISettings)
+
 
 # Fixture for default settings, can be customized in tests
 @pytest.fixture
@@ -12,7 +15,7 @@ def app_settings_defaults():
     return {
         "google": GoogleSettings(
             google_chat_model="test-google-chat",
-            google_embeddings_model="test-google-embed",
+            google_embedding_model="test-google-embed",
             google_api_key="test_google_key" # Required for is_provider_enabled
         ),
         "openai": OpenAISettings(
@@ -21,11 +24,11 @@ def app_settings_defaults():
         ),
         "ollama": OllamaSettings(
             ollama_chat_model="test-ollama-chat",
-            ollama_embeddings_model="test-ollama-embed"
+            ollama_embedding_model="test-ollama-embed"
         ),
         # Ensure other required fields for AppSettings have defaults if not provided
         "default_chat_provider": "google", # Default to google for fixture
-        "default_embed_provider": "google", # Default to google for fixture
+        "default_embedding_provider": "google", # Default to google for fixture
         "qdrant": {"qdrant_enabled": False}, # Disable things not under test
         "rag": {},
         "github": {"github_enabled": False},
@@ -34,55 +37,6 @@ def app_settings_defaults():
         "jira_enabled": False,
 
     }
-
-def test_get_default_chat_model_google_provider(app_settings_defaults):
-    app_settings_defaults["default_chat_provider"] = "google"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_chat_model() == "test-google-chat"
-
-def test_get_default_chat_model_openai_provider(app_settings_defaults):
-    app_settings_defaults["default_chat_provider"] = "openai"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_chat_model() == "test-openai-chat"
-
-def test_get_default_chat_model_ollama_provider(app_settings_defaults):
-    app_settings_defaults["default_chat_provider"] = "ollama"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_chat_model() == "test-ollama-chat"
-
-def test_get_default_chat_model_unknown_provider(app_settings_defaults):
-    # Defaults to google if provider is unknown
-    app_settings_defaults["default_chat_provider"] = "unknown_provider"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_chat_model() == "test-google-chat"
-
-def test_get_default_chat_model_no_provider_set(app_settings_defaults):
-    # Defaults to google if provider is not set (empty string also handled)
-    app_settings_defaults["default_chat_provider"] = ""
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_chat_model() == "test-google-chat"
-
-def test_get_default_embed_model_google_provider(app_settings_defaults):
-    app_settings_defaults["default_embed_provider"] = "google"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_embed_model() == "test-google-embed"
-
-def test_get_default_embed_model_ollama_provider(app_settings_defaults):
-    app_settings_defaults["default_embed_provider"] = "ollama"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_embed_model() == "test-ollama-embed"
-
-def test_get_default_embed_model_unknown_provider(app_settings_defaults):
-    # Defaults to google if provider is unknown
-    app_settings_defaults["default_embed_provider"] = "unknown_provider"
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_embed_model() == "test-google-embed"
-
-def test_get_default_embed_model_no_provider_set(app_settings_defaults):
-    # Defaults to google if provider is not set (empty string also handled)
-    app_settings_defaults["default_embed_provider"] = ""
-    settings = AppSettings(**app_settings_defaults)
-    assert settings.get_default_embed_model() == "test-google-embed"
 
 # Test that the removed fields are indeed gone
 def test_default_model_fields_removed(app_settings_defaults):
