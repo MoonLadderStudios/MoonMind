@@ -9,12 +9,11 @@ RUN apt-get update && \
 # Install hot reloading library
 RUN pip install watchfiles
 
-COPY api_service/requirements.txt /app/requirements.txt
-
-RUN pip install -r /app/requirements.txt
-
-# Copy directories which will be overriden by mounts during development
+# Copy pyproject.toml first for better Docker layer caching
 COPY pyproject.toml /app/pyproject.toml
+
+# Install dependencies from pyproject.toml
+RUN pip install -e .
 COPY moonmind /app/moonmind/
 COPY api_service/api /app/api/
 COPY api_service/main.py /app/main.py
