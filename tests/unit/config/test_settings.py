@@ -33,8 +33,10 @@ def app_settings_defaults():
         "rag": {},
         "github": {"github_enabled": False},
         "google_drive": {"google_drive_enabled": False},
-        "confluence_enabled": False,
-        "jira_enabled": False,
+        "atlassian": {
+            "confluence": {"confluence_enabled": False},
+            "jira": {"jira_enabled": False}
+        },
 
     }
 

@@ -386,7 +386,6 @@ def test_chat_completions_uses_default_model(mock_acreate, mock_get_provider, ch
     """Test that default model is used when no model is specified"""
 
     # Set attributes on settings_in_chat_router to guide get_default_chat_model()
-    settings_in_chat_router.default_chat_model = None  # Ensure it doesn't return a direct default model
     settings_in_chat_router.default_chat_provider = "openai"
     # settings_in_chat_router.openai.openai_chat_model is "gpt-3.5-turbo" by default
 

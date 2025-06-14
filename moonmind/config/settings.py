@@ -181,7 +181,20 @@ class AppSettings(BaseSettings):
         else:
             return False
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='ignore')
+    def get_default_chat_model(self) -> str:
+        """Get the default chat model based on the default provider"""
+        provider = self.default_chat_provider.lower()
+        if provider == "google":
+            return self.google.google_chat_model
+        elif provider == "openai":
+            return self.openai.openai_chat_model
+        elif provider == "ollama":
+            return self.ollama.ollama_chat_model
+        else:
+            # Fallback to google if unknown provider
+            return self.google.google_chat_model
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='forbid')
 
 
 # Create a global settings instance
