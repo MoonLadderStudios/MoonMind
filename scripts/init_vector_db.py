@@ -9,6 +9,7 @@ from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 from moonmind.config.settings import settings
+from moonmind.factories.embed_model_factory import build_embed_model
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
@@ -31,72 +32,69 @@ if __name__ == "__main__":
     try:
         # 1. Confluence Configuration Check
         logger.info("Checking Confluence configuration...")
-        if not settings.confluence.confluence_enabled:
+        if not settings.atlassian.confluence.confluence_enabled:
             logger.error("Confluence is not enabled in settings. Exiting.")
             sys.exit()
-        if not settings.confluence.confluence_url:
+        if not settings.atlassian.confluence.confluence_url:
             logger.error("Confluence URL is not configured. Exiting.")
             sys.exit()
-        if not settings.confluence.confluence_username:
+        if not settings.atlassian.confluence.confluence_username:
             logger.error("Confluence username is not configured. Exiting.")
             sys.exit()
-        if not settings.confluence.confluence_api_key:
+        if not settings.atlassian.confluence.confluence_api_key:
             logger.error("Confluence API key is not configured. Exiting.")
             sys.exit()
-        if not settings.confluence.confluence_space_keys:
+        if not settings.atlassian.confluence.confluence_space_keys:
             logger.error("No Confluence space keys configured (CONFLUENCE_SPACE_KEYS). Exiting.")
             sys.exit()
         logger.info("Confluence configuration check passed.")
 
         # 2. Parse Confluence Space Keys
-        space_keys_str = settings.confluence.confluence_space_keys
+        space_keys_str = settings.atlassian.confluence.confluence_space_keys
         space_keys = [key.strip() for key in space_keys_str.split(',') if key.strip()]
         if not space_keys:
             logger.error("No valid Confluence space keys found after parsing. Exiting.")
             sys.exit()
         logger.info(f"Found Confluence space keys to process: {space_keys}")
 
-        # 3. Set up Qdrant client and VectorStore
+        # 3. Build Embedding Model
+        logger.info("Building embedding model...")
+        try:
+            embed_model, embed_dimensions = build_embed_model(settings)
+            logger.info(f"Embedding model built successfully. Dimensions: {embed_dimensions}")
+        except Exception as e:
+            logger.error(f"Failed to build embedding model: {e}", exc_info=True)
+            sys.exit(1)
+
+        # 4. Set up Qdrant client and VectorStore
         logger.info(f"Initializing Qdrant client for host: {settings.qdrant_host}, port: {settings.qdrant_port}")
         client = qdrant_client.QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
 
         logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
-        logger.info(f"Using Google embeddings dimensions for Qdrant: {settings.google.google_embedding_dimensions}")
+        logger.info(f"Using dynamic embeddings dimensions for Qdrant: {embed_dimensions}")
         vector_store = QdrantVectorStore(
             client=client,
             collection_name=settings.vector_store_collection_name,
-            embed_dim=settings.google.google_embedding_dimensions  # Using Google's dimensions
+            embed_dim=embed_dimensions
         )
         logger.info("Qdrant client and vector store initialized successfully.")
 
-        # 4. Set up StorageContext
+        # 5. Set up StorageContext
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         logger.info("StorageContext initialized successfully.")
 
-        # 5. Set up Embedding Model (Google)
-        logger.info(f"Initializing Google Embeddings model: {settings.google.google_embedding_model}")
-        if not settings.google.google_api_key:
-            logger.error("Google API key (GOOGLE_API_KEY) is not configured for embeddings. Exiting.")
-            sys.exit()
-
-        embed_model = GoogleGenAIEmbedding(
-            model_name=settings.google.google_embedding_model,
-            google_embed_batch_size=settings.google.google_embed_batch_size,
-            api_key=settings.google.google_api_key
-        )
-        logger.info("Google Embedding model initialized successfully.")
-
         # 6. Set up ServiceContext
         # LLM is set to None as we are only performing indexing operations.
+        # embed_model is already initialized by build_embed_model
         service_context = ServiceContext.from_defaults(embed_model=embed_model, llm=None)
         logger.info("ServiceContext initialized successfully (LLM is None for indexing).")
 
         # 7. Instantiate ConfluenceIndexer
         logger.info("Initializing ConfluenceIndexer...")
         confluence_indexer = ConfluenceIndexer(
-            base_url=settings.confluence.confluence_url,
-            user_name=settings.confluence.confluence_username,
-            api_token=settings.confluence.confluence_api_key,
+            base_url=settings.atlassian.confluence.confluence_url,
+            user_name=settings.atlassian.confluence.confluence_username,
+            api_token=settings.atlassian.confluence.confluence_api_key,
             logger=logger  # Pass the logger instance
         )
         logger.info("ConfluenceIndexer initialized successfully.")
@@ -218,47 +216,47 @@ if __name__ == "__main__":
         # 11. Jira Indexing
         logger.info("Starting Jira indexing process...")
         jira_skipped = True # Assume skipped until success
-        if not settings.jira_enabled: # Direct access for jira_enabled
+        if not settings.atlassian.jira.jira_enabled: # Direct access for jira_enabled
             logger.info("Jira integration is not enabled via settings. Skipping Jira indexing.")
-        elif not settings.jira_url: # Direct access
+        elif not settings.atlassian.atlassian_url: # Direct access
             logger.warning("JIRA_URL is not configured. Skipping Jira indexing.")
-        elif not settings.jira_username: # Direct access
+        elif not settings.atlassian.atlassian_username: # Direct access
             logger.warning("JIRA_USERNAME is not configured. Skipping Jira indexing.")
-        elif not settings.jira_api_token: # Direct access
+        elif not settings.atlassian.atlassian_api_key: # Direct access
             logger.warning("JIRA_API_TOKEN is not configured. Skipping Jira indexing.")
-        elif not settings.jira_jql_query: # Direct access
+        elif not settings.atlassian.jira.jira_jql_query: # Direct access
             logger.warning("JIRA_JQL_QUERY is not configured. Skipping Jira indexing.")
         else:
             jira_skipped = False # Enabled and all basic settings seem present
-            logger.info(f"Found Jira JQL query to process: {settings.jira_jql_query}")
+            logger.info(f"Found Jira JQL query to process: {settings.atlassian.jira.jira_jql_query}")
             logger.info("Initializing JiraIndexer...")
             try:
                 jira_indexer = JiraIndexer(
-                    jira_url=settings.jira_url,
-                    username=settings.jira_username,
-                    api_token=settings.jira_api_token,
+                    jira_url=settings.atlassian.atlassian_url,
+                    username=settings.atlassian.atlassian_username,
+                    api_token=settings.atlassian.atlassian_api_key,
                     logger=logger
                 )
                 logger.info("JiraIndexer initialized.")
 
-                logger.info(f"Processing Jira query: {settings.jira_jql_query}")
+                logger.info(f"Processing Jira query: {settings.atlassian.jira.jira_jql_query}")
                 # The existing storage_context and service_context should be reused
                 index_result = jira_indexer.index(
-                    jql_query=settings.jira_jql_query,
+                    jql_query=settings.atlassian.jira.jira_jql_query,
                     storage_context=storage_context,
                     service_context=service_context, # This is LlamaIndex ServiceContext
-                    jira_fetch_batch_size=settings.jira_fetch_batch_size
+                    jira_fetch_batch_size=settings.atlassian.jira.jira_fetch_batch_size
                 )
                 nodes_indexed_count = 0
                 if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
                     nodes_indexed_count = index_result.get('total_nodes_indexed', 0)
-                logger.info(f"Successfully indexed {nodes_indexed_count} nodes from Jira for query: {settings.jira_jql_query}.")
+                logger.info(f"Successfully indexed {nodes_indexed_count} nodes from Jira for query: {settings.atlassian.jira.jira_jql_query}.")
             except Exception as e:
-                logger.error(f"Error indexing Jira query {settings.jira_jql_query}: {e}", exc_info=True)
+                logger.error(f"Error indexing Jira query {settings.atlassian.jira.jira_jql_query}: {e}", exc_info=True)
                 jira_skipped = True # Mark as skipped due to error
 
         # Check if any indexing was attempted
-        confluence_skipped = not (settings.confluence.confluence_enabled and settings.confluence.confluence_space_keys) # This line still uses .confluence. which is likely a bug in existing code
+        confluence_skipped = not (settings.atlassian.confluence.confluence_enabled and settings.atlassian.confluence.confluence_space_keys) # This line still uses .confluence. which is likely a bug in existing code
         github_skipped = not (settings.github.github_enabled and settings.github.github_token and settings.github.github_repos)
         # google_drive_skipped is already set
 
