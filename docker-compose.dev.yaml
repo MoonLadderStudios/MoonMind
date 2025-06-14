@@ -21,7 +21,7 @@ services:
     build:
       context: .
       dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ghcr.io/moonladderstudios/moonmind:latest # This might need to be rebuilt
     ports:
       - "8000:8000"
     environment:
@@ -31,19 +31,23 @@ services:
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
       - MODEL_CONTEXT_PROTOCOL_PORT=8000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
+      # Add PYTHONPATH if pip install -e . isn't sufficient due to WORKDIR context
+      # - PYTHONPATH=/app
     env_file:
       - .env
     volumes:
       - ./model_data:/app/model_data
-      - ./api_service/api:/app/api:ro
-      - ./api_service/main.py:/app/main.py:ro
+      # Mount the entire api_service directory
+      - ./api_service:/app/api_service:ro
       - ./moonmind:/app/moonmind:ro
+      # pyproject.toml is already copied in Dockerfile, but mount if local changes needed for deps
+      # - ./pyproject.toml:/app/pyproject.toml:ro
     command: >
       sh -c "
       if [ \"$FASTAPI_RELOAD\" = \"True\" ]; then
-        uvicorn main:app --host 0.0.0.0 --port 8000 --reload;
+        uvicorn api_service.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/api_service --reload-dir /app/moonmind;
       else
-        uvicorn main:app --host 0.0.0.0 --port 8000;
+        uvicorn api_service.main:app --host 0.0.0.0 --port 8000;
       fi"
     networks:
       - local-network
