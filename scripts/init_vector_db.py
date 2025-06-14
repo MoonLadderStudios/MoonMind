@@ -51,12 +51,12 @@ if __name__ == "__main__":
                 try:
                     client.delete_collection(collection_name=settings.vector_store_collection_name)
                     logger.info(f"Successfully deleted collection '{settings.vector_store_collection_name}'.")
+                except qdrant_client.http.exceptions.UnexpectedResponse as e:
+                    # Handle cases where the collection does not exist or other expected Qdrant-specific issues
+                    logger.info(f"Could not delete collection '{settings.vector_store_collection_name}' due to an unexpected response: {e}")
                 except Exception as e:
-                    # Handle cases where collection doesn't exist (common) or other errors
-                    # Qdrant client might raise different exceptions depending on the scenario,
-                    # e.g., if the collection does not exist, it might raise an UnexpectedResponse with 404 or similar.
-                    # For simplicity, we'll log a general message if deletion fails, as creation will be attempted next.
-                    logger.info(f"Could not delete collection '{settings.vector_store_collection_name}' (it might not exist or another issue occurred): {e}")
+                    # Handle any other unexpected errors
+                    logger.error(f"An unexpected error occurred while attempting to delete collection '{settings.vector_store_collection_name}': {e}", exc_info=True)
 
             vector_store = QdrantVectorStore(
                 client=client,
