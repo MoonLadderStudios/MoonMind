@@ -46,7 +46,7 @@ if __name__ == "__main__":
             logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
             logger.info(f"Using dynamic embeddings dimensions for Qdrant: {embed_dimensions}")
 
-            if init_db: # init_db is already defined from os.getenv("INIT_DATABASE")
+            if init_db:
                 logger.info(f"INIT_DATABASE is true. Attempting to delete collection '{settings.vector_store_collection_name}' if it exists, to ensure a clean start.")
                 try:
                     client.delete_collection(collection_name=settings.vector_store_collection_name)

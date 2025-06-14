@@ -23,7 +23,59 @@ from moonmind.factories.service_context_factory import build_service_context
 from moonmind.factories.storage_context_factory import build_storage_context
 from moonmind.factories.vector_store_factory import build_vector_store
 
+
 logger.info("Starting FastAPI...")
+
+
+# Helper functions for setup
+def _initialize_embedding_model(app_state, app_settings):
+    """Initializes and sets the embedding model and its dimensions on app_state."""
+    logger.info("Initializing embedding model...")
+    app_state.embed_model, app_state.embed_dimensions = build_embed_model(app_settings)
+    logger.info(f"Embedding model initialized with dimensions: {app_state.embed_dimensions}")
+
+def _initialize_vector_store(app_state, app_settings):
+    """Initializes and sets the vector store on app_state."""
+    logger.info("Initializing vector store...")
+    try:
+        app_state.vector_store = build_vector_store(app_settings, app_state.embed_model, app_state.embed_dimensions)
+        logger.info("Vector store initialized successfully.")
+    except ValueError as e:
+        logger.error(f"Failed to build vector store: {e}. This is a critical error.")
+        raise
+
+def _initialize_contexts(app_state, app_settings):
+    """Initializes and sets storage and service contexts on app_state."""
+    logger.info("Initializing storage and service contexts...")
+    app_state.storage_context = build_storage_context(app_settings, app_state.vector_store)
+    app_state.settings = build_service_context(app_settings, app_state.embed_model) # settings is used as service_context
+    logger.info("Storage and service contexts initialized successfully.")
+
+def _load_or_create_vector_index(app_state):
+    """Loads an existing vector index or creates a new one if loading fails."""
+    logger.info("Attempting to load VectorStoreIndex from storage_context...")
+    try:
+        app_state.vector_index = load_index_from_storage(
+            storage_context=app_state.storage_context,
+        )
+        if not app_state.vector_index.docstore.docs:
+            logger.warning("Loaded index appears to be empty (no documents in docstore).")
+        else:
+            logger.info("Successfully loaded VectorStoreIndex from storage.")
+    except ValueError as e_load_idx:
+        logger.warning(f"Could not load VectorStoreIndex from storage (it might be new or empty): {e_load_idx}. "
+                        "Creating a new empty VectorStoreIndex.")
+        if app_state.storage_context and app_state.settings:
+            app_state.vector_index = VectorStoreIndex.from_documents(
+                [],
+                storage_context=app_state.storage_context,
+                service_context=app_state.settings
+            )
+            logger.info("Created a new empty VectorStoreIndex.")
+        else:
+            logger.error("Cannot create new VectorStoreIndex because storage_context or service_context is not available.")
+            raise RuntimeError("Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex.")
+
 
 app = FastAPI(
     title="MoonMind API",
@@ -62,49 +114,22 @@ async def add_request_id(request: Request, call_next):
 
 @app.on_event("startup")
 async def setup():
-    app.state.storage_context = None # Initialize to None
-    app.state.vector_store = None    # Initialize to None
-    app.state.vector_index = None    # Initialize to None
-    app.state.settings = None        # Initialize to None (for service_context)
+    # Initialize state attributes to None
+    app.state.embed_model = None
+    app.state.embed_dimensions = None
+    app.state.vector_store = None
+    app.state.storage_context = None
+    app.state.vector_index = None
+    app.state.settings = None # This is used as service_context
 
     try:
-        app.state.embed_model, app.state.embed_dimensions = build_embed_model(settings)
+        # Call helper functions in sequence
+        _initialize_embedding_model(app.state, settings)
+        _initialize_vector_store(app.state, settings)
+        _initialize_contexts(app.state, settings)
+        _load_or_create_vector_index(app.state)
 
-        # Attempt to build vector_store
-        try:
-            app.state.vector_store = build_vector_store(settings, app.state.embed_model, app.state.embed_dimensions)
-        except ValueError as e_vs: # Catch specific error from build_vector_store (e.g., dimension mismatch)
-            logger.error(f"Failed to build vector store: {e_vs}. This is a critical error.")
-            raise # Re-raise to be caught by the outer Exception handler, preventing app startup
-
-        # Proceed only if vector_store is successfully built
-        app.state.storage_context = build_storage_context(settings, app.state.vector_store)
-        app.state.settings = build_service_context(settings, app.state.embed_model) # Assuming this is service_context
-
-        logger.info("Attempting to load VectorStoreIndex from storage_context...")
-        try:
-            app.state.vector_index = load_index_from_storage(
-                storage_context=app.state.storage_context,
-            )
-            if not app.state.vector_index.docstore.docs:
-                logger.warning("Loaded index appears to be empty (no documents in docstore).")
-            else:
-                logger.info("Successfully loaded VectorStoreIndex from storage.")
-        except ValueError as e_load_idx: # Catch error if index is new/empty or other load issues
-            logger.warning(f"Could not load VectorStoreIndex from storage (it might be new or empty): {e_load_idx}. "
-                            "Creating a new empty VectorStoreIndex.")
-            # Ensure storage_context and service_context (app.state.settings) are valid before this
-            if app.state.storage_context and app.state.settings:
-                app.state.vector_index = VectorStoreIndex.from_documents(
-                    [],
-                    storage_context=app.state.storage_context,
-                    service_context=app.state.settings
-                )
-                logger.info("Created a new empty VectorStoreIndex.")
-            else:
-                logger.error("Cannot create new VectorStoreIndex because storage_context or service_context is not available.")
-                # This case should ideally be prevented by earlier checks/raises if vector_store failed.
-                raise RuntimeError("Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex.")
+        logger.info("Application setup completed successfully.")
 
     except Exception as e_startup: # Outer catch-all for any critical startup failure
         logger.error(f"A critical error occurred during application startup: {e_startup}", exc_info=True)
