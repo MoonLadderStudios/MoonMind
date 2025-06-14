@@ -23,7 +23,7 @@ from moonmind.schemas.chat_models import (ChatCompletionRequest,
 from moonmind.models_cache import model_cache
 
 # Dependencies for RAG functionality
-from ..dependencies import get_service_context, get_vector_index
+from api_service.api.dependencies import get_service_context, get_vector_index
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
