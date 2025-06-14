@@ -11,7 +11,7 @@ from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer # Added import
 from moonmind.schemas.documents_models import ConfluenceLoadRequest, GitHubLoadRequest, GoogleDriveLoadRequest # Updated import path with GoogleDriveLoadRequest
 
-from ..dependencies import get_service_context, get_storage_context
+from api_service.api.dependencies import get_service_context, get_storage_context
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

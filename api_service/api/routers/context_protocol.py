@@ -13,7 +13,7 @@ from moonmind.config.settings import settings
 from moonmind.factories.google_factory import get_google_model
 from moonmind.rag.retriever import QdrantRAG
 
-from ..dependencies import get_service_context, get_vector_index
+from api_service.api.dependencies import get_service_context, get_vector_index
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
