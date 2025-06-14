@@ -1,4 +1,4 @@
-**WARNING: Still in early active development. Not yet at Alpha.**
+**WARNING: Still in early development. Not yet at Alpha.**
 
 # MoonMind
 
