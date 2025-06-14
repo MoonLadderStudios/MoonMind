@@ -7,6 +7,15 @@ from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 from moonmind.indexers.jira_indexer import JiraIndexer
 from moonmind.config.settings import settings
+try:
+    import langchain_google_genai
+    print(f"DEBUG: dir(langchain_google_genai): {dir(langchain_google_genai)}")
+    print(f"DEBUG: langchain_google_genai.__version__: {getattr(langchain_google_genai, '__version__', 'N/A')}")
+    print(f"DEBUG: langchain_google_genai.__file__: {getattr(langchain_google_genai, '__file__', 'N/A')}")
+except ImportError as e:
+    print(f"DEBUG: Failed to import langchain_google_genai: {e}")
+except Exception as e:
+    print(f"DEBUG: An unexpected error occurred during langchain_google_genai inspection: {e}")
 from moonmind.factories.embed_model_factory import build_embed_model # ADDED
 from llama_index.core import StorageContext, ServiceContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore

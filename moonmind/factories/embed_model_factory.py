@@ -1,5 +1,5 @@
 from llama_index.embeddings.ollama import OllamaEmbedding
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
 from llama_index.embeddings.langchain import LangchainEmbedding # New import
 # Ensure other necessary imports like AppSettings from ..config.settings are present
 
