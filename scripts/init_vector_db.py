@@ -40,11 +40,24 @@ if __name__ == "__main__":
             logger.error(f"CRITICAL: Failed to build embedding model: {e}", exc_info=True)
             sys.exit(1)
 
-        logger.info(f"Initializing Qdrant client for host: {settings.qdrant_host}, port: {settings.qdrant_port}")
+        logger.info(f"Initializing Qdrant client for host: {settings.qdrant.qdrant_host}, port: {settings.qdrant.qdrant_port}")
         try:
-            client = qdrant_client.QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+            client = qdrant_client.QdrantClient(host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port)
             logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
             logger.info(f"Using dynamic embeddings dimensions for Qdrant: {embed_dimensions}")
+
+            if init_db: # init_db is already defined from os.getenv("INIT_DATABASE")
+                logger.info(f"INIT_DATABASE is true. Attempting to delete collection '{settings.vector_store_collection_name}' if it exists, to ensure a clean start.")
+                try:
+                    client.delete_collection(collection_name=settings.vector_store_collection_name)
+                    logger.info(f"Successfully deleted collection '{settings.vector_store_collection_name}'.")
+                except Exception as e:
+                    # Handle cases where collection doesn't exist (common) or other errors
+                    # Qdrant client might raise different exceptions depending on the scenario,
+                    # e.g., if the collection does not exist, it might raise an UnexpectedResponse with 404 or similar.
+                    # For simplicity, we'll log a general message if deletion fails, as creation will be attempted next.
+                    logger.info(f"Could not delete collection '{settings.vector_store_collection_name}' (it might not exist or another issue occurred): {e}")
+
             vector_store = QdrantVectorStore(
                 client=client,
                 collection_name=settings.vector_store_collection_name,

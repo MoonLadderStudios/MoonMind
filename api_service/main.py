@@ -62,39 +62,53 @@ async def add_request_id(request: Request, call_next):
 
 @app.on_event("startup")
 async def setup():
+    app.state.storage_context = None # Initialize to None
+    app.state.vector_store = None    # Initialize to None
+    app.state.vector_index = None    # Initialize to None
+    app.state.settings = None        # Initialize to None (for service_context)
+
     try:
-        # Setup providers and VectorStoreIndex
-        # This block contains operations that might make network calls or fail during startup
         app.state.embed_model, app.state.embed_dimensions = build_embed_model(settings)
-        app.state.vector_store = build_vector_store(settings, app.state.embed_model, app.state.embed_dimensions)
+
+        # Attempt to build vector_store
+        try:
+            app.state.vector_store = build_vector_store(settings, app.state.embed_model, app.state.embed_dimensions)
+        except ValueError as e_vs: # Catch specific error from build_vector_store (e.g., dimension mismatch)
+            logger.error(f"Failed to build vector store: {e_vs}. This is a critical error.")
+            raise # Re-raise to be caught by the outer Exception handler, preventing app startup
+
+        # Proceed only if vector_store is successfully built
         app.state.storage_context = build_storage_context(settings, app.state.vector_store)
-        # Configure global Settings instead of using ServiceContext
-        app.state.settings = build_service_context(settings, app.state.embed_model)
+        app.state.settings = build_service_context(settings, app.state.embed_model) # Assuming this is service_context
 
-        # Initialize or load the VectorStoreIndex
         logger.info("Attempting to load VectorStoreIndex from storage_context...")
-        # load_index_from_storage uses the global LlamaIndex Settings (Settings.embed_model)
-        app.state.vector_index = load_index_from_storage(
-            storage_context=app.state.storage_context,
-        )
-        # Check if index is empty after loading.
-        if not app.state.vector_index.docstore.docs:
-            logger.warning("Loaded index appears to be empty (no documents in docstore).")
-        else:
-            logger.info("Successfully loaded VectorStoreIndex from storage.")
+        try:
+            app.state.vector_index = load_index_from_storage(
+                storage_context=app.state.storage_context,
+            )
+            if not app.state.vector_index.docstore.docs:
+                logger.warning("Loaded index appears to be empty (no documents in docstore).")
+            else:
+                logger.info("Successfully loaded VectorStoreIndex from storage.")
+        except ValueError as e_load_idx: # Catch error if index is new/empty or other load issues
+            logger.warning(f"Could not load VectorStoreIndex from storage (it might be new or empty): {e_load_idx}. "
+                            "Creating a new empty VectorStoreIndex.")
+            # Ensure storage_context and service_context (app.state.settings) are valid before this
+            if app.state.storage_context and app.state.settings:
+                app.state.vector_index = VectorStoreIndex.from_documents(
+                    [],
+                    storage_context=app.state.storage_context,
+                    service_context=app.state.settings
+                )
+                logger.info("Created a new empty VectorStoreIndex.")
+            else:
+                logger.error("Cannot create new VectorStoreIndex because storage_context or service_context is not available.")
+                # This case should ideally be prevented by earlier checks/raises if vector_store failed.
+                raise RuntimeError("Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex.")
 
-    except ValueError as e_val: # More specific exception for VectorStoreIndex.from_documents if it's empty/new
-        logger.warning(f"Could not load VectorStoreIndex from storage (it might be new or empty): {e_val}. "
-                        "Creating a new empty VectorStoreIndex.")
-        app.state.vector_index = VectorStoreIndex.from_documents(
-            [], # Empty list of documents
-            storage_context=app.state.storage_context, # storage_context should be available from the try block
-            service_context=app.state.settings # service_context (app.state.settings) should be available
-        )
-        logger.info("Created a new empty VectorStoreIndex.")
-    except Exception as e_startup: # Catch any other exception during startup
-        logger.error(f"A critical error occurred during application startup: {e_startup}")
-        # Re-raise to make startup failures explicit during testing
+    except Exception as e_startup: # Outer catch-all for any critical startup failure
+        logger.error(f"A critical error occurred during application startup: {e_startup}", exc_info=True)
+        # Re-raise to make startup failures explicit and prevent app from running in a broken state.
         raise
 
 @app.on_event("shutdown")
