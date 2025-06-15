@@ -26,7 +26,8 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
 
     client = QdrantClient(
         host=settings.qdrant.qdrant_host, # Corrected access
-        port=settings.qdrant.qdrant_port   # Corrected access
+        port=settings.qdrant.qdrant_port,  # Corrected access
+        check_compatibility=False # Add this line
     )
 
     if embed_dimensions == -1:

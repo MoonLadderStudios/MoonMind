@@ -40,11 +40,24 @@ if __name__ == "__main__":
             logger.error(f"CRITICAL: Failed to build embedding model: {e}", exc_info=True)
             sys.exit(1)
 
-        logger.info(f"Initializing Qdrant client for host: {settings.qdrant_host}, port: {settings.qdrant_port}")
+        logger.info(f"Initializing Qdrant client for host: {settings.qdrant.qdrant_host}, port: {settings.qdrant.qdrant_port}")
         try:
-            client = qdrant_client.QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+            client = qdrant_client.QdrantClient(host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port)
             logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
             logger.info(f"Using dynamic embeddings dimensions for Qdrant: {embed_dimensions}")
+
+            if init_db:
+                logger.info(f"INIT_DATABASE is true. Attempting to delete collection '{settings.vector_store_collection_name}' if it exists, to ensure a clean start.")
+                try:
+                    client.delete_collection(collection_name=settings.vector_store_collection_name)
+                    logger.info(f"Successfully deleted collection '{settings.vector_store_collection_name}'.")
+                except qdrant_client.http.exceptions.UnexpectedResponse as e:
+                    # Handle cases where the collection does not exist or other expected Qdrant-specific issues
+                    logger.info(f"Could not delete collection '{settings.vector_store_collection_name}' due to an unexpected response: {e}")
+                except Exception as e:
+                    # Handle any other unexpected errors
+                    logger.error(f"An unexpected error occurred while attempting to delete collection '{settings.vector_store_collection_name}': {e}", exc_info=True)
+
             vector_store = QdrantVectorStore(
                 client=client,
                 collection_name=settings.vector_store_collection_name,
