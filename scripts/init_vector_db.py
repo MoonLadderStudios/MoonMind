@@ -4,7 +4,7 @@ import sys
 
 import qdrant_client
 from google.genai.types import EmbedContentConfig
-from llama_index.core import ServiceContext, StorageContext
+from llama_index.core import Settings, StorageContext
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
@@ -77,10 +77,10 @@ if __name__ == "__main__":
 
         try:
             # LLM is set to None as we are only performing indexing operations.
-            service_context = ServiceContext.from_defaults(embed_model=embed_model, llm=None)
-            logger.info("ServiceContext initialized successfully (LLM is None for indexing).")
+            Settings.embed_model = embed_model
+            Settings.llm = None
         except Exception as e:
-            logger.error(f"CRITICAL: Failed to initialize ServiceContext: {e}", exc_info=True)
+            logger.error(f"CRITICAL: Failed to initialize Settings: {e}", exc_info=True)
             sys.exit(1)
 
         # 1. Confluence Processing Logic
@@ -135,8 +135,7 @@ if __name__ == "__main__":
                         try:
                             index_result = confluence_indexer.index(
                                 space_key=space_key,
-                                storage_context=storage_context,
-                                service_context=service_context
+                                storage_context=storage_context
                             )
                             total_nodes_indexed = 0
                             if index_result and isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
@@ -184,7 +183,6 @@ if __name__ == "__main__":
                                 repo_full_name=repo_full_name,
                                 branch=default_branch,
                                 storage_context=storage_context,
-                                service_context=service_context,
                                 filter_extensions=None
                             )
                             nodes_indexed_count = 0
@@ -231,8 +229,7 @@ if __name__ == "__main__":
                         try:
                             index_result = google_drive_indexer.index(
                                 folder_id=folder_id,
-                                storage_context=storage_context,
-                                service_context=service_context
+                                storage_context=storage_context
                             )
                             nodes_indexed_count = 0
                             if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
@@ -278,7 +275,6 @@ if __name__ == "__main__":
                 index_result = jira_indexer.index(
                     jql_query=settings.atlassian.jira.jira_jql_query,
                     storage_context=storage_context,
-                    service_context=service_context,
                     jira_fetch_batch_size=settings.atlassian.jira.jira_fetch_batch_size
                 )
                 nodes_indexed_count = 0
