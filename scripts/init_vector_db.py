@@ -93,8 +93,8 @@ if __name__ == "__main__":
         else:
             logger.info("Confluence is enabled. Checking required configurations...")
             missing_confluence_settings = []
-            if not settings.atlassian.confluence.confluence_url:
-                missing_confluence_settings.append("ATLASSIAN_CONFLUENCE_URL")
+            if not settings.atlassian.atlassian_url:
+                missing_confluence_settings.append("ATLASSIAN_URL")
             if not settings.atlassian.confluence.confluence_username:
                 missing_confluence_settings.append("ATLASSIAN_CONFLUENCE_USERNAME")
             if not settings.atlassian.confluence.confluence_api_key:
@@ -122,7 +122,7 @@ if __name__ == "__main__":
                 logger.info("Initializing ConfluenceIndexer...")
                 try:
                     confluence_indexer = ConfluenceIndexer(
-                        base_url=settings.atlassian.confluence.confluence_url,
+                        base_url=settings.atlassian.atlassian_url,
                         user_name=settings.atlassian.confluence.confluence_username,
                         api_token=settings.atlassian.confluence.confluence_api_key,
                         logger=logger
