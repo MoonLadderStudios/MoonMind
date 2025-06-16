@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Union
 
+from github import Github
 from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import \
     SimpleNodeParser  # Default node parser
@@ -23,12 +24,12 @@ class GitHubIndexer:
     def index(
         self,
         repo_full_name: str,  # e.g., "owner/repo_name"
-        branch: str,
-        filter_extensions: Optional[List[str]],
         storage_context: StorageContext,
         service_context: Settings,
+        filter_extensions: Optional[List[str]] = None,
+        branch: Optional[str] = None,
     ) -> Dict[str, Union[VectorStoreIndex, int]]:
-        self.logger.info(f"Starting GitHub indexing for repo: {repo_full_name} on branch: {branch}")
+        self.logger.info(f"Starting GitHub indexing for repo: {repo_full_name} on branch: {branch or 'default'}")
 
         try:
             owner, repo_name = repo_full_name.split('/')
@@ -37,6 +38,21 @@ class GitHubIndexer:
         except ValueError as e:
             self.logger.error(f"Invalid repo_full_name format: {repo_full_name}. Expected 'owner/repo_name'. Error: {e}")
             raise ValueError(f"Invalid repo_full_name format: {repo_full_name}. Expected 'owner/repo_name'. Error: {e}")
+
+        # Determine the branch to use
+        if not branch:
+            self.logger.info(f"No branch specified for {repo_full_name}. Attempting to fetch default branch.")
+            try:
+                g = Github(self.github_token)
+                repo = g.get_repo(f"{owner}/{repo_name}")
+                branch = repo.default_branch
+                self.logger.info(f"Default branch for {repo_full_name} is '{branch}'.")
+            except Exception as e:
+                self.logger.warning(f"Failed to fetch default branch for {repo_full_name}: {e}. Falling back to 'main'.")
+                branch = "main"
+        else:
+            self.logger.info(f"Using specified branch '{branch}' for {repo_full_name}.")
+
 
         reader_filter_extensions_tuple = None
         if filter_extensions:

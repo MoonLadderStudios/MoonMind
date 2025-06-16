@@ -161,15 +161,15 @@ if __name__ == "__main__":
                     github_indexer = GitHubIndexer(github_token=settings.github.github_token, logger=logger)
                     logger.info("GitHubIndexer initialized.")
 
-                    default_branch = settings.github.default_branch if settings.github.default_branch else "main"
                     for repo_full_name in github_repo_list:
-                        logger.info(f"Processing GitHub repository: {repo_full_name} (branch: {default_branch})")
+                        logger.info(f"Processing GitHub repository: {repo_full_name} (using default branch)")
                         try:
                             index_result = github_indexer.index(
                                 repo_full_name=repo_full_name,
-                                branch=default_branch,
                                 storage_context=storage_context,
-                                filter_extensions=None
+                                service_context=Settings,  # Pass the global Settings object
+                                filter_extensions=None, # Explicitly None
+                                branch=None # Let the indexer determine the default branch
                             )
                             nodes_indexed_count = 0
                             if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
