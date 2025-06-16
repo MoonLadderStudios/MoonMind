@@ -175,7 +175,7 @@ if __name__ == "__main__":
                     github_indexer = GitHubIndexer(github_token=settings.github.github_token, logger=logger)
                     logger.info("GitHubIndexer initialized.")
 
-                    default_branch = settings.github.default_branch or "main"
+                    default_branch = "main"
                     for repo_full_name in github_repo_list:
                         logger.info(f"Processing GitHub repository: {repo_full_name} (branch: {default_branch})")
                         try:
