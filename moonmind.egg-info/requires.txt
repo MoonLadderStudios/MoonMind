@@ -20,6 +20,7 @@ llama-index-readers-google<1.0,>=0.6
 llama-index-readers-jira<1.0,>=0.4
 llama-index-vector-stores-qdrant<1.0,>=0.6
 qdrant-client<2.0,>=1.14
+PyGithub<2.0,>=1.59
 google-generativeai<1.0,>=0.8
 openai<2.0,>=1.86
 ollama<1.0,>=0.5

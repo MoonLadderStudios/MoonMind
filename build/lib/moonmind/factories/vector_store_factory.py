@@ -34,7 +34,7 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
         # Use a public API method to determine embedding dimensions
         test_vector = embed_model.embed_query("test")
         embed_dimensions = len(test_vector)
-        logger.info(f"Embedding dimensions set to: {embed_dimensions}")
+        print(f"Embedding dimensions set to: {embed_dimensions}")
 
     desired_distance = Distance.COSINE
     try:

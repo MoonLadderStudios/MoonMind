@@ -90,6 +90,8 @@ class AtlassianSettings(BaseSettings):
 
     def __init__(self, **data):
         super().__init__(**data)
+        if self.atlassian_url and self.atlassian_url.startswith("https://https://"):
+            self.atlassian_url = self.atlassian_url[8:]
         # Manually load environment variables for nested settings
         if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED") == "True":
             self.confluence.confluence_enabled = True
