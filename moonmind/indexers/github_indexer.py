@@ -24,10 +24,10 @@ class GitHubIndexer:
     def index(
         self,
         repo_full_name: str,  # e.g., "owner/repo_name"
-        branch: Optional[str] = None,
-        filter_extensions: Optional[List[str]],
         storage_context: StorageContext,
         service_context: Settings,
+        filter_extensions: Optional[List[str]] = None,
+        branch: Optional[str] = None,
     ) -> Dict[str, Union[VectorStoreIndex, int]]:
         self.logger.info(f"Starting GitHub indexing for repo: {repo_full_name} on branch: {branch or 'default'}")
 

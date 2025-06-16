@@ -168,9 +168,10 @@ if __name__ == "__main__":
                         try:
                             index_result = github_indexer.index(
                                 repo_full_name=repo_full_name,
-                                branch=None, # Let the indexer determine the default branch
                                 storage_context=storage_context,
-                                filter_extensions=None
+                                service_context=Settings,  # Pass the global Settings object
+                                filter_extensions=None, # Explicitly None
+                                branch=None # Let the indexer determine the default branch
                             )
                             nodes_indexed_count = 0
                             if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
