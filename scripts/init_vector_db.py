@@ -83,8 +83,8 @@ if __name__ == "__main__":
             missing_confluence_settings = []
             if not settings.atlassian.atlassian_url:
                 missing_confluence_settings.append("ATLASSIAN_URL")
-            if not settings.atlassian.confluence.confluence_username:
-                missing_confluence_settings.append("ATLASSIAN_CONFLUENCE_USERNAME")
+            if not settings.atlassian.atlassian_username:
+                missing_confluence_settings.append("ATLASSIAN_USERNAME")
             if not settings.atlassian.confluence.confluence_space_keys:
                 missing_confluence_settings.append("ATLASSIAN_CONFLUENCE_SPACE_KEYS")
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
                 try:
                     confluence_indexer = ConfluenceIndexer(
                         base_url=settings.atlassian.atlassian_url,
-                        user_name=settings.atlassian.confluence.confluence_username,
+                        user_name=settings.atlassian.atlassian_username,
                         api_token=settings.atlassian.confluence.confluence_api_key,
                         logger=logger
                     )
