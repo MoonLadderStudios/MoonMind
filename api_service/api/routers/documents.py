@@ -1,17 +1,19 @@
 import logging
 from typing import Dict, List, Optional
 
+from fastapi import APIRouter, Depends, HTTPException
 from llama_index.core import Settings, StorageContext
 from pydantic import BaseModel
 
-from fastapi import APIRouter, Depends, HTTPException
+from api_service.api.dependencies import (get_service_context,
+                                          get_storage_context)
 from moonmind.config.settings import settings
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
-from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer # Added import
-from moonmind.schemas.documents_models import ConfluenceLoadRequest, GitHubLoadRequest, GoogleDriveLoadRequest # Updated import path with GoogleDriveLoadRequest
-
-from api_service.api.dependencies import get_service_context, get_storage_context
+from moonmind.indexers.google_drive_indexer import \
+    GoogleDriveIndexer  # Added import
+from moonmind.schemas.documents_models import (  # Updated import path with GoogleDriveLoadRequest
+    ConfluenceLoadRequest, GitHubLoadRequest, GoogleDriveLoadRequest)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,9 +32,9 @@ async def load_confluence_documents(
     """Load documents from Confluence workspace"""
     try:
         confluence_indexer = ConfluenceIndexer(
-            base_url=settings.confluence.confluence_url,
-            user_name=settings.confluence.confluence_username, # Corrected parameter name
-            api_token=settings.confluence.confluence_api_key, # Corrected parameter name
+            base_url=settings.atlassian.atlassian_url,
+            user_name=settings.atlassian.atlassian_username,
+            api_token=settings.atlassian.atlassian_api_key,  # Corrected to use global Atlassian API key
             logger=logger
         )
 

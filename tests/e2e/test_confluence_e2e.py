@@ -1,10 +1,13 @@
 import os
+
 import pytest
 from dotenv import load_dotenv
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import CountRequest # Added import
 from fastapi.testclient import TestClient
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import CountRequest  # Added import
+
 from api_service.main import app
+
 # from moonmind.config.settings import settings # If needed directly
 # from moonmind.models.documents_models import ConfluenceLoadRequest # If needed for payload construction outside TestClient json
 
@@ -27,7 +30,7 @@ skip_if_missing_env_vars = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def e2e_setup():
-    # CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_KEY, TEST_CONFLUENCE_SPACE_KEY,
+    # CONFLUENCE_URL, CONFLUENCE_USERNAME, ATLASSIAN_API_KEY, TEST_CONFLUENCE_SPACE_KEY,
     # QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME are loaded at module level.
     # load_dotenv() is also called at module level.
 

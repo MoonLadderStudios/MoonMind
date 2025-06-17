@@ -110,7 +110,7 @@ if __name__ == "__main__":
                     confluence_indexer = ConfluenceIndexer(
                         base_url=settings.atlassian.atlassian_url,
                         user_name=settings.atlassian.atlassian_username,
-                        api_token=settings.atlassian.confluence.confluence_api_key,
+                        api_token=settings.atlassian.atlassian_api_key, # Changed to use atlassian_api_key
                         logger=logger
                     )
                     logger.info("ConfluenceIndexer initialized successfully.")

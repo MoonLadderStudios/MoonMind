@@ -2,13 +2,13 @@ import logging
 import os
 from typing import Dict, List, Optional, Union
 
+from fastapi import HTTPException
 from github import Github
 from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import \
     SimpleNodeParser  # Default node parser
 from llama_index.readers.github import GithubRepositoryReader
-
-from fastapi import HTTPException
+from llama_index.readers.github.repository.github_client import GithubClient
 
 
 class GitHubIndexer:
@@ -66,10 +66,12 @@ class GitHubIndexer:
 
         self.logger.info(f"Initializing GithubRepositoryReader for {owner}/{repo_name}")
         try:
+            github_client = GithubClient(github_token=self.github_token, verbose=False) # Initialize client
             reader = GithubRepositoryReader(
+                github_client=github_client, # Pass client object
                 owner=owner,
                 repo=repo_name,
-                github_token=self.github_token,
+                # github_token=self.github_token, # Remove direct token passing
                 filter_file_extensions=reader_filter_extensions_tuple,
                 # filter_directories=None, # Example: (["lib", "docs"], FilterType.INCLUDE)
                 verbose=False, # Set to False to avoid duplicate logging if our logger is sufficient
