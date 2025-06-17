@@ -261,7 +261,7 @@ if __name__ == "__main__":
                 index_result = jira_indexer.index(
                     jql_query=settings.atlassian.jira.jira_jql_query,
                     storage_context=storage_context,
-                    service_context=Settings,  # Add this line
+                    service_context=settings.service_context,  # Use the correct instance
                     jira_fetch_batch_size=settings.atlassian.jira.jira_fetch_batch_size
                 )
                 nodes_indexed_count = 0
