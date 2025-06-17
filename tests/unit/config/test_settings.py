@@ -3,12 +3,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-# Assuming AppSettings is in moonmind.config.settings
-import os # Added for environment variable manipulation
-from unittest.mock import patch
-
-# Adjust the import path if necessary based on your project structure
-from moonmind.config.settings import (AppSettings, AtlassianSettings, # Added AtlassianSettings
+from moonmind.config.settings import (AppSettings, AtlassianSettings,
                                       GoogleSettings, OllamaSettings,
                                       OpenAISettings)
 
