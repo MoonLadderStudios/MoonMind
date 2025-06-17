@@ -67,7 +67,7 @@ class TestJiraIndexer(unittest.TestCase):
         self.assertEqual(self.indexer.jira_url, "https://fake-jira.com")
         self.assertEqual(self.indexer.username, "fake_user")
         self.MockJiraReaderClass.assert_called_once_with(
-            server_url="https://fake-jira.com",
+            server_url="fake-jira.com", # Updated to reflect scheme removal by JiraIndexer
             email="fake_user",
             api_token="fake_token"
         )

@@ -33,9 +33,11 @@ class JiraIndexer:
         # The original self.jira_url is kept as is for logging or other purposes.
         processed_jira_url = self.jira_url
         if "://" in processed_jira_url: # Check if "://" is present
-            # Split by "://" and take the last part (e.g., "example.com" from "http://example.com")
-            # This handles http, https, and even the unusual https://://
-            processed_jira_url = processed_jira_url.split("://", 1)[-1]
+            # Find the last occurrence of "://" and take the part after it.
+            # This correctly handles http://, https://, custom://, and multiple schemes like https://://
+            # For example, "https://://domain.com/path" becomes "domain.com/path".
+            # If no "://" is present, this block is skipped and the URL remains unchanged.
+            processed_jira_url = processed_jira_url.rsplit("://", 1)[-1]
 
         # Initialize JiraReader using Basic Authentication
         # The JiraReader expects the server_url without "https://" for basic_auth server part typically
