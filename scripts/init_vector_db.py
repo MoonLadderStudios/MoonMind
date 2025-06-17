@@ -121,7 +121,8 @@ if __name__ == "__main__":
                         try:
                             index_result = confluence_indexer.index(
                                 space_key=space_key,
-                                storage_context=storage_context
+                                storage_context=storage_context,
+                                service_context=Settings
                             )
                             total_nodes_indexed = 0
                             if index_result and isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
@@ -167,7 +168,7 @@ if __name__ == "__main__":
                             index_result = github_indexer.index(
                                 repo_full_name=repo_full_name,
                                 storage_context=storage_context,
-                                service_context=Settings,  # Pass the global Settings object
+                                service_context=Settings,
                                 filter_extensions=None, # Explicitly None
                                 branch=None # Let the indexer determine the default branch
                             )
@@ -261,6 +262,7 @@ if __name__ == "__main__":
                 index_result = jira_indexer.index(
                     jql_query=settings.atlassian.jira.jira_jql_query,
                     storage_context=storage_context,
+                    service_context=Settings,  # Pass the global Settings object
                     jira_fetch_batch_size=settings.atlassian.jira.jira_fetch_batch_size
                 )
                 nodes_indexed_count = 0
