@@ -29,9 +29,19 @@ class JiraIndexer:
         self.username = username
         self.api_token = api_token
 
+        # Process jira_url to remove scheme for JiraReader
+        # The original self.jira_url is kept as is for logging or other purposes.
+        processed_jira_url = self.jira_url
+        if "://" in processed_jira_url: # Check if "://" is present
+            # Find the last occurrence of "://" and take the part after it.
+            # This correctly handles http://, https://, custom://, and multiple schemes like https://://
+            # For example, "https://://domain.com/path" becomes "domain.com/path".
+            # If no "://" is present, this block is skipped and the URL remains unchanged.
+            processed_jira_url = processed_jira_url.rsplit("://", 1)[-1]
+
         # Initialize JiraReader using Basic Authentication
         # The JiraReader expects the server_url without "https://" for basic_auth server part typically
-        # but the LlamaIndex JiraReader documentation shows it prepends "https://" if not present for the 'server' parameter.
+        # but the LlamaIndex JiraReader documentation shows it prepends "https://://" if not present for the 'server' parameter.
         # For basic_auth, it might be directly `server=jira_url` (if jira_url includes https://)
         # or `server=f"https://{jira_url}"` if jira_url is just "your-domain.atlassian.net"
         # The example `ConfluenceReader` takes `base_url` which includes `https://`.
@@ -40,14 +50,14 @@ class JiraIndexer:
         # The JiraReader's basic_auth parameter takes server_url like "https://your-domain.atlassian.net"
         # So if jira_url is "your-domain.atlassian.net", then it becomes f"https://{jira_url}"
         # However, the constructor also directly takes `email`, `api_token`, `server_url`.
-        # `server_url` for the constructor is the base URL of the Jira instance, e.g., "https://your-domain.atlassian.net".
-        # Let's align with how ConfluenceReader does it, assuming jira_url is the full base URL.
+        # `server_url` for the constructor is the base URL of the Jira instance.
+        # As per task, removing scheme before passing to JiraReader.
         self.reader = JiraReader(
-            server_url=self.jira_url, # This should be the full URL e.g. https://domain.atlassian.net
+            server_url=processed_jira_url, # URL without scheme e.g. domain.atlassian.net
             email=self.username,
             api_token=self.api_token,
         )
-        self.logger.info(f"JiraIndexer initialized for URL: {self.jira_url}")
+        self.logger.info(f"JiraIndexer initialized for URL: {self.jira_url}") # Log original URL
 
     def index(
         self,

@@ -1,12 +1,12 @@
 import unittest
 from unittest.mock import ANY, MagicMock, patch
 
+from fastapi import HTTPException
 from llama_index.core import ServiceContext, StorageContext
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.schema import Document  # For creating mock documents
 from llama_index.readers.github import GithubRepositoryReader
 
-from fastapi import HTTPException
 from moonmind.indexers.github_indexer import GitHubIndexer
 
 
@@ -86,7 +86,7 @@ class TestGitHubIndexer(unittest.TestCase):
         MockGithubReader.assert_called_once_with(
             owner="secure_owner",
             repo="private_repo",
-            github_client=ANY, # Token should be passed here
+            github_client=ANY,
             filter_file_extensions=None,
             verbose=False,
             concurrent_requests=5
