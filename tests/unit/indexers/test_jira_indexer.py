@@ -86,6 +86,37 @@ class TestJiraIndexer(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Jira API token is required."):
             JiraIndexer(jira_url="https://url", username="user", api_token="", logger=self.mock_logger)
 
+    def test_jira_url_scheme_removal(self):
+        test_cases = [
+            ("https://withssl.com", "withssl.com"),
+            ("http://no_ssl.com", "no_ssl.com"),
+            ("justdomain.com", "justdomain.com"),
+            ("https://://weirdprefix.com", "weirdprefix.com"),
+            # Test with paths and query params, ensuring they are preserved if scheme is removed
+            ("https://example.com/jira", "example.com/jira"),
+            ("http://example.com/path?query=1", "example.com/path?query=1"),
+            ("example.com/pathonly", "example.com/pathonly"),
+            ("https://://example.com/another/path", "example.com/another/path"),
+        ]
+
+        original_username = "test_user_scheme_test" # Use a different username to avoid clashes if logs were checked
+        original_api_token = "test_token_scheme_test"
+
+        for jira_url_input, expected_server_url in test_cases:
+            with self.subTest(jira_url_input=jira_url_input): # Provides better output if one case fails
+                self.MockJiraReaderClass.reset_mock()
+                JiraIndexer(
+                    jira_url=jira_url_input,
+                    username=original_username,
+                    api_token=original_api_token,
+                    logger=self.mock_logger
+                )
+                self.MockJiraReaderClass.assert_called_once_with(
+                    server_url=expected_server_url,
+                    email=original_username,
+                    api_token=original_api_token
+                )
+
     @patch('moonmind.indexers.jira_indexer.VectorStoreIndex.from_documents')
     # If JiraIndexer uses SimpleNodeParser as a fallback, you might need to patch it too.
     # @patch('moonmind.indexers.jira_indexer.SimpleNodeParser.from_defaults')
