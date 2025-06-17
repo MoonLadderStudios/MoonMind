@@ -48,6 +48,7 @@ Requires-Dist: llama-index-readers-google<1.0,>=0.6
 Requires-Dist: llama-index-readers-jira<1.0,>=0.4
 Requires-Dist: llama-index-vector-stores-qdrant<1.0,>=0.6
 Requires-Dist: qdrant-client<2.0,>=1.14
+Requires-Dist: PyGithub<2.0,>=1.59
 Requires-Dist: google-generativeai<1.0,>=0.8
 Requires-Dist: openai<2.0,>=1.86
 Requires-Dist: ollama<1.0,>=0.5

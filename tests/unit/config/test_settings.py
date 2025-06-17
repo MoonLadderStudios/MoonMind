@@ -3,10 +3,9 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-# Assuming AppSettings is in moonmind.config.settings
-# Adjust the import path if necessary based on your project structure
-from moonmind.config.settings import (AppSettings, GoogleSettings,
-                                      OllamaSettings, OpenAISettings)
+from moonmind.config.settings import (AppSettings, AtlassianSettings,
+                                      GoogleSettings, OllamaSettings,
+                                      OpenAISettings)
 
 
 # Fixture for default settings, can be customized in tests
@@ -51,3 +50,39 @@ def test_default_model_fields_removed(app_settings_defaults):
     settings = AppSettings(**app_settings_defaults)
     assert not hasattr(settings, "default_chat_model")
     assert not hasattr(settings, "default_embed_model")
+
+
+class TestAtlassianSettings:
+    def test_atlassian_url_correction(self, monkeypatch):
+        # Test case 1: URL with "https://https://"
+        monkeypatch.setenv("ATLASSIAN_URL", "https://https://example.atlassian.net")
+        settings = AtlassianSettings()
+        assert settings.atlassian_url == "https://example.atlassian.net"
+
+        # Test case 2: Correct HTTPS URL
+        monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+        settings2 = AtlassianSettings()
+        assert settings2.atlassian_url == "https://example.atlassian.net"
+
+        # Test case 3: HTTP URL (should remain unchanged)
+        monkeypatch.setenv("ATLASSIAN_URL", "http://example.atlassian.net")
+        settings3 = AtlassianSettings()
+        assert settings3.atlassian_url == "http://example.atlassian.net"
+
+        # Test case 4: Empty URL (should remain None or empty)
+        monkeypatch.delenv("ATLASSIAN_URL", raising=False)
+        settings4 = AtlassianSettings()
+        assert settings4.atlassian_url is None
+
+        # Test case 5: URL that only starts with "https://" once
+        monkeypatch.setenv("ATLASSIAN_URL", "https://another.example.com")
+        settings5 = AtlassianSettings()
+        assert settings5.atlassian_url == "https://another.example.com"
+
+        # Test case 6: URL with no scheme
+        monkeypatch.setenv("ATLASSIAN_URL", "example.atlassian.net")
+        settings6 = AtlassianSettings()
+        assert settings6.atlassian_url == "example.atlassian.net"
+
+        # Clean up environment variable
+        monkeypatch.delenv("ATLASSIAN_URL", raising=False)
