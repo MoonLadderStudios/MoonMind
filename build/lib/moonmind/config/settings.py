@@ -93,11 +93,11 @@ class AtlassianSettings(BaseSettings):
         if self.atlassian_url and self.atlassian_url.startswith("https://https://"):
             self.atlassian_url = self.atlassian_url[8:]
         # Manually load environment variables for nested settings
-        if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED") == "True":
+        if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED", "").lower() == "true":
             self.confluence.confluence_enabled = True
         if os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS"):
             self.confluence.confluence_space_keys = os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS")
-        if os.environ.get("ATLASSIAN_JIRA_ENABLED") == "True":
+        if os.environ.get("ATLASSIAN_JIRA_ENABLED", "").lower() == "true":
             self.jira.jira_enabled = True
         if os.environ.get("ATLASSIAN_JIRA_JQL_QUERY"):
             self.jira.jira_jql_query = os.environ.get("ATLASSIAN_JIRA_JQL_QUERY")
