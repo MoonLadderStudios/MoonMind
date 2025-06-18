@@ -52,7 +52,7 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
                 f"a different distance metric: {existing_distance} vs {desired_distance}"
             )
     except UnexpectedResponse as e:
-        if e.status_code == 404:
+        if "404" in str(e):
             raise RuntimeError(
                 f"Qdrant collection '{settings.vector_store_collection_name}' not found. "
                 "Please ensure it is initialized by running the init_vector_db.py script "

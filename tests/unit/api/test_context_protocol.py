@@ -43,15 +43,12 @@ def mock_qdrant_client_autouse():
     with patch("moonmind.factories.vector_store_factory.QdrantClient") as mock_qdrant:
         mock_client_instance = MagicMock()
         
-        # Simulate QdrantClient.get_collection raising UnexpectedResponse
-        # The TypeError indicated missing: 'reason_phrase', 'content', and 'headers'
-        # Assuming the order is status_code, reason_phrase, content, headers
-        mock_client_instance.get_collection.side_effect = UnexpectedResponse(
-            status_code=404,
-            reason_phrase=b"Not Found", # httpx.Response uses bytes for reason_phrase
-            content=b'{"status": {"error": "Collection not found"}}',
-            headers={} # Example: empty headers
-        )
+        # Mock a CollectionInfo object
+        mock_collection_info = MagicMock()
+        mock_collection_info.config.params.vectors.size = 100 # Match dimension from client fixture
+        mock_collection_info.config.params.vectors.distance = Distance.COSINE # Match expected distance
+
+        mock_client_instance.get_collection.return_value = mock_collection_info
         
         mock_qdrant.return_value = mock_client_instance
         yield mock_qdrant
