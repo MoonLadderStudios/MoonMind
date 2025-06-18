@@ -130,7 +130,30 @@ def test_chat_completions_openai_via_cache(mock_acreate, mock_get_provider, chat
     mock_get_provider.return_value = "OpenAI"
     mock_acreate.return_value = mock_openai_chat_response
     
-    response = client.post("/v1/chat/completions", json=chat_request_openai_model.model_dump())
+    response = client.post("/completions", json=chat_request_openai_model.model_dump())
+
+    assert response.status_code == 200
+    json_response = response.json()
+    assert json_response["model"] == mock_openai_chat_response.model
+    assert json_response["choices"][0]["message"]["content"] == mock_openai_chat_response.choices[0].message.content
+    mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
+    mock_acreate.assert_called_once()
+
+
+# Test with model_cache integration and corrected path
+@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
+def test_chat_completions_endpoint_success_corrected_path(mock_acreate, mock_get_provider, chat_request_openai_model, mock_openai_chat_response):
+    # Patch settings directly in the router's imported settings instance
+    settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test"
+    # Ensure the global settings are also patched if your teardown relies on it,
+    # though patching settings_in_chat_router is more direct for router behavior.
+    # settings.openai.openai_api_key = "fake_openai_key_for_test" # Already handled by setup/teardown via original_openai_api_key
+
+    mock_get_provider.return_value = "OpenAI"
+    mock_acreate.return_value = mock_openai_chat_response
+
+    response = client.post("/completions", json=chat_request_openai_model.model_dump()) # Use corrected path
     
     assert response.status_code == 200
     json_response = response.json()
@@ -159,7 +182,7 @@ def test_chat_completions_google_via_cache(
     mock_google_chat_model_instance.generate_content.return_value = mock_google_chat_response
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
-    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/completions", json=chat_request_google_model.model_dump())
 
     assert response.status_code == 200
     json_response = response.json()
@@ -190,7 +213,7 @@ def test_chat_completions_google_value_error_invalid_role(
     mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
-    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/completions", json=chat_request_google_model.model_dump())
     
     assert response.status_code == 400 
     json_response = response.json()
@@ -215,7 +238,7 @@ def test_chat_completions_google_value_error_other_argument(
     mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
-    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/completions", json=chat_request_google_model.model_dump())
     
     assert response.status_code == 500 
     json_response = response.json()
@@ -229,7 +252,7 @@ def test_chat_completions_model_not_found_initial_and_after_refresh(mock_refresh
     # Simulate provider returning None for the first call, and also for the second call after refresh
     mock_get_provider.side_effect = [None, None] 
     
-    response = client.post("/v1/chat/completions", json=chat_request_unknown_model.model_dump())
+    response = client.post("/completions", json=chat_request_unknown_model.model_dump())
     
     assert response.status_code == 404
     assert f"Model '{chat_request_unknown_model.model}' not found or provider unknown." in response.json()["detail"]
@@ -246,7 +269,7 @@ def test_chat_completions_model_found_after_refresh_openai(mock_acreate, mock_re
     mock_get_provider.side_effect = [None, "OpenAI"]
     mock_acreate.return_value = mock_openai_chat_response # Mock the OpenAI call that would happen after successful refresh
 
-    response = client.post("/v1/chat/completions", json=chat_request_openai_model.model_dump())
+    response = client.post("/completions", json=chat_request_openai_model.model_dump())
     
     # The current code in chat.py raises a specific 404 for "retry logic needs full implementation"
     # This test verifies that behavior. If full retry were implemented, this would be a 200.
@@ -263,7 +286,7 @@ def test_chat_completions_openai_no_api_key_with_cache(mock_get_provider, chat_r
     settings.openai.openai_api_key = None # Key not set
     mock_get_provider.return_value = "OpenAI" # Cache says it's an OpenAI model
     
-    response = client.post("/v1/chat/completions", json=chat_request_openai_model.model_dump())
+    response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 400
     assert "OpenAI API key not configured" in response.json()["detail"]
 
@@ -273,7 +296,7 @@ def test_chat_completions_google_no_api_key_with_cache(mock_get_provider, chat_r
     settings.google.google_api_key = None # Key not set
     mock_get_provider.return_value = "Google" # Cache says it's a Google model
     
-    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
     assert "Google API key not configured" in response.json()["detail"]
 
@@ -286,7 +309,7 @@ def test_chat_completions_openai_api_error_with_cache(mock_acreate, mock_get_pro
     mock_get_provider.return_value = "OpenAI"
     mock_acreate.side_effect = Exception("OpenAI API Communication Error")
     
-    response = client.post("/v1/chat/completions", json=chat_request_openai_model.model_dump())
+    response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 500
     assert "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"]
 
@@ -308,7 +331,7 @@ def test_chat_completions_google_api_error_with_cache(
     mock_google_chat_model_instance.generate_content.side_effect = Exception("Google API Communication Error") # Corrected typo
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
     
-    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 500
     assert "Google Gemini API error: Google API Communication Error" in response.json()["detail"]
 
@@ -343,7 +366,7 @@ def test_chat_completions_openai_provider_disabled(mock_get_provider, chat_reque
     
     mock_get_provider.return_value = "OpenAI"
     
-    response = client.post("/v1/chat/completions", json=chat_request_openai_model.model_dump())
+    response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_openai_request in chat.py
@@ -358,7 +381,7 @@ def test_chat_completions_google_provider_disabled(mock_get_provider, chat_reque
 
     mock_get_provider.return_value = "Google"
     
-    response = client.post("/v1/chat/completions", json=chat_request_google_model.model_dump())
+    response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_google_request in chat.py
@@ -372,7 +395,7 @@ def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_get_pr
     
     mock_get_provider.return_value = "Ollama"
     
-    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_ollama_request in chat.py
@@ -398,7 +421,7 @@ def test_chat_completions_uses_default_model(mock_acreate, mock_get_provider, ch
     mock_get_provider.return_value = "OpenAI" 
     mock_acreate.return_value = mock_openai_chat_response
     
-    response = client.post("/v1/chat/completions", json=chat_request_no_model.model_dump())
+    response = client.post("/completions", json=chat_request_no_model.model_dump())
     
     assert response.status_code == 200
     # mock_get_default.assert_called_once() # Removed as get_default_chat_model is no longer mocked
@@ -436,7 +459,7 @@ def test_chat_completions_ollama_success(
     mock_router_get_ollama_model.return_value = "llama2"
     mock_router_chat_with_ollama.return_value = mock_ollama_chat_response
     
-    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
     
     assert response.status_code == 200
     json_response = response.json()
@@ -463,7 +486,7 @@ def test_chat_completions_ollama_api_error(
     mock_router_get_ollama_model.return_value = "llama2"
     mock_router_chat_with_ollama.side_effect = Exception("Ollama connection error")
     
-    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
     
     assert response.status_code == 500
     json_response = response.json()
@@ -488,7 +511,7 @@ def test_chat_completions_ollama_invalid_response(
     mock_router_get_ollama_model.return_value = "llama2"
     mock_router_chat_with_ollama.return_value = {"invalid": "response"}  # Missing message field
     
-    response = client.post("/v1/chat/completions", json=chat_request_ollama_model.model_dump())
+    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
     
     assert response.status_code == 500
     json_response = response.json()

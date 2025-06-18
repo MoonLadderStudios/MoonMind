@@ -114,7 +114,7 @@ async def get_rag_context(user_query: str, vector_index: Optional[VectorStoreInd
     logger.debug(f"Formatted context for prompt:\n{retrieved_context_str[:500]}...")
     return retrieved_context_str
 
-@router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
+@router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(
     request: ChatCompletionRequest,
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
