@@ -8,6 +8,7 @@ from llama_index.core.schema import Document  # For creating mock documents
 from llama_index.readers.github import GithubRepositoryReader
 
 from moonmind.indexers.github_indexer import GitHubIndexer
+from moonmind.config.settings import GitHubSettings
 
 
 @patch('moonmind.indexers.github_indexer.GithubRepositoryReader') # Patch where it's used
@@ -23,8 +24,27 @@ class TestGitHubIndexer(unittest.TestCase):
         self.mock_node_parser = MagicMock(spec=SimpleNodeParser)
         self.mock_service_context.node_parser = self.mock_node_parser
 
-        self.indexer = GitHubIndexer(logger=MagicMock())
-        self.indexer_with_token = GitHubIndexer(github_token="test_token", logger=MagicMock())
+        # Patch settings for GitHub token at the source
+        self.settings_patch = patch('moonmind.config.settings', autospec=True)
+        mock_app_settings_instance = self.settings_patch.start() # Start the patch
+
+        # Configure the mock AppSettings instance.
+        # The 'github' attribute of AppSettings is an instance of GithubSettings.
+        # We need to mock this GithubSettings instance and its 'github_token' attribute.
+        mock_github_settings_instance = MagicMock(spec=GitHubSettings)
+        mock_github_settings_instance.github_token = "dummy_test_token"
+
+        # Configure the 'github' attribute of the main mock (mock_app_settings_instance)
+        # to return our mock_github_settings_instance.
+        mock_app_settings_instance.github = mock_github_settings_instance
+
+        self.addCleanup(self.settings_patch.stop) # Ensure it's stopped
+
+        # Now instantiate the indexer, explicitly providing a token for the default indexer used in most tests
+        # This makes tests less reliant on the intricacies of mocking the global settings object for this specific detail.
+        self.indexer = GitHubIndexer(github_token="dummy_test_token_for_indexer", logger=MagicMock())
+        # This one is for tests that specifically want to test the token override mechanism or a different token.
+        self.indexer_with_token = GitHubIndexer(github_token="test_token_override", logger=MagicMock())
 
     @patch('llama_index.core.VectorStoreIndex.from_documents')
     def test_index_success_public_repo(self, mock_vs_from_docs, MockGithubReader):

@@ -166,15 +166,15 @@ class ModelCache:
                 # Using the model name from settings directly
                 anthropic_model_name = settings.anthropic.anthropic_chat_model
                 if anthropic_model_name:
-                    # Determine context window (e.g., Claude 3 Opus has 200K, Sonnet 200K, Haiku 200K)
-                    # This might need to be more dynamic if we support multiple Anthropic models
-                    context_window = 200000 # Default for Claude 3 models
-                    if "claude-3-opus" in anthropic_model_name:
+                    # Determine context window
+                    context_window = 200000  # Default for current Anthropic models
+                    if anthropic_model_name == "claude-opus-4-20250514":
                         context_window = 200000
-                    elif "claude-3-sonnet" in anthropic_model_name:
+                    elif anthropic_model_name == "claude-sonnet-4-20250514":
                         context_window = 200000
-                    elif "claude-3-haiku" in anthropic_model_name:
+                    elif anthropic_model_name == "claude-3-5-haiku-20241022":
                         context_window = 200000
+                    # Older models for reference, though we are focusing on the latest
                     elif "claude-2.1" in anthropic_model_name: # Older model
                         context_window = 200000
                     elif "claude-2.0" in anthropic_model_name: # Older model

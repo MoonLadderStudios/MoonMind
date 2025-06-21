@@ -328,7 +328,8 @@ class TestModelCache(unittest.TestCase):
 
             self.assertTrue(any(m["id"] == "gpt-3.5-turbo" for m in cache.models_data))
             self.assertTrue(any(m["id"] == "test-ollama-model" for m in cache.models_data))
-            self.assertEqual(len(cache.models_data), 2)
+            self.assertTrue(any(m["id"] == "claude-test-cache-model" for m in cache.models_data)) # Anthropic model
+            self.assertEqual(len(cache.models_data), 3) # OpenAI, Ollama, Anthropic
             self.assertIsNone(cache.get_model_provider("models/gemini-pro"))
             self.assertEqual(cache.get_model_provider("gpt-3.5-turbo"), "OpenAI")
             self.assertEqual(cache.get_model_provider("test-ollama-model"), "Ollama")
@@ -339,6 +340,7 @@ class TestModelCache(unittest.TestCase):
     def test_missing_api_keys_skips_providers(self):
         settings.google.google_api_key = None
         settings.openai.openai_api_key = None
+        settings.anthropic.anthropic_api_key = None # Ensure Anthropic is also skipped
         # Ollama enabled status is controlled by settings.ollama.ollama_enabled, which is True in setUp
 
         cache = ModelCache(refresh_interval_seconds=36000)
