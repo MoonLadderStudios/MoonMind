@@ -38,6 +38,9 @@ class TestModelCache(unittest.TestCase):
         self.original_openai_api_key = settings.openai.openai_api_key
         self.original_openai_enabled = settings.openai.openai_enabled
         self.original_ollama_enabled = settings.ollama.ollama_enabled
+        self.original_anthropic_api_key = settings.anthropic.anthropic_api_key
+        self.original_anthropic_enabled = settings.anthropic.anthropic_enabled
+        self.original_anthropic_chat_model = settings.anthropic.anthropic_chat_model
         self.original_refresh_interval = settings.model_cache_refresh_interval_seconds
 
         # Set default settings for tests (providers enabled with fake keys)
@@ -46,12 +49,18 @@ class TestModelCache(unittest.TestCase):
         settings.openai.openai_api_key = "fake_openai_key_for_test"
         settings.openai.openai_enabled = True
         settings.ollama.ollama_enabled = True
+        settings.anthropic.anthropic_api_key = "fake_anthropic_key_for_test"
+        settings.anthropic.anthropic_enabled = True
+        settings.anthropic.anthropic_chat_model = "claude-test-cache-model"
+
 
         # Mock the factory functions for listing models from providers
         # Corrected patch targets to where they are used (in moonmind.models_cache)
         self.mock_google_models_patch = patch('moonmind.models_cache.list_google_models')
         self.mock_openai_models_patch = patch('moonmind.models_cache.list_openai_models')
         self.mock_ollama_models_patch = patch('moonmind.models_cache.list_ollama_models', new_callable=AsyncMock)
+        # Anthropic doesn't have a list function, its model is added directly if enabled
+        # So, no direct patch for a list_anthropic_models needed here. We'll check settings.
 
         self.mock_list_google_models = self.mock_google_models_patch.start()
         self.mock_list_openai_models = self.mock_openai_models_patch.start()
@@ -91,6 +100,8 @@ class TestModelCache(unittest.TestCase):
                 return settings.openai.openai_enabled and bool(settings.openai.openai_api_key)
             elif provider_name == "ollama":
                 return settings.ollama.ollama_enabled
+            elif provider_name == "anthropic":
+                return settings.anthropic.anthropic_enabled and bool(settings.anthropic.anthropic_api_key)
             return False
         self.mock_is_provider_enabled_method.side_effect = actual_side_effect_is_provider_enabled
           # Prevent actual thread creation for most tests by mocking threading.Thread
@@ -128,6 +139,9 @@ class TestModelCache(unittest.TestCase):
         settings.openai.openai_api_key = self.original_openai_api_key
         settings.openai.openai_enabled = self.original_openai_enabled
         settings.ollama.ollama_enabled = self.original_ollama_enabled
+        settings.anthropic.anthropic_api_key = self.original_anthropic_api_key
+        settings.anthropic.anthropic_enabled = self.original_anthropic_enabled
+        settings.anthropic.anthropic_chat_model = self.original_anthropic_chat_model
         settings.model_cache_refresh_interval_seconds = self.original_refresh_interval
 
         ModelCache._instance = None
@@ -170,14 +184,18 @@ class TestModelCache(unittest.TestCase):
         self.mock_list_google_models.assert_called_once()
         self.mock_list_openai_models.assert_called_once()
         self.mock_list_ollama_models.assert_called_once()
+        # Anthropic models are added based on settings, not a list function call for this test's purpose
 
-        self.assertEqual(len(cache.models_data), 3)
+        self.assertEqual(len(cache.models_data), 4) # Google, OpenAI, Ollama, Anthropic
         self.assertIn("models/gemini-pro", cache.model_to_provider)
         self.assertEqual(cache.model_to_provider["models/gemini-pro"], "Google")
         self.assertIn("gpt-3.5-turbo", cache.model_to_provider)
         self.assertEqual(cache.model_to_provider["gpt-3.5-turbo"], "OpenAI")
         self.assertIn("test-ollama-model", cache.model_to_provider)
         self.assertEqual(cache.model_to_provider["test-ollama-model"], "Ollama")
+        self.assertIn("claude-test-cache-model", cache.model_to_provider)
+        self.assertEqual(cache.model_to_provider["claude-test-cache-model"], "Anthropic")
+
 
         gemini_model_data = next(m for m in cache.models_data if m["id"] == "models/gemini-pro")
         self.assertEqual(gemini_model_data["owned_by"], "Google")
@@ -190,16 +208,23 @@ class TestModelCache(unittest.TestCase):
         ollama_model_data = next(m for m in cache.models_data if m["id"] == "test-ollama-model")
         self.assertEqual(ollama_model_data["owned_by"], "Ollama")
 
+        anthropic_model_data = next(m for m in cache.models_data if m["id"] == "claude-test-cache-model")
+        self.assertEqual(anthropic_model_data["owned_by"], "Anthropic")
+        # Default context window for Claude 3 models is 200000, this might vary based on specific model name in settings
+        self.assertEqual(anthropic_model_data["context_window"], 200000)
+
 
     def test_get_all_models_after_refresh(self):
         cache = ModelCache(refresh_interval_seconds=36000)
         cache.refresh_models_sync()
 
         models = cache.get_all_models()
-        self.assertEqual(len(models), 3)
+        self.assertEqual(len(models), 4) # Expected 4 models now
         self.assertTrue(any(m["id"] == "models/gemini-pro" for m in models))
         self.assertTrue(any(m["id"] == "gpt-3.5-turbo" for m in models))
         self.assertTrue(any(m["id"] == "test-ollama-model" for m in models))
+        self.assertTrue(any(m["id"] == "claude-test-cache-model" for m in models))
+
 
     def test_get_model_provider(self):
         cache = ModelCache(refresh_interval_seconds=36000)
@@ -208,6 +233,7 @@ class TestModelCache(unittest.TestCase):
         self.assertEqual(cache.get_model_provider("models/gemini-pro"), "Google")
         self.assertEqual(cache.get_model_provider("gpt-3.5-turbo"), "OpenAI")
         self.assertEqual(cache.get_model_provider("test-ollama-model"), "Ollama")
+        self.assertEqual(cache.get_model_provider("claude-test-cache-model"), "Anthropic")
         self.assertIsNone(cache.get_model_provider("non-existent-model"))
 
     @patch('time.time')
@@ -272,10 +298,12 @@ class TestModelCache(unittest.TestCase):
              patch.object(settings.openai, 'openai_api_key', fake_openai_key), \
              patch.object(settings.google, 'google_enabled', True), \
              patch.object(settings.openai, 'openai_enabled', True), \
-             patch.object(settings.ollama, 'ollama_enabled', True):
+             patch.object(settings.ollama, 'ollama_enabled', True), \
+             patch.object(settings.anthropic, 'anthropic_enabled', True), \
+             patch.object(settings.anthropic, 'anthropic_api_key', "fake_anthropic_key_for_test"):
 
             # Ensure that the AppSettings.is_provider_enabled mock also uses these consistent values.
-            # The mock 'actual_side_effect_is_provider_enabled_corrected' already reads from the global 'settings'
+            # The mock 'actual_side_effect_is_provider_enabled' already reads from the global 'settings'
             # object, which we are patching here. So, this should be consistent.
 
             self.mock_list_google_models.side_effect = Exception("Google API Error")

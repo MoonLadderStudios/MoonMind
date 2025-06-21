@@ -18,6 +18,15 @@ class GoogleSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+class AnthropicSettings(BaseSettings):
+    """Anthropic API settings"""
+    anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY")
+    anthropic_chat_model: str = Field("claude-3-opus-20240229", env="ANTHROPIC_CHAT_MODEL")
+    anthropic_enabled: bool = Field(True, env="ANTHROPIC_ENABLED")
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+
 class GitHubSettings(BaseSettings):
     """GitHub settings"""
     github_token: Optional[str] = Field(None, env="GITHUB_TOKEN")
@@ -138,6 +147,7 @@ class AppSettings(BaseSettings):
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
@@ -190,6 +200,8 @@ class AppSettings(BaseSettings):
             return self.openai.openai_enabled and bool(self.openai.openai_api_key)
         elif provider == "ollama":
             return self.ollama.ollama_enabled
+        elif provider == "anthropic":
+            return self.anthropic.anthropic_enabled and bool(self.anthropic.anthropic_api_key)
         else:
             return False
 
@@ -202,6 +214,8 @@ class AppSettings(BaseSettings):
             return self.openai.openai_chat_model
         elif provider == "ollama":
             return self.ollama.ollama_chat_model
+        elif provider == "anthropic":
+            return self.anthropic.anthropic_chat_model
         else:
             # Fallback to google if unknown provider
             return self.google.google_chat_model
