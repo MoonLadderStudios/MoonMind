@@ -1,14 +1,16 @@
 import subprocess
-import requests
 import os
 import json
+import urllib.request
+import urllib.error
+import re
 
 # --- Configuration ---
-# Please replace these with your GitHub repository owner and repository name
-# For example, if your repository is "https://github.com/octocat/Hello-World",
-# OWNER would be "octocat" and REPO would be "Hello-World".
-OWNER = "YOUR_OWNER"
-REPO = "YOUR_REPO"
+# These will be attempted to be auto-detected from git remote.
+# If auto-detection fails, you may need to set them manually here or ensure
+# your git remote 'origin' is configured correctly.
+OWNER = ""
+REPO = ""
 WORKFLOW_FILE_NAME = "pytest-unit-tests.yml"  # The name of your workflow file
 
 # You might need a GitHub token for private repositories or to avoid rate limiting.
@@ -16,6 +18,37 @@ WORKFLOW_FILE_NAME = "pytest-unit-tests.yml"  # The name of your workflow file
 # e.g., export GITHUB_TOKEN="your_token_here"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 # --- End Configuration ---
+
+def get_owner_and_repo_from_git():
+    """
+    Tries to extract the OWNER and REPO from the 'origin' remote URL.
+    Returns (owner, repo) or (None, None) if unable to determine.
+    """
+    try:
+        remote_url_bytes = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"], stderr=subprocess.STDOUT
+        )
+        remote_url = remote_url_bytes.decode("utf-8").strip()
+
+        # Regex to match both SSH and HTTPS URLs
+        # SSH: git@github.com:OWNER/REPO.git
+        # HTTPS: https://github.com/OWNER/REPO.git
+        # Also handles cases without .git suffix
+        match = re.search(r"(?:[:/])([^/]+)/([^/.]+)(?:\.git)?$", remote_url)
+
+        if match:
+            owner, repo = match.groups()
+            print(f"Auto-detected OWNER: {owner}, REPO: {repo} from git remote 'origin'.")
+            return owner, repo
+        else:
+            print(f"Could not parse OWNER and REPO from remote URL: {remote_url}")
+            return None, None
+    except subprocess.CalledProcessError:
+        print("Could not find git remote 'origin'. OWNER and REPO must be set manually or git remote added.")
+        return None, None
+    except FileNotFoundError:
+        print("Error: Git command not found. Is Git installed and in your PATH?")
+        return None, None
 
 def get_current_git_branch():
     """Retrieves the current Git branch name."""
@@ -39,53 +72,78 @@ def get_latest_action_run(branch_name):
     """
     Retrieves the latest GitHub Action run for the specified branch and workflow.
     """
-    if OWNER == "YOUR_OWNER" or REPO == "YOUR_REPO":
-        print("Error: Please configure OWNER and REPO variables in the script.")
+    global OWNER, REPO # Allow modification if auto-detection works
+
+    # Attempt to auto-detect owner and repo if not already set
+    if not OWNER or not REPO:
+        detected_owner, detected_repo = get_owner_and_repo_from_git()
+        if detected_owner and detected_repo:
+            OWNER = detected_owner
+            REPO = detected_repo
+        else:
+            print("Error: OWNER and REPO are not set and could not be auto-detected from git remote 'origin'.")
+            print("Please configure them manually in the script or ensure 'git remote -v' shows a valid origin.")
+            return None
+
+    if not OWNER or not REPO: # Check again after attempting auto-detection
+        print("Error: OWNER and REPO are still not set. Exiting.")
         return None
 
-    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/actions/workflows/{WORKFLOW_FILE_NAME}/runs"
+    # Construct URL with query parameters
+    query_params = urllib.parse.urlencode({
+        "branch": branch_name,
+        "per_page": 1,
+        "status": "completed,in_progress,queued,requested,waiting,pending"
+    })
+    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/actions/workflows/{WORKFLOW_FILE_NAME}/runs?{query_params}"
+
     headers = {
         "Accept": "application/vnd.github.v3+json",
-    }
-    params = {
-        "branch": branch_name,
-        "per_page": 1,  # We only need the most recent run
-        "status": "completed,in_progress,queued,requested,waiting,pending" # Consider all possible statuses
+        "User-Agent": "Python-GitHubActionStatusScript" # Good practice to set a User-Agent
     }
 
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
 
-    print(f"Fetching workflow runs for branch '{branch_name}' from {api_url} (params: {params})...")
+    print(f"Fetching workflow runs for branch '{branch_name}' from {api_url}...")
+
+    req = urllib.request.Request(api_url, headers=headers)
 
     try:
-        response = requests.get(api_url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            response_body = response.read().decode("utf-8")
+            runs_data = json.loads(response_body)
 
-        runs_data = response.json()
+            if runs_data.get("total_count", 0) == 0 or not runs_data.get("workflow_runs"):
+                print(f"No workflow runs found for '{WORKFLOW_FILE_NAME}' on branch '{branch_name}'.")
+                return None
 
-        if runs_data.get("total_count", 0) == 0 or not runs_data.get("workflow_runs"):
-            print(f"No workflow runs found for '{WORKFLOW_FILE_NAME}' on branch '{branch_name}'.")
-            return None
+            latest_run = runs_data["workflow_runs"][0]
+            return latest_run
 
-        latest_run = runs_data["workflow_runs"][0]
-        return latest_run
-
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error fetching action runs: {e.response.status_code} {e.response.reason}")
+    except urllib.error.HTTPError as e:
+        print(f"HTTP Error fetching action runs: {e.code} {e.reason}")
         try:
-            print(f"Response content: {e.response.json()}")
-        except json.JSONDecodeError:
-            print(f"Response content: {e.response.text}")
-        if e.response.status_code == 401:
+            error_content = e.read().decode("utf-8")
+            print(f"Response content: {json.loads(error_content)}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            print(f"Response content (raw): {e.read().decode('utf-8', 'replace')}")
+        if e.code == 401:
             print("Authentication failed. If this is a private repository, ensure GITHUB_TOKEN is set correctly.")
-        elif e.response.status_code == 404:
+        elif e.code == 404:
             print(f"Repository or workflow not found. Check OWNER, REPO, and WORKFLOW_FILE_NAME: {OWNER}/{REPO}, {WORKFLOW_FILE_NAME}")
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching action runs: {e}")
+    except urllib.error.URLError as e:
+        print(f"URL Error fetching action runs: {e.reason}")
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON response: {e}")
+    except Exception as e: # Catch any other unexpected errors
+        print(f"An unexpected error occurred: {e}")
     return None
 
 def main():
+    # OWNER and REPO are now set globally, potentially by get_latest_action_run
+    # So we don't need to pass them around as much.
+
     print("Attempting to retrieve current Git branch...")
     current_branch = get_current_git_branch()
 
@@ -95,6 +153,7 @@ def main():
 
     print(f"Current Git branch: {current_branch}")
 
+    # Auto-detection of OWNER and REPO will happen inside get_latest_action_run if needed
     print(f"\nAttempting to retrieve the latest GitHub Action run for workflow '{WORKFLOW_FILE_NAME}' on branch '{current_branch}'...")
     latest_run = get_latest_action_run(current_branch)
 
