@@ -166,20 +166,8 @@ class ModelCache:
                 # Using the model name from settings directly
                 anthropic_model_name = settings.anthropic.anthropic_chat_model
                 if anthropic_model_name:
-                    # Determine context window
-                    context_window = 200000  # Default for current Anthropic models
-                    if anthropic_model_name == "claude-opus-4-20250514":
-                        context_window = 200000
-                    elif anthropic_model_name == "claude-sonnet-4-20250514":
-                        context_window = 200000
-                    elif anthropic_model_name == "claude-3-5-haiku-20241022":
-                        context_window = 200000
-                    # Older models for reference, though we are focusing on the latest
-                    elif "claude-2.1" in anthropic_model_name: # Older model
-                        context_window = 200000
-                    elif "claude-2.0" in anthropic_model_name: # Older model
-                        context_window = 100000
-                    # Add more specific model context windows if needed
+                    # Determine context window using helper function
+                    context_window = self.get_context_window_for_anthropic_model(anthropic_model_name)
 
                     capabilities = {
                         "chat_completion": True,
