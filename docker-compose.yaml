@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   ui:
     image: ghcr.io/open-webui/open-webui:main
@@ -8,8 +6,8 @@ services:
     ports:
       - 8080:8080
     environment:
-      - OPENAI_API_BASE_URL=http://api:8000/v1
-      - WEBUI_AUTH=false
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:8000/v1}
+      - WEBUI_AUTH=${WEBUI_AUTH:-false}
       - ENABLE_OLLAMA_API=false
     env_file:
       - .env
@@ -28,66 +26,31 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
-      - FASTAPI_RELOAD=${FASTAPI_RELOAD:-0}
+      - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
       - MODEL_CONTEXT_PROTOCOL_PORT=8000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
-      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
     env_file:
       - .env
     volumes:
       - ./model_data:/app/model_data
-      - ./api_service/api:/app/api:ro
-      - ./api_service/main.py:/app/main.py:ro
+      - ./api_service:/app/api_service:ro
       - ./moonmind:/app/moonmind:ro
     command: >
       sh -c "
-      if [ "$FASTAPI_RELOAD" = "True" ]; then
-        uvicorn main:app --host 0.0.0.0 --port 8000 --reload;
+      if [ \"$FASTAPI_RELOAD\" = \"True\" ]; then
+        uvicorn api_service.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/api_service --reload-dir /app/moonmind;
       else
-        uvicorn main:app --host 0.0.0.0 --port 8000;
+        uvicorn api_service.main:app --host 0.0.0.0 --port 8000;
       fi"
     networks:
       - local-network
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
-    depends_on:
-      - qdrant
-
-  init-vector-db:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    environment:
-      - PYTHONPATH=/app
-      - LOG_LEVEL=INFO
-      - PYTHONUNBUFFERED=1
-      - QDRANT_URL=http://qdrant:6333
-    env_file:
-      - .env
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./scripts:/app/scripts:ro
-      - ./model_data:/app/model_data:ro
-    command: >
-      sh -c "
-      if [ "$INIT_DATABASE" = "true" ]; then
-        echo 'Attempting to initialize vector database...'
-        export PYTHONPATH=/app && python /app/scripts/init_vector_db.py;
-      else
-        echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
-      fi"
-    networks:
-      - local-network
-    restart: "no"
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      api:
-        condition: service_started
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -98,7 +61,35 @@ services:
       - qdrant_storage:/qdrant/storage
     networks:
       - local-network
-    restart: unless-stopped
+  init-vector-db:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./scripts:/app/scripts:ro
+      - ./model_data:/app/model_data:ro
+    command: >
+      sh -c "
+      if [ \"$INIT_DATABASE\" = \"true\" ]; then
+        echo 'Attempting to initialize vector database...'
+        export PYTHONPATH=/app && python /app/scripts/init_vector_db.py;
+      else
+        echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
+      fi"
+    networks:
+      - local-network
+    restart: "no"
+    depends_on:
+      api:
+        condition: service_started
 
 volumes:
   open-webui:
