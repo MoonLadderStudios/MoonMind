@@ -14,6 +14,7 @@ from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 from moonmind.indexers.jira_indexer import JiraIndexer
+from moonmind.indexers.local_data_indexer import LocalDataIndexer
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -274,10 +275,55 @@ if __name__ == "__main__":
                 jira_skipped = True # Mark as skipped due to error during indexing or init
         logger.info("--- Finished Jira Processing ---")
 
+        # 12. Local Data Indexing
+        logger.info("--- Starting Local Data Processing ---")
+        local_data_skipped = True # Assume skipped
+        # Reminder: The LocalData path from .env (e.g., settings.local_data.local_data_path)
+        # is expected to be mounted to /app/local_data in the Docker container running this script.
+        local_data_mount_path = "/app/local_data"
+
+        if not settings.local_data.local_data_path:
+            logger.info("LocalData path is not configured in settings (via LocalData env var). Skipping Local Data indexing.")
+        elif not os.path.exists(local_data_mount_path) or not os.listdir(local_data_mount_path):
+             logger.warning(
+                f"Local data directory '{local_data_mount_path}' is empty or does not exist inside the container. "
+                f"Ensure the volume is correctly mounted from '{settings.local_data.local_data_path}'. Skipping Local Data indexing."
+            )
+        else:
+            any_actual_indexing_performed_or_attempted = True # Mark that we are attempting Local Data
+            local_data_skipped = False # Tentatively false
+            logger.info(f"Local data path configured to: {settings.local_data.local_data_path}. Indexing from container path: {local_data_mount_path}")
+            logger.info("Initializing LocalDataIndexer...")
+            try:
+                local_data_indexer = LocalDataIndexer(
+                    data_dir=local_data_mount_path, # Fixed path inside container
+                    logger=logger
+                )
+                logger.info("LocalDataIndexer initialized.")
+
+                logger.info(f"Processing local data directory: {local_data_mount_path}")
+                try:
+                    index_result = local_data_indexer.index(
+                        storage_context=storage_context,
+                        service_context=Settings
+                    )
+                    nodes_indexed_count = 0
+                    if isinstance(index_result, dict) and 'total_nodes_indexed' in index_result:
+                        nodes_indexed_count = index_result.get('total_nodes_indexed', 0)
+                    logger.info(f"Successfully indexed {nodes_indexed_count} nodes from local data directory {local_data_mount_path}.")
+                except Exception as e:
+                    logger.error(f"Error indexing local data directory {local_data_mount_path}: {e}", exc_info=True)
+                    local_data_skipped = True # Mark as skipped due to error
+                logger.info("Finished processing local data directory.")
+            except Exception as e:
+                logger.error(f"Error initializing LocalDataIndexer: {e}", exc_info=True)
+                local_data_skipped = True # Indexer failed to init
+        logger.info("--- Finished Local Data Processing ---")
+
         # Final Summary
         logger.info("--- Final Summary ---")
         if not any_actual_indexing_performed_or_attempted:
-            if confluence_skipped and github_skipped and google_drive_skipped and jira_skipped:
+            if confluence_skipped and github_skipped and google_drive_skipped and jira_skipped and local_data_skipped:
                  logger.info("No data sources were enabled or configured correctly for indexing. Exiting.")
             # If any_actual_indexing_performed_or_attempted is False, but some sources were not technically "skipped"
             # (e.g. enabled but failed pre-check not covered by specific skip flags), this means an earlier critical error.
@@ -293,6 +339,8 @@ if __name__ == "__main__":
             log_messages.append("Google Drive")
         if not jira_skipped:
             log_messages.append("Jira")
+        if not local_data_skipped:
+            log_messages.append("Local Data")
 
         processed_sources_summary = ", ".join(log_messages) if log_messages else "None"
         logger.info(f"Data sources for which processing was attempted: {processed_sources_summary}.")
@@ -306,6 +354,8 @@ if __name__ == "__main__":
             skipped_sources_summary.append("Google Drive")
         if jira_skipped:
             skipped_sources_summary.append("Jira")
+        if local_data_skipped:
+            skipped_sources_summary.append("Local Data")
 
         if skipped_sources_summary:
             logger.info(f"Data sources that were skipped: {', '.join(skipped_sources_summary)} (due to being disabled, misconfigured, or errors during initialization/processing).")

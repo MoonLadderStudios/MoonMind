@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, AliasChoices # Ensure AliasChoices is imported if not already
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -122,6 +122,15 @@ class RAGSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+class LocalDataSettings(BaseSettings):
+    """Settings for local data indexing"""
+    local_data_path: Optional[str] = Field(None, validation_alias=AliasChoices('LocalData', 'LOCAL_DATA_PATH'))
+    # Add local_data_enabled if we want a separate boolean flag, but for now, path presence implies enabled.
+    # local_data_enabled: bool = Field(False, env="LOCAL_DATA_ENABLED")
+
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8", extra='ignore')
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -134,6 +143,7 @@ class AppSettings(BaseSettings):
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
+    local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
