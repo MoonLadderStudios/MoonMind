@@ -200,6 +200,36 @@ class ModelCache:
         self.logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
         return all_models_data, model_to_provider_map
 
+    def get_context_window_for_anthropic_model(self, model_name: str) -> int:
+        """
+        Returns the context window size for a given Anthropic model name.
+        Defaults to 200k tokens if the model is not found, as per newer Anthropic models.
+        """
+        # Reference: https://docs.anthropic.com/claude/reference/input-and-output-sizes
+        # Claude 3 models all have 200K context windows. Older models vary.
+        # Opus: 200K
+        # Sonnet: 200K
+        # Haiku: 200K
+        # Claude 2.1: 200K
+        # Claude 2.0: 100K
+        # Claude Instant 1.2: 100K
+        # This can be expanded as new models are released or if more specific handling is needed.
+        model_context_windows = {
+            "claude-3-opus-20240229": 200000,
+            "claude-3-sonnet-20240229": 200000,
+            "claude-3-haiku-20240307": 200000,
+            "claude-2.1": 200000,
+            "claude-2.0": 100000,
+            "claude-instant-1.2": 100000,
+            # Add a common test model name if used in tests
+            "claude-test-cache-model": 200000, # Defaulting to a large window for a generic test name
+        }
+        default_window = 200000 # Default for unknown or newer models
+        context_window = model_context_windows.get(model_name, default_window)
+        if model_name not in model_context_windows:
+            self.logger.warning(f"Context window for Anthropic model '{model_name}' not explicitly found. Using default: {default_window}.")
+        return context_window
+
     def refresh_models_sync(self):
         with self._refresh_operation_lock: # Changed to use new instance lock
             if self._refresh_in_progress:

@@ -379,7 +379,9 @@ class TestModelCache(unittest.TestCase):
         cache._refresh_in_progress = False
 
         # Test the force refresh function with the cache instance
-        force_refresh_model_cache()
+        # Patch the model_cache global in moonmind.models_cache to use the test's instance
+        with patch('moonmind.models_cache.model_cache', cache):
+            force_refresh_model_cache()
 
         self.assertEqual(self.mock_list_google_models.call_count, 2)
         self.assertEqual(self.mock_list_openai_models.call_count, 2)
