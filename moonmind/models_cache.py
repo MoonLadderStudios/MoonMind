@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from moonmind.factories.google_factory import list_google_models
 from moonmind.factories.openai_factory import list_openai_models
 from moonmind.factories.ollama_factory import list_ollama_models
+from moonmind.factories.anthropic_factory import AnthropicFactory # Assuming a similar listing function or direct model add
 from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,58 @@ class ModelCache:
                     self.logger.info("Ollama provider is enabled but may not be available.")
         except Exception as e:
             self.logger.exception(f"Error fetching Ollama models: {e}")
+
+        # Fetch Anthropic Models
+        # Anthropic SDK does not have a public "list_models" function like OpenAI.
+        # Models are typically known and specified directly.
+        # We will add the configured Anthropic model if the provider is enabled.
+        try:
+            if settings.is_provider_enabled("anthropic"):
+                # Using the model name from settings directly
+                anthropic_model_name = settings.anthropic.anthropic_chat_model
+                if anthropic_model_name:
+                    # Determine context window
+                    context_window = 200000  # Default for current Anthropic models
+                    if anthropic_model_name == "claude-opus-4-20250514":
+                        context_window = 200000
+                    elif anthropic_model_name == "claude-sonnet-4-20250514":
+                        context_window = 200000
+                    elif anthropic_model_name == "claude-3-5-haiku-20241022":
+                        context_window = 200000
+                    # Older models for reference, though we are focusing on the latest
+                    elif "claude-2.1" in anthropic_model_name: # Older model
+                        context_window = 200000
+                    elif "claude-2.0" in anthropic_model_name: # Older model
+                        context_window = 100000
+                    # Add more specific model context windows if needed
+
+                    capabilities = {
+                        "chat_completion": True,
+                        "text_completion": True, # Anthropic models are generally good for this too
+                        "embedding": False, # Anthropic models are not for embeddings
+                    }
+                    model_entry = {
+                        "id": anthropic_model_name,
+                        "object": "model",
+                        "created": int(time.time()), # Placeholder, Anthropic models don't have a creation timestamp via API
+                        "owned_by": "Anthropic",
+                        "permission": [],
+                        "root": anthropic_model_name,
+                        "parent": None,
+                        "context_window": context_window,
+                        "capabilities": capabilities,
+                    }
+                    all_models_data.append(model_entry)
+                    model_to_provider_map[anthropic_model_name] = "Anthropic"
+                    self.logger.info(f"Added configured Anthropic model: {anthropic_model_name}")
+            else:
+                if not settings.anthropic.anthropic_enabled:
+                    self.logger.info("Anthropic provider is disabled.")
+                else:
+                    self.logger.warning("Anthropic API key not set. Skipping Anthropic models.")
+        except Exception as e:
+            self.logger.exception(f"Error adding Anthropic model: {e}")
+
 
         self.logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
         return all_models_data, model_to_provider_map

@@ -16,6 +16,7 @@ from moonmind.config.settings import settings
 from moonmind.factories.google_factory import get_google_model
 from moonmind.factories.openai_factory import get_openai_model
 from moonmind.factories.ollama_factory import get_ollama_model, chat_with_ollama
+from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.rag.retriever import QdrantRAG
 from moonmind.schemas.chat_models import (ChatCompletionRequest,
                                           ChatCompletionResponse, Choice,
@@ -153,6 +154,8 @@ async def chat_completions(
             return await handle_google_request(request, processed_messages, model_to_use)
         elif provider == "Ollama":
             return await handle_ollama_request(request, processed_messages, model_to_use)
+        elif provider == "Anthropic":
+            return await handle_anthropic_request(request, processed_messages, model_to_use)
         else:
             # Handle case where model is not found in cache or provider is unknown
             logger.warning(f"Model '{model_to_use}' not found in cache or provider is unknown.")
@@ -292,6 +295,115 @@ async def handle_google_request(request: ChatCompletionRequest, messages: List, 
             total_tokens=prompt_tokens_estimate + completion_tokens_estimate,
         ),
     )
+
+async def handle_anthropic_request(request: ChatCompletionRequest, messages: List, model_to_use: str) -> ChatCompletionResponse:
+    """Handle Anthropic provider requests."""
+    if not settings.is_provider_enabled("anthropic"):
+        if not settings.anthropic.anthropic_enabled:
+            raise HTTPException(status_code=400, detail="Anthropic provider is disabled.")
+        else:
+            raise HTTPException(status_code=400, detail="Anthropic API key not configured for the server.")
+
+    logger.info(f"Routing to Anthropic for model: {model_to_use}")
+
+    anthropic_model = AnthropicFactory.create_anthropic_model()
+
+    # Convert messages to Anthropic's format (ensure system message is handled correctly if present)
+    anthropic_messages = []
+    system_prompt = None
+    for msg in messages:
+        if msg.role == "system":
+            system_prompt = msg.content  # Anthropic uses a separate system parameter
+        elif msg.role in ["user", "assistant"]: # Anthropic uses "assistant" for model's previous turns
+            anthropic_messages.append({"role": msg.role, "content": msg.content})
+        else:
+            # Potentially log a warning or adapt if other roles are possible via RAG etc.
+            logger.warning(f"Unsupported role {msg.role} for Anthropic, skipping message.")
+
+
+    if not anthropic_messages: # Ensure there's at least one user or assistant message
+        raise HTTPException(status_code=400, detail="No user or assistant messages provided for Anthropic.")
+
+    try:
+        # Note: Anthropic's SDK might use `messages` and `system` parameters differently
+        # depending on the specific SDK version and method used.
+        # This example assumes a structure similar to OpenAI's newer APIs or direct REST usage.
+        # Adjust if using specific Anthropic SDK methods like `anthropic.messages.create`
+
+        # The llama-index Anthropic class's `chat` method expects a list of `ChatMessage`
+        from llama_index.core.llms import ChatMessage as LlamaChatMessage
+        llama_index_messages = []
+        for m in anthropic_messages:
+            llama_index_messages.append(LlamaChatMessage(role=m["role"], content=m["content"]))
+
+        # If a system prompt exists and LlamaIndex's Anthropic wrapper uses it in `chat`:
+        # (This needs verification based on how LlamaIndex's Anthropic class handles system prompts.
+        # Some models/SDKs expect it as the first message, others as a separate parameter.)
+        # For now, assuming it's handled if passed as a system message in the list.
+        # If AnthropicFactory already configures the model, we might not need to pass it again.
+        # The `model` parameter in `Anthropic` is for model name, not an instance.
+
+        # Directly using the chat method of the created anthropic_model instance
+        # The Anthropic LlamaIndex LLM takes `messages` directly.
+        # System prompt handling in LlamaIndex Anthropic:
+        # It seems LlamaIndex's Anthropic wrapper will extract a system prompt if it's the first message
+        # or if provided via `system_prompt` kwarg to some methods, but `chat` primarily takes `messages`.
+        # Let's ensure the system prompt is the first message if present.
+
+        final_messages_for_anthropic = []
+        if system_prompt:
+            final_messages_for_anthropic.append(LlamaChatMessage(role="system", content=system_prompt))
+        final_messages_for_anthropic.extend(llama_index_messages)
+
+
+        # The `chat` method is asynchronous in LlamaIndex
+        anthropic_response_obj = await anthropic_model.achat(
+            messages=final_messages_for_anthropic,
+            # Anthropic uses max_tokens_to_sample, check LlamaIndex wrapper
+            # LlamaIndex's Anthropic wrapper might map `max_tokens` to `max_tokens_to_sample`
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+        )
+
+        ai_message_content = anthropic_response_obj.message.content
+
+    except Exception as e:
+        logger.error(f"Error calling Anthropic API for model {model_to_use}: {e}")
+        raise HTTPException(status_code=500, detail=f"Anthropic API error: {str(e)}")
+
+    # Token counting for Anthropic can be complex.
+    # Anthropic provides token counts in its API response if available.
+    # For now, using a simple estimation.
+    # TODO: Use actual token counts from response if LlamaIndex surfaces them.
+    # anthropic_response_obj.raw often contains the underlying provider response.
+    prompt_tokens_estimate = sum(len(msg.content.split()) for msg in messages) # Based on original request messages
+    completion_tokens_estimate = len(ai_message_content.split())
+
+    # Check if token usage is available in the raw response (implementation dependent)
+    # This is a placeholder, actual path to token usage might differ.
+    # Example: if anthropic_response_obj.raw and 'usage' in anthropic_response_obj.raw:
+    # prompt_tokens = anthropic_response_obj.raw['usage'].get('input_tokens', prompt_tokens_estimate)
+    # completion_tokens = anthropic_response_obj.raw['usage'].get('output_tokens', completion_tokens_estimate)
+
+    return ChatCompletionResponse(
+        id=f"cmpl-anthropic-{uuid4().hex}", # Placeholder ID
+        object="chat.completion",
+        created=int(time.time()),
+        model=model_to_use, # This should be the specific model name like "claude-3-opus-20240229"
+        choices=[
+            Choice(
+                index=0,
+                message=ChoiceMessage(role="assistant", content=ai_message_content.strip()),
+                finish_reason="stop", # Or map from Anthropic's finish reasons
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=prompt_tokens_estimate,
+            completion_tokens=completion_tokens_estimate,
+            total_tokens=prompt_tokens_estimate + completion_tokens_estimate,
+        ),
+    )
+
 
 async def handle_ollama_request(request: ChatCompletionRequest, messages: List, model_to_use: str) -> ChatCompletionResponse:
     """Handle Ollama provider requests."""
