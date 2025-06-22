@@ -4,6 +4,8 @@ import json
 import urllib.request
 import urllib.error
 import re
+import zipfile
+import io
 
 # --- Configuration ---
 # These will be attempted to be auto-detected from git remote.
@@ -143,6 +145,147 @@ def main():
     # So we don't need to pass them around as much.
 
     print("Attempting to retrieve current Git branch...")
+
+def get_and_display_failed_job_logs(jobs_url, owner, repo, token):
+    """
+    Fetches logs for the first failed job in a workflow run, searches for an error,
+    and prints a contextual snippet of the log.
+    """
+    print(f"\nAttempting to fetch job details from: {jobs_url}")
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "Python-GitHubActionStatusScript"
+    }
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    try:
+        req_jobs = urllib.request.Request(jobs_url, headers=headers)
+        with urllib.request.urlopen(req_jobs, timeout=15) as response:
+            jobs_data = json.loads(response.read().decode("utf-8"))
+
+        failed_job = None
+        if "jobs" in jobs_data:
+            for job in jobs_data["jobs"]:
+                if job.get("conclusion") == "failure":
+                    failed_job = job
+                    break # Process the first failed job found
+
+        if not failed_job:
+            print("No failed jobs found in this workflow run.")
+            return
+
+        job_id = failed_job.get("id")
+        job_name = failed_job.get("name")
+        print(f"Found failed job: '{job_name}' (ID: {job_id})")
+
+        # Fetch job log (zip)
+        log_url = f"https://api.github.com/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
+        print(f"Fetching logs for job ID {job_id} from {log_url}...")
+
+        req_log = urllib.request.Request(log_url, headers=headers, method='GET') # Explicit GET for clarity
+
+        log_content_lines = []
+
+        with urllib.request.urlopen(req_log, timeout=30) as response_log:
+            # urlopen handles redirects automatically for GET.
+            # The response_log.url might be different if redirected (e.g. to S3 presigned URL)
+            if response_log.status != 200:
+                 print(f"Error: Expected status 200 for log download, got {response_log.status}. URL: {response_log.url}")
+                 print("Headers:", response_log.getheaders())
+                 # Try to read body for more info if it's an error Github might send
+                 try:
+                     error_body = response_log.read().decode('utf-8', errors='replace')
+                     print("Response body:", error_body)
+                 except Exception as e_read:
+                     print(f"Could not read error response body: {e_read}")
+                 return
+
+            zip_data = io.BytesIO(response_log.read())
+
+        print("Successfully downloaded log zip, processing...")
+        with zipfile.ZipFile(zip_data, 'r') as zip_ref:
+            log_text_parts = []
+            for member_name in zip_ref.namelist():
+                # Typically logs are .txt files, sometimes within job-name specific folders
+                if member_name.endswith(".txt"): # Basic filter
+                    try:
+                        # Read file content as bytes from zip
+                        file_bytes = zip_ref.read(member_name)
+                        # Decode using utf-8, replacing errors
+                        file_content = file_bytes.decode('utf-8', errors='replace')
+                        log_text_parts.append(file_content)
+                    except Exception as e_zip_read:
+                        print(f"Error reading or decoding file {member_name} from zip: {e_zip_read}")
+
+            if not log_text_parts:
+                print(f"No .txt log files found in the zip for job '{job_name}'.")
+                return
+
+            full_log_text = "".join(log_text_parts)
+            log_content_lines = full_log_text.splitlines()
+
+        if not log_content_lines:
+            print(f"Log for job '{job_name}' is empty.")
+            return
+
+        error_signatures = ["error:", "exception:", "traceback (most recent call last):", "failed", "failures", "build failed", "traceback:"]
+        error_found = False
+        first_error_line_index = -1
+
+        for i, line in enumerate(log_content_lines):
+            for sig in error_signatures:
+                if sig in line.lower():
+                    first_error_line_index = i
+                    error_found = True
+                    break
+            if error_found:
+                break
+
+        print("\n---")
+        if error_found:
+            print(f"Error signature found in job '{job_name}' at line ~{first_error_line_index + 1}.")
+            start_context = max(0, first_error_line_index - 10)
+            end_context = min(len(log_content_lines), first_error_line_index + 500 + 1)
+
+            if start_context > 0:
+                print("... (previous lines hidden) ...")
+
+            for i in range(start_context, end_context):
+                print(log_content_lines[i])
+
+            if end_context < len(log_content_lines):
+                print("... (subsequent lines hidden) ...")
+            print(f"--- End of contextual log for job: '{job_name}' ---")
+        else:
+            print(f"No specific error signature found in job '{job_name}'. Displaying last 30 lines:")
+            start_default = max(0, len(log_content_lines) - 30)
+            for i in range(start_default, len(log_content_lines)):
+                print(log_content_lines[i])
+            print(f"--- End of log for job: '{job_name}' (last 30 lines) ---")
+
+    except urllib.error.HTTPError as e:
+        print(f"HTTP Error fetching job details or logs: {e.code} {e.reason}")
+        try:
+            error_content = e.read().decode("utf-8", "replace")
+            print(f"Response content: {error_content}")
+        except Exception:
+            print("Could not read error response body.")
+    except urllib.error.URLError as e:
+        print(f"URL Error fetching job details or logs: {e.reason}")
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON for job list: {e}")
+    except zipfile.BadZipFile:
+        print("Error: Downloaded log file is not a valid zip file or is corrupted.")
+    except Exception as e:
+        print(f"An unexpected error occurred while fetching/processing logs: {e}")
+
+
+def main():
+    # OWNER and REPO are now set globally, potentially by get_latest_action_run
+    # So we don't need to pass them around as much.
+
+    print("Attempting to retrieve current Git branch...")
     current_branch = get_current_git_branch()
 
     if not current_branch:
@@ -173,6 +316,13 @@ def main():
         print(f"  Updated:  {updated_at}")
         print(f"  URL:      {html_url}")
         print("---------------------------------")
+
+        if conclusion == 'failure' and latest_run.get('jobs_url'):
+            # OWNER and REPO are global and should be set by get_latest_action_run or manually
+            if OWNER and REPO:
+                 get_and_display_failed_job_logs(latest_run['jobs_url'], OWNER, REPO, GITHUB_TOKEN)
+            else:
+                print("Cannot fetch logs: OWNER or REPO not determined.")
     else:
         print(f"Could not retrieve the latest action run for branch '{current_branch}'.")
 
