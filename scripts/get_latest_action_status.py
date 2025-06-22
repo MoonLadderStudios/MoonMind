@@ -229,40 +229,75 @@ def get_and_display_failed_job_logs(jobs_url, owner, repo, token):
             print(f"Log for job '{job_name}' is empty.")
             return
 
-        error_signatures = ["error:", "exception:", "traceback (most recent call last):", "failed", "failures", "build failed", "traceback:"]
-        error_found = False
-        first_error_line_index = -1
+        total_log_lines = len(log_content_lines)
+        print(f"Total lines in log for '{job_name}': {total_log_lines}")
 
-        for i, line in enumerate(log_content_lines):
-            for sig in error_signatures:
-                if sig in line.lower():
-                    first_error_line_index = i
-                    error_found = True
-                    break
-            if error_found:
+        if total_log_lines <= 500:
+            print(f"\n--- Full log for failed job: '{job_name}' ({total_log_lines} lines) ---")
+            for line in log_content_lines:
+                print(line)
+            print(f"--- End of full log for job: '{job_name}' ---")
+            return
+
+        # Condition 2: Log is longer than 500 lines (Process snippets)
+        printed_line_indices = set()
+        total_unique_lines_printed_in_snippets = 0
+        error_signatures = ["error:", "exception:", "traceback (most recent call last):", "failed", "failures", "build failed", "traceback:"]
+
+        print(f"\n--- Log snippets for failed job: '{job_name}' (Total log lines: {total_log_lines}) ---")
+        any_error_signature_matched_for_snippets = False
+
+        for line_index, line_content in enumerate(log_content_lines):
+            if total_unique_lines_printed_in_snippets >= 500:
+                print("...Total unique snippet lines limit (500) reached in get_and_display_failed_job_logs. Further errors not processed for snippets.")
                 break
 
-        print("\n---")
-        if error_found:
-            print(f"Error signature found in job '{job_name}' at line ~{first_error_line_index + 1}.")
-            start_context = max(0, first_error_line_index - 10)
-            end_context = min(len(log_content_lines), first_error_line_index + 500 + 1)
+            error_here = False
+            for sig in error_signatures:
+                if sig in line_content.lower():
+                    error_here = True
+                    break
 
-            if start_context > 0:
-                print("... (previous lines hidden) ...")
+            if error_here:
+                any_error_signature_matched_for_snippets = True
+                context_start_index = max(0, line_index - 30)
+                context_end_index = min(total_log_lines, line_index + 70 + 1) # +1 for slicing
 
-            for i in range(start_context, end_context):
+                lines_for_this_specific_snippet = []
+                header_printed_for_snippet = False
+
+                for k in range(context_start_index, context_end_index):
+                    if k not in printed_line_indices:
+                        if not header_printed_for_snippet:
+                            # Print header only if there are new lines to show for this snippet
+                            print(f"\n--- Snippet around error at line ~{line_index + 1} ---")
+                            header_printed_for_snippet = True
+
+                        lines_for_this_specific_snippet.append(log_content_lines[k])
+                        printed_line_indices.add(k)
+                        total_unique_lines_printed_in_snippets += 1
+                        if total_unique_lines_printed_in_snippets >= 500:
+                            break
+
+                if lines_for_this_specific_snippet: # If any new lines were actually added
+                    for snippet_line in lines_for_this_specific_snippet:
+                        print(snippet_line)
+                elif header_printed_for_snippet: # Header was printed but no new lines, means all were duplicates
+                     print("... (all lines in this context were already shown in previous snippets) ...")
+
+
+        # After the loop (fallback conditions)
+        if not any_error_signature_matched_for_snippets:
+            print(f"\nNo defined error signatures matched in the log for job '{job_name}'. Displaying last 30 lines as fallback:")
+            fallback_start = max(0, total_log_lines - 30)
+            for i in range(fallback_start, total_log_lines):
                 print(log_content_lines[i])
+        elif total_unique_lines_printed_in_snippets == 0 and any_error_signature_matched_for_snippets:
+            # This case means errors were found, but every single line of their context was already printed.
+            # This could happen if errors are very close and their contexts completely overlap with earlier printed snippets.
+            print("\nAll contextual lines for matched errors were already displayed in previous snippets. No new lines to show.")
 
-            if end_context < len(log_content_lines):
-                print("... (subsequent lines hidden) ...")
-            print(f"--- End of contextual log for job: '{job_name}' ---")
-        else:
-            print(f"No specific error signature found in job '{job_name}'. Displaying last 30 lines:")
-            start_default = max(0, len(log_content_lines) - 30)
-            for i in range(start_default, len(log_content_lines)):
-                print(log_content_lines[i])
-            print(f"--- End of log for job: '{job_name}' (last 30 lines) ---")
+        print(f"--- End of log display for job: '{job_name}' ---")
 
     except urllib.error.HTTPError as e:
         print(f"HTTP Error fetching job details or logs: {e.code} {e.reason}")
