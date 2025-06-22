@@ -255,8 +255,8 @@ def get_and_display_failed_job_logs(jobs_url, owner, repo, token):
 
             if error_here:
                 any_error_signature_matched_for_snippets = True
-                context_start_index = max(0, line_index - 30)
-                context_end_index = min(total_log_lines, line_index + 70 + 1) # +1 for slicing
+                context_start_index = max(0, line_index - LOG_SNIPPET_CONTEXT_BEFORE)
+                context_end_index = min(total_log_lines, line_index + LOG_SNIPPET_CONTEXT_AFTER + 1) # +1 for slicing
 
                 lines_for_this_specific_snippet = []
                 header_printed_for_snippet = False
