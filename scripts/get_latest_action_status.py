@@ -90,12 +90,10 @@ def get_latest_action_run(branch_name):
         return None
 
     # Construct URL with query parameters
-    query_params = urllib.parse.urlencode({
-        "branch": branch_name,
-        "per_page": 1,
-        "status": "completed,in_progress,queued,requested,waiting,pending"
-    })
-    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/actions/workflows/{WORKFLOW_FILE_NAME}/runs?{query_params}"
+    # Only 'branch' is needed. The API returns runs in reverse chronological order by default.
+    params = {"branch": branch_name}
+    query_string = urllib.parse.urlencode(params)
+    api_url = f"https://api.github.com/repos/{OWNER}/{REPO}/actions/workflows/{WORKFLOW_FILE_NAME}/runs?{query_string}"
 
     headers = {
         "Accept": "application/vnd.github.v3+json",
