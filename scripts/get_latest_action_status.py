@@ -140,12 +140,7 @@ def get_latest_action_run(branch_name):
         print(f"An unexpected error occurred: {e}")
     return None
 
-def main():
-    # OWNER and REPO are now set globally, potentially by get_latest_action_run
-    # So we don't need to pass them around as much.
-
-    print("Attempting to retrieve current Git branch...")
-
+# Removed redundant main() function at line 143.
 def get_and_display_failed_job_logs(jobs_url, owner, repo, token):
     """
     Fetches logs for the first failed job in a workflow run, searches for an error,
