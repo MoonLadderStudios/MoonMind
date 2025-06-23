@@ -12,6 +12,7 @@ moonmind/config/__init__.py
 moonmind/config/logging.py
 moonmind/config/settings.py
 moonmind/factories/__init__.py
+moonmind/factories/anthropic_factory.py
 moonmind/factories/embed_model_factory.py
 moonmind/factories/google_factory.py
 moonmind/factories/indexers_factory.py
@@ -24,6 +25,7 @@ moonmind/indexers/confluence_indexer.py
 moonmind/indexers/github_indexer.py
 moonmind/indexers/google_drive_indexer.py
 moonmind/indexers/jira_indexer.py
+moonmind/indexers/local_data_indexer.py
 moonmind/rag/__init__.py
 moonmind/rag/retriever.py
 moonmind/schemas/chat_models.py
