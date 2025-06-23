@@ -63,6 +63,66 @@ Pydantic settings allow you to configure:
 
 Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
 
+### Profile Management (Advanced Configuration)
+
+MoonMind now supports a dynamic profile management system, allowing for different configurations to be stored and activated without needing to manually change numerous environment variables for each setup. This is particularly useful for managing distinct settings for development, different projects, or various LLM provider setups.
+
+**How it Works:**
+
+1.  **`profiles.json`:** Configurations are stored in a `profiles.json` file. This file is located at `/app/config/profiles.json` inside the `api` service container.
+    *   Docker Persistence: This file is persisted across container restarts using a Docker named volume called `moonmind_api_config`.
+    *   Structure: The JSON file contains an object where each key is a profile name (e.g., `"development"`, `"project_x_ollama"`) and its value is an object representing the full `AppSettings` for that profile.
+
+2.  **`ACTIVE_PROFILE` Environment Variable:**
+    *   To select which profile the application should load at startup, set the `ACTIVE_PROFILE` environment variable for the `api` service in your `docker-compose.yaml` or `.env` file.
+    *   Example in `.env`:
+        ```env
+        ACTIVE_PROFILE=my_custom_profile
+        ```
+    *   If `ACTIVE_PROFILE` is not set, it defaults to `"development"`.
+    *   If the specified `ACTIVE_PROFILE` does not exist in `profiles.json` when the application starts, MoonMind will initialize with settings from environment variables and defaults, and then save this configuration as a new profile under the `ACTIVE_PROFILE` name in `profiles.json`.
+
+3.  **Interaction with Environment Variables:**
+    *   When a profile is loaded, its settings are used to initialize the application.
+    *   However, Pydantic's settings loading prioritizes environment variables. This means you can still override specific settings from a loaded profile by setting the corresponding environment variable. For example, even if `GOOGLE_API_KEY` is in a profile, setting `GOOGLE_API_KEY` in your `.env` file will take precedence. This is especially useful for managing secrets.
+
+**Managing Profiles via API:**
+
+You can manage profiles (list, create, view, update, delete) using the following REST API endpoints provided by the `api` service:
+
+*   **List Profiles:** `GET /v1/profiles`
+    *   Returns a list of available profile names.
+*   **Get Profile:** `GET /v1/profiles/{profile_name}`
+    *   Returns the complete configuration for the specified `profile_name`.
+*   **Create/Update Profile:** `PUT /v1/profiles/{profile_name}`
+    *   Request Body: A JSON object matching the structure of `AppSettings` (the application's main configuration model).
+    *   Creates a new profile or updates an existing one.
+*   **Delete Profile:** `DELETE /v1/profiles/{profile_name}`
+    *   Deletes the specified profile.
+
+**Example Workflow:**
+
+1.  Set `ACTIVE_PROFILE=dev_local_ollama` in your `.env` file.
+2.  Start MoonMind: `docker-compose up -d`.
+3.  If `dev_local_ollama` didn't exist, MoonMind starts with defaults/env vars and saves them as `dev_local_ollama` in `profiles.json`.
+4.  You can then use the API (e.g., via curl or a tool like Postman) to modify the `dev_local_ollama` profile or create new ones. For instance, to update the default chat provider for this profile:
+    ```bash
+    curl -X PUT http://localhost:8000/v1/profiles/dev_local_ollama \
+    -H "Content-Type: application/json" \
+    -d '{
+          "default_chat_provider": "ollama",
+          "default_embedding_provider": "ollama",
+          "ollama_settings": {
+            "ollama_base_url": "http://ollama:11434",
+            "ollama_chat_model": "mistral:latest"
+          },
+          // ... other AppSettings fields ...
+        }'
+    ```
+5.  Subsequent restarts with `ACTIVE_PROFILE=dev_local_ollama` will load these modified settings.
+
+This system provides a flexible way to manage complex configurations while keeping sensitive data like API keys primarily managed through environment variables.
+
 ### Ollama Model Configuration
 
 If you are using the provided Ollama service for local LLM inference, you can control which model or models (chat and/or embedding) are loaded by default at startup.

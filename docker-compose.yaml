@@ -26,6 +26,8 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app
+      - ACTIVE_PROFILE=${ACTIVE_PROFILE:-development} # Added: Specify active profile
+      - MOONMIND_PROFILES_DIR=/app/config # Added: Explicitly set profiles directory
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
@@ -39,6 +41,7 @@ services:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service:ro
       - ./moonmind:/app/moonmind:ro
+      - moonmind_api_config:/app/config # Added: Mount volume for profiles.json
     command: >
       sh -c "
       if [ \"$FASTAPI_RELOAD\" = \"True\" ]; then
@@ -96,6 +99,7 @@ services:
 volumes:
   open-webui:
   qdrant_storage:
+  moonmind_api_config: {} # Added: Declare the profiles config volume
 
 networks:
   local-network:

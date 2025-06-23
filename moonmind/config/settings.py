@@ -223,5 +223,6 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='forbid')
 
 
-# Create a global settings instance
-settings = AppSettings()
+# The global settings instance will now be initialized and managed
+# by the moonmind.config.config module.
+# Remove: settings = AppSettings()
