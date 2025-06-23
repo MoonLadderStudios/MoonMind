@@ -41,76 +41,125 @@ class ConfluenceIndexer:
 
     def index(
         self,
-        space_key: str,
         storage_context: StorageContext,
         service_context: Settings,
-        page_ids: Optional[List[str]] = None,
-        confluence_fetch_batch_size: int = 100
+        space_key: Optional[str] = None,
+        page_id: Optional[str] = None,
+        page_title: Optional[str] = None,
+        cql_query: Optional[str] = None,
+        max_pages_to_fetch: Optional[int] = 100 # Default for space/CQL pagination
     ) -> Dict[str, Union[VectorStoreIndex, int]]:
         """
-        Reads Confluence pages from the specified space or specific page IDs,
-        converts them into nodes, and incrementally builds a vector index using
-        the provided storage and service contexts.
+        Reads Confluence pages based on provided identifiers (page_id, space_key/page_title, cql_query, or space_key for all pages),
+        converts them into nodes, and incrementally builds a vector index.
         """
-        # Initialize an empty index (with no initial documents)
-        # Use the embed_model from Settings instead of passing service_context
         index = VectorStoreIndex.from_documents(
             [],
             storage_context=storage_context,
             embed_model=service_context.embed_model
         )
         total_nodes_indexed = 0
+        docs: List[TextNode] = []
 
-        # Use the node parser from the Settings if provided; otherwise create a default parser.
         try:
             node_parser = service_context.node_parser
         except AttributeError:
             from llama_index.core.node_parser import SimpleNodeParser
             node_parser = SimpleNodeParser.from_defaults()
 
-        if page_ids:
-            self.logger.info(f"Fetching {len(page_ids)} specific pages from Confluence: {page_ids}")
-            docs = self.reader.load_data(page_ids=page_ids) # Fetches all at once
-            self.logger.info(f"Fetched {len(docs)} documents by page_ids.")
-            if docs:
-                self.logger.info(f"Converting {len(docs)} documents (from page_ids) to nodes.")
-                nodes = node_parser.get_nodes_from_documents(docs)
-                self.logger.info(f"Converted to {len(nodes)} nodes; inserting into index.")
-                if nodes: # Ensure there are nodes to insert
-                    index.insert_nodes(nodes)
-                    total_nodes_indexed = len(nodes)
-            else:
-                self.logger.info("No documents found for the given page_ids.")
-        else: # space_key processing
-            self.logger.info(f"Fetching documents from Confluence space '{space_key}' using pagination.")
+        effective_cql = None
+        load_args = {}
+
+        if page_id:
+            self.logger.info(f"Fetching specific page from Confluence by page_id: {page_id}")
+            load_args = {"page_ids": [page_id]}
+        elif space_key and page_title:
+            self.logger.info(f"Fetching specific page from Confluence by space_key '{space_key}' and title '{page_title}'")
+            # ConfluenceReader uses 'password' for the API token.
+            # CQL requires escaping for special characters in title if any, but Confluence API usually handles this.
+            # Titles with quotes might need specific handling if issues arise.
+            effective_cql = f'space = "{space_key}" AND title = "{page_title}"'
+            load_args = {"cql": effective_cql}
+        elif cql_query:
+            self.logger.info(f"Fetching documents from Confluence using CQL query: {cql_query}")
+            effective_cql = cql_query
+            load_args = {"cql": effective_cql}
+        elif space_key: # Process entire space with pagination
+            self.logger.info(f"Fetching all documents from Confluence space '{space_key}' using pagination.")
+            # Pagination logic will be handled below for space_key or CQL queries that might return many results
+            load_args = {"space_key": space_key}
+        else:
+            # This case should be prevented by the Pydantic model validation in the API layer
+            self.logger.error("No valid parameters provided for Confluence indexing.")
+            raise ValueError("Must provide page_id, space_key (with or without page_title), or cql_query.")
+
+        # Handle fetching logic (single page/CQL vs. space pagination)
+        if load_args.get("page_ids") or (effective_cql and not space_key and not page_title): # Single page ID or direct CQL for a specific item
+            # For single page_id or a CQL query expected to return one/few items,
+            # pagination parameters (start, max_num_results) might not be directly applicable in the same way,
+            # or ConfluenceReader handles it if the result is unexpectedly large.
+            # The ConfluenceReader's load_data with page_ids or cql fetches all matching.
+            # max_pages_to_fetch is more for limiting bulk loads.
+            docs = self.reader.load_data(**load_args)
+            self.logger.info(f"Fetched {len(docs)} documents based on provided arguments: {load_args}.")
+
+        elif load_args.get("space_key") or effective_cql : # Fetching entire space or a potentially multi-result CQL
+            self.logger.info(f"Fetching documents using pagination with arguments: {load_args}")
             start = 0
+            # Define a standard batch size for each API request to Confluence
+            api_batch_size = 50 # A common default, can be tuned. Confluence Cloud limit is often higher.
+
+            current_load_args = load_args.copy() # To add pagination params
+
             while True:
+                # Determine how many to request in this batch:
+                # It's api_batch_size, unless max_pages_to_fetch imposes a smaller remaining number.
+                num_to_request_this_batch = api_batch_size
+                if max_pages_to_fetch is not None:
+                    remaining_to_fetch = max_pages_to_fetch - len(docs)
+                    if remaining_to_fetch <= 0:
+                        self.logger.info(f"Already fetched {len(docs)} docs, which meets or exceeds max_pages_to_fetch ({max_pages_to_fetch}). Stopping.")
+                        break
+                    num_to_request_this_batch = min(api_batch_size, remaining_to_fetch)
+
+                if num_to_request_this_batch <= 0: # Should be caught by remaining_to_fetch check, but as safeguard
+                    break
+
+                current_load_args["start"] = start
+                current_load_args["max_num_results"] = num_to_request_this_batch
+
                 self.logger.info(
-                    f"Fetching documents from Confluence space '{space_key}' starting at {start} with batch size {confluence_fetch_batch_size}"
+                    f"Fetching batch with: {current_load_args}"
                 )
-                batch_docs = self.reader.load_data(
-                    space_key=space_key,
-                    start=start,
-                    max_num_results=confluence_fetch_batch_size
-                )
+                batch_docs = self.reader.load_data(**current_load_args)
+
                 if not batch_docs:
-                    self.logger.info("No more documents returned; ending batch fetch for space_key.")
+                    self.logger.info("No more documents returned; ending batch fetch.")
                     break
 
-                self.logger.info(f"Fetched {len(batch_docs)} documents in this batch. Converting to nodes.")
-                batch_nodes = node_parser.get_nodes_from_documents(batch_docs)
-                self.logger.info(f"Converted to {len(batch_nodes)} nodes; inserting batch into index.")
-                if batch_nodes: # Ensure there are nodes to insert
-                    index.insert_nodes(batch_nodes)
-                    total_nodes_indexed += len(batch_nodes)
+                docs.extend(batch_docs)
+                self.logger.info(f"Fetched {len(batch_docs)} documents in this batch. Total docs so far: {len(docs)}")
 
-                if len(batch_docs) < confluence_fetch_batch_size:
-                    self.logger.info("Final batch fetched for space_key.")
+                if max_pages_to_fetch is not None and len(docs) >= max_pages_to_fetch:
+                    self.logger.info(f"Reached max_pages_to_fetch ({max_pages_to_fetch}). Stopping.")
+                    docs = docs[:max_pages_to_fetch] # Trim if over
                     break
-                start += confluence_fetch_batch_size
-            self.logger.info(f"Total documents processed in batches for space '{space_key}'.")
 
-        # Common exit logic
+                if len(batch_docs) < limit: # Assuming this means last page from Confluence itself
+                    self.logger.info("Final batch fetched based on returned count vs limit.")
+                    break
+                start += limit # Prepare for next batch
+
+        if docs:
+            self.logger.info(f"Converting {len(docs)} fetched documents to nodes.")
+            nodes = node_parser.get_nodes_from_documents(docs)
+            self.logger.info(f"Converted to {len(nodes)} nodes; inserting into index.")
+            if nodes:
+                index.insert_nodes(nodes)
+                total_nodes_indexed = len(nodes)
+        else:
+            self.logger.info("No documents found or fetched from Confluence based on the criteria.")
+
         if total_nodes_indexed == 0:
             self.logger.info("No documents were indexed overall.")
 

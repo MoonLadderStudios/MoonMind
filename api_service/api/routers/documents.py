@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # TODO: There should be a way to load specific documents or load a space
 
-@router.post("/documents/confluence/load")
+@router.post("/confluence/load") # Path relative to the /v1/documents prefix
 async def load_confluence_documents(
     request: ConfluenceLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
@@ -38,23 +38,43 @@ async def load_confluence_documents(
             logger=logger
         )
 
-        # Pass page_ids and max_num_results from the request
+        # Pass parameters from the request to the indexer
         index_result = confluence_indexer.index(
-            space_key=request.space_key,
             storage_context=storage_context,
             service_context=service_context,
-            page_ids=request.page_ids,
-            confluence_fetch_batch_size=request.max_num_results
+            space_key=request.space_key,
+            page_id=request.page_id,
+            page_title=request.page_title,
+            cql_query=request.cql_query,
+            max_pages_to_fetch=request.max_pages_to_fetch
         )
 
         total_nodes_indexed = index_result["total_nodes_indexed"]
         # The index object itself can be accessed via index_result["index"] if needed later
 
-        message = ""
-        if request.page_ids:
-            message = f"Successfully loaded {total_nodes_indexed} nodes from {len(request.page_ids)} specified page IDs."
+        message_parts = ["Successfully loaded {total_nodes_indexed} nodes"]
+        source_description_parts = []
+
+        if request.page_id:
+            source_description_parts.append(f"page ID '{request.page_id}'")
+        elif request.space_key and request.page_title:
+            source_description_parts.append(f"page title '{request.page_title}' in space '{request.space_key}'")
+        elif request.cql_query:
+            source_description_parts.append(f"Confluence using CQL query: '{request.cql_query[:50]}{'...' if len(request.cql_query) > 50 else ''}'")
+        elif request.space_key:
+            source_description_parts.append(f"Confluence space '{request.space_key}'")
+
+        if source_description_parts:
+            message_parts.append("from")
+            message_parts.append(", ".join(source_description_parts))
         else:
-            message = f"Successfully loaded {total_nodes_indexed} nodes from Confluence space {request.space_key}."
+            # This case should ideally be caught by Pydantic validation
+            message_parts.append("from Confluence (undefined source)")
+
+        message = " ".join(message_parts) + "."
+
+        # Replace placeholder with actual count
+        message = message.format(total_nodes_indexed=total_nodes_indexed)
 
         return {
             "status": "success",
