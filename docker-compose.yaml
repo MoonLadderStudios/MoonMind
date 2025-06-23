@@ -51,6 +51,8 @@ services:
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
+    depends_on:
+      - init-vector-db
 
   qdrant:
     image: qdrant/qdrant:v1.14.1
@@ -89,9 +91,9 @@ services:
     networks:
       - local-network
     restart: "no"
-    depends_on:
-      api:
-        condition: service_started
+    # depends_on:
+    #   api:
+    #     condition: service_started
 
 volumes:
   open-webui:

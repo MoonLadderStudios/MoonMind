@@ -6,7 +6,30 @@ from llama_index.core import (Settings, StorageContext, VectorStoreIndex,
                               load_index_from_storage)
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.schema import TextNode
-from llama_index.readers.file import SimpleDirectoryReader
+
+# ---------------------------------------------------------------------------
+# Import SimpleDirectoryReader with fallbacks to support multiple versions of
+# llama_index. The class location changed after v0.12.
+# ---------------------------------------------------------------------------
+
+try:
+    # Pre-v0.12 path (still works in some minor versions)
+    from llama_index.readers.file import SimpleDirectoryReader  # type: ignore
+except ImportError:  # pragma: no cover – fall back for newer versions
+    try:
+        # v0.12+ path – relocated to a sub-module
+        from llama_index.readers.file.base import \
+            SimpleDirectoryReader  # type: ignore
+    except ImportError:
+        try:
+            # Some versions expose it via core.readers
+            from llama_index.core.readers import \
+                SimpleDirectoryReader  # type: ignore
+        except ImportError:
+            # Final fallback: dynamic loader utility
+            from llama_index.core import download_loader  # type: ignore
+
+            SimpleDirectoryReader = download_loader("SimpleDirectoryReader")  # type: ignore
 
 
 class LocalDataIndexer:

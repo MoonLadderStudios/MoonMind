@@ -15,6 +15,7 @@ from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 from moonmind.indexers.jira_indexer import JiraIndexer
 from moonmind.indexers.local_data_indexer import LocalDataIndexer
+from moonmind.utils.env_bool import env_to_bool
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     logger.info("Starting vector database initialization script.")
 
-    init_db = os.getenv("INIT_DATABASE", "false").lower() == "true"
+    init_db = env_to_bool(os.getenv("INIT_DATABASE"), default=False)
     if not init_db:
         logger.info("INIT_DATABASE environment variable is not set to 'true', exiting.")
         sys.exit(1) # Keep exit here as basic prerequisite
@@ -46,6 +47,34 @@ if __name__ == "__main__":
             client = qdrant_client.QdrantClient(host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port)
             logger.info(f"Using vector store collection name: {settings.vector_store_collection_name}")
             logger.info(f"Using dynamic embeddings dimensions for Qdrant: {embed_dimensions}")
+
+            # Ensure the collection exists or create it with the correct vector size/distance.
+            from qdrant_client.http.exceptions import UnexpectedResponse
+            from qdrant_client.http.models import Distance, VectorParams
+
+            try:
+                client.get_collection(settings.vector_store_collection_name)
+                logger.info(
+                    f"Qdrant collection '{settings.vector_store_collection_name}' already exists."
+                )
+            except UnexpectedResponse as e:
+                if "404" in str(e):
+                    logger.info(
+                        f"Qdrant collection '{settings.vector_store_collection_name}' not found. Creating it..."
+                    )
+                    client.create_collection(
+                        collection_name=settings.vector_store_collection_name,
+                        vectors_config=VectorParams(
+                            size=embed_dimensions,
+                            distance=Distance.COSINE,
+                        ),
+                    )
+                    any_actual_indexing_performed_or_attempted = True  # Collection creation counts as an action
+                    logger.info(
+                        f"Collection '{settings.vector_store_collection_name}' created successfully."
+                    )
+                else:
+                    raise
 
             vector_store = QdrantVectorStore(
                 client=client,

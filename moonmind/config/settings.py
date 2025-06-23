@@ -1,7 +1,8 @@
 import os
 from typing import Optional
 
-from pydantic import Field, AliasChoices # Ensure AliasChoices is imported if not already
+from pydantic import (  # Ensure AliasChoices is imported if not already
+    AliasChoices, Field, field_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -101,17 +102,6 @@ class AtlassianSettings(BaseSettings):
         super().__init__(**data)
         if self.atlassian_url and self.atlassian_url.startswith("https://https://"):
             self.atlassian_url = self.atlassian_url[8:]
-        # Manually load environment variables for nested settings
-        if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED", "").lower() == "true":
-            self.confluence.confluence_enabled = True
-        if os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS"):
-            self.confluence.confluence_space_keys = os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS")
-        if os.environ.get("ATLASSIAN_JIRA_ENABLED", "").lower() == "true":
-            self.jira.jira_enabled = True
-        if os.environ.get("ATLASSIAN_JIRA_JQL_QUERY"):
-            self.jira.jira_jql_query = os.environ.get("ATLASSIAN_JIRA_JQL_QUERY")
-        if os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"):
-            self.jira.jira_fetch_batch_size = int(os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"))
 
 
 class QdrantSettings(BaseSettings):
@@ -190,6 +180,21 @@ class AppSettings(BaseSettings):
     openhands_core_workspace_base: str = Field("/workspace", env="OPENHANDS__CORE__WORKSPACE_BASE")
 
     postgres_version: int = Field(14, env="POSTGRES_VERSION")
+
+    # ------------------------------------------------------------------
+    # Validators
+    # ------------------------------------------------------------------
+
+    @field_validator("fastapi_reload", mode="before")
+    @classmethod
+    def _coerce_fastapi_reload(cls, v):
+        """Ensure an empty string or malformed value for FASTAPI_RELOAD becomes False.
+
+        This avoids ValidationError when the env var is set but left blank.
+        """
+        from moonmind.utils.env_bool import env_to_bool
+
+        return env_to_bool(v, default=False)
 
     def is_provider_enabled(self, provider: str) -> bool:
         """Check if a provider is enabled"""
