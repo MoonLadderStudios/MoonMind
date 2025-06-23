@@ -24,6 +24,7 @@ License: MIT License
         OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
         SOFTWARE.
 
+Requires-Python: <3.14,>=3.10
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: fastapi<1.0,>=0.115
@@ -52,6 +53,8 @@ Requires-Dist: PyGithub<2.0,>=1.59
 Requires-Dist: google-generativeai<1.0,>=0.8
 Requires-Dist: openai<2.0,>=1.86
 Requires-Dist: ollama<1.0,>=0.5
+Requires-Dist: anthropic<1.0,>=0.25.0
+Requires-Dist: llama-index-llms-anthropic<1.0,>=0.1.7
 Requires-Dist: httpx<1.0,>=0.28
 Requires-Dist: atlassian-python-api<4.0,>=3.41
 Requires-Dist: beautifulsoup4<5.0,>=4.13
@@ -65,11 +68,9 @@ Requires-Dist: requests<3.0,>=2.32
 Requires-Dist: PyYAML>=6.0.1
 Dynamic: license-file
 
-**WARNING: Still in early development. Not yet at Alpha.**
-
 # MoonMind
 
-**MoonMind makes it easy to enhance AI chat with personal or proprietary data. It is a Retrieval-Augmented Generation (RAG) app built with LangChain, FastAPI, Open-WebUI, Qdrant, and docker-compose. The API adheres to the OpenAI architecture, so Open-WebUI can be swapped for any OpenAI-compatible UI. It can also be exposed using MCP to other tools like agents.**
+**MoonMind makes it easy to enhance AI chat with personal or proprietary data. It is a Retrieval-Augmented Generation (RAG) app built with Llama Index, FastAPI, Open-WebUI, Qdrant, and docker-compose. The API adheres to the OpenAI architecture, so Open-WebUI can be swapped for any OpenAI-compatible UI. It can also be exposed using MCP to other tools like agents.**
 
 ## Quick Start
 
