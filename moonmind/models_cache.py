@@ -210,6 +210,62 @@ class ModelCache:
 
 
         self.logger.info(f"Total models fetched: {len(all_models_data)}. Model to provider map size: {len(model_to_provider_map)}")
+
+        # Sort models to bring the default chat model to the top
+        try:
+            default_chat_model_id = settings.get_default_chat_model()
+            default_provider_name = settings.default_chat_provider.capitalize() # Capitalize to match "owned_by"
+
+            self.logger.info(f"Default chat provider: {default_provider_name}, Default chat model: {default_chat_model_id}")
+
+            # Find the default model entry
+            default_model_entry = None
+            for i, model_entry in enumerate(all_models_data):
+                # Check if the model ID matches and if it belongs to the default provider
+                # The model ID in all_models_data for Google is like "models/gemini-1.5-flash-latest"
+                # but settings.get_default_chat_model() might return "gemini-1.5-flash-latest"
+                # So we need to handle this potential mismatch.
+                # For Google, model.name is "models/gemini..."
+                # For OpenAI, model.id is "gpt-..."
+                # For Ollama, model_name is "llama2:latest"
+                # For Anthropic, anthropic_model_name is "claude..."
+
+                # We need to ensure the comparison is fair.
+                # The `id` in `model_entry` is what the UI will see and use.
+                # `settings.get_default_chat_model()` returns the model ID as configured.
+
+                # Let's refine the check based on how IDs are stored.
+                # For Google, the settings.google.google_chat_model is the short form (e.g. "gemini-1.5-pro-latest")
+                # but the model_entry["id"] is "models/gemini-1.5-pro-latest".
+                # So, if the provider is Google, we might need to prepend "models/" to the default_chat_model_id for comparison.
+
+                current_model_id = model_entry.get("id")
+                current_model_owner = model_entry.get("owned_by")
+
+                is_default_model = False
+                if default_provider_name == "Google" and current_model_owner == "Google":
+                    # Google models in cache have "models/" prefix, setting might not.
+                    if default_chat_model_id.startswith("models/"):
+                        is_default_model = (current_model_id == default_chat_model_id)
+                    else:
+                        is_default_model = (current_model_id == f"models/{default_chat_model_id}")
+                elif current_model_owner == default_provider_name: # For OpenAI, Ollama, Anthropic
+                    is_default_model = (current_model_id == default_chat_model_id)
+
+
+                if is_default_model:
+                    default_model_entry = all_models_data.pop(i)
+                    self.logger.info(f"Found default model '{default_chat_model_id}' from provider '{default_provider_name}' and moved it to the top.")
+                    break
+
+            if default_model_entry:
+                all_models_data.insert(0, default_model_entry)
+            else:
+                self.logger.warning(f"Default model '{default_chat_model_id}' from provider '{default_provider_name}' not found in the fetched models list.")
+
+        except Exception as e:
+            self.logger.exception(f"Error while trying to prioritize default model: {e}")
+
         return all_models_data, model_to_provider_map
 
     def refresh_models_sync(self):
