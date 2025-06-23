@@ -53,7 +53,7 @@ services:
       - "ai.model.context.protocol.endpoint=/context"
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.14.1
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -61,10 +61,12 @@ services:
       - qdrant_storage:/qdrant/storage
     networks:
       - local-network
+
   init-vector-db:
     build:
       context: .
       dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=INFO
