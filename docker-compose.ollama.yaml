@@ -14,7 +14,7 @@ services:
               capabilities: [gpu]
     volumes:
       - ./model_data:/root/.ollama/models
-      - ./scripts/entrypoint-ollama.sh:/entrypoint-ollama.sh:ro
+      - ./tools/entrypoint-ollama.sh:/entrypoint-ollama.sh:ro
     entrypoint: ["/bin/sh", "/entrypoint-ollama.sh"]
     networks:
       - local-network

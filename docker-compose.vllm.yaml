@@ -12,7 +12,7 @@ services:
               capabilities: [gpu]
     volumes:
       - ./model_data:/root/.cache/huggingface/hub
-      - ./scripts/entrypoint-vllm.sh:/entrypoint-vllm.sh:ro # Added this line
+      - ./tools/entrypoint-vllm.sh:/entrypoint-vllm.sh:ro # Added this line
     ports:
       - "8001:8000" # Exposing on 8001 to avoid conflict with existing api service on 8000
     environment:

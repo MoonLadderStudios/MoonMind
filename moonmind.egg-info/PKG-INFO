@@ -144,7 +144,7 @@ The following environment variables in your `.env` file are used:
 
 **Launching with Specific Models:**
 
-You can specify which models to load at launch time using the `scripts/ollama.ps1` script with its new switch parameters. This will override the `OLLAMA_MODES` value in your `.env` file for that specific run.
+You can specify which models to load at launch time using the `tools/ollama.ps1` script with its new switch parameters. This will override the `OLLAMA_MODES` value in your `.env` file for that specific run.
 
 *   `-LoadChatModel`: Use this switch to load the chat model specified by `OLLAMA_CHAT_MODEL`.
 *   `-LoadEmbeddingModel`: Use this switch to load the embedding model specified by `OLLAMA_EMBEDDING_MODEL`.
@@ -155,18 +155,18 @@ Examples:
 
 *   To launch Ollama and load only the configured chat model:
     ```powershell
-    .\scripts\ollama.ps1 -LoadChatModel
+    .\tools\ollama.ps1 -LoadChatModel
     ```
-    (or simply `.\scripts\ollama.ps1` as this is the default if no switches are passed)
+    (or simply `.\tools\ollama.ps1` as this is the default if no switches are passed)
 
 *   To launch Ollama and load only the configured embedding model:
     ```powershell
-    .\scripts\ollama.ps1 -LoadEmbeddingModel
+    .\tools\ollama.ps1 -LoadEmbeddingModel
     ```
 
 *   To launch Ollama and load both the chat and embedding models:
     ```powershell
-    .\scripts\ollama.ps1 -LoadChatModel -LoadEmbeddingModel
+    .\tools\ollama.ps1 -LoadChatModel -LoadEmbeddingModel
     ```
 
 The script will automatically attempt to pull the selected model(s) if not already available locally and then make them active within the Ollama server.
@@ -521,7 +521,7 @@ While LangChain's direct support for the newest Gemini models might vary, MoonMi
 
 To run unit tests:
 ```powershell
-.\scripts\test-unit.ps1
+.\tools\test-unit.ps1
 ```
 
 ### Confluence Integration Tests
@@ -551,6 +551,6 @@ These tests verify the end-to-end functionality of loading documents from a real
 **Running the Tests:**
 To execute the Confluence integration tests, run the following command from the project root:
 ```powershell
-.\scripts\test-integration.ps1
+.\tools\test-integration.ps1
 ```
 The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.

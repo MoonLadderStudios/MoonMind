@@ -57,4 +57,4 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]  # Search for packages in the current directory (project root)
 include = ["moonmind*"]  # Include 'moonmind' and its sub-packages
-exclude = ["tests*", "scripts*"] # Exclude tests and scripts from being top-level packages
+exclude = ["tests*", "tools*"] # Exclude tests and tools from being top-level packages

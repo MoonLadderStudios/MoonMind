@@ -1,14 +1,14 @@
 # Agent Instructions
 
-## Retrieving GitHub Action Results
+## Retrieving GitHub Action Status
 
-The script `scripts/get_action_results.py` can be used to retrieve the latest GitHub Action workflow results for a particular branch with detailed error information.
+The script `tools/get_action_status.py` can be used to retrieve the latest GitHub Action workflow results for a particular branch with detailed error information.
 
 **Usage:**
 
 To run the script:
 ```bash
-python scripts/get_action_results.py [--branch <branch-name>]
+python tools/get_action_status.py [--branch <branch-name>]
 ```
 
 --branch <branch-name> should be explicitly specified when git is in a detached HEAD state as branch auto-detection will no longer work.

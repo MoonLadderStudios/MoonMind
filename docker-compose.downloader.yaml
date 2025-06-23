@@ -12,9 +12,9 @@ services:
     volumes:
       - ./model_data:/app/model_data
       - ./moonmind:/app/moonmind
-      - ./scripts:/app/scripts
+      - ./tools:/app/tools
     working_dir: /app
-    entrypoint: ["bash", "-c", "/app/scripts/get-qwen.sh"]
+    entrypoint: ["bash", "-c", "/app/tools/get-qwen.sh"]
     networks:
       - local-network
 
