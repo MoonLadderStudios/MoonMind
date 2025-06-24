@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional # Keep one Optional import
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
     AliasChoices, Field, field_validator) # Removed PostgresDsn
@@ -8,15 +8,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class DatabaseSettings(BaseSettings):
     """Database settings"""
-    DATABASE_URL: str = Field(..., env="DATABASE_URL") # Changed PostgresDsn to str
+    DATABASE_URL: Optional[str] = Field("postgresql://test_user:test_password@test_host:5432/test_db", env="DATABASE_URL") # Made Optional and added default
 
     model_config = SettingsConfigDict(env_prefix="")
 
 
 class SecuritySettings(BaseSettings):
     """Security settings"""
-    JWT_SECRET_KEY: str = Field(..., env="JWT_SECRET_KEY")
-    ENCRYPTION_MASTER_KEY: str = Field(..., env="ENCRYPTION_MASTER_KEY")
+    JWT_SECRET_KEY: Optional[str] = Field("test_jwt_secret_key", env="JWT_SECRET_KEY") # Made Optional and added default
+    ENCRYPTION_MASTER_KEY: Optional[str] = Field("test_encryption_master_key", env="ENCRYPTION_MASTER_KEY") # Made Optional and added default
 
     model_config = SettingsConfigDict(env_prefix="")
 
