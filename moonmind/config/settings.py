@@ -1,9 +1,24 @@
 import os
-from typing import Optional
+from typing import Optional # Keep one Optional import
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
     AliasChoices, Field, field_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DatabaseSettings(BaseSettings):
+    """Database settings"""
+    DATABASE_URL: Optional[str] = Field("postgresql://test_user:test_password@test_host:5432/test_db", env="DATABASE_URL") # Made Optional and added default
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+
+class SecuritySettings(BaseSettings):
+    """Security settings"""
+    JWT_SECRET_KEY: Optional[str] = Field("test_jwt_secret_key", env="JWT_SECRET_KEY") # Made Optional and added default
+    ENCRYPTION_MASTER_KEY: Optional[str] = Field("test_encryption_master_key", env="ENCRYPTION_MASTER_KEY") # Made Optional and added default
+
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class GoogleSettings(BaseSettings):
@@ -134,6 +149,8 @@ class AppSettings(BaseSettings):
     """Main application settings"""
 
     # Sub-settings
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
