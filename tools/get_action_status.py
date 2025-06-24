@@ -1,3 +1,4 @@
+import argparse
 import io
 import json
 import os
@@ -291,24 +292,79 @@ def get_job_log_content(job_id: int, job_name: str, owner: str, repo: str, token
     return log_content_lines
 
 def main():
+    parser = argparse.ArgumentParser(description="Fetch latest GitHub Action status for a workflow and branch.")
+    parser.add_argument("--branch", type=str, help="The Git branch to query for workflow runs. Overrides auto-detection.")
+    args = parser.parse_args()
+
     output_data = {}
+    output_data.setdefault("git_context", {}) # Initialize git_context
+
     try:
-        print("Attempting to retrieve current Git branch...", file=sys.stderr)
-        current_branch = get_current_git_branch()
-        output_data.setdefault("git_context", {})["head_branch"] = current_branch or None
-        if current_branch: print(f"Current Git branch: {current_branch}", file=sys.stderr)
-        else: print("Warning: Failed to determine Git branch.", file=sys.stderr)
+        # Determine branch_to_query (this is for the API call)
+        if args.branch is not None and args.branch != "":
+            # User explicitly provided a branch, so skip auto-detection completely
+            branch_to_query = args.branch
+            print(
+                f"Using specified branch from --branch argument for API query: {branch_to_query}",
+                file=sys.stderr,
+            )
 
-        print("Attempting to retrieve current Git commit SHA...", file=sys.stderr)
-        current_sha = get_current_git_commit_sha()
-        output_data.setdefault("git_context", {})["head_sha"] = current_sha or None
-        if current_sha: print(f"Current Git SHA: {current_sha}", file=sys.stderr)
-        else: print("Warning: Failed to determine Git SHA.", file=sys.stderr)
+            # Do not attempt to detect branch for local context when --branch is supplied
+            local_head_branch_for_context = None
+        else:
+            print(
+                "Attempting to retrieve current Git branch for API query (no --branch argument provided)...",
+                file=sys.stderr,
+            )
+            current_branch_for_query = get_current_git_branch()  # May print its own errors
+            if current_branch_for_query:
+                branch_to_query = current_branch_for_query
+                print(
+                    f"Using current Git branch for API query: {branch_to_query}",
+                    file=sys.stderr,
+                )
+            else:
+                # Error already printed by get_current_git_branch() if it failed
+                print(
+                    "Warning: Failed to determine current Git branch for API query. Defaulting to 'main'.",
+                    file=sys.stderr,
+                )
+                branch_to_query = "main"
 
-        branch_to_query = current_branch if current_branch else "main"
-        if not current_branch: print(f"Warning: No branch detected. Querying for '{branch_to_query}'.", file=sys.stderr)
+            # For git_context we record whatever branch we managed to detect (may be None)
+            local_head_branch_for_context = current_branch_for_query
 
-        print(f"\nAttempting to retrieve latest Action run for workflow '{WORKFLOW_FILE_NAME}' on branch '{branch_to_query}'...", file=sys.stderr)
+        # Populate git_context for JSON output (informational about local state)
+        output_data["git_context"]["head_branch"] = local_head_branch_for_context or None
+
+        # NOTE: When --branch is supplied we purposefully do NOT attempt to reconcile against local HEAD
+        if args.branch and local_head_branch_for_context and local_head_branch_for_context != args.branch:
+            print(
+                f"Note: Local Git HEAD is on branch '{local_head_branch_for_context}', but API query is for specified branch '{args.branch}'.",
+                file=sys.stderr,
+            )
+        elif args.branch and local_head_branch_for_context is None:
+            # Could be detached head or non-git directory
+            print(
+                f"Note: Could not determine local Git HEAD branch for context. API query is for specified branch '{args.branch}'.",
+                file=sys.stderr,
+            )
+        # When args.branch is not supplied, local_head_branch_for_context is already used for branch_to_query (or default 'main')
+
+        # SHA retrieval is for local context.
+        # The get_current_git_commit_sha() function prints its own errors to stderr if it fails.
+        print("Attempting to retrieve current Git commit SHA (local context)...", file=sys.stderr)
+        current_sha_for_context = get_current_git_commit_sha()
+        output_data["git_context"]["head_sha"] = current_sha_for_context or None
+        if current_sha_for_context: print(f"Current Git SHA (local context): {current_sha_for_context}", file=sys.stderr)
+        else: print("Warning: Failed to determine Git SHA (local context).", file=sys.stderr)
+
+        # Ensure branch_to_query is robustly set (should be by logic above)
+        if not branch_to_query:
+            print("Critical Error: branch_to_query ended up not being set. Defaulting to 'main'. This indicates a logic flaw.", file=sys.stderr)
+            branch_to_query = "main"
+
+        print(f"\nAttempting to retrieve latest Action run for workflow '{WORKFLOW_FILE_NAME}' on branch '{branch_to_query}' (this is the branch used for API query)...", file=sys.stderr)
         latest_run = get_latest_action_run(branch_to_query)
 
         if OWNER and REPO: # OWNER/REPO are global, set by get_latest_action_run
