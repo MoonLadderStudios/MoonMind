@@ -107,9 +107,6 @@ services:
     networks:
       - local-network
     restart: "no"
-    # depends_on:
-    #   api:
-    #     condition: service_started
 
 volumes:
   open-webui:
