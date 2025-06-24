@@ -2,7 +2,7 @@ import os
 from typing import Optional # Keep one Optional import
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
-    AliasChoices, Field, field_validator) # Removed PostgresDsn
+    AliasChoices, Field, field_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
