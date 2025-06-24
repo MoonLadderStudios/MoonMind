@@ -2,8 +2,23 @@ import os
 from typing import Optional
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
-    AliasChoices, Field, field_validator)
+    AliasChoices, Field, field_validator) # Removed PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DatabaseSettings(BaseSettings):
+    """Database settings"""
+    DATABASE_URL: str = Field(..., env="DATABASE_URL") # Changed PostgresDsn to str
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+
+class SecuritySettings(BaseSettings):
+    """Security settings"""
+    JWT_SECRET_KEY: str = Field(..., env="JWT_SECRET_KEY")
+    ENCRYPTION_MASTER_KEY: str = Field(..., env="ENCRYPTION_MASTER_KEY")
+
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class GoogleSettings(BaseSettings):
@@ -134,6 +149,8 @@ class AppSettings(BaseSettings):
     """Main application settings"""
 
     # Sub-settings
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
