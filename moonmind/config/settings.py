@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class DatabaseSettings(BaseSettings):
     """Database settings"""
-    DATABASE_URL: Optional[str] = Field("postgresql://test_user:test_password@test_host:5432/test_db", env="DATABASE_URL") # Made Optional and added default
+    DATABASE_URL: str = Field("postgresql+asyncpg://user:password@localhost/dbname", env="DATABASE_URL")
 
     model_config = SettingsConfigDict(env_prefix="")
 
