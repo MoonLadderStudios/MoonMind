@@ -14,7 +14,11 @@ from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
+
+# Auth imports
+from api_service.auth import auth_backend, fastapi_users, UserRead, UserCreate, UserUpdate
+from api_service.db.models import User # Ensure User model is imported if needed for routers
 from fastapi.middleware.cors import CORSMiddleware
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
@@ -88,6 +92,35 @@ app.include_router(chat_router, prefix="/v1/chat")
 app.include_router(models_router, prefix="/v1/models")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(context_protocol_router) # Removed prefix="/context"
+
+# Auth routers
+API_AUTH_PREFIX = "/api/v1/auth" # Defined a constant for clarity
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend),
+    prefix=API_AUTH_PREFIX,
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix=API_AUTH_PREFIX,
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_reset_password_router(), # Added reset password router
+    prefix=API_AUTH_PREFIX,
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_verify_router(UserRead), # Added verify router
+    prefix=API_AUTH_PREFIX,
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix=f"{API_AUTH_PREFIX}/users", # Users router typically prefixed further
+    tags=["users"],
+)
+
 
 app.add_middleware(
     CORSMiddleware,
