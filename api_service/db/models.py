@@ -5,4 +5,4 @@ class Base(DeclarativeBase):
     pass
 
 class User(SQLAlchemyBaseUserTable[int], Base):
-    pass
+    __tablename__ = "user"
