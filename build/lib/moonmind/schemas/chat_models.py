@@ -32,3 +32,11 @@ class ChatCompletionResponse(BaseModel):
     model: str = "gemini-1.5-pro"
     choices: List[Choice]
     usage: Optional[Usage] = None
+
+from enum import Enum
+
+class ModelProvider(Enum):
+    GOOGLE = "google"
+    OPENAI = "openai"
+    OLLAMA = "ollama"
+    ANTHROPIC = "anthropic"

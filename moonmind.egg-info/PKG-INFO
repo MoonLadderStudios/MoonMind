@@ -66,6 +66,15 @@ Requires-Dist: pytest-mock<4.0,>=3.14
 Requires-Dist: pytesseract<1.0,>=0.3
 Requires-Dist: requests<3.0,>=2.32
 Requires-Dist: PyYAML>=6.0.1
+Requires-Dist: asyncpg<0.30.0,>=0.29.0
+Requires-Dist: SQLAlchemy<2.1.0,>=2.0.0
+Requires-Dist: fastapi-users[sqlalchemy]<14.0.0,>=13.0.0
+Requires-Dist: fastapi-users[jwt]<14.0.0,>=13.0.0
+Requires-Dist: pytest<9.0,>=8.4
+Requires-Dist: pytest-asyncio<0.24.0,>=0.23.0
+Requires-Dist: alembic<2.0.0,>=1.13.0
+Requires-Dist: sqlalchemy-utils<0.42.0,>=0.41.1
+Requires-Dist: cryptography<43.0.0,>=42.0.0
 Dynamic: license-file
 
 # MoonMind

@@ -1,8 +1,24 @@
 import os
-from typing import Optional
+from typing import Optional # Keep one Optional import
 
-from pydantic import Field
+from pydantic import (  # Ensure AliasChoices is imported if not already
+    AliasChoices, Field, field_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DatabaseSettings(BaseSettings):
+    """Database settings"""
+    DATABASE_URL: str = Field("postgresql+asyncpg://user:password@localhost/dbname", env="DATABASE_URL")
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+
+class SecuritySettings(BaseSettings):
+    """Security settings"""
+    JWT_SECRET_KEY: Optional[str] = Field("test_jwt_secret_key", env="JWT_SECRET_KEY") # Made Optional and added default
+    ENCRYPTION_MASTER_KEY: Optional[str] = Field("test_encryption_master_key", env="ENCRYPTION_MASTER_KEY") # Made Optional and added default
+
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class GoogleSettings(BaseSettings):
@@ -14,6 +30,15 @@ class GoogleSettings(BaseSettings):
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     google_embed_batch_size: int = Field(100, env="GOOGLE_EMBED_BATCH_SIZE")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+
+class AnthropicSettings(BaseSettings):
+    """Anthropic API settings"""
+    anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY")
+    anthropic_chat_model: str = Field("claude-3-opus-20240229", env="ANTHROPIC_CHAT_MODEL")
+    anthropic_enabled: bool = Field(True, env="ANTHROPIC_ENABLED")
 
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -92,17 +117,6 @@ class AtlassianSettings(BaseSettings):
         super().__init__(**data)
         if self.atlassian_url and self.atlassian_url.startswith("https://https://"):
             self.atlassian_url = self.atlassian_url[8:]
-        # Manually load environment variables for nested settings
-        if os.environ.get("ATLASSIAN_CONFLUENCE_ENABLED", "").lower() == "true":
-            self.confluence.confluence_enabled = True
-        if os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS"):
-            self.confluence.confluence_space_keys = os.environ.get("ATLASSIAN_CONFLUENCE_SPACE_KEYS")
-        if os.environ.get("ATLASSIAN_JIRA_ENABLED", "").lower() == "true":
-            self.jira.jira_enabled = True
-        if os.environ.get("ATLASSIAN_JIRA_JQL_QUERY"):
-            self.jira.jira_jql_query = os.environ.get("ATLASSIAN_JIRA_JQL_QUERY")
-        if os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"):
-            self.jira.jira_fetch_batch_size = int(os.environ.get("ATLASSIAN_JIRA_FETCH_BATCH_SIZE"))
 
 
 class QdrantSettings(BaseSettings):
@@ -122,18 +136,31 @@ class RAGSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+class LocalDataSettings(BaseSettings):
+    """Settings for local data indexing"""
+    local_data_path: Optional[str] = Field(None, validation_alias=AliasChoices('LocalData', 'LOCAL_DATA_PATH'))
+    # Add local_data_enabled if we want a separate boolean flag, but for now, path presence implies enabled.
+    # local_data_enabled: bool = Field(False, env="LOCAL_DATA_ENABLED")
+
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8", extra='ignore')
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
     # Sub-settings
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
+    local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
@@ -171,6 +198,21 @@ class AppSettings(BaseSettings):
 
     postgres_version: int = Field(14, env="POSTGRES_VERSION")
 
+    # ------------------------------------------------------------------
+    # Validators
+    # ------------------------------------------------------------------
+
+    @field_validator("fastapi_reload", mode="before")
+    @classmethod
+    def _coerce_fastapi_reload(cls, v):
+        """Ensure an empty string or malformed value for FASTAPI_RELOAD becomes False.
+
+        This avoids ValidationError when the env var is set but left blank.
+        """
+        from moonmind.utils.env_bool import env_to_bool
+
+        return env_to_bool(v, default=False)
+
     def is_provider_enabled(self, provider: str) -> bool:
         """Check if a provider is enabled"""
         provider = provider.lower()
@@ -180,6 +222,8 @@ class AppSettings(BaseSettings):
             return self.openai.openai_enabled and bool(self.openai.openai_api_key)
         elif provider == "ollama":
             return self.ollama.ollama_enabled
+        elif provider == "anthropic":
+            return self.anthropic.anthropic_enabled and bool(self.anthropic.anthropic_api_key)
         else:
             return False
 
@@ -192,6 +236,8 @@ class AppSettings(BaseSettings):
             return self.openai.openai_chat_model
         elif provider == "ollama":
             return self.ollama.ollama_chat_model
+        elif provider == "anthropic":
+            return self.anthropic.anthropic_chat_model
         else:
             # Fallback to google if unknown provider
             return self.google.google_chat_model

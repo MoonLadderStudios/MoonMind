@@ -33,6 +33,7 @@ moonmind/schemas/documents_models.py
 moonmind/summarization/__init__.py
 moonmind/summarization/repo_summary.py
 moonmind/summarization/summarization.py
+moonmind/utils/env_bool.py
 moonmind/utils/find_files.py
 moonmind/utils/insert_text_file.py
 moonmind/utils/read_text_file.py

@@ -53,13 +53,10 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
             )
     except UnexpectedResponse as e:
         if "404" in str(e):
-            print(f"Collection '{settings.vector_store_collection_name}' does not exist. Creating...")
-            client.create_collection(
-                collection_name=settings.vector_store_collection_name,
-                vectors_config=VectorParams(
-                    size=embed_dimensions,
-                    distance=desired_distance
-                )
+            raise RuntimeError(
+                f"Qdrant collection '{settings.vector_store_collection_name}' not found. "
+                "Please ensure it is initialized by running the init_vector_db.py script "
+                "before starting the API service."
             )
         else:
             raise e
