@@ -28,7 +28,8 @@ def test_user_model_columns():
     # Note: id is a UUID/GUID type which doesn't implement python_type
     # We can check that it's a GUID type instead
     from sqlalchemy.dialects.postgresql import UUID
-    assert isinstance(inspector.columns["id"].type, UUID) or str(inspector.columns["id"].type).upper().startswith('GUID')
+    from sqlalchemy.sql.sqltypes import GUID
+    assert isinstance(inspector.columns["id"].type, (UUID, GUID)) or str(inspector.columns["id"].type).upper().startswith('GUID')
     assert inspector.columns["email"].type.python_type is str
     assert inspector.columns["hashed_password"].type.python_type is str
     assert inspector.columns["is_active"].type.python_type is bool
