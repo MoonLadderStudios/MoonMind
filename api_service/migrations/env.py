@@ -1,3 +1,9 @@
+import os
+import sys
+
+# Add project root to sys.path, assuming env.py is in api_service/migrations
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -14,10 +20,19 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+import pathlib # For path manipulation
+
 # add your model's MetaData object here
 # for 'autogenerate' support
 from api_service.db.models import Base  # Import Base
-from moonmind.config.settings import settings # Import settings
+from moonmind.config.settings import AppSettings # Import AppSettings class
+
+# Determine project root from env.py's location: api_service/migrations/env.py -> app/
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+DOTENV_PATH = PROJECT_ROOT / ".env"
+
+# Instantiate settings locally for Alembic, ensuring .env is loaded correctly
+local_settings = AppSettings(_env_file=DOTENV_PATH)
 
 target_metadata = Base.metadata  # Use Base.metadata
 
@@ -40,7 +55,7 @@ def run_migrations_offline() -> None:
 
     """
     # url = config.get_main_option("sqlalchemy.url") # Comment out original url
-    url = settings.database.DATABASE_URL # Use DATABASE_URL from settings
+    url = local_settings.database.DATABASE_URL # Use DATABASE_URL from local_settings
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -59,8 +74,16 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # Use DATABASE_URL from Pydantic settings instead of alembic.ini
+    configuration = config.get_section(config.config_ini_section)
+    # Explicitly set the DB URL for Alembic to ensure 'postgres' hostname
+    # This overrides potentially problematic environment/Pydantic loading for Alembic
+    # Changed 'postgres' to 'localhost' for environments where 'postgres' service name isn't resolvable
+    db_url_alembic = "postgresql+psycopg2://moonmind_user:moonmind_password@localhost:5432/moonmind_db"
+    configuration["sqlalchemy.url"] = db_url_alembic
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration, # Use modified configuration
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

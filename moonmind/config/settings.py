@@ -1,4 +1,5 @@
 import os
+from pathlib import Path # Added Path
 from typing import Optional # Keep one Optional import
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
@@ -242,7 +243,11 @@ class AppSettings(BaseSettings):
             # Fallback to google if unknown provider
             return self.google.google_chat_model
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='forbid')
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parent.parent.parent / ".env"),
+        env_file_encoding="utf-8",
+        extra='forbid'
+    )
 
 
 # Create a global settings instance
