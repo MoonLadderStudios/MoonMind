@@ -9,6 +9,6 @@ def build_service_context(settings: AppSettings, embed_model):
     """
     # Configure global settings
     Settings.embed_model = embed_model
-    
+
     # Return the configured Settings object
     return Settings

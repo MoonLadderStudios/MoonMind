@@ -14,7 +14,9 @@ def get_ollama_model(model_name: str) -> str:
     return model_name
 
 
-async def chat_with_ollama(model_name: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
+async def chat_with_ollama(
+    model_name: str, messages: List[Dict[str, str]], **kwargs
+) -> Dict[str, Any]:
     """
     Send a chat completion request to Ollama.
 
@@ -31,16 +33,9 @@ async def chat_with_ollama(model_name: str, messages: List[Dict[str, str]], **kw
     # Convert messages to Ollama format
     ollama_messages = []
     for msg in messages:
-        ollama_messages.append({
-            "role": msg["role"],
-            "content": msg["content"]
-        })
+        ollama_messages.append({"role": msg["role"], "content": msg["content"]})
 
-    payload = {
-        "model": model_name,
-        "messages": ollama_messages,
-        "stream": False
-    }
+    payload = {"model": model_name, "messages": ollama_messages, "stream": False}
 
     # Add optional parameters
     if "temperature" in kwargs and kwargs["temperature"] is not None:

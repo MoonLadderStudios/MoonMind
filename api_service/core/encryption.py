@@ -1,5 +1,6 @@
 from moonmind.config.settings import settings
 
+
 def get_encryption_key() -> str:
     """
     Retrieves the encryption master key from Pydantic settings.
@@ -7,5 +8,7 @@ def get_encryption_key() -> str:
     """
     encryption_key = settings.security.ENCRYPTION_MASTER_KEY
     if not encryption_key:
-        raise ValueError("ENCRYPTION_MASTER_KEY is not set in the application settings.")
+        raise ValueError(
+            "ENCRYPTION_MASTER_KEY is not set in the application settings."
+        )
     return encryption_key

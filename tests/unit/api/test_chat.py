@@ -9,16 +9,17 @@ import time
 # Ensure the path to chat_router is correct based on your project structure.
 # If chat.py is in api_service.api.routers.chat, this should be fine.
 from api_service.api.routers.chat import router as chat_router
-from moonmind.config import settings # Direct import for patching, used for teardown
-from api_service.api.routers.chat import settings as settings_in_chat_router # For patch.object
+from moonmind.config import settings  # Direct import for patching, used for teardown
+from api_service.api.routers.chat import (
+    settings as settings_in_chat_router,
+)  # For patch.object
 from moonmind.schemas.chat_models import ChatCompletionRequest, Message
 
 # Setup TestClient
 app = FastAPI()
-app.include_router(chat_router) # Router paths are already prefixed
+app.include_router(chat_router)  # Router paths are already prefixed
 
-from api_service.api.dependencies import get_vector_index, get_service_context
-from unittest.mock import MagicMock
+from api_service.api.dependencies import get_vector_index, get_service_context # noqa E402
 
 # Mock the dependencies that rely on app.state
 # These can be simple MagicMocks for most router unit tests,
@@ -35,51 +36,56 @@ client = TestClient(app)
 original_openai_api_key = settings.openai.openai_api_key
 original_google_api_key = settings.google.google_api_key
 # Attempt to get original cache refresh interval if it exists, otherwise default
-original_model_cache_refresh_interval = getattr(settings, 'model_cache_refresh_interval', 3600)
+original_model_cache_refresh_interval = getattr(
+    settings, "model_cache_refresh_interval", 3600
+)
 
 
 def setup_module(module):
-    """ setup any state specific to the execution of the given module."""
+    """setup any state specific to the execution of the given module."""
     # Ensure model_cache is patched for all tests in this module if needed globally
     # Or patch it specifically within each test/fixture where it's used.
     pass
 
+
 def teardown_module(module):
-    """ teardown any state that was previously setup with a setup_module
+    """teardown any state that was previously setup with a setup_module
     method.
     """
     settings.openai.openai_api_key = original_openai_api_key
     settings.google.google_api_key = original_google_api_key
     settings.model_cache_refresh_interval = original_model_cache_refresh_interval
-    patch.stopall() # Stop all patches
+    patch.stopall()  # Stop all patches
 
 
-@pytest.fixture(autouse=True) # Apply to all tests in this module
+@pytest.fixture(autouse=True)  # Apply to all tests in this module
 def cleanup_singleton_cache():
     # This fixture ensures that the ModelCache singleton is reset before each test.
     # It addresses the issue of state leakage between tests due to the singleton nature.
-    with patch('moonmind.models_cache.ModelCache._instance', None):
-        yield # Test runs here
+    with patch("moonmind.models_cache.ModelCache._instance", None):
+        yield  # Test runs here
     # No explicit teardown needed here as the patch resets _instance for the next test's setup phase.
 
 
 @pytest.fixture
 def chat_request_openai_model():
     return ChatCompletionRequest(
-        model="gpt-3.5-turbo", # A model ID that model_cache.get_model_provider would identify as OpenAI
+        model="gpt-3.5-turbo",  # A model ID that model_cache.get_model_provider would identify as OpenAI
         messages=[Message(role="user", content="Hello OpenAI from cache test")],
         max_tokens=50,
         temperature=0.7,
     )
 
+
 @pytest.fixture
 def chat_request_google_model():
     return ChatCompletionRequest(
-        model="models/gemini-pro", # A model ID that model_cache.get_model_provider would identify as Google
+        model="models/gemini-pro",  # A model ID that model_cache.get_model_provider would identify as Google
         messages=[Message(role="user", content="Hello Google from cache test")],
         max_tokens=50,
         temperature=0.7,
     )
+
 
 @pytest.fixture
 def chat_request_unknown_model():
@@ -96,13 +102,13 @@ def mock_openai_chat_response():
     mock_choice = MagicMock()
     mock_choice.message.content = "This is a response from OpenAI (mocked)."
     mock_choice.finish_reason = "stop"
-    
+
     mock_usage = MagicMock()
     mock_usage.prompt_tokens = 15
     mock_usage.completion_tokens = 25
     mock_usage.total_tokens = 40
 
-    mock_response = AsyncMock() 
+    mock_response = AsyncMock()
     mock_response.id = response_id
     mock_response.created = created_time
     mock_response.model = "gpt-3.5-turbo-mocked"
@@ -110,40 +116,55 @@ def mock_openai_chat_response():
     mock_response.usage = mock_usage
     return mock_response
 
+
 @pytest.fixture
 def mock_google_chat_response():
     mock_part = MagicMock()
     mock_part.text = "This is a response from Google (mocked)."
-    
+
     mock_candidate = MagicMock()
     mock_candidate.content.parts = [mock_part]
 
-    mock_response = MagicMock() 
+    mock_response = MagicMock()
     mock_response.candidates = [mock_candidate]
     return mock_response
 
+
 # Test with model_cache integration
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
-def test_chat_completions_openai_via_cache(mock_acreate, mock_get_provider, chat_request_openai_model, mock_openai_chat_response):
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+def test_chat_completions_openai_via_cache(
+    mock_acreate,
+    mock_get_provider,
+    chat_request_openai_model,
+    mock_openai_chat_response,
+):
     settings.openai.openai_api_key = "fake_openai_key_for_test"
     mock_get_provider.return_value = "OpenAI"
     mock_acreate.return_value = mock_openai_chat_response
-    
+
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
 
     assert response.status_code == 200
     json_response = response.json()
     assert json_response["model"] == mock_openai_chat_response.model
-    assert json_response["choices"][0]["message"]["content"] == mock_openai_chat_response.choices[0].message.content
+    assert (
+        json_response["choices"][0]["message"]["content"]
+        == mock_openai_chat_response.choices[0].message.content
+    )
     mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
     mock_acreate.assert_called_once()
 
 
 # Test with model_cache integration and corrected path
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
-def test_chat_completions_endpoint_success_corrected_path(mock_acreate, mock_get_provider, chat_request_openai_model, mock_openai_chat_response):
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+def test_chat_completions_endpoint_success_corrected_path(
+    mock_acreate,
+    mock_get_provider,
+    chat_request_openai_model,
+    mock_openai_chat_response,
+):
     # Patch settings directly in the router's imported settings instance
     settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test"
     # Ensure the global settings are also patched if your teardown relies on it,
@@ -153,33 +174,42 @@ def test_chat_completions_endpoint_success_corrected_path(mock_acreate, mock_get
     mock_get_provider.return_value = "OpenAI"
     mock_acreate.return_value = mock_openai_chat_response
 
-    response = client.post("/completions", json=chat_request_openai_model.model_dump()) # Use corrected path
-    
+    response = client.post(
+        "/completions", json=chat_request_openai_model.model_dump()
+    )  # Use corrected path
+
     assert response.status_code == 200
     json_response = response.json()
     assert json_response["model"] == mock_openai_chat_response.model
-    assert json_response["choices"][0]["message"]["content"] == mock_openai_chat_response.choices[0].message.content
+    assert (
+        json_response["choices"][0]["message"]["content"]
+        == mock_openai_chat_response.choices[0].message.content
+    )
     mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
     mock_acreate.assert_called_once()
 
 
-@patch('google.generativeai.configure') # Outermost mock
-@patch('api_service.api.routers.chat.get_google_model') # Middle mock - CORRECTED TARGET
-@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Innermost mock
+@patch("google.generativeai.configure")  # Outermost mock
+@patch(
+    "api_service.api.routers.chat.get_google_model"
+)  # Middle mock - CORRECTED TARGET
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Innermost mock
 def test_chat_completions_google_via_cache(
-    mock_get_model_provider,         # Corresponds to model_cache.get_model_provider
-    mock_router_get_google_model,    # Corresponds to chat.get_google_model
-    mock_genai_configure,            # Corresponds to genai.configure
+    mock_get_model_provider,  # Corresponds to model_cache.get_model_provider
+    mock_router_get_google_model,  # Corresponds to chat.get_google_model
+    mock_genai_configure,  # Corresponds to genai.configure
     chat_request_google_model,
-    mock_google_chat_response
+    mock_google_chat_response,
 ):
     # Directly set attributes on the imported settings instance
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
-    
+
     mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
-    mock_google_chat_model_instance.generate_content.return_value = mock_google_chat_response
+    mock_google_chat_model_instance.generate_content.return_value = (
+        mock_google_chat_response
+    )
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
     response = client.post("/completions", json=chat_request_google_model.model_dump())
@@ -187,22 +217,27 @@ def test_chat_completions_google_via_cache(
     assert response.status_code == 200
     json_response = response.json()
     assert json_response["model"] == chat_request_google_model.model
-    assert json_response["choices"][0]["message"]["content"] == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
+    assert (
+        json_response["choices"][0]["message"]["content"]
+        == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
+    )
     mock_get_model_provider.assert_called_once_with(chat_request_google_model.model)
-    mock_router_get_google_model.assert_called_once_with(chat_request_google_model.model)
+    mock_router_get_google_model.assert_called_once_with(
+        chat_request_google_model.model
+    )
     mock_google_chat_model_instance.generate_content.assert_called_once()
     # No mock_is_enabled_google to assert anymore
 
 
 # Refined Google Error Handling Tests
-@patch('google.generativeai.configure')
-@patch('api_service.api.routers.chat.get_google_model') # CORRECTED TARGET
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch("google.generativeai.configure")
+@patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
 def test_chat_completions_google_value_error_invalid_role(
     mock_get_model_provider,
     mock_router_get_google_model,
     mock_genai_configure,
-    chat_request_google_model
+    chat_request_google_model,
 ):
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
@@ -210,24 +245,26 @@ def test_chat_completions_google_value_error_invalid_role(
     mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
     error_message = "Invalid role: 'system' is not a valid role for this model. Valid roles are 'user', 'model'."
-    mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
+    mock_google_chat_model_instance.generate_content.side_effect = ValueError(
+        error_message
+    )
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
     response = client.post("/completions", json=chat_request_google_model.model_dump())
-    
-    assert response.status_code == 400 
+
+    assert response.status_code == 400
     json_response = response.json()
     assert "Role or turn order error with Gemini API" in json_response["detail"]
 
 
-@patch('google.generativeai.configure')
-@patch('api_service.api.routers.chat.get_google_model') # CORRECTED TARGET
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch("google.generativeai.configure")
+@patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
 def test_chat_completions_google_value_error_other_argument(
     mock_get_model_provider,
     mock_router_get_google_model,
     mock_genai_configure,
-    chat_request_google_model
+    chat_request_google_model,
 ):
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
@@ -235,105 +272,136 @@ def test_chat_completions_google_value_error_other_argument(
     mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
     error_message = "Some other argument error not related to roles."
-    mock_google_chat_model_instance.generate_content.side_effect = ValueError(error_message)
+    mock_google_chat_model_instance.generate_content.side_effect = ValueError(
+        error_message
+    )
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
 
     response = client.post("/completions", json=chat_request_google_model.model_dump())
-    
-    assert response.status_code == 500 
+
+    assert response.status_code == 500
     json_response = response.json()
     assert f"Google Gemini API error: {error_message}" in json_response["detail"]
 
 
 # Cache behavior for unknown models
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('api_service.api.routers.chat.model_cache.refresh_models_sync') # Mock the sync refresh
-def test_chat_completions_model_not_found_initial_and_after_refresh(mock_refresh_sync, mock_get_provider, chat_request_unknown_model):
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch(
+    "api_service.api.routers.chat.model_cache.refresh_models_sync"
+)  # Mock the sync refresh
+def test_chat_completions_model_not_found_initial_and_after_refresh(
+    mock_refresh_sync, mock_get_provider, chat_request_unknown_model
+):
     # Simulate provider returning None for the first call, and also for the second call after refresh
-    mock_get_provider.side_effect = [None, None] 
-    
+    mock_get_provider.side_effect = [None, None]
+
     response = client.post("/completions", json=chat_request_unknown_model.model_dump())
-    
+
     assert response.status_code == 404
-    assert f"Model '{chat_request_unknown_model.model}' not found or provider unknown." in response.json()["detail"]
-    mock_refresh_sync.assert_called_once() # Ensure refresh was attempted
+    assert (
+        f"Model '{chat_request_unknown_model.model}' not found or provider unknown."
+        in response.json()["detail"]
+    )
+    mock_refresh_sync.assert_called_once()  # Ensure refresh was attempted
     assert mock_get_provider.call_count == 2
 
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('api_service.api.routers.chat.model_cache.refresh_models_sync')
-@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock) # For the retry path
-def test_chat_completions_model_found_after_refresh_openai(mock_acreate, mock_refresh_sync, mock_get_provider, chat_request_openai_model, mock_openai_chat_response):
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.model_cache.refresh_models_sync")
+@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)  # For the retry path
+def test_chat_completions_model_found_after_refresh_openai(
+    mock_acreate,
+    mock_refresh_sync,
+    mock_get_provider,
+    chat_request_openai_model,
+    mock_openai_chat_response,
+):
     settings.openai.openai_api_key = "fake_openai_key_for_test"
     # First call to get_model_provider returns None, second call returns "OpenAI"
     mock_get_provider.side_effect = [None, "OpenAI"]
-    mock_acreate.return_value = mock_openai_chat_response # Mock the OpenAI call that would happen after successful refresh
+    mock_acreate.return_value = mock_openai_chat_response  # Mock the OpenAI call that would happen after successful refresh
 
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
-    
+
     # The current code in chat.py raises a specific 404 for "retry logic needs full implementation"
     # This test verifies that behavior. If full retry were implemented, this would be a 200.
-    assert response.status_code == 404 
-    assert f"Model '{chat_request_openai_model.model}' found after refresh, but retry logic needs full implementation." in response.json()["detail"]
+    assert response.status_code == 404
+    assert (
+        f"Model '{chat_request_openai_model.model}' found after refresh, but retry logic needs full implementation."
+        in response.json()["detail"]
+    )
     mock_refresh_sync.assert_called_once()
     assert mock_get_provider.call_count == 2
     # mock_acreate.assert_called_once() # This would be called if retry was fully implemented and led to a 200
 
 
 # API Key Checks (still relevant with cache)
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-def test_chat_completions_openai_no_api_key_with_cache(mock_get_provider, chat_request_openai_model):
-    settings.openai.openai_api_key = None # Key not set
-    mock_get_provider.return_value = "OpenAI" # Cache says it's an OpenAI model
-    
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+def test_chat_completions_openai_no_api_key_with_cache(
+    mock_get_provider, chat_request_openai_model
+):
+    settings.openai.openai_api_key = None  # Key not set
+    mock_get_provider.return_value = "OpenAI"  # Cache says it's an OpenAI model
+
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 400
     assert "OpenAI API key not configured" in response.json()["detail"]
 
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-def test_chat_completions_google_no_api_key_with_cache(mock_get_provider, chat_request_google_model):
-    settings.google.google_api_key = None # Key not set
-    mock_get_provider.return_value = "Google" # Cache says it's a Google model
-    
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+def test_chat_completions_google_no_api_key_with_cache(
+    mock_get_provider, chat_request_google_model
+):
+    settings.google.google_api_key = None  # Key not set
+    mock_get_provider.return_value = "Google"  # Cache says it's a Google model
+
     response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
     assert "Google API key not configured" in response.json()["detail"]
 
 
 # General API errors after successful routing by cache
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
-def test_chat_completions_openai_api_error_with_cache(mock_acreate, mock_get_provider, chat_request_openai_model):
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+def test_chat_completions_openai_api_error_with_cache(
+    mock_acreate, mock_get_provider, chat_request_openai_model
+):
     settings.openai.openai_api_key = "fake_openai_key_for_test"
     mock_get_provider.return_value = "OpenAI"
     mock_acreate.side_effect = Exception("OpenAI API Communication Error")
-    
+
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 500
-    assert "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"]
+    assert (
+        "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"]
+    )
 
 
-@patch('google.generativeai.configure')
-@patch('api_service.api.routers.chat.get_google_model') # CORRECTED TARGET
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch("google.generativeai.configure")
+@patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
 def test_chat_completions_google_api_error_with_cache(
     mock_get_model_provider,
     mock_router_get_google_model,
     mock_genai_configure,
-    chat_request_google_model
+    chat_request_google_model,
 ):
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
 
     mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
-    mock_google_chat_model_instance.generate_content.side_effect = Exception("Google API Communication Error") # Corrected typo
+    mock_google_chat_model_instance.generate_content.side_effect = Exception(
+        "Google API Communication Error"
+    )  # Corrected typo
     mock_router_get_google_model.return_value = mock_google_chat_model_instance
-    
+
     response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 500
-    assert "Google Gemini API error: Google API Communication Error" in response.json()["detail"]
+    assert (
+        "Google Gemini API error: Google API Communication Error"
+        in response.json()["detail"]
+    )
 
 
 # Test fixtures for provider enablement tests
@@ -346,10 +414,11 @@ def chat_request_no_model():
         temperature=0.7,
     )
 
+
 @pytest.fixture
 def chat_request_ollama_model():
     return ChatCompletionRequest(
-        model="llama2", # A model ID that model_cache.get_model_provider would identify as Ollama
+        model="llama2",  # A model ID that model_cache.get_model_provider would identify as Ollama
         messages=[Message(role="user", content="Hello Ollama from cache test")],
         max_tokens=50,
         temperature=0.7,
@@ -357,55 +426,66 @@ def chat_request_ollama_model():
 
 
 # Tests for provider enablement functionality
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-def test_chat_completions_openai_provider_disabled(mock_get_provider, chat_request_openai_model):
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+def test_chat_completions_openai_provider_disabled(
+    mock_get_provider, chat_request_openai_model
+):
     """Test that disabled OpenAI provider returns appropriate error"""
     settings_in_chat_router.openai.openai_enabled = False
-    settings_in_chat_router.openai.openai_api_key = "fake_key" 
+    settings_in_chat_router.openai.openai_api_key = "fake_key"
     # settings.openai.openai_api_key = "fake_openai_key_for_test" # Original line for teardown reference
-    
+
     mock_get_provider.return_value = "OpenAI"
-    
+
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_openai_request in chat.py
     assert "OpenAI provider is disabled." in json_response["detail"]
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-def test_chat_completions_google_provider_disabled(mock_get_provider, chat_request_google_model):
+
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+def test_chat_completions_google_provider_disabled(
+    mock_get_provider, chat_request_google_model
+):
     """Test that disabled Google provider returns appropriate error"""
     settings_in_chat_router.google.google_enabled = False
     settings_in_chat_router.google.google_api_key = "fake_key"
     # settings.google.google_api_key = "fake_google_key_for_test" # Original line for teardown reference
 
     mock_get_provider.return_value = "Google"
-    
+
     response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_google_request in chat.py
     assert "Google provider is disabled." in json_response["detail"]
 
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
-@patch('moonmind.factories.ollama_factory.chat_with_ollama', new_callable=AsyncMock)
-def test_chat_completions_ollama_provider_disabled(mock_chat_ollama, mock_get_provider, chat_request_ollama_model):
+
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.ollama_factory.chat_with_ollama", new_callable=AsyncMock)
+def test_chat_completions_ollama_provider_disabled(
+    mock_chat_ollama, mock_get_provider, chat_request_ollama_model
+):
     """Test that disabled Ollama provider returns appropriate error"""
     settings_in_chat_router.ollama.ollama_enabled = False
-    
+
     mock_get_provider.return_value = "Ollama"
-    
+
     response = client.post("/completions", json=chat_request_ollama_model.model_dump())
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_ollama_request in chat.py
     assert "Ollama provider is disabled or not available." in json_response["detail"]
 
+
 # Test default model functionality
-@patch('api_service.api.routers.chat.model_cache.get_model_provider')
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
 # Removed patch for 'settings.get_default_chat_model'
-@patch('openai.ChatCompletion.acreate', new_callable=AsyncMock)
-def test_chat_completions_uses_default_model(mock_acreate, mock_get_provider, chat_request_no_model, mock_openai_chat_response):
+@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+def test_chat_completions_uses_default_model(
+    mock_acreate, mock_get_provider, chat_request_no_model, mock_openai_chat_response
+):
     """Test that default model is used when no model is specified"""
 
     # Set attributes on settings_in_chat_router to guide get_default_chat_model()
@@ -417,16 +497,17 @@ def test_chat_completions_uses_default_model(mock_acreate, mock_get_provider, ch
     settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test"
     # The global 'settings.openai.openai_api_key = "fake_openai_key_for_test"' from the original
     # test setup is fine for teardown, but router uses settings_in_chat_router.
-    
-    mock_get_provider.return_value = "OpenAI" 
+
+    mock_get_provider.return_value = "OpenAI"
     mock_acreate.return_value = mock_openai_chat_response
-    
+
     response = client.post("/completions", json=chat_request_no_model.model_dump())
-    
+
     assert response.status_code == 200
     # mock_get_default.assert_called_once() # Removed as get_default_chat_model is no longer mocked
     # The model_to_use in chat.py will be the result of the real get_default_chat_model()
-    mock_get_provider.assert_called_once_with("gpt-3.5-turbo") 
+    mock_get_provider.assert_called_once_with("gpt-3.5-turbo")
+
 
 # Test Ollama integration
 @pytest.fixture
@@ -434,85 +515,108 @@ def mock_ollama_chat_response():
     return {
         "message": {
             "content": "This is a response from Ollama (mocked).",
-            "role": "assistant"
+            "role": "assistant",
         },
-        "done": True
+        "done": True,
     }
 
-@patch('moonmind.factories.ollama_factory.list_ollama_models', new_callable=AsyncMock) # Outermost
-@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Middle
-@patch('api_service.api.routers.chat.chat_with_ollama', new_callable=AsyncMock) # Middle - CORRECTED TARGET
-@patch('api_service.api.routers.chat.get_ollama_model') # Innermost - CORRECTED TARGET
+
+@patch(
+    "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
+)  # Outermost
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Middle
+@patch(
+    "api_service.api.routers.chat.chat_with_ollama", new_callable=AsyncMock
+)  # Middle - CORRECTED TARGET
+@patch("api_service.api.routers.chat.get_ollama_model")  # Innermost - CORRECTED TARGET
 def test_chat_completions_ollama_success(
-    mock_router_get_ollama_model,    # Innermost
-    mock_router_chat_with_ollama,    # Middle
-    mock_get_provider,               # Middle
-    mock_list_ollama_models,         # Outermost
+    mock_router_get_ollama_model,  # Innermost
+    mock_router_chat_with_ollama,  # Middle
+    mock_get_provider,  # Middle
+    mock_list_ollama_models,  # Outermost
     chat_request_ollama_model,
-    mock_ollama_chat_response
+    mock_ollama_chat_response,
 ):
     """Test successful Ollama chat completion"""
     settings_in_chat_router.ollama.ollama_enabled = True
-    
-    mock_list_ollama_models.return_value = [] # Prevent ModelCache network call
+
+    mock_list_ollama_models.return_value = []  # Prevent ModelCache network call
     mock_get_provider.return_value = "Ollama"
     mock_router_get_ollama_model.return_value = "llama2"
     mock_router_chat_with_ollama.return_value = mock_ollama_chat_response
-    
+
     response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-    
+
     assert response.status_code == 200
     json_response = response.json()
     assert json_response["model"] == "llama2"
-    assert json_response["choices"][0]["message"]["content"] == mock_ollama_chat_response["message"]["content"]
+    assert (
+        json_response["choices"][0]["message"]["content"]
+        == mock_ollama_chat_response["message"]["content"]
+    )
     mock_router_chat_with_ollama.assert_called_once()
 
-@patch('moonmind.factories.ollama_factory.list_ollama_models', new_callable=AsyncMock) # Outermost
-@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Middle
-@patch('api_service.api.routers.chat.chat_with_ollama', new_callable=AsyncMock) # Middle - CORRECTED TARGET
-@patch('api_service.api.routers.chat.get_ollama_model') # Innermost - CORRECTED TARGET
+
+@patch(
+    "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
+)  # Outermost
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Middle
+@patch(
+    "api_service.api.routers.chat.chat_with_ollama", new_callable=AsyncMock
+)  # Middle - CORRECTED TARGET
+@patch("api_service.api.routers.chat.get_ollama_model")  # Innermost - CORRECTED TARGET
 def test_chat_completions_ollama_api_error(
-    mock_router_get_ollama_model,    # Innermost
-    mock_router_chat_with_ollama,    # Middle
-    mock_get_provider,               # Middle
-    mock_list_ollama_models,         # Outermost
-    chat_request_ollama_model
+    mock_router_get_ollama_model,  # Innermost
+    mock_router_chat_with_ollama,  # Middle
+    mock_get_provider,  # Middle
+    mock_list_ollama_models,  # Outermost
+    chat_request_ollama_model,
 ):
     """Test Ollama API error handling"""
     settings_in_chat_router.ollama.ollama_enabled = True
 
-    mock_list_ollama_models.return_value = [] # Prevent ModelCache network call
+    mock_list_ollama_models.return_value = []  # Prevent ModelCache network call
     mock_get_provider.return_value = "Ollama"
     mock_router_get_ollama_model.return_value = "llama2"
     mock_router_chat_with_ollama.side_effect = Exception("Ollama connection error")
-    
+
     response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-    
+
     assert response.status_code == 500
     json_response = response.json()
     assert "Ollama API error: Ollama connection error" in json_response["detail"]
 
-@patch('moonmind.factories.ollama_factory.list_ollama_models', new_callable=AsyncMock) # Outermost
-@patch('api_service.api.routers.chat.model_cache.get_model_provider') # Middle
-@patch('api_service.api.routers.chat.chat_with_ollama', new_callable=AsyncMock) # Middle - CORRECTED TARGET
-@patch('api_service.api.routers.chat.get_ollama_model') # Innermost - CORRECTED TARGET
+
+@patch(
+    "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
+)  # Outermost
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Middle
+@patch(
+    "api_service.api.routers.chat.chat_with_ollama", new_callable=AsyncMock
+)  # Middle - CORRECTED TARGET
+@patch("api_service.api.routers.chat.get_ollama_model")  # Innermost - CORRECTED TARGET
 def test_chat_completions_ollama_invalid_response(
-    mock_router_get_ollama_model,    # Innermost
-    mock_router_chat_with_ollama,    # Middle
-    mock_get_provider,               # Middle
-    mock_list_ollama_models,         # Outermost
-    chat_request_ollama_model
+    mock_router_get_ollama_model,  # Innermost
+    mock_router_chat_with_ollama,  # Middle
+    mock_get_provider,  # Middle
+    mock_list_ollama_models,  # Outermost
+    chat_request_ollama_model,
 ):
     """Test Ollama invalid response handling"""
     settings_in_chat_router.ollama.ollama_enabled = True
 
-    mock_list_ollama_models.return_value = [] # Prevent ModelCache network call
+    mock_list_ollama_models.return_value = []  # Prevent ModelCache network call
     mock_get_provider.return_value = "Ollama"
     mock_router_get_ollama_model.return_value = "llama2"
-    mock_router_chat_with_ollama.return_value = {"invalid": "response"}  # Missing message field
-    
+    mock_router_chat_with_ollama.return_value = {
+        "invalid": "response"
+    }  # Missing message field
+
     response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-    
+
     assert response.status_code == 500
     json_response = response.json()
-    assert "Invalid response from Ollama API: No message returned" in json_response["detail"]
+    assert (
+        "Invalid response from Ollama API: No message returned"
+        in json_response["detail"]
+    )

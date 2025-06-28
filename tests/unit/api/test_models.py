@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import time
@@ -11,76 +11,107 @@ from api_service.api.routers.models import router as models_router
 
 # Setup TestClient
 app = FastAPI()
-app.include_router(models_router, prefix="/v1/models") 
+app.include_router(models_router, prefix="/v1/models")
 client = TestClient(app)
+
 
 # Fixture for a sample list of models as would be returned by model_cache.get_all_models()
 @pytest.fixture
 def mock_cached_models_data():
     return [
         {
-            "id": "models/gemini-pro", "object": "model", "created": int(time.time()),
-            "owned_by": "Google", "permission": [], "root": "models/gemini-pro", "parent": None,
-            "context_window": 8192, 
-            "capabilities": {"chat_completion": True, "text_completion": True, "embedding": False}
+            "id": "models/gemini-pro",
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "Google",
+            "permission": [],
+            "root": "models/gemini-pro",
+            "parent": None,
+            "context_window": 8192,
+            "capabilities": {
+                "chat_completion": True,
+                "text_completion": True,
+                "embedding": False,
+            },
         },
         {
-            "id": "gpt-3.5-turbo", "object": "model", "created": int(time.time()),
-            "owned_by": "OpenAI", "permission": [], "root": "gpt-3.5-turbo", "parent": None,
+            "id": "gpt-3.5-turbo",
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "OpenAI",
+            "permission": [],
+            "root": "gpt-3.5-turbo",
+            "parent": None,
             "context_window": 4096,
-            "capabilities": {"chat_completion": True, "text_completion": True, "embedding": False}
+            "capabilities": {
+                "chat_completion": True,
+                "text_completion": True,
+                "embedding": False,
+            },
         },
         {
-            "id": "models/embedding-001", "object": "model", "created": int(time.time()),
-            "owned_by": "Google", "permission": [], "root": "models/embedding-001", "parent": None,
+            "id": "models/embedding-001",
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "Google",
+            "permission": [],
+            "root": "models/embedding-001",
+            "parent": None,
             "context_window": 1024,
-            "capabilities": {"chat_completion": False, "text_completion": False, "embedding": True}
-        }
+            "capabilities": {
+                "chat_completion": False,
+                "text_completion": False,
+                "embedding": True,
+            },
+        },
     ]
 
-@patch('api_service.api.routers.models.model_cache.get_all_models')
+
+@patch("api_service.api.routers.models.model_cache.get_all_models")
 def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_data):
     """
     Test the /v1/models endpoint when the model_cache returns a list of models.
     """
     mock_get_all_models.return_value = mock_cached_models_data
-    
-    response = client.get("/v1/models/") # Updated path
+
+    response = client.get("/v1/models/")  # Updated path
     assert response.status_code == 200
     json_response = response.json()
-    
+
     assert json_response["object"] == "list"
     assert "data" in json_response
     assert json_response["data"] == mock_cached_models_data
     assert len(json_response["data"]) == len(mock_cached_models_data)
     mock_get_all_models.assert_called_once()
 
-@patch('api_service.api.routers.models.model_cache.get_all_models')
+
+@patch("api_service.api.routers.models.model_cache.get_all_models")
 def test_get_models_empty_from_cache(mock_get_all_models):
     """
     Test the /v1/models endpoint when the model_cache returns an empty list.
     """
-    mock_get_all_models.return_value = [] # Cache returns no models
-    
-    response = client.get("/v1/models/") # Updated path
+    mock_get_all_models.return_value = []  # Cache returns no models
+
+    response = client.get("/v1/models/")  # Updated path
     assert response.status_code == 200
     json_response = response.json()
-    
+
     assert json_response["object"] == "list"
     assert "data" in json_response
     assert len(json_response["data"]) == 0
     mock_get_all_models.assert_called_once()
 
-@patch('api_service.api.routers.models.model_cache.get_all_models')
+
+@patch("api_service.api.routers.models.model_cache.get_all_models")
 def test_get_models_cache_exception(mock_get_all_models):
     """
     Test the /v1/models endpoint when model_cache.get_all_models() raises an exception.
     """
     error_message = "Cache internal error"
     mock_get_all_models.side_effect = Exception(error_message)
-    
-    response = client.get("/v1/models/") # Updated path
-    
+
+    response = client.get("/v1/models/")  # Updated path
+
     # The router should catch this and return a 500 error
     assert response.status_code == 500
     json_response = response.json()
@@ -90,8 +121,9 @@ def test_get_models_cache_exception(mock_get_all_models):
     # assert error_message in json_response["detail"] # Check if original error is propagated in message
     mock_get_all_models.assert_called_once()
 
+
 # Health check tests (ensure they are still working)
-def test_health_check_main_app(): # Renamed to distinguish if app has own /health
+def test_health_check_main_app():  # Renamed to distinguish if app has own /health
     # This test assumes /health is at the root of the TestClient's app.
     # If models_router is the only thing in `app`, then this might fail or hit the router's health.
     # For clarity, it's better to test the router's health check specifically if it exists.
@@ -101,14 +133,15 @@ def test_health_check_main_app(): # Renamed to distinguish if app has own /healt
     # For now, assuming this test is for a health check defined outside the models_router.
     # If not, this test might need adjustment or removal.
     # Let's assume the app itself does not have a /health and we only test the router's.
-    pass 
+    pass
 
 
 def test_router_health_check():
     # This tests the health check defined within the models_router
-    response = client.get("/v1/models/health") # Updated path
+    response = client.get("/v1/models/health")  # Updated path
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
+
 
 # Notes on previous tests:
 # The tests like test_get_models_google_only, test_get_models_openai_only,

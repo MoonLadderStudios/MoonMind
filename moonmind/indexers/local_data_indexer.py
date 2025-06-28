@@ -1,11 +1,13 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, Union
 
-from llama_index.core import (Settings, StorageContext, VectorStoreIndex,
-                              load_index_from_storage)
+from llama_index.core import (
+    Settings,
+    StorageContext,
+    VectorStoreIndex,
+)
 from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.core.schema import TextNode
 
 # ---------------------------------------------------------------------------
 # Import SimpleDirectoryReader with fallbacks to support multiple versions of
@@ -18,13 +20,11 @@ try:
 except ImportError:  # pragma: no cover – fall back for newer versions
     try:
         # v0.12+ path – relocated to a sub-module
-        from llama_index.readers.file.base import \
-            SimpleDirectoryReader  # type: ignore
+        from llama_index.readers.file.base import SimpleDirectoryReader  # type: ignore
     except ImportError:
         try:
             # Some versions expose it via core.readers
-            from llama_index.core.readers import \
-                SimpleDirectoryReader  # type: ignore
+            from llama_index.core.readers import SimpleDirectoryReader  # type: ignore
         except ImportError:
             # Final fallback: dynamic loader utility
             from llama_index.core import download_loader  # type: ignore
@@ -33,11 +33,7 @@ except ImportError:  # pragma: no cover – fall back for newer versions
 
 
 class LocalDataIndexer:
-    def __init__(
-        self,
-        data_dir: str,
-        logger: logging.Logger = None
-    ):
+    def __init__(self, data_dir: str, logger: logging.Logger = None):
         self.logger = logger or logging.getLogger(__name__)
         if not data_dir:
             raise ValueError("Data directory is required to set up LocalDataIndexer")
@@ -54,7 +50,9 @@ class LocalDataIndexer:
         Reads documents from the specified local directory, converts them into nodes,
         and builds a vector index using the provided storage and service contexts.
         """
-        self.logger.info(f"Starting indexing of local data from directory: {self.data_dir}")
+        self.logger.info(
+            f"Starting indexing of local data from directory: {self.data_dir}"
+        )
 
         if not os.path.exists(self.data_dir) or not os.listdir(self.data_dir):
             self.logger.warning(
@@ -63,20 +61,23 @@ class LocalDataIndexer:
             return {"index": None, "total_nodes_indexed": 0}
 
         try:
-            self.logger.info(f"Loading documents from {self.data_dir} using SimpleDirectoryReader (recursive).")
+            self.logger.info(
+                f"Loading documents from {self.data_dir} using SimpleDirectoryReader (recursive)."
+            )
             # Explicitly require text files for now, can be expanded later.
             # Update: Let SimpleDirectoryReader handle default file types.
-            reader = SimpleDirectoryReader(
-                input_dir=self.data_dir,
-                recursive=True
-            )
+            reader = SimpleDirectoryReader(input_dir=self.data_dir, recursive=True)
             documents = reader.load_data()
         except Exception as e:
-            self.logger.error(f"Failed to load documents from {self.data_dir}: {e}", exc_info=True)
+            self.logger.error(
+                f"Failed to load documents from {self.data_dir}: {e}", exc_info=True
+            )
             return {"index": None, "total_nodes_indexed": 0}
 
         if not documents:
-            self.logger.info(f"No documents found in {self.data_dir}. Skipping indexing.")
+            self.logger.info(
+                f"No documents found in {self.data_dir}. Skipping indexing."
+            )
             return {"index": None, "total_nodes_indexed": 0}
 
         self.logger.info(f"Loaded {len(documents)} documents from {self.data_dir}.")
@@ -84,7 +85,9 @@ class LocalDataIndexer:
         try:
             node_parser = service_context.node_parser
         except AttributeError:
-            self.logger.info("Service context does not have a node_parser, using default SimpleNodeParser.")
+            self.logger.info(
+                "Service context does not have a node_parser, using default SimpleNodeParser."
+            )
             node_parser = SimpleNodeParser.from_defaults()
 
         self.logger.info(f"Converting {len(documents)} documents to nodes.")
@@ -92,15 +95,17 @@ class LocalDataIndexer:
         self.logger.info(f"Converted to {len(nodes)} nodes.")
 
         if not nodes:
-            self.logger.info("No nodes were generated from the documents. Skipping index creation.")
+            self.logger.info(
+                "No nodes were generated from the documents. Skipping index creation."
+            )
             return {"index": None, "total_nodes_indexed": 0}
 
         self.logger.info(f"Creating VectorStoreIndex with {len(nodes)} nodes.")
         # Use the embed_model from Settings instead of passing the whole service_context to from_documents
         index = VectorStoreIndex(
-            nodes=nodes, # Pass nodes directly
+            nodes=nodes,  # Pass nodes directly
             storage_context=storage_context,
-            embed_model=service_context.embed_model # Explicitly pass embed_model
+            embed_model=service_context.embed_model,  # Explicitly pass embed_model
         )
         total_nodes_indexed = len(nodes)
 

@@ -7,7 +7,7 @@ def configure_logging(
     level: str = "INFO",
     format_string: Optional[str] = None,
     include_timestamp: bool = True,
-    include_module: bool = True
+    include_module: bool = True,
 ) -> None:
     """
     Configure logging for the application.
@@ -31,10 +31,8 @@ def configure_logging(
     logging.basicConfig(
         level=getattr(logging, level.upper()),
         format=format_string,
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ],
-        force=True  # Override any existing configuration
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,  # Override any existing configuration
     )
 
     # Set specific loggers to appropriate levels

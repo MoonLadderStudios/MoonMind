@@ -6,7 +6,10 @@ from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 
 # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)
-from llama_index.readers.jira import JiraReader # Assuming it's directly available, adjust if it's like llama_index.readers.jira.base.JiraReader or from an integration package
+from llama_index.readers.jira import (
+    JiraReader,
+)  # Assuming it's directly available, adjust if it's like llama_index.readers.jira.base.JiraReader or from an integration package
+
 
 class JiraIndexer:
     def __init__(
@@ -32,7 +35,7 @@ class JiraIndexer:
         # Process jira_url to remove scheme for JiraReader
         # The original self.jira_url is kept as is for logging or other purposes.
         processed_jira_url = self.jira_url
-        if "://" in processed_jira_url: # Check if "://" is present
+        if "://" in processed_jira_url:  # Check if "://" is present
             # Find the last occurrence of "://" and take the part after it.
             # This correctly handles http://, https://, custom://, and multiple schemes like https://://
             # For example, "https://://domain.com/path" becomes "domain.com/path".
@@ -53,17 +56,19 @@ class JiraIndexer:
         # `server_url` for the constructor is the base URL of the Jira instance.
         # As per task, removing scheme before passing to JiraReader.
         self.reader = JiraReader(
-            server_url=processed_jira_url, # URL without scheme e.g. domain.atlassian.net
+            server_url=processed_jira_url,  # URL without scheme e.g. domain.atlassian.net
             email=self.username,
             api_token=self.api_token,
         )
-        self.logger.info(f"JiraIndexer initialized for URL: {self.jira_url}") # Log original URL
+        self.logger.info(
+            f"JiraIndexer initialized for URL: {self.jira_url}"
+        )  # Log original URL
 
     def index(
         self,
         jql_query: str,
         storage_context: StorageContext,
-        service_context: Settings, # Changed from ServiceContext to Settings for LlamaIndex v0.10+
+        service_context: Settings,  # Changed from ServiceContext to Settings for LlamaIndex v0.10+
         jira_fetch_batch_size: int = 50,
     ) -> Dict[str, Union[VectorStoreIndex, int]]:
         self.logger.info(f"Starting Jira indexing for JQL query: '{jql_query}'")
@@ -75,17 +80,18 @@ class JiraIndexer:
         index = VectorStoreIndex.from_documents(
             [],
             storage_context=storage_context,
-            embed_model=service_context.embed_model, # Use embed_model from Settings
+            embed_model=service_context.embed_model,  # Use embed_model from Settings
             # service_context=service_context, # Deprecated in LlamaIndex v0.10+
         )
         total_nodes_indexed = 0
 
         try:
             node_parser = service_context.node_parser
-        except AttributeError: # Fallback if node_parser is not directly on Settings (older LlamaIndex or custom setup)
-            self.logger.warning("service_context.node_parser not found, falling back to SimpleNodeParser.from_defaults()")
+        except AttributeError:  # Fallback if node_parser is not directly on Settings (older LlamaIndex or custom setup)
+            self.logger.warning(
+                "service_context.node_parser not found, falling back to SimpleNodeParser.from_defaults()"
+            )
             node_parser = SimpleNodeParser.from_defaults()
-
 
         start_at = 0
         while True:
@@ -94,7 +100,9 @@ class JiraIndexer:
             )
             try:
                 batch_docs = self.reader.load_data(
-                    query=jql_query, start_at=start_at, max_results=jira_fetch_batch_size
+                    query=jql_query,
+                    start_at=start_at,
+                    max_results=jira_fetch_batch_size,
                 )
             except Exception as e:
                 self.logger.error(f"Failed to load data from Jira: {e}", exc_info=True)
@@ -102,12 +110,18 @@ class JiraIndexer:
                 break
 
             if not batch_docs:
-                self.logger.info("No more documents returned from Jira; ending batch fetch.")
+                self.logger.info(
+                    "No more documents returned from Jira; ending batch fetch."
+                )
                 break
 
-            self.logger.info(f"Fetched {len(batch_docs)} documents in this batch. Converting to nodes.")
+            self.logger.info(
+                f"Fetched {len(batch_docs)} documents in this batch. Converting to nodes."
+            )
             batch_nodes = node_parser.get_nodes_from_documents(batch_docs)
-            self.logger.info(f"Converted to {len(batch_nodes)} nodes; inserting batch into index.")
+            self.logger.info(
+                f"Converted to {len(batch_nodes)} nodes; inserting batch into index."
+            )
 
             if batch_nodes:
                 index.insert_nodes(batch_nodes)
@@ -122,9 +136,13 @@ class JiraIndexer:
             start_at += jira_fetch_batch_size
 
         if total_nodes_indexed == 0:
-            self.logger.info("No documents were indexed from Jira for the given JQL query.")
+            self.logger.info(
+                "No documents were indexed from Jira for the given JQL query."
+            )
         else:
-            self.logger.info(f"Persisting storage context for Jira index. Total nodes indexed: {total_nodes_indexed}")
+            self.logger.info(
+                f"Persisting storage context for Jira index. Total nodes indexed: {total_nodes_indexed}"
+            )
             storage_context.persist()
             self.logger.info("Storage context persisted successfully.")
 
