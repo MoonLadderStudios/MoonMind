@@ -99,16 +99,14 @@ class TestOpenAIFactory(unittest.TestCase):
 
         model_name = get_openai_model()  # Get default model
         self.assertEqual(model_name, "gpt-default")
-        mock_logger_warning.assert_called_with(
-            "OpenAI API key is not set in settings. OpenAI model initialization might fail."
-        )
+        # The function no longer logs this warning, as API key handling is elsewhere.
+        mock_logger_warning.assert_not_called()
 
         mock_logger_warning.reset_mock()  # Reset mock for the next call
         model_name_specific = get_openai_model("gpt-specific")  # Get specific model
         self.assertEqual(model_name_specific, "gpt-specific")
-        mock_logger_warning.assert_called_with(
-            "OpenAI API key is not set in settings. OpenAI model initialization might fail."
-        )
+        # The function no longer logs this warning.
+        mock_logger_warning.assert_not_called()
 
 
 if __name__ == "__main__":

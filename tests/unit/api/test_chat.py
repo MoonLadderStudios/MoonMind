@@ -57,8 +57,8 @@ mock_llama_settings_dependency = MagicMock()
 
 # Override dependencies in the app
 app.dependency_overrides[current_active_user] = mock_current_active_user
-app.dependency_overrides[get_user_api_key] = mock_user_api_key_dependency # Directly use the AsyncMock
-app.dependency_overrides[get_async_session] = lambda: mock_db_session
+# app.dependency_overrides[get_user_api_key] = lambda: mock_user_api_key_dependency # This was incorrect as get_user_api_key is not a FastAPI dependency
+app.dependency_overrides[get_async_session] = lambda: mock_db_session # This IS a FastAPI dependency for chat_completions
 app.dependency_overrides[get_vector_index] = lambda: mock_vector_index_dependency
 app.dependency_overrides[get_service_context] = lambda: mock_llama_settings_dependency
 
@@ -140,12 +140,35 @@ def mock_openai_chat_response():
     mock_usage.completion_tokens = 25
     mock_usage.total_tokens = 40
 
-    mock_response = AsyncMock()
+    # Replicate the structure of openai.types.chat.ChatCompletion
+    mock_response = MagicMock(spec=True) # Using MagicMock, spec=True can help catch attribute errors
     mock_response.id = response_id
     mock_response.created = created_time
     mock_response.model = "gpt-3.5-turbo-mocked"
-    mock_response.choices = [mock_choice]
-    mock_response.usage = mock_usage
+
+    # Replicate openai.types.chat.chat_completion.Choice
+    choice_mock = MagicMock()
+    choice_mock.finish_reason = "stop"
+    choice_mock.index = 0
+    # Replicate openai.types.chat.chat_completion_message.ChatCompletionMessage
+    message_mock = MagicMock()
+    message_mock.content = "This is a response from OpenAI (mocked)."
+    message_mock.role = "assistant"
+    message_mock.function_call = None
+    message_mock.tool_calls = None
+    choice_mock.message = message_mock
+    choice_mock.logprobs = None
+    mock_response.choices = [choice_mock]
+
+    # Replicate openai.types.completion_usage.CompletionUsage
+    usage_mock = MagicMock()
+    usage_mock.prompt_tokens = 15
+    usage_mock.completion_tokens = 25
+    usage_mock.total_tokens = 40
+    mock_response.usage = usage_mock
+
+    mock_response.object = "chat.completion"
+    mock_response.system_fingerprint = None
     return mock_response
 
 
@@ -164,51 +187,62 @@ def mock_google_chat_response():
 
 # Test with model_cache integration
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
-@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.AsyncOpenAI") # Corrected patch target
 def test_chat_completions_openai_via_cache(
-    mock_acreate,
-    mock_get_provider,
+    mock_async_openai_client, # Patched AsyncOpenAI
+    mock_get_user_api_key_helper, # Patched get_user_api_key
+    mock_get_provider, # Patched model_cache.get_model_provider
     chat_request_openai_model,
-    mock_openai_chat_response,
+    mock_openai_chat_response, # This fixture might need update for new SDK response structure
 ):
-    settings.openai.openai_api_key = "fake_openai_key_for_test"
+    # settings.openai.openai_api_key = "fake_openai_key_for_test" # Global key not primary focus
     mock_get_provider.return_value = "OpenAI"
-    mock_acreate.return_value = mock_openai_chat_response
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+
+    # Configure the mock AsyncOpenAI client instance and its methods
+    mock_client_instance = AsyncMock()
+    mock_client_instance.chat.completions.create = AsyncMock(return_value=mock_openai_chat_response)
+    mock_async_openai_client.return_value = mock_client_instance # AsyncOpenAI() call returns our mock_client_instance
 
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
 
     assert response.status_code == 200
     json_response = response.json()
+    # Assertions need to align with mock_openai_chat_response structure (which should mimic new SDK)
     assert json_response["model"] == mock_openai_chat_response.model
     assert (
         json_response["choices"][0]["message"]["content"]
         == mock_openai_chat_response.choices[0].message.content
     )
     mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
-    mock_acreate.assert_called_once()
+    mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
+    mock_client_instance.chat.completions.create.assert_called_once()
 
 
 # Test with model_cache integration and corrected path
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
-@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.AsyncOpenAI") # Corrected patch target
 def test_chat_completions_endpoint_success_corrected_path(
-    mock_acreate,
-    mock_get_provider,
+    mock_async_openai_client, # Patched AsyncOpenAI
+    mock_get_user_api_key_helper, # Patched get_user_api_key
+    mock_get_provider, # Patched model_cache.get_model_provider
     chat_request_openai_model,
-    mock_openai_chat_response,
+    mock_openai_chat_response, # This fixture might need update for new SDK response structure
 ):
-    # Patch settings directly in the router's imported settings instance
-    settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test"
-    # Ensure the global settings are also patched if your teardown relies on it,
-    # though patching settings_in_chat_router is more direct for router behavior.
-    # settings.openai.openai_api_key = "fake_openai_key_for_test" # Already handled by setup/teardown via original_openai_api_key
-
+    settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test" # Can remain for server enabled check if any
     mock_get_provider.return_value = "OpenAI"
-    mock_acreate.return_value = mock_openai_chat_response
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+
+    # Configure the mock AsyncOpenAI client instance and its methods
+    mock_client_instance = AsyncMock()
+    mock_client_instance.chat.completions.create = AsyncMock(return_value=mock_openai_chat_response)
+    mock_async_openai_client.return_value = mock_client_instance
 
     response = client.post(
         "/completions", json=chat_request_openai_model.model_dump()
-    )  # Use corrected path
+    )
 
     assert response.status_code == 200
     json_response = response.json()
@@ -218,24 +252,28 @@ def test_chat_completions_endpoint_success_corrected_path(
         == mock_openai_chat_response.choices[0].message.content
     )
     mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
-    mock_acreate.assert_called_once()
+    mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
+    mock_client_instance.chat.completions.create.assert_called_once()
 
 
-@patch("google.generativeai.configure")  # Outermost mock
-@patch(
-    "api_service.api.routers.chat.get_google_model"
-)  # Middle mock - CORRECTED TARGET
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Innermost mock
+@patch("google.generativeai.configure")
+@patch("api_service.api.routers.chat.get_google_model")
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock) # Patching the helper
 def test_chat_completions_google_via_cache(
-    mock_get_model_provider,  # Corresponds to model_cache.get_model_provider
-    mock_router_get_google_model,  # Corresponds to chat.get_google_model
-    mock_genai_configure,  # Corresponds to genai.configure
+    mock_get_user_api_key_helper, # Innermost due to decorator order
+    mock_get_model_provider,
+    mock_router_get_google_model,
+    mock_genai_configure,
     chat_request_google_model,
     mock_google_chat_response,
 ):
     # Directly set attributes on the imported settings instance
     settings_in_chat_router.google.google_enabled = True
-    settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
+    settings_in_chat_router.google.google_api_key = "fake_google_key_for_test" # This is for the global key, not user specific
+
+    # Setup the new mock for get_user_api_key helper
+    mock_get_user_api_key_helper.return_value = "test-google-key"
 
     mock_get_model_provider.return_value = "Google"
     mock_google_chat_model_instance = MagicMock()
@@ -370,44 +408,58 @@ def test_chat_completions_model_found_after_refresh_openai(
 
 # API Key Checks (still relevant with cache)
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_openai_no_api_key_with_cache(
-    mock_get_provider, chat_request_openai_model
+    mock_get_user_api_key_helper, mock_get_provider, chat_request_openai_model
 ):
-    settings.openai.openai_api_key = None  # Key not set
-    mock_get_provider.return_value = "OpenAI"  # Cache says it's an OpenAI model
+    # settings.openai.openai_api_key = None # Global key not relevant here for user-specific check
+    mock_get_provider.return_value = "OpenAI"
+    mock_get_user_api_key_helper.return_value = None # Simulate user has no key for OpenAI
 
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 400
-    assert "OpenAI API key not configured" in response.json()["detail"]
+    assert "API key for OpenAI not found in your profile" in response.json()["detail"]
 
 
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_google_no_api_key_with_cache(
-    mock_get_provider, chat_request_google_model
+    mock_get_user_api_key_helper, mock_get_provider, chat_request_google_model
 ):
-    settings.google.google_api_key = None  # Key not set
-    mock_get_provider.return_value = "Google"  # Cache says it's a Google model
+    # settings.google.google_api_key = None # Global key not relevant
+    mock_get_provider.return_value = "Google"
+    mock_get_user_api_key_helper.return_value = None # Simulate user has no key for Google
 
     response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
-    assert "Google API key not configured" in response.json()["detail"]
+    assert "API key for Google not found in your profile" in response.json()["detail"]
 
 
 # General API errors after successful routing by cache
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
-@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.AsyncOpenAI") # Corrected patch target
 def test_chat_completions_openai_api_error_with_cache(
-    mock_acreate, mock_get_provider, chat_request_openai_model
+    mock_async_openai_client, # Patched AsyncOpenAI
+    mock_get_user_api_key_helper, # Patched get_user_api_key
+    mock_get_provider, # Patched model_cache.get_model_provider
+    chat_request_openai_model
 ):
-    settings.openai.openai_api_key = "fake_openai_key_for_test"
+    # settings.openai.openai_api_key = "fake_openai_key_for_test" # Global key not primary
     mock_get_provider.return_value = "OpenAI"
-    mock_acreate.side_effect = Exception("OpenAI API Communication Error")
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+
+    # Configure the mock AsyncOpenAI client instance to raise an error
+    mock_client_instance = AsyncMock()
+    mock_client_instance.chat.completions.create = AsyncMock(side_effect=Exception("OpenAI API Communication Error"))
+    mock_async_openai_client.return_value = mock_client_instance
 
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 500
     assert (
-        "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"]
+        "OpenAI API error: OpenAI API Communication Error" in response.json()["detail"] # This error message comes from the handler
     )
+    mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
 
 
 @patch("google.generativeai.configure")
@@ -460,13 +512,16 @@ def chat_request_ollama_model():
 
 # Tests for provider enablement functionality
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_openai_provider_disabled(
-    mock_get_provider, chat_request_openai_model
+    mock_get_user_api_key_helper, mock_get_provider, chat_request_openai_model
 ):
     """Test that disabled OpenAI provider returns appropriate error"""
     settings_in_chat_router.openai.openai_enabled = False
-    settings_in_chat_router.openai.openai_api_key = "fake_key"
+    settings_in_chat_router.openai.openai_api_key = "fake_key" # Global key
     # settings.openai.openai_api_key = "fake_openai_key_for_test" # Original line for teardown reference
+    mock_get_user_api_key_helper.return_value = "sk-test-openai-key" # User has a key, but provider is off
+
 
     mock_get_provider.return_value = "OpenAI"
 
@@ -474,7 +529,7 @@ def test_chat_completions_openai_provider_disabled(
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_openai_request in chat.py
-    assert "OpenAI provider is disabled." in json_response["detail"]
+    assert "OpenAI provider is disabled on the server." in json_response["detail"]
 
 
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -492,7 +547,7 @@ def test_chat_completions_google_provider_disabled(
     assert response.status_code == 400
     json_response = response.json()
     # The error message comes from handle_google_request in chat.py
-    assert "Google provider is disabled." in json_response["detail"]
+    assert "Google provider is disabled on the server." in json_response["detail"]
 
 
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -514,32 +569,42 @@ def test_chat_completions_ollama_provider_disabled(
 
 # Test default model functionality
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
-# Removed patch for 'settings.get_default_chat_model'
-@patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.AsyncOpenAI") # Corrected patch target
 def test_chat_completions_uses_default_model(
-    mock_acreate, mock_get_provider, chat_request_no_model, mock_openai_chat_response
+    mock_async_openai_client, # Patched AsyncOpenAI
+    mock_get_user_api_key_helper, # Patched get_user_api_key
+    mock_get_provider, # Patched model_cache.get_model_provider
+    chat_request_no_model,
+    mock_openai_chat_response # Fixture for response
 ):
     """Test that default model is used when no model is specified"""
 
-    # Set attributes on settings_in_chat_router to guide get_default_chat_model()
     settings_in_chat_router.default_chat_provider = "openai"
-    # settings_in_chat_router.openai.openai_chat_model is "gpt-3.5-turbo" by default
+    # Default model (e.g., "gpt-3.5-turbo") will be fetched by settings.get_default_chat_model()
 
-    # Ensure OpenAI provider is enabled for the subsequent call
     settings_in_chat_router.openai.openai_enabled = True
-    settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test"
-    # The global 'settings.openai.openai_api_key = "fake_openai_key_for_test"' from the original
-    # test setup is fine for teardown, but router uses settings_in_chat_router.
+    # settings_in_chat_router.openai.openai_api_key = "fake_openai_key_for_test" # Global key not primary
 
-    mock_get_provider.return_value = "OpenAI"
-    mock_acreate.return_value = mock_openai_chat_response
+    mock_get_provider.return_value = "OpenAI" # Model cache identifies the default model as OpenAI
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key" # User has a key
+
+    # Configure the mock AsyncOpenAI client
+    mock_client_instance = AsyncMock()
+    mock_client_instance.chat.completions.create = AsyncMock(return_value=mock_openai_chat_response)
+    mock_async_openai_client.return_value = mock_client_instance
 
     response = client.post("/completions", json=chat_request_no_model.model_dump())
 
     assert response.status_code == 200
-    # mock_get_default.assert_called_once() # Removed as get_default_chat_model is no longer mocked
-    # The model_to_use in chat.py will be the result of the real get_default_chat_model()
-    mock_get_provider.assert_called_once_with("gpt-3.5-turbo")
+    # Assert that get_model_provider was called with the actual default model name
+    # The actual default model name comes from settings.get_default_chat_model()
+    # For this test, let's assume it's "gpt-3.5-turbo" as per current settings default.
+    # If settings.get_default_chat_model() is complex, this might need adjustment or specific mocking of settings.
+    actual_default_model = settings.get_default_chat_model() # Get it dynamically
+    mock_get_provider.assert_called_once_with(actual_default_model)
+    mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
+    mock_client_instance.chat.completions.create.assert_called_once()
 
 
 # Test Ollama integration

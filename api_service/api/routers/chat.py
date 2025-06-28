@@ -3,6 +3,7 @@ import time
 from typing import List, Optional
 from uuid import uuid4
 import openai
+from openai import AsyncOpenAI # Moved import to top
 
 # RAG imports from feat/rag branch
 from llama_index.core import Settings as LlamaSettings
@@ -297,20 +298,11 @@ async def handle_openai_request(
     # Prepare messages for OpenAI
     openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
+    # The import 'from openai import AsyncOpenAI' is now at the top of the file.
+    # This try block will encompass client creation and the API call.
     try:
-        # Use the user-specific API key
-        # openai.api_key = api_key # Setting global openai.api_key is not ideal for concurrent requests
-        # Instead, pass it directly to the request if the SDK supports it, or use a per-request client.
-        # For openai SDK v0.x.x, openai.api_key is global.
-        # For openai SDK v1.x.x, you initialize a client: client = OpenAI(api_key=api_key)
-        # Assuming older SDK for now based on current code.
-        # IMPORTANT: If multiple users access this concurrently, this global assignment is an issue.
-        # The `get_openai_model` or a new client instantiation should handle the key.
-        # For simplicity in this step, we'll set it globally but acknowledge this limitation.
-        current_openai_api_key = openai.api_key # Store current global key if any
-        openai.api_key = api_key
-
-        openai_response = await openai.ChatCompletion.acreate(
+        client = AsyncOpenAI(api_key=api_key)
+        openai_response = await client.chat.completions.create(
             model=openai_model_name,
             messages=openai_messages,
             max_tokens=request.max_tokens,
@@ -318,11 +310,8 @@ async def handle_openai_request(
         )
     except Exception as e:
         logger.error(f"Error calling OpenAI API for model {openai_model_name}: {e}")
+        # Consider more specific error handling for common OpenAI API errors if needed
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
-    finally:
-        # Restore the original global API key to avoid interference
-        openai.api_key = current_openai_api_key
-
 
     if not openai_response.choices:
         raise HTTPException(
@@ -330,27 +319,36 @@ async def handle_openai_request(
             detail="Invalid response from OpenAI API: No choices returned.",
         )
 
-    ai_message_content = openai_response.choices[0].message.content
+    # Accessing response data according to OpenAI SDK v1.x.x
+    first_choice = openai_response.choices[0]
+    ai_message_content = first_choice.message.content
+    finish_reason = first_choice.finish_reason
     usage_data = openai_response.usage
+
+    if usage_data is None: # Should not happen with successful chat completion
+        logger.error("OpenAI response missing usage data.")
+        # Provide default usage if necessary, or handle as an error
+        usage_data = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
 
     return ChatCompletionResponse(
         id=openai_response.id,
-        object="chat.completion",
+        object=openai_response.object, # typically "chat.completion"
         created=openai_response.created,
         model=openai_response.model,
         choices=[
             Choice(
-                index=0,
+                index=0, # SDK v1.x index is usually part of the choice object, but response schema expects it
                 message=ChoiceMessage(
                     role="assistant", content=ai_message_content.strip()
                 ),
-                finish_reason=openai_response.choices[0].finish_reason,
+                finish_reason=finish_reason,
             )
         ],
-        usage=Usage(
-            prompt_tokens=usage_data.prompt_tokens,
-            completion_tokens=usage_data.completion_tokens,
-            total_tokens=usage_data.total_tokens,
+        usage=Usage( # Ensure these fields exist on usage_data
+            prompt_tokens=usage_data.prompt_tokens if usage_data else 0,
+            completion_tokens=usage_data.completion_tokens if usage_data else 0,
+            total_tokens=usage_data.total_tokens if usage_data else 0,
         ),
     )
 
