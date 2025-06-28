@@ -4,7 +4,6 @@ import pytest
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import CountRequest  # Added import
 
 from api_service.main import app
 
@@ -20,13 +19,25 @@ CONFLUENCE_USERNAME = os.getenv("CONFLUENCE_USERNAME")
 CONFLUENCE_API_KEY = os.getenv("CONFLUENCE_API_KEY")
 TEST_CONFLUENCE_SPACE_KEY = os.getenv("TEST_CONFLUENCE_SPACE_KEY")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333")) # Ensure string default for int conversion
-QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "moonmind_documents") # Ensure this matches your actual collection name from settings
+QDRANT_PORT = int(
+    os.getenv("QDRANT_PORT", "6333")
+)  # Ensure string default for int conversion
+QDRANT_COLLECTION_NAME = os.getenv(
+    "QDRANT_COLLECTION_NAME", "moonmind_documents"
+)  # Ensure this matches your actual collection name from settings
 
 skip_if_missing_env_vars = pytest.mark.skipif(
-    not all([CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_KEY, TEST_CONFLUENCE_SPACE_KEY]),
-    reason="Required Confluence environment variables are not set in .env"
+    not all(
+        [
+            CONFLUENCE_URL,
+            CONFLUENCE_USERNAME,
+            CONFLUENCE_API_KEY,
+            TEST_CONFLUENCE_SPACE_KEY,
+        ]
+    ),
+    reason="Required Confluence environment variables are not set in .env",
 )
+
 
 @pytest.fixture(scope="module")
 def e2e_setup():
@@ -35,7 +46,9 @@ def e2e_setup():
     # load_dotenv() is also called at module level.
 
     qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-    test_client = TestClient(app) # app is imported from moonmind.application at module level
+    test_client = TestClient(
+        app
+    )  # app is imported from moonmind.application at module level
 
     # No Qdrant cleanup or recreation logic in this iteration.
     # Assume the collection QDRANT_COLLECTION_NAME exists.
@@ -43,12 +56,13 @@ def e2e_setup():
     yield {
         "test_client": test_client,
         "qdrant_client": qdrant_client,
-        "collection_name": QDRANT_COLLECTION_NAME
+        "collection_name": QDRANT_COLLECTION_NAME,
     }
 
     # Teardown: close the qdrant client
     qdrant_client.close()
     # print("Qdrant client closed.") # Optional: for debugging during test runs
+
 
 @skip_if_missing_env_vars
 def test_load_and_query_confluence_documents(e2e_setup):
@@ -84,8 +98,7 @@ def test_load_and_query_confluence_documents(e2e_setup):
     # A robust test might first check collection existence or rely on the count.
     try:
         count_response = qdrant_client.count(
-            collection_name=collection_name,
-            exact=True
+            collection_name=collection_name, exact=True
         )
         assert count_response.count > 0
         # Optionally, assert count_response.count == response_json["total_nodes_indexed"]

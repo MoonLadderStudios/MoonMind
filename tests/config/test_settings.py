@@ -1,7 +1,7 @@
-import os
 import pytest
 
 from moonmind.config.settings import AtlassianSettings
+
 
 @pytest.mark.parametrize(
     "env_value, expected",
@@ -15,7 +15,7 @@ from moonmind.config.settings import AtlassianSettings
         ("FALSE", False),
         ("fAlSe", False),
         ("", False),  # Default to False if empty
-        ("other", False), # Default to False if not a valid boolean string
+        ("other", False),  # Default to False if not a valid boolean string
     ],
 )
 def test_atlassian_confluence_enabled_parsing(monkeypatch, env_value, expected):
@@ -25,6 +25,7 @@ def test_atlassian_confluence_enabled_parsing(monkeypatch, env_value, expected):
     # For now, assuming other fields can be None or have defaults.
     settings = AtlassianSettings()
     assert settings.confluence.confluence_enabled == expected
+
 
 @pytest.mark.parametrize(
     "env_value, expected",
@@ -45,6 +46,7 @@ def test_atlassian_jira_enabled_parsing(monkeypatch, env_value, expected):
     monkeypatch.setenv("ATLASSIAN_JIRA_ENABLED", env_value)
     settings = AtlassianSettings()
     assert settings.jira.jira_enabled == expected
+
 
 def test_atlassian_settings_init_no_env_vars(monkeypatch):
     # Ensure that if the env vars are not set, the defaults (False) are used.

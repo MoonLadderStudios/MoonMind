@@ -1,11 +1,14 @@
-from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
-from moonmind.config.settings import (AppSettings, AtlassianSettings,
-                                      GoogleSettings, OllamaSettings,
-                                      OpenAISettings)
+from moonmind.config.settings import (
+    AppSettings,
+    AtlassianSettings,
+    GoogleSettings,
+    OllamaSettings,
+    OpenAISettings,
+)
 
 
 # Fixture for default settings, can be customized in tests
@@ -15,36 +18,40 @@ def app_settings_defaults():
         "google": GoogleSettings(
             google_chat_model="test-google-chat",
             google_embedding_model="test-google-embed",
-            google_api_key="test_google_key" # Required for is_provider_enabled
+            google_api_key="test_google_key",  # Required for is_provider_enabled
         ),
         "openai": OpenAISettings(
             openai_chat_model="test-openai-chat",
-            openai_api_key="test_openai_key" # Required for is_provider_enabled
+            openai_api_key="test_openai_key",  # Required for is_provider_enabled
         ),
         "ollama": OllamaSettings(
             ollama_chat_model="test-ollama-chat",
-            ollama_embedding_model="test-ollama-embed"
+            ollama_embedding_model="test-ollama-embed",
         ),
         # Ensure other required fields for AppSettings have defaults if not provided
-        "default_chat_provider": "google", # Default to google for fixture
-        "default_embedding_provider": "google", # Default to google for fixture
-        "qdrant": {"qdrant_enabled": False}, # Disable things not under test
+        "default_chat_provider": "google",  # Default to google for fixture
+        "default_embedding_provider": "google",  # Default to google for fixture
+        "qdrant": {"qdrant_enabled": False},  # Disable things not under test
         "rag": {},
         "github": {"github_enabled": False},
         "google_drive": {"google_drive_enabled": False},
         "atlassian": {
             "confluence": {"confluence_enabled": False},
-            "jira": {"jira_enabled": False}
+            "jira": {"jira_enabled": False},
         },
-
     }
+
 
 # Test that the removed fields are indeed gone
 def test_default_model_fields_removed(app_settings_defaults):
     with pytest.raises(ValidationError):
-        AppSettings(**app_settings_defaults, default_chat_model="some-model") # This should fail
+        AppSettings(
+            **app_settings_defaults, default_chat_model="some-model"
+        )  # This should fail
     with pytest.raises(ValidationError):
-        AppSettings(**app_settings_defaults, default_embed_model="some-model") # This should fail
+        AppSettings(
+            **app_settings_defaults, default_embed_model="some-model"
+        )  # This should fail
 
     # Check that they are not present as attributes either
     settings = AppSettings(**app_settings_defaults)

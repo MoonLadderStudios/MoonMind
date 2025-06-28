@@ -2,14 +2,25 @@ import uuid
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload # For eager loading if needed in the future
 from fastapi import HTTPException, status
 
-from api_service.db.models import UserProfile, User # User model might be needed for context or future validation
-from api_service.api.schemas import UserProfileSchema, UserProfileUpdateSchema, UserProfileCreateSchema
+from api_service.db.models import (
+    UserProfile,
+    User,
+)  # User model might be needed for context or future validation
+
+# Updated import to use UserProfileRead and UserProfileUpdate
+from api_service.api.schemas import (
+    UserProfileRead,
+    UserProfileUpdate,
+    UserProfileCreateSchema,
+)
+
 
 class ProfileService:
-    async def get_profile_by_user_id(self, db_session: AsyncSession, user_id: uuid.UUID) -> Optional[UserProfile]:
+    async def get_profile_by_user_id(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> Optional[UserProfile]:
         """
         Retrieves a user's profile by user_id.
         Returns the UserProfile model instance or None if not found.
@@ -19,7 +30,9 @@ class ProfileService:
         )
         return result.scalars().first()
 
-    async def get_or_create_profile(self, db_session: AsyncSession, user_id: uuid.UUID) -> UserProfileSchema:
+    async def get_or_create_profile(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> UserProfileRead:
         """
         Retrieves a user's profile by user_id, or creates a new one if it doesn't exist.
         The `user_id` is expected to be validated and exist in the `User` table upstream.
@@ -33,20 +46,22 @@ class ProfileService:
             if not user_exists:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"User with id {user_id} not found. Cannot create profile."
+                    detail=f"User with id {user_id} not found. Cannot create profile.",
                 )
 
             # Create a new profile with default (empty) values initially
             # UserProfileCreateSchema can be used here if specific creation defaults are desired
             # For now, directly creating UserProfile model instance
-            new_profile_data = UserProfileCreateSchema() # Provides default values if any
+            new_profile_data = (
+                UserProfileCreateSchema()
+            )  # Provides default values if any
 
             profile = UserProfile(
                 user_id=user_id,
                 # Set fields from new_profile_data if they exist and are not None
                 # Example: profile.some_field = new_profile_data.some_field
                 # For google_api_key, it's optional and defaults to None in the schema
-                google_api_key_encrypted=new_profile_data.google_api_key # Will be None if not provided
+                google_api_key_encrypted=new_profile_data.google_api_key,  # Will be None if not provided
             )
             db_session.add(profile)
             try:
@@ -54,16 +69,24 @@ class ProfileService:
                 await db_session.refresh(profile)
             except Exception as e:
                 import logging
-                logging.error("Failed to commit transaction while creating profile", exc_info=True)
+
+                logging.error(
+                    "Failed to commit transaction while creating profile", exc_info=True
+                )
                 await db_session.rollback()
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create profile: {str(e)}"
+                    detail=f"Failed to create profile: {str(e)}",
                 )
 
-        return UserProfileSchema.from_orm(profile)
+        return UserProfileRead.from_orm(profile)  # Use UserProfileRead
 
-    async def update_profile(self, db_session: AsyncSession, user_id: uuid.UUID, profile_data: UserProfileUpdateSchema) -> UserProfileSchema:
+    async def update_profile(
+        self,
+        db_session: AsyncSession,
+        user_id: uuid.UUID,
+        profile_data: UserProfileUpdate,
+    ) -> UserProfileRead:  # Use UserProfileUpdate and UserProfileRead
         """
         Updates an existing user's profile.
         If the profile doesn't exist, it will first be created.
@@ -84,49 +107,54 @@ class ProfileService:
             if not user_exists:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"User with id {user_id} not found. Cannot create or update profile."
+                    detail=f"User with id {user_id} not found. Cannot create or update profile.",
                 )
 
             profile = UserProfile(user_id=user_id)
             # Apply update data to the new profile
             update_data = profile_data.dict(exclude_unset=True)
             for key, value in update_data.items():
-                if key == "google_api_key": # Schema field name
-                    setattr(profile, "google_api_key_encrypted", value) # Model field name
+                if key == "google_api_key":  # Schema field name
+                    setattr(
+                        profile, "google_api_key_encrypted", value
+                    )  # Model field name
                 elif hasattr(profile, key):
                     setattr(profile, key, value)
 
             db_session.add(profile)
             # No commit yet, will commit after applying updates or if it was just created.
 
-        else: # Profile exists, update it
-            update_data = profile_data.dict(exclude_unset=True) # Get only provided fields
+        else:  # Profile exists, update it
+            update_data = profile_data.dict(
+                exclude_unset=True
+            )  # Get only provided fields
             if not update_data:
-                 # If no data to update, just return the current profile
-                return UserProfileSchema.from_orm(profile)
+                # If no data to update, just return the current profile
+                return UserProfileRead.from_orm(profile)  # Use UserProfileRead
 
             for key, value in update_data.items():
-                if key == "google_api_key": # Schema field name for input
+                if key == "google_api_key":  # Schema field name for input
                     # The model field is 'google_api_key_encrypted'.
                     # Assigning to it will trigger encryption via EncryptedType.
                     setattr(profile, "google_api_key_encrypted", value)
-                elif hasattr(profile, key): # For other potential direct mapped fields
+                elif hasattr(profile, key):  # For other potential direct mapped fields
                     setattr(profile, key, value)
                 # else:
                 #     logger.warning(f"Field {key} in profile_data not found on UserProfile model or not handled.")
 
         try:
-            await db_session.commit() # Commit changes (either new profile or updates)
+            await db_session.commit()  # Commit changes (either new profile or updates)
             await db_session.refresh(profile)
         except Exception as e:
             await db_session.rollback()
             # Log error e
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to update profile: {str(e)}"
+                detail=f"Failed to update profile: {str(e)}",
             )
 
-        return UserProfileSchema.from_orm(profile)
+        return UserProfileRead.from_orm(profile)  # Use UserProfileRead
+
 
 # Optional: A function to get the service instance, useful for dependency injection
 # async def get_profile_service() -> ProfileService:

@@ -1,8 +1,7 @@
-from llama_index.core import Settings, StorageContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import Distance
 
 from ..config.settings import AppSettings
 
@@ -15,7 +14,9 @@ def build_vector_store(settings: AppSettings, embed_model, embed_dimensions: int
     if settings.vector_store_provider == "qdrant":
         return build_qdrant(settings, embed_model, embed_dimensions)
     else:
-        raise ValueError(f"Unsupported vector store provider: {settings.vector_store_provider}")
+        raise ValueError(
+            f"Unsupported vector store provider: {settings.vector_store_provider}"
+        )
 
 
 def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1):
@@ -25,9 +26,9 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
     """
 
     client = QdrantClient(
-        host=settings.qdrant.qdrant_host, # Corrected access
+        host=settings.qdrant.qdrant_host,  # Corrected access
         port=settings.qdrant.qdrant_port,  # Corrected access
-        check_compatibility=False # Add this line
+        check_compatibility=False,  # Add this line
     )
 
     if embed_dimensions == -1:
@@ -67,4 +68,3 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
     )
 
     return vector_store
-
