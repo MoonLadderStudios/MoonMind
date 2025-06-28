@@ -1,6 +1,6 @@
 import os
-from pathlib import Path # Added Path
-from typing import Optional # Keep one Optional import
+from pathlib import Path  # Added Path
+from typing import Optional  # Keep one Optional import
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
     AliasChoices, Field, field_validator)
@@ -9,7 +9,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class DatabaseSettings(BaseSettings):
     """Database settings"""
-    DATABASE_URL: str = Field("postgresql+asyncpg://user:password@localhost/dbname", env="DATABASE_URL")
+    POSTGRES_HOST: str = Field("localhost", env="POSTGRES_HOST")
+    POSTGRES_USER: str = Field("postgres", env="POSTGRES_USER")
+    POSTGRES_PASSWORD: str = Field("password", env="POSTGRES_PASSWORD")
+    POSTGRES_DB: str = Field("moonmind", env="POSTGRES_DB")
+    POSTGRES_PORT: int = Field(5432, env="POSTGRES_PORT")
+
+    @property
+    def POSTGRES_URL(self) -> str:
+        """Construct PostgreSQL URL from components"""
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+    @property
+    def POSTGRES_URL_SYNC(self) -> str:
+        """Construct synchronous PostgreSQL URL for Alembic"""
+        return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     model_config = SettingsConfigDict(env_prefix="")
 

@@ -7,4 +7,5 @@ prompts/
 jobs/
 *.code-workspace
 .env
+.env-backup
 .openhands-state-data/
