@@ -39,6 +39,7 @@ Requires-Dist: langchain-google-genai<3.0,>=2.0
 Requires-Dist: langchain-ollama<1.0,>=0.3
 Requires-Dist: langchain-openai<1.0,>=0.3
 Requires-Dist: langchain-qdrant<1.0,>=0.2
+Requires-Dist: readmeai<1.0,>=0.5.0
 Requires-Dist: langsmith<1.0,>=0.3
 Requires-Dist: llama-index<1.0,>=0.12
 Requires-Dist: llama-index-embeddings-google-genai<1.0,>=0.2
@@ -75,6 +76,7 @@ Requires-Dist: pytest-asyncio<0.24.0,>=0.23.0
 Requires-Dist: alembic<2.0.0,>=1.13.0
 Requires-Dist: sqlalchemy-utils<0.42.0,>=0.41.1
 Requires-Dist: cryptography<43.0.0,>=42.0.0
+Requires-Dist: psycopg2-binary<3.0.0,>=2.9.0
 Dynamic: license-file
 
 # MoonMind
