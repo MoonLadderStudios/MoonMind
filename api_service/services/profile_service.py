@@ -53,8 +53,9 @@ class ProfileService:
                 await db_session.commit()
                 await db_session.refresh(profile)
             except Exception as e:
+                import logging
+                logging.error("Failed to commit transaction while creating profile", exc_info=True)
                 await db_session.rollback()
-                # Consider specific database error logging or re-raising
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to create profile: {str(e)}"
