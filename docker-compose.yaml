@@ -50,11 +50,11 @@ services:
       - postgres
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg${POSTGRES_VERSION:-16}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      POSTGRES_DB: ${POSTGRES_DB:-mydatabase}
+      POSTGRES_DB: ${POSTGRES_DB:-moonmind}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres_init:/docker-entrypoint-initdb.d
