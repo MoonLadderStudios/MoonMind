@@ -8,12 +8,15 @@ import time
 # Assuming the main app's router is imported correctly
 # Ensure the path to chat_router is correct based on your project structure.
 # If chat.py is in api_service.api.routers.chat, this should be fine.
-from api_service.api.routers.chat import router as chat_router
+from api_service.api.routers.chat import router as chat_router, get_user_api_key
 from moonmind.config import settings  # Direct import for patching, used for teardown
 from api_service.api.routers.chat import (
     settings as settings_in_chat_router,
 )  # For patch.object
 from moonmind.schemas.chat_models import ChatCompletionRequest, Message
+from api_service.auth import current_active_user # Import for overriding
+from api_service.db.models import User # For mock user type hint
+from api_service.db.base import get_async_session # For overriding db session
 
 # Setup TestClient
 app = FastAPI()
@@ -21,12 +24,41 @@ app.include_router(chat_router)  # Router paths are already prefixed
 
 from api_service.api.dependencies import get_vector_index, get_service_context # noqa E402
 
-# Mock the dependencies that rely on app.state
-# These can be simple MagicMocks for most router unit tests,
-# or more sophisticated mocks if specific behavior is needed from them.
+# --- Mocking Dependencies ---
+# Mock user for authentication
+mock_user = User(id=uuid4(), email="test@example.com", is_active=True, is_superuser=False, is_verified=True, hashed_password="fake")
+
+def mock_current_active_user():
+    return mock_user
+
+# Mock get_user_api_key
+async def mock_get_user_api_key_logic(user: User, provider: str, db_session):
+    # This print helps debug which provider is being asked for during tests.
+    # print(f"mock_get_user_api_key_logic called for user {user.id}, provider {provider}")
+    if provider == "OpenAI":
+        # Allow specific tests to override this by changing the side_effect of mock_user_api_key_dependency
+        return "sk-test-openai-key"
+    elif provider == "Google":
+        return "test-google-key" # Corrected this line
+    elif provider == "Anthropic":
+        return "test-anthropic-key"
+    # Ollama doesn't need a key, so get_user_api_key shouldn't be called for it.
+    # If provider is None or any other unhandled case:
+    return None
+
+mock_user_api_key_dependency = AsyncMock(side_effect=mock_get_user_api_key_logic)
+
+# Mock database session
+mock_db_session = AsyncMock()
+
+# Mock other app state dependencies
 mock_vector_index_dependency = MagicMock()
 mock_llama_settings_dependency = MagicMock()
 
+# Override dependencies in the app
+app.dependency_overrides[current_active_user] = mock_current_active_user
+app.dependency_overrides[get_user_api_key] = mock_user_api_key_dependency # Directly use the AsyncMock
+app.dependency_overrides[get_async_session] = lambda: mock_db_session
 app.dependency_overrides[get_vector_index] = lambda: mock_vector_index_dependency
 app.dependency_overrides[get_service_context] = lambda: mock_llama_settings_dependency
 
@@ -222,8 +254,9 @@ def test_chat_completions_google_via_cache(
         == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
     )
     mock_get_model_provider.assert_called_once_with(chat_request_google_model.model)
+    # Adjust the assertion to expect the api_key argument
     mock_router_get_google_model.assert_called_once_with(
-        chat_request_google_model.model
+        model_name=chat_request_google_model.model, api_key="test-google-key" # Expected from mock_get_user_api_key_logic
     )
     mock_google_chat_model_instance.generate_content.assert_called_once()
     # No mock_is_enabled_google to assert anymore

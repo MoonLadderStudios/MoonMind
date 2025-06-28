@@ -27,12 +27,11 @@ def list_openai_models():
 def get_openai_model(model_name: str = None):
     if not model_name:
         model_name = settings.openai.openai_chat_model
-    if settings.openai.openai_api_key:
-        openai.api_key = settings.openai.openai_api_key
-    else:
-        logger.warning(
-            "OpenAI API key is not set in settings. OpenAI model initialization might fail."
-        )
+    # Removed the global openai.api_key setting from this factory function.
+    # API key management for OpenAI will be handled directly in the request handler
+    # to support per-user keys and avoid conflicts with global state modification here.
+    # logger.warning can be added if model_name is requested but no global key is intended to be available
+    # from settings (though for user-specific keys this is less relevant here).
 
     # Note: Unlike Google's library, OpenAI's library doesn't have a model object initialization.
     # The model is specified when making API calls (e.g., openai.ChatCompletion.create).
