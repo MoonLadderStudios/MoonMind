@@ -165,7 +165,7 @@ async def summarize_repository(
 
             # 3. Summarization
             summary_content = None
-            if request.summary_type == "readme":
+            if request.summary_type == SummaryType.README:
                 logger.info(f"Preparing to generate README for repository in {temp_dir}")
                 readme_config = {
                     "provider": provider.lower(), # readme-ai expects lowercase
