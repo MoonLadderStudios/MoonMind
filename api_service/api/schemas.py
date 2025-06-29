@@ -51,3 +51,13 @@ class UserProfileCreateSchema(UserProfileBaseSchema):
     # This schema might be used if creation requires specific fields or is different from update.
     # For now, it's similar to UserProfileBaseSchema.
     pass
+
+
+class ApiKeyStatus(BaseModel):
+    """Schema for displaying API key status."""
+    openai_api_key_set: bool = False
+    # anthropic_api_key_set: bool = False # Example for other keys
+    # Add other keys as needed
+
+    # For Pydantic V2
+    model_config = {"from_attributes": True} # Replaces orm_mode in Pydantic V2
