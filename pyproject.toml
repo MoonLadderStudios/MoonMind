@@ -55,7 +55,8 @@ dependencies = [
     "sqlalchemy-utils~=0.41.2",
     "cryptography~=45.0.4",
     "psycopg2-binary~=2.9.0",
-    "gitpython~=3.1.42"
+    "gitpython~=3.1.42",
+    "toml~=0.10.2"
 ]
 
 # This tells setuptools where to find packages when building.

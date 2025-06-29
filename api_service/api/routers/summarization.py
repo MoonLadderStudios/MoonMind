@@ -1,28 +1,20 @@
-from enum import Enum
 from typing import Optional
-from urllib.parse import urlparse
-
 from pydantic import BaseModel, Field
-
-
-class SummaryType(str, Enum):
-    README = "readme"
 
 class RepositorySummarizationRequest(BaseModel):
     repo_url: str
-    summary_type: SummaryType = Field(default=SummaryType.README, description="The type of summary to generate.")
+    summary_type: str = Field(default="readme", description="The type of summary to generate.")
     model: Optional[str] = Field(default=None, description="The language model to use for generation.")
 
 class RepositorySummarizationResponse(BaseModel):
     summary_content: str
-    summary_type: SummaryType
+    summary_type: str
 
 # Imports for helper functions and upcoming endpoint
 import logging
-
+from typing import Optional # Already imported, but good to ensure it's here for context
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from api_service.db.models import User  # Assuming User model path
+from api_service.db.models import User # Assuming User model path
 
 logger = logging.getLogger(__name__)
 
@@ -75,18 +67,18 @@ async def get_user_llm_api_key(user: User, provider: str, db: AsyncSession) -> O
     logger.warning(f"No API key logic defined for provider: {provider} in placeholder function for user {user.id}.")
     return None
 
-import tempfile
-
-import git  # GitPython
 # FastAPI and other necessary imports for the router
 from fastapi import APIRouter, Depends, HTTPException
+import tempfile
+import git # GitPython
 
-from api_service.auth import current_active_user
-from api_service.db.base import get_async_session
 # MoonMind specific imports
 from moonmind.config.settings import settings
 from moonmind.models_cache import model_cache
 from moonmind.summarization.readme_generator import ReadmeAiGenerator
+from api_service.auth import current_active_user
+from api_service.db.base import get_async_session
+
 
 router = APIRouter()
 
@@ -140,9 +132,8 @@ async def summarize_repository(
                 if github_token:
                     # Construct authenticated URL: https://oauth2:{token}@github.com/owner/repo.git
                     # This format is common for GitHub. Other providers might vary.
-                    parsed_url = urlparse(request.repo_url)
-                    if parsed_url.hostname == "github.com":
-                        repo_part = parsed_url.path.lstrip("/")
+                    if "github.com/" in request.repo_url:
+                        repo_part = request.repo_url.split("github.com/")[-1]
                         authenticated_url = f"https://oauth2:{github_token}@github.com/{repo_part}"
                         logger.info(f"Attempting to clone with authenticated URL: {authenticated_url.replace(github_token, '***TOKEN***')}")
                         try:
