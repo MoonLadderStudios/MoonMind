@@ -58,8 +58,25 @@ class ReadmeAiGenerator:
 
             # Add any custom configurations
             # For example: --badge-style flat-square
+            # Specific handling for model, provider, and api_key
+            if "model" in self.config and self.config["model"]:
+                args.extend(["--model", str(self.config["model"])])
+
+            # 'provider' in config corresponds to '--llm-provider' for readme-ai CLI
+            if "provider" in self.config and self.config["provider"]:
+                args.extend(["--llm-provider", str(self.config["provider"])]) # Changed from --provider to --llm-provider
+
+            if "api_key" in self.config and self.config["api_key"]:
+                args.extend(["--api-key", str(self.config["api_key"])])
+
+            # Add other configurations from self.config, avoiding duplication
+            # of already handled keys (model, provider, api_key).
+            other_config_keys = ["model", "provider", "api_key"]
             for key, value in self.config.items():
-                args.extend([f"--{key.replace('_', '-')}", str(value)])
+                if key not in other_config_keys and value is not None:
+                    args.extend([f"--{key.replace('_', '-')}", str(value)])
+
+            logger.debug(f"readme-ai arguments: {args}")
 
             # Invoke the readme-ai CLI's entrypoint function
             # readme_cli is not an async function, it's synchronous.
