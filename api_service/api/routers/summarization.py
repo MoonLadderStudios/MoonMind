@@ -12,7 +12,6 @@ class RepositorySummarizationResponse(BaseModel):
 
 # Imports for helper functions and upcoming endpoint
 import logging
-from typing import Optional # Already imported, but good to ensure it's here for context
 from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import User # Assuming User model path
 
