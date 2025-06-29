@@ -7,7 +7,8 @@ services:
       - 8080:8080
     environment:
       - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:8000/v1}
-      - WEBUI_AUTH=${WEBUI_AUTH:-false}
+      - WEBUI_AUTH=${WEBUI_AUTH:-true}
+      - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true}
       - ENABLE_OLLAMA_API=false
     env_file:
       - .env
@@ -91,21 +92,8 @@ services:
       - ./tools:/app/tools:ro
       - ./model_data:/app/model_data:ro
       - ./api_service:/app/api_service:ro
-    command: >
-      sh -c "
-        echo 'Running Alembic migrations...';
-        alembic -c /app/api_service/alembic.ini upgrade head;
-        if [ $? -ne 0 ]; then
-          echo 'Alembic migration failed';
-          exit 1;
-        fi;
-        if [ \"$INIT_DATABASE\" = \"true\" ]; then
-          echo 'Attempting to initialize vector database...';
-          python /app/tools/init_vector_db.py;
-        else
-          echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
-        fi
-      "
+      - ./init_db:/app/init_db
+    command: sh /app/init_db/init_db_entrypoint.sh
     networks:
       - local-network
     restart: "no"
