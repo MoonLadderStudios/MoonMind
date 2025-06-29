@@ -101,7 +101,7 @@ router = APIRouter()
 @router.post("/repository", response_model=RepositorySummarizationResponse)
 async def summarize_repository(
     request: RepositorySummarizationRequest,
-    user: User = Depends(get_current_user), # Updated dependency
+    user: User = Depends(get_current_user()), # Updated dependency
     db: AsyncSession = Depends(get_async_session),
 ):
     """
