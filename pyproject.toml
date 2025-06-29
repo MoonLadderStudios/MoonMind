@@ -57,7 +57,9 @@ dependencies = [
     "psycopg2-binary~=2.9.0",
     "jinja2~=3.1.4",
     "gitpython~=3.1.42",
-    "toml~=0.10.2"
+    "toml~=0.10.2",
+    "pydantic-extra-types~=2.10.1",
+    "structlog~=24.1.0"
 ]
 
 # This tells setuptools where to find packages when building.

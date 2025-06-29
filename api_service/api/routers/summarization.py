@@ -75,9 +75,17 @@ async def get_user_llm_api_key(user: User, provider: str, db: AsyncSession) -> O
     logger.warning(f"No API key logic defined for provider: {provider} in placeholder function for user {user.id}.")
     return None
 
+import os
 import tempfile
 
-import git  # GitPython
+# Set environment variable to suppress git warnings before importing
+os.environ['GIT_PYTHON_REFRESH'] = 'quiet'
+
+try:
+    import git  # GitPython
+except ImportError as e:
+    raise ImportError("GitPython is required but not properly installed. Please install git and GitPython.") from e
+
 # FastAPI and other necessary imports for the router
 from fastapi import APIRouter, Depends, HTTPException
 

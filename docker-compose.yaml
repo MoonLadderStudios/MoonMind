@@ -39,14 +39,14 @@ services:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
-    command: sh /app/api_service/prestart.sh
+    command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
     depends_on:
-      - init-vector-db
+      - init-db
       - postgres
 
   postgres:
@@ -74,7 +74,7 @@ services:
     networks:
       - local-network
 
-  init-vector-db:
+  init-db:
     build:
       context: .
       dockerfile: ./api_service/Dockerfile
@@ -90,17 +90,28 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./tools:/app/tools:ro
       - ./model_data:/app/model_data:ro
+      - ./api_service:/app/api_service:ro
     command: >
       sh -c "
-      if [ \"$INIT_DATABASE\" = \"true\" ]; then
-        echo 'Attempting to initialize vector database...'
-        export PYTHONPATH=/app && python /app/tools/init_vector_db.py;
-      else
-        echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
-      fi"
+        echo 'Running Alembic migrations...';
+        alembic -c /app/api_service/alembic.ini upgrade head;
+        if [ $? -ne 0 ]; then
+          echo 'Alembic migration failed';
+          exit 1;
+        fi;
+        if [ \"$INIT_DATABASE\" = \"true\" ]; then
+          echo 'Attempting to initialize vector database...';
+          python /app/tools/init_vector_db.py;
+        else
+          echo 'INIT_DATABASE not set to true, skipping vector DB initialization.';
+        fi
+      "
     networks:
       - local-network
     restart: "no"
+    depends_on:
+      - postgres
+      - qdrant
 
 volumes:
   open-webui:

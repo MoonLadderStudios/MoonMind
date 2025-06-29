@@ -1,10 +1,7 @@
 #!/bin/bash
-set -e
 
-echo "Running Alembic migrations..."
-cd /app/api_service/migrations
-alembic upgrade head
-cd /app
+# Set environment variables to suppress git warnings
+export GIT_PYTHON_REFRESH=quiet
 
 echo "Starting Uvicorn server..."
 if [ "$FASTAPI_RELOAD" = "true" ]; then

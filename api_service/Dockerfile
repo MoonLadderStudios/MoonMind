@@ -3,27 +3,31 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 RUN apt-get update && \
-    apt-get install -y tesseract-ocr tesseract-ocr-eng && \
+    apt-get install -y tesseract-ocr tesseract-ocr-eng git curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Install hot reloading library
 RUN pip install watchfiles
 
-# Copy pyproject.toml first for better Docker layer caching
+# Copy pyproject.toml and README.md first for better Docker layer caching
 COPY pyproject.toml /app/pyproject.toml
-# Copy other necessary files for installation
 COPY README.md /app/README.md
+
+# Create empty directories to satisfy pip install
+RUN mkdir -p /app/moonmind /app/api_service
+RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
+
+# Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
+RUN pip install -e .
+RUN pip install readmeai~=0.6.3 --no-deps
+
+# Copy source code AFTER installing dependencies
+# This ensures that code changes don't invalidate the dependency cache
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 
-# Install dependencies from pyproject.toml, including api_service in editable mode
-# This assumes pyproject.toml is set up to recognize 'api_service' as a package.
-RUN pip install -e .
-
-# Install readmeai separately due to version conflict
-RUN pip install readmeai~=0.6.0 --no-deps
+RUN chmod +x /app/api_service/entrypoint.sh && \
+    sed -i 's/\r$//' /app/api_service/entrypoint.sh
 
 EXPOSE 8000
 
-# Update CMD to correctly point to the app within the api_service package
-CMD ["uvicorn", "api_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/api_service/entrypoint.sh"]
