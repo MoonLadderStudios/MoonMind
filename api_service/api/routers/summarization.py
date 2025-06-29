@@ -2,14 +2,14 @@ from enum import Enum
 from typing import Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class SummaryType(str, Enum):
     README = "readme"
 
 class RepositorySummarizationRequest(BaseModel):
-    repo_url: str
+    repo_url: HttpUrl
     summary_type: SummaryType = Field(default=SummaryType.README, description="The type of summary to generate.")
     model: Optional[str] = Field(default=None, description="The language model to use for generation.")
 
@@ -125,32 +125,33 @@ async def summarize_repository(
         )
 
     # 2. Temporary Directory and Cloning
+    repo_url_str = str(request.repo_url)  # Convert HttpUrl to string for git operations
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             logger.info(f"Created temporary directory: {temp_dir}")
             cloned_successfully = False
             try:
-                logger.info(f"Attempting to clone {request.repo_url} into {temp_dir}")
-                git.Repo.clone_from(request.repo_url, temp_dir)
-                logger.info(f"Successfully cloned {request.repo_url} anonymously.")
+                logger.info(f"Attempting to clone {repo_url_str} into {temp_dir}")
+                git.Repo.clone_from(repo_url_str, temp_dir)
+                logger.info(f"Successfully cloned {repo_url_str} anonymously.")
                 cloned_successfully = True
             except git.exc.GitCommandError as e_clone:
-                logger.warning(f"Anonymous clone failed for {request.repo_url}: {e_clone}. Attempting with token.")
+                logger.warning(f"Anonymous clone failed for {repo_url_str}: {e_clone}. Attempting with token.")
                 github_token = await get_user_github_token(user, db)
                 if github_token:
                     # Construct authenticated URL: https://oauth2:{token}@github.com/owner/repo.git
                     # This format is common for GitHub. Other providers might vary.
-                    parsed_url = urlparse(request.repo_url)
+                    parsed_url = urlparse(repo_url_str)
                     if parsed_url.hostname == "github.com":
                         repo_part = parsed_url.path.lstrip("/")
                         authenticated_url = f"https://oauth2:{github_token}@github.com/{repo_part}"
                         logger.info(f"Attempting to clone with authenticated URL: {authenticated_url.replace(github_token, '***TOKEN***')}")
                         try:
                             git.Repo.clone_from(authenticated_url, temp_dir)
-                            logger.info(f"Successfully cloned {request.repo_url} using user's GitHub token.")
+                            logger.info(f"Successfully cloned {repo_url_str} using user's GitHub token.")
                             cloned_successfully = True
                         except git.exc.GitCommandError as e_auth_clone:
-                            logger.error(f"Authenticated clone failed for {request.repo_url}: {e_auth_clone}")
+                            logger.error(f"Authenticated clone failed for {repo_url_str}: {e_auth_clone}")
                             raise HTTPException(status_code=400, detail=f"Failed to clone repository (even with authentication): {e_auth_clone}")
                     else:
                         logger.warning("Cannot construct authenticated URL for non-GitHub repo automatically.")
@@ -181,9 +182,9 @@ async def summarize_repository(
 
                 summary_content = await generator.generate(repo_path=temp_dir)
                 if summary_content is None:
-                    logger.error(f"README.md generation failed for {request.repo_url} in {temp_dir}")
+                    logger.error(f"README.md generation failed for {repo_url_str} in {temp_dir}")
                     raise HTTPException(status_code=500, detail="Failed to generate README.md summary.")
-                logger.info(f"Successfully generated README.md for {request.repo_url}")
+                logger.info(f"Successfully generated README.md for {repo_url_str}")
             else:
                 logger.error(f"Unsupported summary_type requested: {request.summary_type}")
                 raise HTTPException(status_code=400, detail=f"Unsupported summary_type: {request.summary_type}")
@@ -196,9 +197,9 @@ async def summarize_repository(
     except HTTPException: # Re-raise HTTPExceptions directly
         raise
     except git.exc.GitCommandError as e: # Catch specific git errors not handled above
-        logger.exception(f"A GitCommandError occurred during repository operation for {request.repo_url}: {e}")
+        logger.exception(f"A GitCommandError occurred during repository operation for {repo_url_str}: {e}")
         raise HTTPException(status_code=500, detail=f"A Git error occurred: {e}")
     except Exception as e:
-        logger.exception(f"An unexpected error occurred while summarizing repository {request.repo_url}: {e}")
+        logger.exception(f"An unexpected error occurred while summarizing repository {repo_url_str}: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
     # Temporary directory 'temp_dir' is automatically cleaned up here due to 'with' statement

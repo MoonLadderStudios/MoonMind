@@ -4,6 +4,7 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
+
 from readmeai.main import readme_cli
 
 logger = logging.getLogger(__name__)
@@ -49,22 +50,18 @@ class ReadmeAiGenerator:
 
         try:
             # Prepare arguments for the readme-ai CLI function
-            # Note: readme_cli expects sys.argv style arguments, where the first one is the program name (can be dummy)
             args = [
-                "readme-ai", # Dummy program name
+                "readme-ai",  # Program name
                 "--repository", repo_path,
-                "--output", output_path_str, # Use string representation of path
+                "--output", output_path_str,
             ]
 
-            # Add any custom configurations
-            # For example: --badge-style flat-square
-            # Specific handling for model, provider, and api_key
+            # Add custom configurations
             if "model" in self.config and self.config["model"]:
                 args.extend(["--model", str(self.config["model"])])
 
-            # 'provider' in config corresponds to '--llm-provider' for readme-ai CLI
             if "provider" in self.config and self.config["provider"]:
-                args.extend(["--llm-provider", str(self.config["provider"])]) # Changed from --provider to --llm-provider
+                args.extend(["--llm-provider", str(self.config["provider"])])
 
             if "api_key" in self.config and self.config["api_key"]:
                 args.extend(["--api-key", str(self.config["api_key"])])
@@ -78,21 +75,9 @@ class ReadmeAiGenerator:
 
             logger.debug(f"readme-ai arguments: {args}")
 
-            # Invoke the readme-ai CLI's entrypoint function
-            # readme_cli is not an async function, it's synchronous.
-            # We need to run it in a way that doesn't block asyncio loop if called from async code.
-            # For now, direct call as per original plan, will adjust if blocking becomes an issue.
-            # Consider asyncio.to_thread if this class is used in an async context.
-
-            # readme_cli might not directly accept a list of arguments.
-            # It's designed to be called via command line and parses sys.argv.
-            # A common pattern for such tools is to have a wrapper function or to use subprocess.
-            # For now, assuming readme_cli can be called this way based on the plan's import.
-            # If it fails, I'll need to check readmeai.main.readme_cli's signature or use subprocess.
-
-            # Correction: readme_cli is an async function as per readme-ai v0.5.0+
-            # https://github.com/eli64s/readme-ai/blob/main/readmeai/main.py
-            await readme_cli(args)
+            # Use asyncio.to_thread to avoid blocking the event loop
+            # This handles both sync and async CLI functions properly
+            await asyncio.to_thread(readme_cli, args)
 
             # Read the content from the temporary output file
             with open(output_path_str, 'r', encoding='utf-8') as f:
@@ -112,4 +97,4 @@ class ReadmeAiGenerator:
                 temp_file_path.unlink()
                 logger.debug(f"Temporary file {output_path_str} deleted.")
             else:
-                logger.debug(f"Temporary file {output_path_str} not found for deletion (may have been moved or deleted by readme-ai if output was specified to be elsewhere).")
+                logger.debug(f"Temporary file {output_path_str} not found for deletion.")
