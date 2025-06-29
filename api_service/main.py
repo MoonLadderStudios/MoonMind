@@ -13,6 +13,7 @@ from api_service.api.routers.context_protocol import router as context_protocol_
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.profile import router as profile_router
+from api_service.api.routers import summarization as summarization_router # Added import for summarization router
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
 from fastapi import FastAPI, Request, Depends
@@ -111,6 +112,7 @@ app = FastAPI(
 app.include_router(chat_router, prefix="/v1/chat")
 app.include_router(models_router, prefix="/v1/models")
 app.include_router(documents_router, prefix="/v1/documents")
+app.include_router(summarization_router.router, prefix="/summarization", tags=["Summarization"]) # Added summarization router
 app.include_router(context_protocol_router)  # Removed prefix="/context"
 app.include_router(
     profile_router, prefix="/api/v1/profile", tags=["profile"]

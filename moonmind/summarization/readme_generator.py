@@ -4,7 +4,9 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
-from readmeai.main import readme_cli
+
+from readmeai.config.settings import ConfigLoader
+from readmeai.core.pipeline import readme_agent
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +30,7 @@ class ReadmeAiGenerator:
         """
         Generates a README.md file for a given repository using readme-ai.
 
-        This method runs the readme-ai CLI tool in a controlled way,
-        capturing the output file's content.
+        This method runs the readme-ai programmatically using its core pipeline.
 
         Args:
             repo_path (str): The absolute path to the code repository.
@@ -40,44 +41,42 @@ class ReadmeAiGenerator:
         """
         logger.info(f"Starting README generation for {repo_path} using readme-ai.")
 
-        # Use a temporary file for the output to avoid cluttering the project
+        # Use a temporary file for the output
         with tempfile.NamedTemporaryFile(mode='w+', suffix=".md", delete=False) as temp_output:
             output_path = temp_output.name
 
-        # Ensure output_path is a string for readme_cli
         output_path_str = str(output_path)
 
         try:
-            # Prepare arguments for the readme-ai CLI function
-            # Note: readme_cli expects sys.argv style arguments, where the first one is the program name (can be dummy)
-            args = [
-                "readme-ai", # Dummy program name
-                "--repository", repo_path,
-                "--output", output_path_str, # Use string representation of path
-            ]
+            # Create readme-ai configuration
+            config_loader = ConfigLoader()
 
-            # Add any custom configurations
-            # For example: --badge-style flat-square
-            for key, value in self.config.items():
-                args.extend([f"--{key.replace('_', '-')}", str(value)])
+            # Set the repository path
+            config_loader.config.git.repository = repo_path
 
-            # Invoke the readme-ai CLI's entrypoint function
-            # readme_cli is not an async function, it's synchronous.
-            # We need to run it in a way that doesn't block asyncio loop if called from async code.
-            # For now, direct call as per original plan, will adjust if blocking becomes an issue.
-            # Consider asyncio.to_thread if this class is used in an async context.
+            # Apply custom configurations
+            if "model" in self.config and self.config["model"]:
+                config_loader.config.llm.model = self.config["model"]
 
-            # readme_cli might not directly accept a list of arguments.
-            # It's designed to be called via command line and parses sys.argv.
-            # A common pattern for such tools is to have a wrapper function or to use subprocess.
-            # For now, assuming readme_cli can be called this way based on the plan's import.
-            # If it fails, I'll need to check readmeai.main.readme_cli's signature or use subprocess.
+            if "provider" in self.config and self.config["provider"]:
+                config_loader.config.llm.api = self.config["provider"]
 
-            # Correction: readme_cli is an async function as per readme-ai v0.5.0+
-            # https://github.com/eli64s/readme-ai/blob/main/readmeai/main.py
-            await readme_cli(args)
+            if "api_key" in self.config and self.config["api_key"]:
+                # Set the API key based on provider
+                if self.config["provider"].lower() == "openai":
+                    config_loader.config.llm.api_key = self.config["api_key"]
+                elif self.config["provider"].lower() == "anthropic":
+                    config_loader.config.llm.api_key = self.config["api_key"]
+                elif self.config["provider"].lower() == "google":
+                    config_loader.config.llm.api_key = self.config["api_key"]
+                # Ollama typically doesn't use an API key
 
-            # Read the content from the temporary output file
+            logger.debug(f"readme-ai config: repository={repo_path}, model={config_loader.config.llm.model}, provider={config_loader.config.llm.api}")
+
+            # Use asyncio.to_thread to run the synchronous readme_agent function
+            await asyncio.to_thread(readme_agent, config_loader, output_path_str)
+
+            # Read the content from the output file
             with open(output_path_str, 'r', encoding='utf-8') as f:
                 readme_content = f.read()
 
@@ -95,4 +94,4 @@ class ReadmeAiGenerator:
                 temp_file_path.unlink()
                 logger.debug(f"Temporary file {output_path_str} deleted.")
             else:
-                logger.debug(f"Temporary file {output_path_str} not found for deletion (may have been moved or deleted by readme-ai if output was specified to be elsewhere).")
+                logger.debug(f"Temporary file {output_path_str} not found for deletion.")
