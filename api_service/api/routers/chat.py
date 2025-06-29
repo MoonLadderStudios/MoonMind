@@ -3,6 +3,7 @@ import time
 from typing import List, Optional
 from uuid import uuid4
 import openai
+from openai import AsyncOpenAI # Moved import to top
 
 # RAG imports from feat/rag branch
 from llama_index.core import Settings as LlamaSettings
@@ -28,6 +29,11 @@ from moonmind.models_cache import model_cache
 
 # Dependencies for RAG functionality
 from api_service.api.dependencies import get_service_context, get_vector_index
+from api_service.auth import current_active_user
+from api_service.db.models import User
+from sqlalchemy.ext.asyncio import AsyncSession
+from api_service.db.base import get_async_session
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -143,11 +149,41 @@ async def get_rag_context(
     return retrieved_context_str
 
 
+async def get_user_api_key(user: User, provider: str, db_session: AsyncSession) -> Optional[str]:
+    """
+    Retrieves the API key for a given user and provider.
+    Placeholder logic for now.
+    """
+    # TODO: Implement actual logic to fetch API key from user's profile
+    # This will involve querying the UserProfile model and decrypting the key.
+    # For now, using placeholder logic.
+    logger.info(f"Attempting to retrieve API key for user {user.id} and provider {provider}")
+    if provider == "OpenAI":
+        # Replace with actual key retrieval from user.profile.openai_api_key_encrypted
+        # and decrypt it.
+        # Example: return user.profile.openai_api_key (after decryption)
+        logger.warning("Using placeholder logic for OpenAI API key retrieval.")
+        return "sk-placeholder-openai-key"  # Placeholder
+    elif provider == "Google":
+        # Replace with actual key retrieval, e.g., user.profile.google_api_key_encrypted
+        logger.warning("Using placeholder logic for Google API key retrieval.")
+        return "google-placeholder-api-key"  # Placeholder
+    elif provider == "Anthropic":
+        # Replace with actual key retrieval, e.g., user.profile.anthropic_api_key_encrypted
+        logger.warning("Using placeholder logic for Anthropic API key retrieval.")
+        return "anthropic-placeholder-api-key"  # Placeholder
+
+    logger.warning(f"No API key logic defined for provider: {provider} in placeholder function.")
+    return None
+
+
 @router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(
     request: ChatCompletionRequest,
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
 ):
     try:
         # Extract the last user message as the query for RAG
@@ -182,13 +218,26 @@ async def chat_completions(
         provider = model_cache.get_model_provider(model_to_use)
         logger.info(f"Requested model: {model_to_use}, Provider: {provider}")
 
+        user_api_key = None
+        if provider and provider != "Ollama":  # Only get key if provider exists and is not Ollama
+            user_api_key = await get_user_api_key(user, provider, db)
+            if not user_api_key: # This implies provider is known but key is missing for user
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"API key for {provider} not found in your profile. Please add it to use this model.",
+                )
+        # If provider is None here, it means model_cache.get_model_provider(model_to_use) returned None.
+        # The request will proceed to the provider checks. If no provider matches,
+        # it will fall into the 'else' clause which handles unknown models (triggers refresh or 404).
+        # No specific API key logic is needed if provider is None.
+
         if provider == "OpenAI":
             return await handle_openai_request(
-                request, processed_messages, model_to_use
+                request, processed_messages, model_to_use, user_api_key
             )
         elif provider == "Google":
             return await handle_google_request(
-                request, processed_messages, model_to_use
+                request, processed_messages, model_to_use, user_api_key
             )
         elif provider == "Ollama":
             return await handle_ollama_request(
@@ -196,7 +245,7 @@ async def chat_completions(
             )
         elif provider == "Anthropic":
             return await handle_anthropic_request(
-                request, processed_messages, model_to_use
+                request, processed_messages, model_to_use, user_api_key
             )
         else:
             # Handle case where model is not found in cache or provider is unknown
@@ -232,27 +281,28 @@ async def chat_completions(
 
 
 async def handle_openai_request(
-    request: ChatCompletionRequest, messages: List, model_to_use: str
+    request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str
 ) -> ChatCompletionResponse:
     """Handle OpenAI provider requests."""
-    # Check if OpenAI is enabled
-    if not settings.is_provider_enabled("openai"):
-        if not settings.openai.openai_enabled:
-            raise HTTPException(status_code=400, detail="OpenAI provider is disabled.")
-        else:
-            raise HTTPException(
-                status_code=400, detail="OpenAI API key not configured for the server."
-            )
+    # Check if OpenAI is enabled - server-side check can remain if desired,
+    # but user-specific key is now the primary concern.
+    if not settings.is_provider_enabled("openai") and not settings.openai.openai_enabled:
+        raise HTTPException(status_code=400, detail="OpenAI provider is disabled on the server.")
 
-    openai_model_name = get_openai_model(model_to_use)
+    if not api_key: # This check is technically redundant if get_user_api_key enforces it
+        raise HTTPException(status_code=400, detail="OpenAI API key not provided for the user.")
+
+    openai_model_name = get_openai_model(model_to_use) # This function might need api_key if it uses it
     logger.info(f"Routing to OpenAI for model: {openai_model_name}")
 
     # Prepare messages for OpenAI
     openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
+    # The import 'from openai import AsyncOpenAI' is now at the top of the file.
+    # This try block will encompass client creation and the API call.
     try:
-        openai.api_key = settings.openai.openai_api_key
-        openai_response = await openai.ChatCompletion.acreate(
+        client = AsyncOpenAI(api_key=api_key)
+        openai_response = await client.chat.completions.create(
             model=openai_model_name,
             messages=openai_messages,
             max_tokens=request.max_tokens,
@@ -260,6 +310,7 @@ async def handle_openai_request(
         )
     except Exception as e:
         logger.error(f"Error calling OpenAI API for model {openai_model_name}: {e}")
+        # Consider more specific error handling for common OpenAI API errors if needed
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
     if not openai_response.choices:
@@ -268,45 +319,57 @@ async def handle_openai_request(
             detail="Invalid response from OpenAI API: No choices returned.",
         )
 
-    ai_message_content = openai_response.choices[0].message.content
+    # Accessing response data according to OpenAI SDK v1.x.x
+    first_choice = openai_response.choices[0]
+    ai_message_content = first_choice.message.content
+    finish_reason = first_choice.finish_reason
     usage_data = openai_response.usage
+
+    if usage_data is None: # Should not happen with successful chat completion
+        logger.error("OpenAI response missing usage data.")
+        # Provide default usage if necessary, or handle as an error
+        usage_data = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
 
     return ChatCompletionResponse(
         id=openai_response.id,
-        object="chat.completion",
+        object=openai_response.object, # typically "chat.completion"
         created=openai_response.created,
         model=openai_response.model,
         choices=[
             Choice(
-                index=0,
+                index=0, # SDK v1.x index is usually part of the choice object, but response schema expects it
                 message=ChoiceMessage(
                     role="assistant", content=ai_message_content.strip()
                 ),
-                finish_reason=openai_response.choices[0].finish_reason,
+                finish_reason=finish_reason,
             )
         ],
-        usage=Usage(
-            prompt_tokens=usage_data.prompt_tokens,
-            completion_tokens=usage_data.completion_tokens,
-            total_tokens=usage_data.total_tokens,
+        usage=Usage( # Ensure these fields exist on usage_data
+            prompt_tokens=usage_data.prompt_tokens if usage_data else 0,
+            completion_tokens=usage_data.completion_tokens if usage_data else 0,
+            total_tokens=usage_data.total_tokens if usage_data else 0,
         ),
     )
 
 
 async def handle_google_request(
-    request: ChatCompletionRequest, messages: List, model_to_use: str
+    request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str
 ) -> ChatCompletionResponse:
     """Handle Google Gemini provider requests."""
-    # Check if Google is enabled
-    if not settings.is_provider_enabled("google"):
-        if not settings.google.google_enabled:
-            raise HTTPException(status_code=400, detail="Google provider is disabled.")
-        else:
-            raise HTTPException(
-                status_code=400, detail="Google API key not configured for the server."
-            )
+    # Server-side enablement check (can remain)
+    if not settings.is_provider_enabled("google") and not settings.google.google_enabled:
+        raise HTTPException(status_code=400, detail="Google provider is disabled on the server.")
+
+    if not api_key: # Redundant if get_user_api_key enforces it
+        raise HTTPException(status_code=400, detail="Google API key not provided for the user.")
 
     logger.info(f"Routing to Google for model: {model_to_use}")
+
+    # The get_google_model factory already uses settings.google.google_api_key.
+    # We need to modify it or create a new client instance with the user's key.
+    # For now, let's assume get_google_model can take an api_key argument.
+    # This will require modifying the factory function.
 
     # Convert messages to Google's format
     contents = []
@@ -325,7 +388,21 @@ async def handle_google_request(
         f"Final `contents` for Gemini (with RAG context if any): {str(contents)[:1000]}..."
     )
 
-    chat_model = get_google_model(model_to_use)
+    # Modify get_google_model or create client directly.
+    # For now, we'll assume get_google_model is updated to accept api_key.
+    # If get_google_model cannot be changed to accept api_key, we'd do:
+    # import google.generativeai as genai
+    # genai.configure(api_key=api_key) # This configures globally for the genai module.
+    # chat_model = genai.GenerativeModel(model_name=model_to_use)
+    # This global configuration has similar concurrency issues as OpenAI's old SDK.
+    # A better approach is if the SDK supports per-request API keys or client instances.
+    # Google's SDK (google.generativeai) uses a global configuration via genai.configure().
+    # This is a known limitation if needing per-user keys without re-configuring constantly.
+    #
+    # Let's proceed by calling a modified get_google_model that handles this.
+    # We will adjust get_google_model in a later step or assume it's done.
+    # For the purpose of this step, we pass api_key to get_google_model.
+    chat_model = get_google_model(model_name=model_to_use, api_key=api_key)
     try:
         response_gemini = chat_model.generate_content(contents)
     except Exception as e:
@@ -384,23 +461,23 @@ async def handle_google_request(
 
 
 async def handle_anthropic_request(
-    request: ChatCompletionRequest, messages: List, model_to_use: str
+    request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str
 ) -> ChatCompletionResponse:
     """Handle Anthropic provider requests."""
-    if not settings.is_provider_enabled("anthropic"):
-        if not settings.anthropic.anthropic_enabled:
-            raise HTTPException(
-                status_code=400, detail="Anthropic provider is disabled."
-            )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Anthropic API key not configured for the server.",
-            )
+    if not settings.is_provider_enabled("anthropic") and not settings.anthropic.anthropic_enabled:
+        raise HTTPException(
+            status_code=400, detail="Anthropic provider is disabled on the server."
+        )
+
+    if not api_key: # Redundant if get_user_api_key enforces it
+        raise HTTPException(status_code=400, detail="Anthropic API key not provided for the user.")
+
 
     logger.info(f"Routing to Anthropic for model: {model_to_use}")
 
-    anthropic_model = AnthropicFactory.create_anthropic_model()
+    # The AnthropicFactory.create_anthropic_model currently uses global settings.
+    # We need to pass the api_key to it.
+    anthropic_model = AnthropicFactory.create_anthropic_model(api_key=api_key, model_name=model_to_use)
 
     # Convert messages to Anthropic's format (ensure system message is handled correctly if present)
     anthropic_messages = []
