@@ -1,5 +1,6 @@
 import uuid
 from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -21,6 +22,22 @@ class UserProfileRead(
     user_id: uuid.UUID
     # google_api_key is inherited from UserProfileBaseSchema
     # Configuration for ORM mode is inherited
+    # google_api_key and openai_api_key are inherited from UserProfileBaseSchema
+    # and will be present in this schema, suitable for internal use or when keys are needed.
+
+
+# New schema for sanitized output, excluding sensitive API keys.
+class UserProfileReadSanitized(UserProfileRead):
+    class Config:
+        orm_mode = True
+        # Exclude sensitive fields from the output.
+        # This is more maintainable than a separate schema definition.
+        model_config = {
+            "fields": {
+                "google_api_key": {"exclude": True},
+                "openai_api_key": {"exclude": True},
+            }
+        }
 
 
 class UserProfileUpdate(UserProfileBaseSchema):

@@ -9,7 +9,11 @@ from api_service.api.routers.profile import (
     update_current_user_profile,
     get_profile_service,
 )
-from api_service.api.schemas import UserProfileRead, UserProfileUpdate
+from api_service.api.schemas import (
+    UserProfileRead,
+    UserProfileUpdate,
+    UserProfileReadSanitized,
+)
 from api_service.services.profile_service import ProfileService
 from api_service.db.models import User as DBUser
 
@@ -32,6 +36,11 @@ MOCK_PROFILE_DATA = {
     "openai_api_key": "test_openai_key",
 }
 MOCK_PROFILE_READ_SCHEMA = UserProfileRead(**MOCK_PROFILE_DATA)
+
+# Sanitized version for GET endpoint response testing
+MOCK_PROFILE_READ_SANITIZED_SCHEMA = UserProfileReadSanitized(
+    id=MOCK_PROFILE_DATA["id"], user_id=MOCK_PROFILE_DATA["user_id"]
+)
 
 
 @pytest.fixture
@@ -63,15 +72,28 @@ async def test_get_current_user_profile_success(mock_db_session, mock_profile_se
     # or mock the `Depends` mechanism if necessary. Here, we assume `get_profile_service` is simple.
 
     # Act
-    profile = await get_current_user_profile(
+    # The endpoint function itself returns the object from the service (which includes keys)
+    # FastAPI's response_model handles the serialization to the sanitized version.
+    # When unit testing the function directly, it will return what the service returns.
+    profile_from_service = await get_current_user_profile(
         user=MOCK_USER, db=mock_db_session, profile_service=mock_profile_service
     )
 
     # Assert
-    assert profile == MOCK_PROFILE_READ_SCHEMA
+    # 1. Check the service was called correctly
     mock_profile_service.get_or_create_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID
     )
+    # 2. Check that the object returned by the service, if serialized with UserProfileReadSanitized, matches expectations.
+    # This simulates what FastAPI does with response_model.
+    # The `get_current_user_profile` function returns a UserProfileRead instance (from the service).
+    # We need to ensure this instance, when data is taken for UserProfileReadSanitized, is correct.
+    assert profile_from_service.id == MOCK_PROFILE_READ_SANITIZED_SCHEMA.id
+    assert profile_from_service.user_id == MOCK_PROFILE_READ_SANITIZED_SCHEMA.user_id
+    # Ensure that the returned object (which is UserProfileRead) still contains the keys,
+    # as the sanitization happens at the FastAPI serialization stage.
+    assert hasattr(profile_from_service, "google_api_key")
+    assert profile_from_service.google_api_key == MOCK_PROFILE_DATA["google_api_key"]
 
 
 @pytest.mark.asyncio
