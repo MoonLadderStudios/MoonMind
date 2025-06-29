@@ -1,4 +1,34 @@
 services:
+  keycloak-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_DB_PW:-keycloak}
+      POSTGRES_DB: keycloak
+    volumes: [ keycloak_data:/var/lib/postgresql/data ]
+    networks: [ local-network ]
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: >
+      start --optimized --proxy=edge
+      --hostname-url=http://keycloak:8080
+      --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PW:-keycloak}
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PW:-admin}
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports: [ "8085:8080" ]        # host→container
+    depends_on: [ keycloak-db ]
+    networks: [ local-network ]
+    restart: unless-stopped
+
   ui:
     image: ghcr.io/open-webui/open-webui:main
     volumes:
@@ -8,8 +38,16 @@ services:
     environment:
       - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:8000/v1}
       - WEBUI_AUTH=${WEBUI_AUTH:-true}
-      - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true}
+      # - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true} # Keep or remove based on final setup with OIDC
       - ENABLE_OLLAMA_API=false
+      # OIDC specific variables for OpenWebUI
+      - ENABLE_OAUTH_SIGNUP=true
+      - OAUTH_PROVIDER_NAME=Keycloak # Can be changed by .env if needed
+      - OAUTH_CLIENT_ID=open-webui # As defined in realm-export.json
+      - OAUTH_CLIENT_SECRET= # Left blank for PKCE
+      - OAUTH_SCOPES=openid email profile
+      - OPENID_PROVIDER_URL=http://keycloak:8080/realms/moonmind/.well-known/openid-configuration # Internal URL for Keycloak
+      - WEBUI_FORWARD_AUTH_HEADER=true # Important for API to get the token
     env_file:
       - .env
     restart: unless-stopped
@@ -17,6 +55,7 @@ services:
       - local-network
     depends_on:
       - api
+      - keycloak # Added dependency
 
   api:
     build:
@@ -34,12 +73,19 @@ services:
       - MODEL_CONTEXT_PROTOCOL_PORT=8000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      # OIDC specific variables for API service
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-local} # local, google, or disabled
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-api-service} # For 'local', matches realm-export.json
+      - OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme} # For 'local', matches realm-export.json
+      - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
     env_file:
       - .env
     volumes:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
+      - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
@@ -49,6 +95,7 @@ services:
     depends_on:
       - init-db
       - postgres
+      - keycloak # Added dependency
 
   postgres:
     image: pgvector/pgvector:pg${POSTGRES_VERSION:-16}
@@ -105,6 +152,7 @@ volumes:
   open-webui:
   qdrant_storage:
   postgres_data:
+  keycloak_data: # Added volume for keycloak
 
 networks:
   local-network:

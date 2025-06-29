@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth import current_active_user  # Dependency for authenticated user
+from api_service.auth_providers import get_current_user  # Updated import
 from api_service.db.base import get_async_session  # Dependency for DB session
 from api_service.db.models import User as DBUser  # User model from DB
 from api_service.services.profile_service import ProfileService
@@ -34,7 +34,7 @@ async def get_profile_service() -> ProfileService:
 
 @router.get("/me", response_model=UserProfileReadSanitized)
 async def get_current_user_profile(
-    user: DBUser = Depends(current_active_user),
+    user: DBUser = Depends(get_current_user), # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -53,7 +53,7 @@ async def get_current_user_profile(
 @router.put("/me", response_model=UserProfileRead)
 async def update_current_user_profile(
     profile_update_data: UserProfileUpdate,
-    user: DBUser = Depends(current_active_user),
+    user: DBUser = Depends(get_current_user), # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -71,7 +71,7 @@ async def update_current_user_profile(
 @router.get("/me/ui", response_class=HTMLResponse, name="profile_ui")
 async def get_profile_management_page(
     request: Request,
-    user: DBUser = Depends(current_active_user),
+    user: DBUser = Depends(get_current_user), # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -105,7 +105,7 @@ async def get_profile_management_page(
 @router.post("/me/ui", response_class=HTMLResponse, name="update_profile_ui")
 async def handle_profile_update_form(
     request: Request, # Added request parameter
-    user: DBUser = Depends(current_active_user),
+    user: DBUser = Depends(get_current_user), # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
     openai_api_key: str = Form(None),

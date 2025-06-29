@@ -1,7 +1,7 @@
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy.orm import DeclarativeBase, relationship
-from sqlalchemy import Column, ForeignKey, Integer, Text, Uuid  # Added Uuid
+from sqlalchemy import Column, ForeignKey, Integer, Text, Uuid, String, UniqueConstraint  # Added Uuid, String, UniqueConstraint
 from sqlalchemy_utils import EncryptedType  # Added EncryptedType
 
 from api_service.core.encryption import (
@@ -26,10 +26,13 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     # is_superuser is inherited
     # is_verified is inherited
 
-    # You can add custom fields here if needed, for example:
-    # first_name = Column(String(length=50), nullable=True)
-    # last_name = Column(String(length=50), nullable=True)
+    hashed_password = Column(Text, nullable=True)  # Made nullable
+    oidc_provider = Column(String(32), index=True, nullable=True)
+    oidc_subject = Column(String(255), index=True, nullable=True)
 
+    __table_args__ = (
+        UniqueConstraint("oidc_provider", "oidc_subject", name="uq_oidc_identity"),
+    )
     user_profile = relationship(
         "UserProfile", back_populates="user", uselist=False
     )  # Added relationship to UserProfile

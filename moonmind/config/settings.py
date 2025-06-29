@@ -204,6 +204,17 @@ class LocalDataSettings(BaseSettings):
     )
 
 
+class OIDCSettings(BaseSettings):
+    """OIDC authentication settings"""
+
+    AUTH_PROVIDER: str = Field("disabled", env="AUTH_PROVIDER")  # disabled, local, google
+    OIDC_ISSUER_URL: Optional[str] = Field(None, env="OIDC_ISSUER_URL")
+    OIDC_CLIENT_ID: Optional[str] = Field(None, env="OIDC_CLIENT_ID")
+    OIDC_CLIENT_SECRET: Optional[str] = Field(None, env="OIDC_CLIENT_SECRET")
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -220,6 +231,7 @@ class AppSettings(BaseSettings):
     rag: RAGSettings = Field(default_factory=RAGSettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
+    oidc: OIDCSettings = Field(default_factory=OIDCSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")

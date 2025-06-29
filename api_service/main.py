@@ -1,37 +1,43 @@
 # main.py
 # Configure logging at the very beginning
 import logging
+
 from moonmind.config.logging import configure_logging
+
 configure_logging()
 logger = logging.getLogger(__name__) # Get logger after configuration
 
+import os  # For path operations
 # Now proceed with other imports
 from uuid import uuid4
 
+import requests
+from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from llama_index.core import VectorStoreIndex, load_index_from_storage
+
+from api_service.api.routers import \
+    summarization as \
+    summarization_router  # Added import for summarization router
 from api_service.api.routers.chat import router as chat_router
-from api_service.api.routers.context_protocol import router as context_protocol_router
+from api_service.api.routers.context_protocol import \
+    router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.profile import router as profile_router
-from api_service.api.routers import summarization as summarization_router # Added import for summarization router
-from llama_index.core import VectorStoreIndex, load_index_from_storage
-
-from fastapi import FastAPI, Request, Depends
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-import os # For path operations
-
 # Auth imports
-from api_service.auth import auth_backend, fastapi_users, UserRead, UserCreate, UserUpdate
-from api_service.db.models import User # Ensure User model is imported if needed for routers
-from fastapi.middleware.cors import CORSMiddleware
+from api_service.auth import (UserCreate, UserRead, UserUpdate, auth_backend,
+                              fastapi_users)
+from api_service.db.models import \
+    User  # Ensure User model is imported if needed for routers
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
 # Removed unused import: build_indexers
 from moonmind.factories.service_context_factory import build_service_context
 from moonmind.factories.storage_context_factory import build_storage_context
 from moonmind.factories.vector_store_factory import build_vector_store
-
 
 logger.info("Starting FastAPI...")
 
@@ -69,6 +75,30 @@ def _initialize_contexts(app_state, app_settings):
         app_settings, app_state.embed_model
     )  # settings is used as service_context
     logger.info("Storage and service contexts initialized successfully.")
+
+
+def _initialize_oidc_provider(app: FastAPI):
+    """Initializes the OIDC provider by fetching discovery documents if needed."""
+    provider = settings.oidc.AUTH_PROVIDER
+    if provider == "google":
+        logger.info("Initializing Google OIDC provider...")
+        try:
+            discovery_url = f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
+            response = requests.get(discovery_url)
+            response.raise_for_status()
+            discovery_doc = response.json()
+            jwks_uri = discovery_doc.get("jwks_uri")
+            if not jwks_uri:
+                logger.error("JWKS URI not found in Google OIDC discovery document.")
+                raise RuntimeError("JWKS URI not found in Google OIDC discovery document.")
+            app.state.jwks_uri = jwks_uri
+            logger.info("Successfully fetched and stored Google JWKS URI.")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch Google OIDC discovery document: {e}")
+            raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
+        except Exception as e:
+            logger.error(f"Error processing Google OIDC discovery document: {e}")
+            raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
 
 
 def _load_or_create_vector_index(app_state):
@@ -193,31 +223,22 @@ async def add_request_id(request: Request, call_next):
 
 
 @app.on_event("startup")
-async def setup():
-    # Initialize state attributes to None
-    app.state.embed_model = None
-    app.state.embed_dimensions = None
-    app.state.vector_store = None
-    app.state.storage_context = None
-    app.state.vector_index = None
-    app.state.settings = None  # This is used as service_context
+async def startup_event():
+    """Defines the application's startup events."""
+    logger.info("Executing application startup events...")
+    # Initialize state object if it doesn't exist
+    if not hasattr(app, "state"):
+        # In modern FastAPI, `app.state` exists by default, but this is a safeguard.
+        from starlette.datastructures import State
+        app.state = State()
 
-    try:
-        # Call helper functions in sequence
-        _initialize_embedding_model(app.state, settings)
-        _initialize_vector_store(app.state, settings)
-        _initialize_contexts(app.state, settings)
-        _load_or_create_vector_index(app.state)
+    _initialize_embedding_model(app.state, settings)
+    _initialize_vector_store(app.state, settings)
+    _initialize_contexts(app.state, settings)
+    _load_or_create_vector_index(app.state)
+    _initialize_oidc_provider(app)
 
-        logger.info("Application setup completed successfully.")
-
-    except Exception as e_startup:  # Outer catch-all for any critical startup failure
-        logger.error(
-            f"A critical error occurred during application startup: {e_startup}",
-            exc_info=True,
-        )
-        # Re-raise to make startup failures explicit and prevent app from running in a broken state.
-        raise
+    logger.info("Application startup events completed.")
 
 
 @app.on_event("shutdown")

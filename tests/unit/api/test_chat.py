@@ -8,13 +8,14 @@ import time
 # Assuming the main app's router is imported correctly
 # Ensure the path to chat_router is correct based on your project structure.
 # If chat.py is in api_service.api.routers.chat, this should be fine.
-from api_service.api.routers.chat import router as chat_router, get_user_api_key
+from api_service.api.routers.chat import router as chat_router
 from moonmind.config import settings  # Direct import for patching, used for teardown
 from api_service.api.routers.chat import (
     settings as settings_in_chat_router,
 )  # For patch.object
 from moonmind.schemas.chat_models import ChatCompletionRequest, Message
-from api_service.auth import current_active_user # Import for overriding
+# Updated import for the new auth dependency
+from api_service.auth_providers import get_current_user # Import the actual dependency used by the router
 from api_service.db.models import User # For mock user type hint
 from api_service.db.base import get_async_session # For overriding db session
 
@@ -26,10 +27,11 @@ from api_service.api.dependencies import get_vector_index, get_service_context #
 
 # --- Mocking Dependencies ---
 # Mock user for authentication
-mock_user = User(id=uuid4(), email="test@example.com", is_active=True, is_superuser=False, is_verified=True, hashed_password="fake")
+mock_user_instance = User(id=uuid4(), email="test@example.com", is_active=True, is_superuser=False, is_verified=True, hashed_password="fake")
 
-def mock_current_active_user():
-    return mock_user
+# This function will be used to override the get_current_user dependency
+def direct_override_get_current_user():
+    return mock_user_instance
 
 # Mock get_user_api_key
 async def mock_get_user_api_key_logic(user: User, provider: str, db_session):
@@ -55,9 +57,12 @@ mock_db_session = AsyncMock()
 mock_vector_index_dependency = MagicMock()
 mock_llama_settings_dependency = MagicMock()
 
+from api_service.auth import current_active_user as legacy_current_active_user # Import the actual legacy dependency
+
+from api_service.auth import current_active_user as legacy_current_active_user_object_for_override
+
 # Override dependencies in the app
-app.dependency_overrides[current_active_user] = mock_current_active_user
-# app.dependency_overrides[get_user_api_key] = lambda: mock_user_api_key_dependency # This was incorrect as get_user_api_key is not a FastAPI dependency
+app.dependency_overrides[get_current_user] = direct_override_get_current_user # Restore direct override
 app.dependency_overrides[get_async_session] = lambda: mock_db_session # This IS a FastAPI dependency for chat_completions
 app.dependency_overrides[get_vector_index] = lambda: mock_vector_index_dependency
 app.dependency_overrides[get_service_context] = lambda: mock_llama_settings_dependency
@@ -87,8 +92,16 @@ def teardown_module(module):
     settings.openai.openai_api_key = original_openai_api_key
     settings.google.google_api_key = original_google_api_key
     settings.model_cache_refresh_interval = original_model_cache_refresh_interval
-    patch.stopall()  # Stop all patches
+    # patch.stopall() # Avoid stopping all patches if some are managed by pytest-mock or context managers
 
+@pytest.fixture(autouse=True)
+def force_auth_provider_disabled_for_tests(monkeypatch):
+    """Ensure AUTH_PROVIDER is 'disabled' for all tests in this module to use legacy auth path."""
+    from moonmind.config import settings as settings_instance_for_auth_providers
+    monkeypatch.setattr(settings_instance_for_auth_providers.oidc, "AUTH_PROVIDER", "disabled")
+    # Also ensure the settings instance potentially used by the router itself is patched, if different.
+    monkeypatch.setattr(settings_in_chat_router.oidc, "AUTH_PROVIDER", "disabled")
+    yield
 
 @pytest.fixture(autouse=True)  # Apply to all tests in this module
 def cleanup_singleton_cache():
@@ -189,13 +202,16 @@ def mock_google_chat_response():
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI") # Corrected patch target
+@patch("api_service.api.routers.chat.get_current_user") # Added patch
 def test_chat_completions_openai_via_cache(
+    mock_chat_get_current_user, # Added mock
     mock_async_openai_client, # Patched AsyncOpenAI
     mock_get_user_api_key_helper, # Patched get_user_api_key
     mock_get_provider, # Patched model_cache.get_model_provider
     chat_request_openai_model,
     mock_openai_chat_response, # This fixture might need update for new SDK response structure
 ):
+    mock_chat_get_current_user.return_value = mock_user_instance # Configure mock
     # settings.openai.openai_api_key = "fake_openai_key_for_test" # Global key not primary focus
     mock_get_provider.return_value = "OpenAI"
     mock_get_user_api_key_helper.return_value = "sk-test-user-key"
@@ -304,12 +320,15 @@ def test_chat_completions_google_via_cache(
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+# Removed patch for get_user_api_key
 def test_chat_completions_google_value_error_invalid_role(
+    # mock_get_user_api_key, # Removed
     mock_get_model_provider,
     mock_router_get_google_model,
     mock_genai_configure,
     chat_request_google_model,
 ):
+    # mock_get_user_api_key.return_value = "fake-user-api-key"
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
 
@@ -331,12 +350,15 @@ def test_chat_completions_google_value_error_invalid_role(
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock) # Patch get_user_api_key
 def test_chat_completions_google_value_error_other_argument(
+    mock_get_user_api_key, # Add mock argument
     mock_get_model_provider,
     mock_router_get_google_model,
     mock_genai_configure,
     chat_request_google_model,
 ):
+    mock_get_user_api_key.return_value = "fake-user-api-key" # Configure it
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
 
@@ -465,12 +487,15 @@ def test_chat_completions_openai_api_error_with_cache(
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock) # Patch get_user_api_key
 def test_chat_completions_google_api_error_with_cache(
+    mock_get_user_api_key, # Add mock argument
     mock_get_model_provider,
     mock_router_get_google_model,
     mock_genai_configure,
     chat_request_google_model,
 ):
+    mock_get_user_api_key.return_value = "fake-user-api-key" # Configure it
     settings_in_chat_router.google.google_enabled = True
     settings_in_chat_router.google.google_api_key = "fake_google_key_for_test"
 
@@ -533,10 +558,13 @@ def test_chat_completions_openai_provider_disabled(
 
 
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
+# Removed patch for get_user_api_key
 def test_chat_completions_google_provider_disabled(
+    # mock_get_user_api_key, # Removed
     mock_get_provider, chat_request_google_model
 ):
     """Test that disabled Google provider returns appropriate error"""
+    # mock_get_user_api_key.return_value = "fake-user-api-key"
     settings_in_chat_router.google.google_enabled = False
     settings_in_chat_router.google.google_api_key = "fake_key"
     # settings.google.google_api_key = "fake_google_key_for_test" # Original line for teardown reference
