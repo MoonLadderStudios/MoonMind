@@ -15,7 +15,7 @@
     },
     {
       "clientId": "api-service",
-      "secret": "changeme",
+      "secret": "${API_SERVICE_SECRET}",
       "serviceAccountsEnabled": false,
       "redirectUris": []
     }
