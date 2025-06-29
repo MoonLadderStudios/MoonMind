@@ -1,20 +1,15 @@
 import uuid
 from typing import Optional
+
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from fastapi import HTTPException, status
-
-from api_service.db.models import (
-    UserProfile,
-    User,
-)  # User model might be needed for context or future validation
 
 # Updated import to use UserProfileRead and UserProfileUpdate
-from api_service.api.schemas import (
-    UserProfileRead,
-    UserProfileUpdate,
-    UserProfileCreateSchema,
-)
+from api_service.api.schemas import (UserProfileCreateSchema, UserProfileRead,
+                                     UserProfileUpdate)
+from api_service.db.models import (  # User model might be needed for context or future validation
+    User, UserProfile)
 
 
 class ProfileService:
@@ -85,6 +80,19 @@ class ProfileService:
 
         return UserProfileRead.from_orm(profile)  # Use UserProfileRead
 
+    def _apply_update_data_to_profile(self, profile: UserProfile, update_data: dict):
+        for key_in_schema, value in update_data.items():
+            if key_in_schema.endswith("_api_key"):  # Handles google_api_key, openai_api_key, etc.
+                model_field_name = f"{key_in_schema}_encrypted"
+                # Assigning to this EncryptedType field handles encryption
+                if hasattr(profile, model_field_name):
+                    setattr(profile, model_field_name, value)
+                # else: log warning or handle mismatch if necessary
+            elif hasattr(profile, key_in_schema):  # For other potential direct mapped fields
+                setattr(profile, key_in_schema, value)
+            # else:
+            #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")
+
     async def update_profile(
         self,
         db_session: AsyncSession,
@@ -96,17 +104,9 @@ class ProfileService:
         If the profile doesn't exist, it will first be created.
         """
         profile = await self.get_profile_by_user_id(db_session, user_id)
+        update_data = profile_data.dict(exclude_unset=True)
 
         if not profile:
-            # Option 1: Raise an error if profile must exist
-            # raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found to update.")
-            # Option 2: Call get_or_create to ensure it exists (as per Story's implication for update)
-            # However, get_or_create returns a schema, we need the model instance here.
-            # Let's ensure it's created first, then proceed.
-            # This might lead to creating an empty profile and then updating it.
-            # A more direct approach might be to fetch, if not found, create with new data.
-            # For now, let's try to fetch, and if not found, create with the update data.
-
             user_exists = await db_session.get(User, user_id)
             if not user_exists:
                 raise HTTPException(
@@ -115,42 +115,15 @@ class ProfileService:
                 )
 
             profile = UserProfile(user_id=user_id)
-            # Apply update data to the new profile
-            update_data = profile_data.dict(exclude_unset=True)
-            for key_in_schema, value in update_data.items():
-                if key_in_schema.endswith("_api_key"): # Handles google_api_key, openai_api_key, etc.
-                    model_field_name = f"{key_in_schema}_encrypted"
-                    if hasattr(profile, model_field_name):
-                        setattr(profile, model_field_name, value)
-                    # else: log warning or handle mismatch if necessary
-                elif hasattr(profile, key_in_schema): # For other direct mapped fields
-                    setattr(profile, key_in_schema, value)
-                # else:
-                #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")
-
-
+            self._apply_update_data_to_profile(profile, update_data)
             db_session.add(profile)
-            # No commit yet, will commit after applying updates or if it was just created.
 
         else:  # Profile exists, update it
-            update_data = profile_data.dict(
-                exclude_unset=True
-            )  # Get only provided fields
             if not update_data:
                 # If no data to update, just return the current profile
                 return UserProfileRead.from_orm(profile)  # Use UserProfileRead
 
-            for key_in_schema, value in update_data.items():
-                if key_in_schema.endswith("_api_key"): # Handles google_api_key, openai_api_key, etc.
-                    model_field_name = f"{key_in_schema}_encrypted"
-                     # Assigning to this EncryptedType field handles encryption
-                    if hasattr(profile, model_field_name):
-                        setattr(profile, model_field_name, value)
-                    # else: log warning or handle mismatch if necessary
-                elif hasattr(profile, key_in_schema):  # For other potential direct mapped fields
-                    setattr(profile, key_in_schema, value)
-                # else:
-                #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")
+            self._apply_update_data_to_profile(profile, update_data)
 
         try:
             await db_session.commit()  # Commit changes (either new profile or updates)
