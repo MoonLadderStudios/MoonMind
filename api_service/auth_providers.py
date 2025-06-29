@@ -1,12 +1,16 @@
 import uuid
-import requests # For fetching Google OIDC discovery document
-from fastapi import Depends, Security, HTTPException
+
+import requests  # For fetching Google OIDC discovery document
+from fastapi import Depends, HTTPException, Request, Security
 from fastapi_keycloak import FastAPIKeycloak
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from pydantic import BaseModel
+
 from moonmind.config.settings import settings
-from .db.models import User
+
 from .db.base import get_async_session
+from .db.models import User
+
 
 class GoogleClaims(BaseModel):
     sub: str
@@ -77,33 +81,24 @@ def _google_dep():
             raise HTTPException(status_code=500, detail="Google OIDC provider is not configured properly.")
         return misconfigured_dep
 
-    # Fetch Google's OIDC discovery document
-    try:
-        discovery_url = f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
-        response = requests.get(discovery_url)
-        response.raise_for_status()
-        discovery_doc = response.json()
-        jwks_uri = discovery_doc.get("jwks_uri")
-        if not jwks_uri:
-            raise HTTPException(status_code=500, detail="JWKS URI not found in Google OIDC discovery document.")
-    except requests.exceptions.RequestException as e:
-        # This error occurs at app startup/module load time if requests fails.
-        # It's better to raise it here so it's immediately obvious.
-        raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
-    except Exception as e:
-        raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
-
 
     # Define a Bearer scheme for Google (can be any standard OAuth2 compatible scheme)
     # We are not using FastAPIKeycloak here, so we need to handle token validation manually.
-    from fastapi.security import OAuth2PasswordBearer # Or OAuth2AuthorizationCodeBearer if more appropriate
+    from fastapi.security import \
+        OAuth2PasswordBearer  # Or OAuth2AuthorizationCodeBearer if more appropriate
+
     # Using a generic name for the tokenUrl as it's not strictly used for validation here,
     # but required by OAuth2PasswordBearer. The actual token comes in the Authorization header.
     google_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/google/token") # Placeholder tokenUrl
 
-    async def dep(token: str = Security(google_oauth2_scheme),
+    async def dep(request: Request,
+                  token: str = Security(google_oauth2_scheme),
                   db=Depends(get_async_session)):
         try:
+            jwks_uri = getattr(request.app.state, "jwks_uri", None)
+            if not jwks_uri:
+                raise HTTPException(status_code=500, detail="JWKS URI not configured or available.")
+
             # Fetch Google's public keys
             jwks_client = jwt.PyJWKClient(jwks_uri)
             signing_key = jwks_client.get_signing_key_from_jwt(token)

@@ -89,7 +89,7 @@ except ImportError as e:
 # FastAPI and other necessary imports for the router
 from fastapi import APIRouter, Depends, HTTPException
 
-from api_service.auth_providers import get_current_user # Updated import
+from api_service.auth_providers import get_current_user  # Updated import
 from api_service.db.base import get_async_session
 # MoonMind specific imports
 from moonmind.config.settings import settings
