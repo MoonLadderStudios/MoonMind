@@ -44,6 +44,8 @@ class UserProfile(Base):
     )  # Changed to Uuid
 
     # Example profile field
-    google_api_key_encrypted = Column(EncryptedType(Text, get_encryption_key))
+    google_api_key_encrypted = Column(EncryptedType(Text, get_encryption_key), nullable=True)
+    openai_api_key_encrypted = Column(EncryptedType(Text, get_encryption_key), nullable=True)
+    # Add other provider keys here as needed
 
     user = relationship("User", back_populates="user_profile")

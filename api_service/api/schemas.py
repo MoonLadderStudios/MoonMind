@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class UserProfileBaseSchema(BaseModel):
     google_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
     # Add other profile fields here as they are defined in the UserProfile model
 
     class Config:

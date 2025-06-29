@@ -54,15 +54,19 @@ class ProfileService:
             # For now, directly creating UserProfile model instance
             new_profile_data = (
                 UserProfileCreateSchema()
-            )  # Provides default values if any
+            )  # Provides default values if any (e.g. None for keys)
 
-            profile = UserProfile(
-                user_id=user_id,
-                # Set fields from new_profile_data if they exist and are not None
-                # Example: profile.some_field = new_profile_data.some_field
-                # For google_api_key, it's optional and defaults to None in the schema
-                google_api_key_encrypted=new_profile_data.google_api_key,  # Will be None if not provided
-            )
+            profile = UserProfile(user_id=user_id)
+            # Initialize all keys from schema defaults (which should be None)
+            # This ensures that if new keys are added to the schema and model,
+            # they are initialized here during profile creation.
+            for key_in_schema in new_profile_data.dict(exclude_unset=False):
+                if key_in_schema.endswith("_api_key"):
+                    model_field_name = f"{key_in_schema}_encrypted"
+                    if hasattr(profile, model_field_name):
+                        setattr(profile, model_field_name, getattr(new_profile_data, key_in_schema))
+                    # else: log warning or handle mismatch if necessary
+
             db_session.add(profile)
             try:
                 await db_session.commit()
@@ -113,13 +117,17 @@ class ProfileService:
             profile = UserProfile(user_id=user_id)
             # Apply update data to the new profile
             update_data = profile_data.dict(exclude_unset=True)
-            for key, value in update_data.items():
-                if key == "google_api_key":  # Schema field name
-                    setattr(
-                        profile, "google_api_key_encrypted", value
-                    )  # Model field name
-                elif hasattr(profile, key):
-                    setattr(profile, key, value)
+            for key_in_schema, value in update_data.items():
+                if key_in_schema.endswith("_api_key"): # Handles google_api_key, openai_api_key, etc.
+                    model_field_name = f"{key_in_schema}_encrypted"
+                    if hasattr(profile, model_field_name):
+                        setattr(profile, model_field_name, value)
+                    # else: log warning or handle mismatch if necessary
+                elif hasattr(profile, key_in_schema): # For other direct mapped fields
+                    setattr(profile, key_in_schema, value)
+                # else:
+                #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")
+
 
             db_session.add(profile)
             # No commit yet, will commit after applying updates or if it was just created.
@@ -132,15 +140,17 @@ class ProfileService:
                 # If no data to update, just return the current profile
                 return UserProfileRead.from_orm(profile)  # Use UserProfileRead
 
-            for key, value in update_data.items():
-                if key == "google_api_key":  # Schema field name for input
-                    # The model field is 'google_api_key_encrypted'.
-                    # Assigning to it will trigger encryption via EncryptedType.
-                    setattr(profile, "google_api_key_encrypted", value)
-                elif hasattr(profile, key):  # For other potential direct mapped fields
-                    setattr(profile, key, value)
+            for key_in_schema, value in update_data.items():
+                if key_in_schema.endswith("_api_key"): # Handles google_api_key, openai_api_key, etc.
+                    model_field_name = f"{key_in_schema}_encrypted"
+                     # Assigning to this EncryptedType field handles encryption
+                    if hasattr(profile, model_field_name):
+                        setattr(profile, model_field_name, value)
+                    # else: log warning or handle mismatch if necessary
+                elif hasattr(profile, key_in_schema):  # For other potential direct mapped fields
+                    setattr(profile, key_in_schema, value)
                 # else:
-                #     logger.warning(f"Field {key} in profile_data not found on UserProfile model or not handled.")
+                #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")
 
         try:
             await db_session.commit()  # Commit changes (either new profile or updates)
