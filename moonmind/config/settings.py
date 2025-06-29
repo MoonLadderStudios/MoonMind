@@ -2,10 +2,7 @@ from pathlib import Path  # Added Path
 from typing import Optional  # Keep one Optional import
 
 from pydantic import (  # Ensure AliasChoices is imported if not already
-    AliasChoices,
-    Field,
-    field_validator,
-)
+    AliasChoices, Field, field_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -205,10 +202,14 @@ class LocalDataSettings(BaseSettings):
 
 
 class OIDCSettings(BaseSettings):
-    """OIDC authentication settings"""
+    """OIDC settings"""
 
-    AUTH_PROVIDER: str = Field("disabled", env="AUTH_PROVIDER")  # disabled, local, google
-    OIDC_ISSUER_URL: Optional[str] = Field(None, env="OIDC_ISSUER_URL")
+    AUTH_PROVIDER: str = Field(
+        "disabled",
+        description="Authentication provider: 'disabled' or 'keycloak'.",
+        env="AUTH_PROVIDER",
+    )
+    OIDC_ISSUER_URL: Optional[str] = Field(None, env="OIDC_ISSUER_URL", description="URL of the OIDC provider, e.g., Keycloak.")
     OIDC_CLIENT_ID: Optional[str] = Field(None, env="OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET: Optional[str] = Field(None, env="OIDC_CLIENT_SECRET")
 
