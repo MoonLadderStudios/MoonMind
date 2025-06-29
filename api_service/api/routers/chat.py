@@ -29,7 +29,7 @@ from moonmind.models_cache import model_cache
 
 # Dependencies for RAG functionality
 from api_service.api.dependencies import get_service_context, get_vector_index
-from api_service.auth import current_active_user
+from api_service.auth_providers import get_current_user # Updated import
 from api_service.db.models import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
@@ -183,7 +183,7 @@ async def chat_completions(
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
     db: AsyncSession = Depends(get_async_session),
-    user: User = Depends(current_active_user),
+    user: User = Depends(get_current_user), # Updated dependency
 ):
     try:
         # Extract the last user message as the query for RAG
