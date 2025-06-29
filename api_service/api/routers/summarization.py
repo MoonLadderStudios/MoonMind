@@ -1,14 +1,18 @@
 from typing import Optional
 from pydantic import BaseModel, Field
+from enum import Enum
+
+class SummaryType(str, Enum):
+    README = "readme"
 
 class RepositorySummarizationRequest(BaseModel):
     repo_url: str
-    summary_type: str = Field(default="readme", description="The type of summary to generate.")
+    summary_type: SummaryType = Field(default=SummaryType.README, description="The type of summary to generate.")
     model: Optional[str] = Field(default=None, description="The language model to use for generation.")
 
 class RepositorySummarizationResponse(BaseModel):
     summary_content: str
-    summary_type: str
+    summary_type: SummaryType
 
 # Imports for helper functions and upcoming endpoint
 import logging
