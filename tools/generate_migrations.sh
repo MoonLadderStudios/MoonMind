@@ -9,7 +9,11 @@ DB_NAME="moonmind_db"
 DB_PORT="5432"
 POSTGRES_IMAGE="postgres:15" # Or your preferred Postgres version
 
-ALEMBIC_DIR="../api_service/migrations" # Relative to where the script is run from (project root)
+# Determine Project Root and Alembic Directory dynamically
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PROJECT_ROOT_DIR=$(dirname "$SCRIPT_DIR") # Assumes script is in a direct subdirectory of project root (e.g., tools/)
+ALEMBIC_DIR="$PROJECT_ROOT_DIR/api_service/migrations"
+ALEMBIC_CONFIG_FILE="$ALEMBIC_DIR/alembic.ini" # Used for running alembic command
 
 # --- Helper Functions ---
 check_docker() {
@@ -57,15 +61,14 @@ stop_postgres_container() {
 # --- Main Script ---
 check_docker
 
-# Ensure we are in the project root if the script is in docs/
-if [[ "$(basename "$(pwd)")" == "docs" ]]; then
-    cd ..
-    echo "Changed directory to project root: $(pwd)"
-fi
-
+# The ALEMBIC_DIR is now absolute, so no need to check current path or cd from "docs"
 # Check if Alembic target directory exists
 if [ ! -d "$ALEMBIC_DIR" ]; then
-    echo "ERROR: Alembic directory not found at ${ALEMBIC_DIR}. Make sure you are in the project root."
+    echo "ERROR: Alembic directory not found at ${ALEMBIC_DIR} (derived from script location)."
+    exit 1
+fi
+if [ ! -f "$ALEMBIC_CONFIG_FILE" ]; then
+    echo "ERROR: Alembic config file not found at ${ALEMBIC_CONFIG_FILE}."
     exit 1
 fi
 
@@ -95,12 +98,19 @@ else
 fi
 
 # Generate migration
-echo "Attempting to generate Alembic revision..."
-cd "${ALEMBIC_DIR}"
-if alembic revision --autogenerate -m "$MIGRATION_MESSAGE"; then
-    echo "Alembic revision generated successfully in $(pwd)/versions."
+echo "Attempting to generate Alembic revision in ${ALEMBIC_DIR} using config ${ALEMBIC_CONFIG_FILE}..."
+# Run alembic command from project root, but pass the config file path
+# Alembic needs to run in a context where it can import the models, typically the project root or a directory in PYTHONPATH.
+# The env.py in migrations dir usually handles path to models.
+# The -c flag tells alembic where to find alembic.ini
+# The actual CWD for alembic command itself might matter for how it resolves `script_location` in alembic.ini
+# Let's try running it from project root, with absolute path to config.
+# env.py typically uses `os.path.join(os.path.dirname(__file__), "..", "..")` to get to project root for model imports.
+
+if alembic -c "${ALEMBIC_CONFIG_FILE}" revision --autogenerate -m "$MIGRATION_MESSAGE"; then
+    echo "Alembic revision generated successfully in ${ALEMBIC_DIR}/versions."
 else
-    echo "ERROR: Alembic revision command failed."
+    echo "ERROR: Alembic revision command failed. CWD is $(pwd)."
     # Optionally, stop the container if script started it
     if [ "$container_started_by_script" = true ]; then
         read -r -p "Alembic command failed. Stop the PostgreSQL container '${CONTAINER_NAME}'? (y/N): " confirm_stop_on_fail
@@ -108,10 +118,10 @@ else
             stop_postgres_container
         fi
     fi
-    cd - > /dev/null # Go back to original directory
+    # No cd was performed for alembic command, so no need to cd back
     exit 1
 fi
-cd - > /dev/null # Go back to original directory
+# No cd was performed for alembic command, so no need to cd back
 
 # Stop container if started by script
 if [ "$container_started_by_script" = true ]; then

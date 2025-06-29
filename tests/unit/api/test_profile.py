@@ -25,7 +25,12 @@ MOCK_USER = DBUser(
 )
 
 # Mock profile data
-MOCK_PROFILE_DATA = {"id": 1, "user_id": USER_ID, "google_api_key": "test_google_key"}
+MOCK_PROFILE_DATA = {
+    "id": 1,
+    "user_id": USER_ID,
+    "google_api_key": "test_google_key",
+    "openai_api_key": "test_openai_key",
+}
 MOCK_PROFILE_READ_SCHEMA = UserProfileRead(**MOCK_PROFILE_DATA)
 
 
@@ -94,7 +99,16 @@ async def test_update_current_user_profile_success(
     mock_db_session, mock_profile_service
 ):
     # Arrange
-    update_data = UserProfileUpdate(google_api_key="new_google_key")
+    update_data = UserProfileUpdate(
+        google_api_key="new_google_key", openai_api_key="new_openai_key"
+    )
+
+    # Update mock_profile_service.update_profile to return a schema that reflects these new keys
+    # For simplicity, we'll assume MOCK_PROFILE_READ_SCHEMA is what's returned,
+    # but in a more detailed test, you might construct a specific UserProfileRead
+    # instance that includes "new_google_key" and "new_openai_key".
+    # However, the current MOCK_PROFILE_READ_SCHEMA already includes an openai_api_key.
+    # The key is that the `update_data` object passed to the service method is correct.
 
     # Act
     updated_profile = await update_current_user_profile(
@@ -118,7 +132,9 @@ async def test_update_current_user_profile_user_id_none(
     mock_db_session, mock_profile_service
 ):
     # Arrange
-    update_data = UserProfileUpdate(google_api_key="new_google_key")
+    update_data = UserProfileUpdate(
+        google_api_key="new_google_key", openai_api_key="new_openai_key"
+    )
     user_without_id = MagicMock(spec=DBUser)
     user_without_id.id = None
 
