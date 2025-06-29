@@ -17,6 +17,9 @@ from api_service.api.routers import summarization as summarization_router # Adde
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
 from fastapi import FastAPI, Request, Depends
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+import os # For path operations
 
 # Auth imports
 from api_service.auth import auth_backend, fastapi_users, UserRead, UserCreate, UserUpdate
@@ -107,6 +110,20 @@ app = FastAPI(
     description="API for MoonMind - LLM-powered documentation search and chat interface",
     version="0.1.0",
 )
+
+# Setup templates
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+# Mount static files directory (optional, if you have CSS/JS files)
+# Create the static directory if it doesn't exist, or ensure your deployment process does.
+if not os.path.exists(STATIC_DIR):
+    os.makedirs(STATIC_DIR)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 
 # Include all routers
 app.include_router(chat_router, prefix="/v1/chat")
