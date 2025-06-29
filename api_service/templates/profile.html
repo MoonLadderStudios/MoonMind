@@ -28,7 +28,7 @@
             <div class="alert {% if 'success' in message.lower() %}alert-success{% else %}alert-danger{% endif %}">{{ message }}</div>
         {% endif %}
 
-        <form method="POST" action="/api/v1/profile/me/ui">
+        <form method="POST" action="{{ request.url_for('profile_ui') }}">
             <div>
                 <label for="openai_api_key">OpenAI API Key</label>
                 {% if keys_status.openai_api_key_set %}

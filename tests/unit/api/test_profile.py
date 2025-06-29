@@ -1,28 +1,24 @@
 import uuid
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.api.routers.profile import (
-    get_current_user_profile,
-    update_current_user_profile,
-    get_profile_service,
-    get_profile_management_page,
-    handle_profile_update_form,
-    templates, # Import the templates object to mock it
-)
-from api_service.api.schemas import (
-    UserProfileRead,
-    UserProfileUpdate,
-    UserProfileReadSanitized,
-    ApiKeyStatus,
-)
-from api_service.services.profile_service import ProfileService
-from fastapi import Request
-from fastapi.datastructures import QueryParams, FormData
+import pytest
+from fastapi import HTTPException, Request, status
+from fastapi.datastructures import FormData, QueryParams
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
+
+from api_service.api.routers.profile import \
+    templates  # Import the templates object to mock it
+from api_service.api.routers.profile import (get_current_user_profile,
+                                             get_profile_management_page,
+                                             get_profile_service,
+                                             handle_profile_update_form,
+                                             update_current_user_profile)
+from api_service.api.schemas import (ApiKeyStatus, UserProfileRead,
+                                     UserProfileReadSanitized,
+                                     UserProfileUpdate)
+from api_service.services.profile_service import ProfileService
 
 # Mock the templates object
 # We need to mock TemplateResponse method of the templates object
@@ -46,6 +42,7 @@ mock_templates.TemplateResponse = MagicMock(side_effect=mock_template_response_s
 
 # Original templates object from the router module, to be patched
 from api_service.api.routers import profile as profile_router_module
+
 profile_router_module.templates = mock_templates # Patching at module level for simplicity in tests
 
 from api_service.db.models import User as DBUser
@@ -408,6 +405,8 @@ async def test_handle_profile_update_form_service_error(
     # Ensure get_or_create_profile is still available for error path rendering
     mock_profile_service.get_or_create_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
 
+    # Reset the mock to ensure isolation
+    mock_templates.TemplateResponse.reset_mock()
 
     # Act
     response = await handle_profile_update_form(
