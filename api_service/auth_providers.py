@@ -4,10 +4,10 @@ import requests  # For fetching Google OIDC discovery document
 from fastapi import Depends, HTTPException, Request, Security
 from fastapi_keycloak import FastAPIKeycloak
 from jose import JWTError
+from jwt import PyJWKClient
+from jwt import decode as jwt_decode
+from jwt.exceptions import PyJWTError
 from pydantic import BaseModel
-from pyjwt import PyJWKClient
-from pyjwt import decode as pyjwt_decode
-from pyjwt.exceptions import PyJWTError
 from sqlalchemy.future import select
 
 from moonmind.config.settings import settings
@@ -99,56 +99,39 @@ def _google_dep():
                   token: str = Security(google_oauth2_scheme),
                   db=Depends(get_async_session)):
         try:
-            jwks_uri = getattr(request.app.state, "jwks_uri", None)
-            if not jwks_uri:
-                raise HTTPException(status_code=500, detail="JWKS URI not configured or available.")
-
-            # Fetch Google's public keys
+            # Manually validate Google token
+            # 1. Get Google's public keys
+            jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
             jwks_client = PyJWKClient(jwks_uri)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-            # Decode and validate the token
-            # Audience should be your Google OIDC client ID
-            data = pyjwt_decode(
+            # 2. Decode and validate the token
+            decoded_token = jwt_decode(
                 token,
                 signing_key.key,
-                algorithms=["RS256"],  # Google uses RS256
+                algorithms=["RS256"],
                 audience=settings.oidc.OIDC_CLIENT_ID,
-                issuer=settings.oidc.OIDC_ISSUER_URL,  # Validate issuer
+                issuer=settings.oidc.OIDC_ISSUER_URL,
+                options={"verify_exp": True}
             )
+            claims = GoogleClaims(**decoded_token)
 
-            claims = GoogleClaims(**data)  # Validate claims structure
+            # 3. Process user based on claims
+            user = await db.execute(select(User).where(User.oidc_subject == claims.sub, User.oidc_provider == "google"))
+            user = user.scalars().first()
 
-            # Check if user exists, create if not
-            # Google's 'sub' is the unique identifier
-            stmt = select(User).filter(
-                User.oidc_provider == "google", User.oidc_subject == claims.sub
-            )
-            result = await db.execute(stmt)
-            user = result.scalars().first()
             if not user:
-                # For Google, the 'sub' is not a UUID. We still use our internal UUID for User.id
-                user = User(
-                    id=uuid.uuid4(),  # Generate a new UUID for internal use
-                    email=claims.email,
-                    is_active=True,
-                    is_verified=True,  # Assume verified if from Google
-                    oidc_provider="google",
-                    oidc_subject=claims.sub,
-                )
+                user = User(id=uuid.uuid4(),
+                            email=claims.email,
+                            is_active=True, is_verified=True,
+                            oidc_provider="google",
+                            oidc_subject=claims.sub)
                 db.add(user)
                 await db.commit()
                 await db.refresh(user)
             return user
         except PyJWTError as e:
-            raise HTTPException(
-                status_code=401, detail=f"Google token error: {str(e)}"
-            )
+            raise HTTPException(status_code=401, detail=f"Google token error: {str(e)}")
         except Exception as e:
-            # Catch other potential errors
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error processing Google authentication: {str(e)}",
-            )
-
+            raise HTTPException(status_code=500, detail=f"Error processing Google authentication: {str(e)}")
     return dep
