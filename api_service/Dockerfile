@@ -20,6 +20,9 @@ COPY api_service /app/api_service/
 # This assumes pyproject.toml is set up to recognize 'api_service' as a package.
 RUN pip install -e .
 
+# Install readmeai separately due to version conflict
+RUN pip install readmeai~=0.6.0 --no-deps
+
 EXPOSE 8000
 
 # Update CMD to correctly point to the app within the api_service package
