@@ -5,7 +5,8 @@ import logging
 import tempfile
 from pathlib import Path
 
-from readmeai.main import readme_cli
+from readmeai.config.settings import ConfigLoader
+from readmeai.core.pipeline import readme_agent
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,7 @@ class ReadmeAiGenerator:
         """
         Generates a README.md file for a given repository using readme-ai.
 
-        This method runs the readme-ai CLI tool in a controlled way,
-        capturing the output file's content.
+        This method runs the readme-ai programmatically using its core pipeline.
 
         Args:
             repo_path (str): The absolute path to the code repository.
@@ -41,45 +41,42 @@ class ReadmeAiGenerator:
         """
         logger.info(f"Starting README generation for {repo_path} using readme-ai.")
 
-        # Use a temporary file for the output to avoid cluttering the project
+        # Use a temporary file for the output
         with tempfile.NamedTemporaryFile(mode='w+', suffix=".md", delete=False) as temp_output:
             output_path = temp_output.name
 
-        # Ensure output_path is a string for readme_cli
         output_path_str = str(output_path)
 
         try:
-            # Prepare arguments for the readme-ai CLI function
-            args = [
-                "readme-ai",  # Program name
-                "--repository", repo_path,
-                "--output", output_path_str,
-            ]
+            # Create readme-ai configuration
+            config_loader = ConfigLoader()
 
-            # Add custom configurations
+            # Set the repository path
+            config_loader.config.git.repository = repo_path
+
+            # Apply custom configurations
             if "model" in self.config and self.config["model"]:
-                args.extend(["--model", str(self.config["model"])])
+                config_loader.config.llm.model = self.config["model"]
 
             if "provider" in self.config and self.config["provider"]:
-                args.extend(["--llm-provider", str(self.config["provider"])])
+                config_loader.config.llm.api = self.config["provider"]
 
             if "api_key" in self.config and self.config["api_key"]:
-                args.extend(["--api-key", str(self.config["api_key"])])
+                # Set the API key based on provider
+                if self.config["provider"].lower() == "openai":
+                    config_loader.config.llm.api_key = self.config["api_key"]
+                elif self.config["provider"].lower() == "anthropic":
+                    config_loader.config.llm.api_key = self.config["api_key"]
+                elif self.config["provider"].lower() == "google":
+                    config_loader.config.llm.api_key = self.config["api_key"]
+                # Ollama typically doesn't use an API key
 
-            # Add other configurations from self.config, avoiding duplication
-            # of already handled keys (model, provider, api_key).
-            other_config_keys = ["model", "provider", "api_key"]
-            for key, value in self.config.items():
-                if key not in other_config_keys and value is not None:
-                    args.extend([f"--{key.replace('_', '-')}", str(value)])
+            logger.debug(f"readme-ai config: repository={repo_path}, model={config_loader.config.llm.model}, provider={config_loader.config.llm.api}")
 
-            logger.debug(f"readme-ai arguments: {args}")
+            # Use asyncio.to_thread to run the synchronous readme_agent function
+            await asyncio.to_thread(readme_agent, config_loader, output_path_str)
 
-            # Use asyncio.to_thread to avoid blocking the event loop
-            # This handles both sync and async CLI functions properly
-            await asyncio.to_thread(readme_cli, args)
-
-            # Read the content from the temporary output file
+            # Read the content from the output file
             with open(output_path_str, 'r', encoding='utf-8') as f:
                 readme_content = f.read()
 
