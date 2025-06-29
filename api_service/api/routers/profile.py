@@ -5,7 +5,11 @@ from api_service.auth import current_active_user  # Dependency for authenticated
 from api_service.db.base import get_async_session  # Dependency for DB session
 from api_service.db.models import User as DBUser  # User model from DB
 from api_service.services.profile_service import ProfileService
-from api_service.api.schemas import UserProfileRead, UserProfileUpdate
+from api_service.api.schemas import (
+    UserProfileRead,
+    UserProfileUpdate,
+    UserProfileReadSanitized,
+)
 
 router = APIRouter()
 
@@ -16,7 +20,7 @@ async def get_profile_service() -> ProfileService:
     return ProfileService()
 
 
-@router.get("/me", response_model=UserProfileRead)
+@router.get("/me", response_model=UserProfileReadSanitized)
 async def get_current_user_profile(
     user: DBUser = Depends(current_active_user),
     db: AsyncSession = Depends(get_async_session),
