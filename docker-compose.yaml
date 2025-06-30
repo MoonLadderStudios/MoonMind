@@ -59,7 +59,6 @@ services:
       - local-network
     depends_on:
       - api
-      - keycloak
 
   api:
     build:
