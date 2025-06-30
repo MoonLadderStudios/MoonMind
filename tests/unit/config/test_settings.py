@@ -8,6 +8,7 @@ from moonmind.config.settings import (
     GoogleSettings,
     OllamaSettings,
     OpenAISettings,
+    OIDCSettings,
 )
 
 
@@ -93,3 +94,40 @@ class TestAtlassianSettings:
 
         # Clean up environment variable
         monkeypatch.delenv("ATLASSIAN_URL", raising=False)
+
+
+class TestOIDCSettings:
+    def test_auth_provider_default(self, monkeypatch):
+        """Test that AUTH_PROVIDER defaults to 'disabled'."""
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+        settings = OIDCSettings()
+        assert settings.AUTH_PROVIDER == "disabled"
+
+    def test_auth_provider_env_override(self, monkeypatch):
+        """Test that AUTH_PROVIDER can be set by environment variable."""
+        monkeypatch.setenv("AUTH_PROVIDER", "google")
+        settings = OIDCSettings()
+        assert settings.AUTH_PROVIDER == "google"
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+
+    def test_default_user_defaults(self, monkeypatch):
+        """Test that DEFAULT_USER_ID and DEFAULT_USER_EMAIL default to None."""
+        monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
+        monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
+        settings = OIDCSettings()
+        assert settings.DEFAULT_USER_ID is None
+        assert settings.DEFAULT_USER_EMAIL is None
+
+    def test_default_user_env_override(self, monkeypatch):
+        """Test that DEFAULT_USER_ID and DEFAULT_USER_EMAIL can be set by env vars."""
+        test_id = "test_user_123"
+        test_email = "test@example.com"
+        monkeypatch.setenv("DEFAULT_USER_ID", test_id)
+        monkeypatch.setenv("DEFAULT_USER_EMAIL", test_email)
+
+        settings = OIDCSettings()
+        assert settings.DEFAULT_USER_ID == test_id
+        assert settings.DEFAULT_USER_EMAIL == test_email
+
+        monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
+        monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)

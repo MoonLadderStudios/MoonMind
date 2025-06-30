@@ -31,6 +31,7 @@ moonmind/rag/retriever.py
 moonmind/schemas/chat_models.py
 moonmind/schemas/documents_models.py
 moonmind/summarization/__init__.py
+moonmind/summarization/readme_generator.py
 moonmind/summarization/repo_summary.py
 moonmind/summarization/summarization.py
 moonmind/utils/env_bool.py
