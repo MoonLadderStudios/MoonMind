@@ -8,9 +8,9 @@ router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("/health", include_in_schema=False) # Usually health checks are not in public schema if auth protected
+@router.get("/health", include_in_schema=False) # Health checks should be public
 @router.head("/health", include_in_schema=False)
-async def health_check(_user: User = Depends(get_current_user)): # Protected
+async def health_check(): # Public
     return {"status": "healthy"}
 
 
