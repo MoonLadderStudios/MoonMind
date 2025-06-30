@@ -171,7 +171,7 @@ async def get_or_create_default_user(
     except Exception as e:
         await db_session.rollback()
         # Log error details here
-        print(f"Error creating default user: {e}")
+        logger.error(f"Error creating default user: {e}")
         raise HTTPException(status_code=500, detail=f"Could not create default user: {e}")
 
 
