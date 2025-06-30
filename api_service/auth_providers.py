@@ -1,26 +1,56 @@
 import uuid
 
+import logging # Added logging
 from fastapi import Depends, HTTPException, Security
 from fastapi_keycloak import FastAPIKeycloak
 from jose import JWTError
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession # For type hinting
 from sqlalchemy.future import select
 
-from moonmind.config.settings import settings
 
+from moonmind.config.settings import settings
 from .db.base import get_async_session
 from .db.models import User
+from .auth import get_or_create_default_user, get_user_manager # Import new function and UserManager
+from api_service.auth import UserManager # Ensure UserManager is available for type hinting
 
+logger = logging.getLogger(__name__) # Added logger
 
-def get_current_user():
+def get_current_user(): # This function becomes a factory for the actual dependency
     provider = settings.oidc.AUTH_PROVIDER
     if provider == "disabled":
-        from api_service.auth import current_active_user
+        logger.info("Auth provider is 'disabled'. Using default user dependency.")
+        if not settings.oidc.DEFAULT_USER_ID or not settings.oidc.DEFAULT_USER_EMAIL:
+            logger.error("DEFAULT_USER_ID or DEFAULT_USER_EMAIL not set for 'disabled' auth mode.")
+            async def misconfigured_default_user_dep():
+                raise HTTPException(
+                    status_code=500,
+                    detail="Default user not configured for disabled authentication mode."
+                )
+            return misconfigured_default_user_dep
 
-        return current_active_user
-
-    # Default to keycloak if auth is not disabled
-    return _keycloak_dep()
+        async def get_default_user_dependency(
+            db: AsyncSession = Depends(get_async_session),
+            user_manager: UserManager = Depends(get_user_manager)
+        ) -> User:
+            try:
+                user = await get_or_create_default_user(db_session=db, user_manager=user_manager)
+                if not user: # Should not happen if get_or_create_default_user raises error on failure
+                    raise HTTPException(status_code=500, detail="Failed to get or create default user.")
+                return user
+            except ValueError as ve: # Catch specific errors from get_or_create_default_user
+                logger.error(f"Configuration error for default user: {ve}")
+                raise HTTPException(status_code=500, detail=str(ve))
+            except HTTPException as he: # Re-raise HTTPExceptions
+                raise he
+            except Exception as e:
+                logger.error(f"Unexpected error in default user dependency: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Error fetching default user: {e}")
+        return get_default_user_dependency
+    else: # Default to keycloak or other configured OIDC providers
+        logger.info(f"Auth provider is '{provider}'. Using Keycloak OIDC dependency.")
+        return _keycloak_dep()
 
 
 def _keycloak_dep():
