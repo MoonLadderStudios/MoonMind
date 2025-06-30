@@ -98,7 +98,7 @@ async def get_or_create_default_user(
             # Ideally, ID should be authoritative.
             if user_by_email.id != default_user_uuid:
                 # Log a warning about ID mismatch if logging is available
-                logger.warning(f"Default user email {default_email} exists with ID {user_by_email.id}, but expected ID {default_user_uuid}.")
+                print(f"Warning: Default user email {default_email} exists with ID {user_by_email.id}, but expected ID {default_user_uuid}.")
                 # Potentially update the existing user's ID if that's desired and feasible,
                 # or raise an error. For now, we'll return the user found by email.
                 pass # Or handle more robustly
@@ -171,7 +171,7 @@ async def get_or_create_default_user(
     except Exception as e:
         await db_session.rollback()
         # Log error details here
-        logger.error(f"Error creating default user: {e}")
+        print(f"Error creating default user: {e}")
         raise HTTPException(status_code=500, detail=f"Could not create default user: {e}")
 
 
