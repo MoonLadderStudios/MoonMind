@@ -14,6 +14,8 @@ from moonmind.factories.google_factory import get_google_model
 from moonmind.rag.retriever import QdrantRAG
 
 from api_service.api.dependencies import get_service_context, get_vector_index
+from api_service.auth_providers import get_current_user # Auth dependency
+from api_service.db.models import User # User model for type hinting
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -67,6 +69,7 @@ async def process_context(
     request: ContextRequest,
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
+    _user: User = Depends(get_current_user), # Protected
 ):
     try:
         user_query = ""

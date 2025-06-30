@@ -1,19 +1,21 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from moonmind.models_cache import model_cache  # Import the model cache
+from api_service.auth_providers import get_current_user # Auth dependency
+from api_service.db.models import User # User model for type hinting
 
 router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("/health")
-@router.head("/health")
-async def health_check():
+@router.get("/health", include_in_schema=False) # Usually health checks are not in public schema if auth protected
+@router.head("/health", include_in_schema=False)
+async def health_check(_user: User = Depends(get_current_user)): # Protected
     return {"status": "healthy"}
 
 
 @router.get("/")
-async def models():
+async def models(_user: User = Depends(get_current_user)): # Protected
     try:
         # Get all models from the cache
         # The data is already formatted by the cache's _fetch_all_models method
