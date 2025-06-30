@@ -78,7 +78,7 @@ class ProfileService:
                     detail=f"Failed to create profile: {str(e)}",
                 )
 
-        return UserProfileRead.from_orm(profile)  # Use UserProfileRead
+        return UserProfileRead.model_validate(profile)  # Use UserProfileRead
 
     def _apply_update_data_to_profile(self, profile: UserProfile, update_data: dict):
         for key_in_schema, value in update_data.items():
@@ -121,7 +121,7 @@ class ProfileService:
         else:  # Profile exists, update it
             if not update_data:
                 # If no data to update, just return the current profile
-                return UserProfileRead.from_orm(profile)  # Use UserProfileRead
+                return UserProfileRead.model_validate(profile)  # Use UserProfileRead
 
             self._apply_update_data_to_profile(profile, update_data)
 
@@ -136,7 +136,7 @@ class ProfileService:
                 detail=f"Failed to update profile: {str(e)}",
             )
 
-        return UserProfileRead.from_orm(profile)  # Use UserProfileRead
+        return UserProfileRead.model_validate(profile)  # Use UserProfileRead
 
 
 # Optional: A function to get the service instance, useful for dependency injection

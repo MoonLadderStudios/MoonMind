@@ -1,23 +1,18 @@
 import uuid
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class UserProfileBaseSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     google_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     # Add other profile fields here as they are defined in the UserProfile model
 
-    class Config:
-        orm_mode = (
-            True  # Kept for compatibility, though Pydantic V2 prefers model_validate
-        )
 
-
-class UserProfileRead(
-    UserProfileBaseSchema
-):  # Renamed UserProfileSchema to UserProfileRead
+class UserProfileRead(UserProfileBaseSchema):  # Renamed UserProfileSchema to UserProfileRead
     id: int  # Assuming 'id' is the primary key of UserProfile model
     user_id: uuid.UUID
     # google_api_key is inherited from UserProfileBaseSchema
@@ -27,17 +22,12 @@ class UserProfileRead(
 
 
 # New schema for sanitized output, excluding sensitive API keys.
-class UserProfileReadSanitized(UserProfileRead):
-    class Config:
-        orm_mode = True
-        # Exclude sensitive fields from the output.
-        # This is more maintainable than a separate schema definition.
-        model_config = {
-            "fields": {
-                "google_api_key": {"exclude": True},
-                "openai_api_key": {"exclude": True},
-            }
-        }
+class UserProfileReadSanitized(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: uuid.UUID
+    # Exclude sensitive fields by not including them in the schema
 
 
 class UserProfileUpdate(UserProfileBaseSchema):
@@ -55,9 +45,8 @@ class UserProfileCreateSchema(UserProfileBaseSchema):
 
 class ApiKeyStatus(BaseModel):
     """Schema for displaying API key status."""
+    model_config = ConfigDict(from_attributes=True)
+
     openai_api_key_set: bool = False
     # anthropic_api_key_set: bool = False # Example for other keys
     # Add other keys as needed
-
-    # For Pydantic V2
-    model_config = {"from_attributes": True} # Replaces orm_mode in Pydantic V2
