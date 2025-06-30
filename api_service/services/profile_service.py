@@ -106,6 +106,12 @@ class ProfileService:
         profile = await self.get_profile_by_user_id(db_session, user_id)
         update_data = profile_data.dict(exclude_unset=True)
 
+        if profile and profile.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot update another user's profile.",
+            )
+
         if not profile:
             user_exists = await db_session.get(User, user_id)
             if not user_exists:
