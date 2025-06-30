@@ -1,11 +1,11 @@
 services:
   keycloak-db:
-    image: postgres:16
+    image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: keycloak
       POSTGRES_PASSWORD: ${KC_DB_PW:-keycloak}
       POSTGRES_DB: keycloak
-    volumes: [ keycloak_data:/var/lib/postgresql/data ]
+    volumes: [ keycloak-data:/var/lib/postgresql/data ]
     networks: [ local-network ]
     restart: unless-stopped
 
@@ -55,7 +55,7 @@ services:
       - local-network
     depends_on:
       - api
-      - keycloak # Added dependency
+      - keycloak
 
   api:
     build:
@@ -74,7 +74,7 @@ services:
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       # OIDC specific variables for API service
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-local} # local, google, or disabled
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-api-service} # For 'local', matches realm-export.json
       - OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme} # For 'local', matches realm-export.json
@@ -95,16 +95,15 @@ services:
     depends_on:
       - init-db
       - api-db
-      - keycloak # Added dependency
 
   api-db:
-    image: pgvector/pgvector:pg${POSTGRES_VERSION:-16}
+    image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-moonmind}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
       - ./postgres_init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
@@ -118,7 +117,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_storage:/qdrant/storage
+      - qdrant-storage:/qdrant/storage
     networks:
       - local-network
 
@@ -150,9 +149,9 @@ services:
 
 volumes:
   open-webui:
-  qdrant_storage:
-  postgres_data:
-  keycloak_data: # Added volume for keycloak
+  qdrant-storage:
+  postgres-data:
+  keycloak-data:
 
 networks:
   local-network:
