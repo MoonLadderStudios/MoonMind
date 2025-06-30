@@ -1,17 +1,15 @@
 import uuid
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
-from fastapi import Depends, Request
-from fastapi_users import BaseUserManager, FastAPIUsers, schemas, UUIDIDMixin
-from fastapi_users.authentication import (
-    AuthenticationBackend,
-    BearerTransport,
-    JWTStrategy,
-)
+from fastapi import Depends, HTTPException, Request
+from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin, schemas
+from fastapi_users.authentication import (AuthenticationBackend,
+                                          BearerTransport, JWTStrategy)
 from fastapi_users.db import SQLAlchemyUserDatabase
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import User
 from api_service.db.base import get_async_session
+from api_service.db.models import User
 from moonmind.config.settings import settings
 
 
@@ -53,6 +51,7 @@ async def get_user_manager(user_db: SQLAlchemyUserDatabase = Depends(get_user_db
     yield UserManager(user_db)
 
 from contextlib import asynccontextmanager
+
 
 @asynccontextmanager
 async def get_user_manager_context(db_session: AsyncSession) -> AsyncGenerator[UserManager, None]:
