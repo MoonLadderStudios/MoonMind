@@ -95,7 +95,6 @@ services:
     depends_on:
       - init-db
       - api-db
-      - keycloak
 
   api-db:
     image: postgres:${POSTGRES_VERSION:-17}
@@ -145,7 +144,7 @@ services:
       - local-network
     restart: "no"
     depends_on:
-      - postgres
+      - api-db
       - qdrant
 
 volumes:

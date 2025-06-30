@@ -20,9 +20,9 @@ This approach uses the API service container that already has all Python depende
     ```
 
 2.  **Start the PostgreSQL Database**:
-    The API container needs a PostgreSQL database to compare against. Start just the PostgreSQL service:
+    The API container needs a PostgreSQL database to compare against. Start just the PostgreSQL service (now named `api-db`):
     ```bash
-    docker-compose up -d postgres
+    docker-compose up -d api-db
     ```
 
 3.  **Build the API Image** (if not already built):
@@ -45,7 +45,7 @@ This approach uses the API service container that already has all Python depende
 6.  **Stop the Database** (optional):
     If you don't need the database running, you can stop it:
     ```bash
-    docker-compose down postgres
+    docker-compose down api-db
     ```
 
 ### Alternative: Using Docker Run Command

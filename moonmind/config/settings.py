@@ -212,6 +212,8 @@ class OIDCSettings(BaseSettings):
     OIDC_ISSUER_URL: Optional[str] = Field(None, env="OIDC_ISSUER_URL", description="URL of the OIDC provider, e.g., Keycloak.")
     OIDC_CLIENT_ID: Optional[str] = Field(None, env="OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET: Optional[str] = Field(None, env="OIDC_CLIENT_SECRET")
+    DEFAULT_USER_ID: Optional[str] = Field(None, env="DEFAULT_USER_ID")
+    DEFAULT_USER_EMAIL: Optional[str] = Field(None, env="DEFAULT_USER_EMAIL")
 
     model_config = SettingsConfigDict(env_prefix="")
 
