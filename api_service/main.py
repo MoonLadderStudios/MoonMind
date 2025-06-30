@@ -236,7 +236,37 @@ async def startup_event():
     _initialize_vector_store(app.state, settings)
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
-    _initialize_oidc_provider(app)
+    _initialize_oidc_provider(app) # OIDC provider init like Keycloak discovery
+
+    # Ensure default user and profile exist if auth is disabled
+    if settings.oidc.AUTH_PROVIDER == "disabled":
+        logger.info("Auth provider is 'disabled'. Ensuring default user and profile exist on startup.")
+        from api_service.db.base import get_async_session_context
+        from api_service.auth import get_user_manager_context, get_or_create_default_user
+        from api_service.services.profile_service import ProfileService
+
+        async with get_async_session_context() as db_session:
+            async with get_user_manager_context(db_session) as user_manager:
+                try:
+                    if not settings.oidc.DEFAULT_USER_ID or not settings.oidc.DEFAULT_USER_EMAIL:
+                        logger.warning("DEFAULT_USER_ID or DEFAULT_USER_EMAIL not set. Skipping default user/profile creation on startup.")
+                    else:
+                        logger.info(f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID} on startup.")
+                        default_user = await get_or_create_default_user(db_session=db_session, user_manager=user_manager)
+                        if default_user:
+                            logger.info(f"Default user {default_user.email} (ID: {default_user.id}) ensured.")
+                            profile_service = ProfileService()
+                            profile = await profile_service.get_or_create_profile(db_session=db_session, user_id=default_user.id)
+                            logger.info(f"Profile for default user {default_user.email} ensured (Profile ID: {profile.id}).")
+                        else:
+                            logger.error("Failed to get or create default user on startup.")
+                except ValueError as ve:
+                    logger.error(f"Configuration error during default user setup on startup: {ve}")
+                except Exception as e:
+                    logger.error(f"Error ensuring default user/profile on startup: {e}", exc_info=True)
+    else:
+        logger.info(f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup.")
+
 
     logger.info("Application startup events completed.")
 
