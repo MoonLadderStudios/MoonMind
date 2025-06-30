@@ -32,6 +32,7 @@ from api_service.auth import (UserCreate, UserRead, UserUpdate, auth_backend,
                               fastapi_users)
 from api_service.db.models import \
     User  # Ensure User model is imported if needed for routers
+from fastapi import APIRouter # Added for healthz
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
 # Removed unused import: build_indexers
@@ -155,6 +156,17 @@ if not os.path.exists(STATIC_DIR):
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+# Healthz router
+health_router = APIRouter()
+
+
+@health_router.get("/healthz")
+async def health_check():
+    return {"status": "ok"}
+
+
+app.include_router(health_router, tags=["health"])
+
 # Include all routers
 app.include_router(chat_router, prefix="/v1/chat")
 app.include_router(models_router, prefix="/v1/models")
@@ -167,31 +179,40 @@ app.include_router(
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
-app.include_router(
-    fastapi_users.get_auth_router(auth_backend),
-    prefix=API_AUTH_PREFIX,
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
-    prefix=API_AUTH_PREFIX,
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_reset_password_router(),  # Added reset password router
-    prefix=API_AUTH_PREFIX,
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_verify_router(UserRead),  # Added verify router
-    prefix=API_AUTH_PREFIX,
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_users_router(UserRead, UserUpdate),
-    prefix=f"{API_AUTH_PREFIX}/users",  # Users router typically prefixed further
-    tags=["users"],
-)
+
+if settings.oidc.AUTH_PROVIDER != "keycloak":
+    logger.info(
+        f"AUTH_PROVIDER is '{settings.oidc.AUTH_PROVIDER}'. Including fastapi-users auth routers."
+    )
+    app.include_router(
+        fastapi_users.get_auth_router(auth_backend),
+        prefix=API_AUTH_PREFIX,
+        tags=["auth"],
+    )
+    app.include_router(
+        fastapi_users.get_register_router(UserRead, UserCreate),
+        prefix=API_AUTH_PREFIX,
+        tags=["auth"],
+    )
+    app.include_router(
+        fastapi_users.get_reset_password_router(),
+        prefix=API_AUTH_PREFIX,
+        tags=["auth"],
+    )
+    app.include_router(
+        fastapi_users.get_verify_router(UserRead),
+        prefix=API_AUTH_PREFIX,
+        tags=["auth"],
+    )
+    app.include_router(
+        fastapi_users.get_users_router(UserRead, UserUpdate),
+        prefix=f"{API_AUTH_PREFIX}/users",
+        tags=["users"],
+    )
+else:
+    logger.info(
+        "AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers."
+    )
 
 
 app.add_middleware(
