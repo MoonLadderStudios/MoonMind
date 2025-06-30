@@ -149,6 +149,82 @@ services:
       - api-db
       - qdrant
 
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    ports:
+      - 11434:11434
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./model_data:/root/.ollama/models
+      - ./tools/entrypoint-ollama.sh:/entrypoint-ollama.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint-ollama.sh"]
+    networks:
+      - local-network
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_CONTEXT_LENGTH=32768
+      - OLLAMA_FLASH_ATTENTION=true
+      - OLLAMA_KV_CACHE_TYPE=q4_0
+
+  openhands:
+    profiles: ["openhands"]
+    image: docker.all-hands.dev/all-hands-ai/openhands:0.39
+    container_name: openhands-app
+    pull_policy: always
+    tty: true
+    stdin_open: true
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.openhands-state-data:/.openhands-state
+      - ./config.toml:/app/openhands/config.toml:ro
+      - .:/workspace
+    environment:
+      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:0.39-nikolaik
+      - LOG_ALL_EVENTS=true
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - local-network
+    env_file:
+      - .env
+
+  vllm:
+    profiles: ["vllm"]
+    image: vllm/vllm-openai:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./model_data:/root/.cache/huggingface/hub
+      - ./tools/entrypoint-vllm.sh:/entrypoint-vllm.sh:ro
+    ports:
+      - "8001:8000"
+    environment:
+      - MODEL_NAME=${VLLM_MODEL_NAME:-ByteDance-Seed/UI-TARS-1.5-7B}
+      - DTYPE=${VLLM_DTYPE:-float16}
+      - GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
+      - HF_HOME=/root/.cache/huggingface
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    entrypoint: ["/bin/sh", "/entrypoint-vllm.sh"]
+    networks:
+      - local-network
+    tty: true
+    init: true
+
 volumes:
   open-webui:
   qdrant-storage:
