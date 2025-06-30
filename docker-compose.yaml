@@ -1,5 +1,6 @@
 services:
   keycloak-db:
+    profiles: ["keycloak"]
     image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: keycloak
@@ -10,6 +11,7 @@ services:
     restart: unless-stopped
 
   keycloak:
+    profiles: ["keycloak"]
     image: quay.io/keycloak/keycloak:24.0
     command: >
       start --optimized --proxy=edge
