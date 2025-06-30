@@ -70,7 +70,7 @@ def _keycloak_dep():
         client_secret=settings.oidc.OIDC_CLIENT_SECRET or None,  # Handles optional secret
         verify=True,
         # algorithm="RS256", # Default is RS256, explicitly setting if needed
-        # audience=settings.oidc.OIDC_CLIENT_ID # Usually client_id is the audience
+        audience=settings.oidc.OIDC_CLIENT_ID, # Ensure token is intended for this API
     )
     scheme = kc.get_auth_scheme()
 
