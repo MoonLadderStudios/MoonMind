@@ -6,7 +6,6 @@
       "clientId": "open-webui",
       "publicClient": true,
       "standardFlowEnabled": true,
-      "pkceCodeChallengeMethod": "S256",
       "redirectUris": [
         "http://ui:8080/oauth/oidc/callback",
         "http://localhost:8080/oauth/oidc/callback"
