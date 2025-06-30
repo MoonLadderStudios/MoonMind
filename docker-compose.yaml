@@ -14,20 +14,22 @@ services:
     profiles: ["keycloak"]
     image: quay.io/keycloak/keycloak:24.0
     command: >
-      start --optimized --proxy=edge
+      start-dev
+      --proxy-headers=xforwarded
       --hostname-url=http://keycloak:8080
       --import-realm
+      --db=postgres
+      --db-url=jdbc:postgresql://keycloak-db:5432/keycloak
+      --db-username=keycloak
+      --db-password=${KC_DB_PW:-keycloak}
     environment:
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
-      KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: ${KC_DB_PW:-keycloak}
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PW:-admin}
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     ports: [ "8085:8080" ]        # host→container
-    depends_on: [ keycloak-db ]
+    depends_on:
+      - keycloak-db
     networks: [ local-network ]
     restart: unless-stopped
 
@@ -57,7 +59,6 @@ services:
       - local-network
     depends_on:
       - api
-      - keycloak
 
   api:
     build:
@@ -105,10 +106,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-moonmind}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - api-db-data:/var/lib/postgresql/data
       - ./postgres_init:/docker-entrypoint-initdb.d
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     networks:
       - local-network
     restart: unless-stopped
@@ -152,7 +153,7 @@ services:
 volumes:
   open-webui:
   qdrant-storage:
-  postgres-data:
+  api-db-data:
   keycloak-data:
 
 networks:

@@ -2,7 +2,9 @@ import uuid
 from typing import AsyncGenerator, Optional
 
 from fastapi import Depends, HTTPException, Request
-from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin, schemas
+from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
+from fastapi_users import exceptions as fastapi_users_exceptions
+from fastapi_users import schemas
 from fastapi_users.authentication import (AuthenticationBackend,
                                           BearerTransport, JWTStrategy)
 from fastapi_users.db import SQLAlchemyUserDatabase
@@ -137,13 +139,17 @@ async def get_or_create_default_user(
         return user
 
     # Check if user with default_email exists
-    existing_user_by_email = await user_manager.get_by_email(default_email)
-    if existing_user_by_email and existing_user_by_email.id != default_user_uuid:
-        raise ValueError(
-            f"A user with email {default_email} already exists but with a different ID ({existing_user_by_email.id}) than the configured DEFAULT_USER_ID ({default_user_uuid})."
-        )
-    elif existing_user_by_email and existing_user_by_email.id == default_user_uuid:
-        return existing_user_by_email # Should have been caught by user_manager.get(default_user_uuid)
+    try:
+        existing_user_by_email = await user_manager.get_by_email(default_email)
+        if existing_user_by_email and existing_user_by_email.id != default_user_uuid:
+            raise ValueError(
+                f"A user with email {default_email} already exists but with a different ID ({existing_user_by_email.id}) than the configured DEFAULT_USER_ID ({default_user_uuid})."
+            )
+        elif existing_user_by_email and existing_user_by_email.id == default_user_uuid:
+            return existing_user_by_email # Should have been caught by user_manager.get(default_user_uuid)
+    except fastapi_users_exceptions.UserNotExists:
+        # User doesn't exist by email, which is expected for new setup
+        pass
 
     # Create the user directly with the specified ID
     # Note: Hashing the password should be handled by UserManager or a utility.
