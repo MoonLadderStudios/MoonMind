@@ -39,24 +39,29 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Restore unique constraint to its previous definition
     op.drop_constraint('uq_oidc_identity', 'user', type_='unique')
-    op.create_unique_constraint('uq_oidc_identity', 'user', ['oidc_provider', 'oidc_subject'])
+    op.create_unique_constraint('uq_oidc_identity', 'user', ['oidc_identity'])
+
+    # Revert encrypted columns to their original types and nullability
     op.alter_column(
         'user_profile',
         'openai_api_key_encrypted',
-        type_=sqlalchemy_utils.types.encrypted.encrypted_type.EncryptedType(sa.Text),
-        existing_nullable=True,
+        type_=sa.Text(),
+        existing_nullable=False,
     )
     op.alter_column(
         'user_profile',
         'google_api_key_encrypted',
-        type_=sqlalchemy_utils.types.encrypted.encrypted_type.EncryptedType(sa.Text),
-        existing_nullable=True,
+        type_=sa.Text(),
+        existing_nullable=False,
     )
+
+    # Revert hashed_password to non-nullable state
     op.alter_column(
         'user',
         'hashed_password',
         existing_type=sa.Text(),
         type_=sa.Text(),
-        nullable=True,
+        nullable=False,
     )
