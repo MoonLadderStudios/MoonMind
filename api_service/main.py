@@ -12,6 +12,7 @@ import os  # For path operations
 from uuid import uuid4
 
 import requests
+from fastapi import APIRouter  # Added for healthz
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -27,12 +28,12 @@ from api_service.api.routers.context_protocol import \
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.profile import router as profile_router
+from api_service.api.schemas import UserProfileUpdate
 # Auth imports
 from api_service.auth import (UserCreate, UserRead, UserUpdate, auth_backend,
                               fastapi_users)
 from api_service.db.models import \
     User  # Ensure User model is imported if needed for routers
-from fastapi import APIRouter # Added for healthz
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
 # Removed unused import: build_indexers
@@ -173,9 +174,7 @@ app.include_router(models_router, prefix="/v1/models")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(summarization_router.router, prefix="/summarization", tags=["Summarization"]) # Added summarization router
 app.include_router(context_protocol_router)  # Removed prefix="/context"
-app.include_router(
-    profile_router, prefix="/api/v1/profile", tags=["profile"]
-)  # Include profile router
+app.include_router(profile_router, prefix="", tags=["Profile"])  # Include profile router
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
@@ -262,8 +261,9 @@ async def startup_event():
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":
         logger.info("Auth provider is 'disabled'. Ensuring default user and profile exist on startup.")
+        from api_service.auth import (get_or_create_default_user,
+                                      get_user_manager_context)
         from api_service.db.base import get_async_session_context
-        from api_service.auth import get_user_manager_context, get_or_create_default_user
         from api_service.services.profile_service import ProfileService
 
         async with get_async_session_context() as db_session:
@@ -272,19 +272,48 @@ async def startup_event():
                     if not settings.oidc.DEFAULT_USER_ID or not settings.oidc.DEFAULT_USER_EMAIL:
                         logger.warning("DEFAULT_USER_ID or DEFAULT_USER_EMAIL not set. Skipping default user/profile creation on startup.")
                     else:
-                        logger.info(f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID} on startup.")
-                        default_user = await get_or_create_default_user(db_session=db_session, user_manager=user_manager)
+                        logger.info(
+                            f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID} on startup."
+                        )
+                        default_user = await get_or_create_default_user(
+                            db_session=db_session, user_manager=user_manager
+                        )
                         if default_user:
-                            logger.info(f"Default user {default_user.email} (ID: {default_user.id}) ensured.")
+                            logger.info(
+                                f"Default user {default_user.email} (ID: {default_user.id}) ensured."
+                            )
                             profile_service = ProfileService()
-                            profile = await profile_service.get_or_create_profile(db_session=db_session, user_id=default_user.id)
-                            logger.info(f"Profile for default user {default_user.email} ensured (Profile ID: {profile.id}).")
+                            existing_profile = await profile_service.get_profile_by_user_id(
+                                db_session=db_session, user_id=default_user.id
+                            )
+                            if existing_profile:
+                                logger.info(
+                                    f"Profile for default user {default_user.email} already exists (Profile ID: {existing_profile.id})."
+                                )
+                            else:
+                                profile_update = UserProfileUpdate(
+                                    google_api_key=settings.google.google_api_key,
+                                    openai_api_key=settings.openai.openai_api_key,
+                                )
+                                profile = await profile_service.update_profile(
+                                    db_session=db_session,
+                                    user_id=default_user.id,
+                                    profile_data=profile_update,
+                                )
+                                logger.info(
+                                    f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
+                                )
                         else:
                             logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:
-                    logger.error(f"Configuration error during default user setup on startup: {ve}")
+                    logger.error(
+                        f"Configuration error during default user setup on startup: {ve}"
+                    )
                 except Exception as e:
-                    logger.error(f"Error ensuring default user/profile on startup: {e}", exc_info=True)
+                    logger.error(
+                        f"Error ensuring default user/profile on startup: {e}",
+                        exc_info=True,
+                    )
     else:
         logger.info(f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup.")
 
