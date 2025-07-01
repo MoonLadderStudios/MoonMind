@@ -440,7 +440,7 @@ def test_chat_completions_openai_no_api_key_with_cache(
 
     response = client.post("/completions", json=chat_request_openai_model.model_dump())
     assert response.status_code == 400
-    assert "API key for OpenAI not found in your profile" in response.json()["detail"]
+    assert "Provide a key" in response.json()["detail"]
 
 
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -454,7 +454,7 @@ def test_chat_completions_google_no_api_key_with_cache(
 
     response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
-    assert "API key for Google not found in your profile" in response.json()["detail"]
+    assert "Provide a key" in response.json()["detail"]
 
 
 # General API errors after successful routing by cache
