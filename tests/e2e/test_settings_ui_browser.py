@@ -34,7 +34,7 @@ def server():
     test_user = User(id=__import__("uuid").uuid4(), email="test@example.com")
     dummy_service = DummyProfileService()
 
-    main_app.dependency_overrides[get_current_user()] = lambda: test_user
+    main_app.dependency_overrides[get_current_user] = lambda: test_user
     main_app.dependency_overrides[get_async_session] = lambda: AsyncSession
     main_app.dependency_overrides[get_profile_service] = lambda: dummy_service
 
