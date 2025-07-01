@@ -27,7 +27,8 @@ This section guides you through a one-click deployment of MoonMind using Docker 
 
 3.  **Accessing the UI:** Once the services are up and running (this might take a few minutes the first time as images are downloaded and built), you can access the Open-WebUI by navigating to `http://localhost:8080` in your web browser.
 
-4.  **Initializing the Vector Database (Optional but Recommended):**
+4.  **Manage API Keys:** When `AUTH_PROVIDER` is left as `disabled` (the default for local setups), any provider keys you place in `.env` are copied to the default user profile on startup. Visit `http://localhost:8080/settings` to view or change these values.
+5.  **Initializing the Vector Database (Optional but Recommended):**
     If you want to load initial data into the Qdrant vector database (e.g., from local files or other sources configured in `config.toml`), you can trigger the initialization process.
     Set the `INIT_DATABASE` variable in your `.env` file to `true`:
     ```env
@@ -425,6 +426,17 @@ GOOGLE_API_KEY="your_google_api_key_here"
 OPENAI_API_KEY="your_openai_api_key_here"
 # OPENAI_CHAT_MODEL="gpt-4o" # Optional
 ```
+
+### Provider Key Precedence
+
+MoonMind checks user profile settings first when looking up API keys. If a key is not stored in the profile, the value from the environment is used. The default `disabled` auth mode automatically seeds the default profile with keys from `.env` so they can be managed via the UI.
+
+| Auth mode | Key lookup order |
+|-----------|-----------------|
+| `disabled` | user profile → environment variable |
+| `keycloak` | user profile → environment variable |
+
+You can view or change keys at `http://localhost:8080/settings`.
 
 ## Roadmap
 MoonMind now supports:
