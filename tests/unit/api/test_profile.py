@@ -8,20 +8,16 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
 
-from api_service.api.routers.profile import (
-    templates,  # Import the templates object to mock it
-    get_current_user_profile,
-    get_profile_management_page,
-    get_profile_service,
-    handle_profile_update_form,
-    update_current_user_profile,
-)
 from api_service.api.constants import MANAGED_PROVIDERS
-from api_service.api.schemas import (
-    UserProfileRead,
-    UserProfileReadSanitized,
-    UserProfileUpdate,
-)
+from api_service.api.routers.profile import \
+    templates  # Import the templates object to mock it
+from api_service.api.routers.profile import (get_current_user_profile,
+                                             get_profile_management_page,
+                                             get_profile_service,
+                                             handle_profile_update_form,
+                                             update_current_user_profile)
+from api_service.api.schemas import (UserProfileRead, UserProfileReadSanitized,
+                                     UserProfileUpdate)
 from api_service.services.profile_service import ProfileService
 
 # Mock the templates object
@@ -327,7 +323,10 @@ async def test_get_profile_management_page_success(
         db_session=mock_db_session, user_id=USER_ID
     )
     # Check that TemplateResponse was called with the correct template name and context
-    expected_keys_status = {"openai_api_key_set": bool(profile_with_key.openai_api_key)}
+    expected_keys_status = {
+        "openai_api_key_set": bool(profile_with_key.openai_api_key),
+        "google_api_key_set": bool(profile_with_key.google_api_key),
+    }
 
     mock_templates.TemplateResponse.assert_called_once()
     args, kwargs = mock_templates.TemplateResponse.call_args
@@ -369,12 +368,17 @@ async def test_handle_profile_update_form_success_new_key(
 ):
     # Arrange
     new_openai_key = "new_test_openai_key"
+    new_google_key = "new_test_google_key"
     # Mock request.form() to return FormData with the new key
-    # We need to ensure the mock_request.form() is an async function that returns FormData
-    # The fixture for mock_request already sets up request.form as an AsyncMock.
-    # We can configure its return_value for this specific test if needed,
-    # or pass form fields directly to the endpoint.
-    # The endpoint uses `openai_api_key: str = Form(None)`, so we pass it directly.
+    async def mock_form():
+        return FormData(
+            [
+                ("openai_api_key", new_openai_key),
+                ("google_api_key", new_google_key),
+            ]
+        )
+
+    mock_request.form = AsyncMock(side_effect=mock_form)
 
     # Act
     response = await handle_profile_update_form(
@@ -382,7 +386,6 @@ async def test_handle_profile_update_form_success_new_key(
         user=MOCK_USER,
         db=mock_db_session,
         profile_service=mock_profile_service,
-        openai_api_key=new_openai_key,  # Pass the form data directly
     )
 
     # Assert
@@ -394,7 +397,9 @@ async def test_handle_profile_update_form_success_new_key(
     assert "message=API+keys+updated+successfully." in response.headers["location"]
 
     # Verify that profile_service.update_profile was called with the correct data
-    expected_update_data = UserProfileUpdate(openai_api_key=new_openai_key)
+    expected_update_data = UserProfileUpdate(
+        openai_api_key=new_openai_key, google_api_key=new_google_key
+    )
     mock_profile_service.update_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID, profile_data=expected_update_data
     )
@@ -404,7 +409,11 @@ async def test_handle_profile_update_form_success_new_key(
 async def test_handle_profile_update_form_no_changes(
     mock_request, mock_db_session, mock_profile_service
 ):
-    # Arrange - no new key provided, so openai_api_key will be None (default for Form)
+    # Arrange - no new key provided, so form is empty
+    async def mock_form():
+        return FormData()
+
+    mock_request.form = AsyncMock(side_effect=mock_form)
 
     # Act
     response = await handle_profile_update_form(
@@ -412,7 +421,6 @@ async def test_handle_profile_update_form_no_changes(
         user=MOCK_USER,
         db=mock_db_session,
         profile_service=mock_profile_service,
-        openai_api_key=None,  # Explicitly pass None, as if form field was empty
     )
 
     # Assert
@@ -435,6 +443,11 @@ async def test_handle_profile_update_form_service_error(
         return_value=MOCK_PROFILE_READ_SCHEMA
     )
 
+    async def mock_form():
+        return FormData([("openai_api_key", new_openai_key)])
+
+    mock_request.form = AsyncMock(side_effect=mock_form)
+
     # Reset the mock to ensure isolation
     mock_templates.TemplateResponse.reset_mock()
 
@@ -444,7 +457,6 @@ async def test_handle_profile_update_form_service_error(
         user=MOCK_USER,
         db=mock_db_session,
         profile_service=mock_profile_service,
-        openai_api_key=new_openai_key,
     )
 
     # Assert
@@ -463,10 +475,13 @@ async def test_handle_profile_update_form_service_error(
             "request": mock_request,
             "user": MOCK_USER,
             "keys_status": {
-                "openai_api_key_set": bool(MOCK_PROFILE_READ_SCHEMA.openai_api_key)
+                "openai_api_key_set": bool(MOCK_PROFILE_READ_SCHEMA.openai_api_key),
+                "google_api_key_set": bool(MOCK_PROFILE_READ_SCHEMA.google_api_key),
             },
             "provider_list": [
-                p for p in MANAGED_PROVIDERS if hasattr(MOCK_PROFILE_READ_SCHEMA, f"{p}_api_key")
+                p
+                for p in MANAGED_PROVIDERS
+                if hasattr(MOCK_PROFILE_READ_SCHEMA, f"{p}_api_key")
             ],
             "message": f"Error updating API keys: {error_message}",
         },
