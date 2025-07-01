@@ -5,14 +5,15 @@ from moonmind.config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def list_openai_models():
-    if not settings.openai.openai_api_key:
+def list_openai_models(api_key: str | None = None):
+    key_to_use = api_key if api_key else settings.openai.openai_api_key
+    if not key_to_use:
         logger.warning(
             "OpenAI models are not available because the API key is not set in settings"
         )
         return []
 
-    openai.api_key = settings.openai.openai_api_key
+    openai.api_key = key_to_use
     try:
         models = openai.Model.list()
         # Filter for models that support chat completions, or adjust as needed
