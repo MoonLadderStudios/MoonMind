@@ -23,7 +23,12 @@ class ModelCache:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, refresh_interval_seconds: Optional[int] = None):
+    def __init__(
+        self,
+        refresh_interval_seconds: Optional[int] = None,
+        google_api_key: str | None = None,
+        openai_api_key: str | None = None,
+    ):
         # Ensure __init__ is only run once for the singleton
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -40,6 +45,8 @@ class ModelCache:
                 if refresh_interval_seconds is not None
                 else settings.model_cache_refresh_interval_seconds
             )
+            self.google_api_key = google_api_key
+            self.openai_api_key = openai_api_key
             self._initialized: bool = True
             self._refresh_operation_lock = (
                 Lock()
@@ -51,6 +58,14 @@ class ModelCache:
             # self.logger.info("ModelCache initialized. Starting refresh thread.") # Commented out
             self._refresh_thread.start()
 
+    def update_keys(
+        self, google_api_key: str | None = None, openai_api_key: str | None = None
+    ) -> None:
+        if google_api_key is not None:
+            self.google_api_key = google_api_key
+        if openai_api_key is not None:
+            self.openai_api_key = openai_api_key
+
     def _fetch_all_models(self) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
         self.logger.info("Attempting to fetch all models for cache refresh.")
         all_models_data = []
@@ -59,7 +74,9 @@ class ModelCache:
         # Fetch Google Models
         try:
             if settings.is_provider_enabled("google"):
-                google_models_list = list(list_google_models())  # Ensure it's a list
+                google_models_list = list(
+                    list_google_models(api_key=self.google_api_key)
+                )  # Ensure it's a list
                 self.logger.info(
                     f"Fetched {len(google_models_list)} raw Google models."
                 )
@@ -106,9 +123,7 @@ class ModelCache:
         # Fetch OpenAI Models
         try:
             if settings.is_provider_enabled("openai"):
-                openai_models_raw = (
-                    list_openai_models()
-                )  # This should return a list of model objects/dicts
+                openai_models_raw = list_openai_models(api_key=self.openai_api_key)
                 self.logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
                 for model in (
                     openai_models_raw
@@ -416,8 +431,18 @@ model_cache = ModelCache(
     refresh_interval_seconds=settings.model_cache_refresh_interval_seconds
 )
 
-
 def force_refresh_model_cache():
     """Utility function to manually trigger a cache refresh."""
     logger.info("Force refresh of model cache requested.")
+    model_cache.refresh_models_sync()
+
+
+async def refresh_model_cache_for_user(user, db_session):
+    """Refresh the model cache using API keys from the given user profile."""
+    from api_service.api.routers.chat import get_user_api_key
+
+    google_key = await get_user_api_key(user, "google", db_session)
+    openai_key = await get_user_api_key(user, "openai", db_session)
+
+    model_cache.update_keys(google_api_key=google_key, openai_api_key=openai_key)
     model_cache.refresh_models_sync()

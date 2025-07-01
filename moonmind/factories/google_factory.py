@@ -7,14 +7,15 @@ from moonmind.config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def list_google_models():
-    if not settings.google.google_api_key:
+def list_google_models(api_key: str | None = None):
+    key_to_use = api_key if api_key else settings.google.google_api_key
+    if not key_to_use:
         logger.warning(
             "Google models are not available because the API key is not set in settings"
         )
         return []
 
-    genai.configure(api_key=settings.google.google_api_key)
+    genai.configure(api_key=key_to_use)
     return genai.list_models()
 
 

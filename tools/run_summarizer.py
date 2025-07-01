@@ -2,11 +2,15 @@ import argparse
 import logging
 import os
 import sys
+import asyncio
 
 # Assuming moonmind.config.logging and configure_logging exist and are accessible
 from moonmind.config.logging import configure_logging
 
 from moonmind.factories.google_factory import get_google_model
+from api_service.auth import get_or_create_default_user, get_user_manager_context
+from api_service.db.base import get_async_session_context
+from api_service.api.routers.chat import get_user_api_key
 from moonmind.summarization import summarize_text_gemini, update_summaries
 
 # Call configure_logging early, as in the original script
@@ -57,17 +61,20 @@ if __name__ == "__main__":
     logger.info(f"Derived input directory: {input_directory}")
     logger.info(f"Derived output directory: {output_directory}")
 
-    if not os.getenv("GOOGLE_API_KEY"):
-        logger.error(
-            "GOOGLE_API_KEY environment variable is not set. The job may fail to access Google services."
-        )
+    async def _get_google_key():
+        async with get_async_session_context() as db_session:
+            async with get_user_manager_context(db_session) as user_manager:
+                user = await get_or_create_default_user(db_session=db_session, user_manager=user_manager)
+                return await get_user_api_key(user, "google", db_session)
+
+    google_key = asyncio.run(_get_google_key())
 
     try:
         update_summaries(
             input_dir=input_directory,
             output_dir=output_directory,
             prompt_file_path=args.prompt_file,
-            model_factory=get_google_model,
+            model_factory=lambda: get_google_model(api_key=google_key),
             text_summarizer=summarize_text_gemini,
             replace_existing=args.replace_existing,
         )
