@@ -1,7 +1,8 @@
 import uuid
+import asyncio
 from typing import AsyncGenerator, Optional
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
 from fastapi_users import exceptions as fastapi_users_exceptions
 from fastapi_users import schemas
@@ -11,7 +12,9 @@ from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
+from api_service.db import base as db_base
 from api_service.db.models import User
+from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 
 
@@ -31,8 +34,24 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     reset_password_token_secret = settings.security.JWT_SECRET_KEY
     verification_token_secret = settings.security.JWT_SECRET_KEY
 
+    async def _ensure_profile(self, user: User) -> None:
+        """Create a profile for the user if it doesn't exist."""
+        async with db_base.async_session_maker() as session:
+            service = ProfileService()
+            try:
+                await service.get_or_create_profile(session, user.id)
+            finally:
+                await session.close()
+
     async def on_after_register(self, user: User, request: Optional[Request] = None):
-        print(f"User {user.id} has registered.")
+        # Create the user profile asynchronously so registration isn't delayed
+        asyncio.create_task(self._ensure_profile(user))
+
+    async def on_after_login(
+        self, user: User, request: Optional[Request] = None, response: Optional[Response] = None
+    ) -> None:
+        # Ensure the user has a profile on first login
+        asyncio.create_task(self._ensure_profile(user))
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
