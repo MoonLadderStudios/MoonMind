@@ -115,7 +115,7 @@ async def summarize_repository(
     Summarizes a code repository.
     Currently supports generating a README.md file.
     """
-    user_id = user.id if hasattr(user, "id") else "unknown"
+    user_id = user.id if hasattr(user, "id") else "unauthenticated_user"
     logger.info(f"Received repository summarization request for URL: {request.repo_url}, type: {request.summary_type}, model: {request.model} by user {user_id}")
 
     # 1. Model and Provider Resolution
