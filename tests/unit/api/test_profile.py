@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
 
+from api_service.api.constants import MANAGED_PROVIDERS
 from api_service.api.routers.profile import \
     templates  # Import the templates object to mock it
 from api_service.api.routers.profile import (get_current_user_profile,
@@ -15,8 +16,7 @@ from api_service.api.routers.profile import (get_current_user_profile,
                                              get_profile_service,
                                              handle_profile_update_form,
                                              update_current_user_profile)
-from api_service.api.schemas import (ApiKeyStatus, UserProfileRead,
-                                     UserProfileReadSanitized,
+from api_service.api.schemas import (UserProfileRead, UserProfileReadSanitized,
                                      UserProfileUpdate)
 from api_service.services.profile_service import ProfileService
 
@@ -30,20 +30,32 @@ from api_service.services.profile_service import ProfileService
 # Let's create a mock for the templates object used in profile router
 mock_templates = AsyncMock()
 
+
 # Custom side_effect for TemplateResponse mock
-def mock_template_response_side_effect(template_name, context, status_code=200, headers=None):
+def mock_template_response_side_effect(
+    template_name, context, status_code=200, headers=None
+):
     # In a real scenario, you might render the template or do something more complex.
     # For testing, we just need to return an HTMLResponse that respects the status_code.
     # The content can be simple, as it's not the focus of this part of the test.
-    return HTMLResponse(content=f"<html>mocked_template: {template_name}</html>", status_code=status_code, headers=headers)
+    return HTMLResponse(
+        content=f"<html>mocked_template: {template_name}</html>",
+        status_code=status_code,
+        headers=headers,
+    )
+
 
 # Configure the mock TemplateResponse to use the custom side_effect
-mock_templates.TemplateResponse = MagicMock(side_effect=mock_template_response_side_effect)
+mock_templates.TemplateResponse = MagicMock(
+    side_effect=mock_template_response_side_effect
+)
 
 # Original templates object from the router module, to be patched
 from api_service.api.routers import profile as profile_router_module
 
-profile_router_module.templates = mock_templates # Patching at module level for simplicity in tests
+profile_router_module.templates = (
+    mock_templates  # Patching at module level for simplicity in tests
+)
 
 from api_service.db.models import User as DBUser
 
@@ -245,11 +257,12 @@ def mock_request():
     # For POST requests, form() method might be relevant.
     # Here, we mock basic attributes and methods.
     request = MagicMock(spec=Request)
-    request.query_params = QueryParams() # Default empty query params
+    request.query_params = QueryParams()  # Default empty query params
 
     # Mock url_for chain: request.url_for(...).include_query_params(...)
     # The include_query_params method should return a string URL for RedirectResponse
     mock_url_for_object = MagicMock()
+
     # Make include_query_params a function that constructs a URL string based on its args
     def mock_include_query_params(**kwargs):
         # Base URL, can be anything representative for the test
@@ -260,7 +273,9 @@ def mock_request():
             return f"{base_url}?{query_string}"
         return base_url
 
-    mock_url_for_object.include_query_params = MagicMock(side_effect=mock_include_query_params)
+    mock_url_for_object.include_query_params = MagicMock(
+        side_effect=mock_include_query_params
+    )
     request.url_for = MagicMock(return_value=mock_url_for_object)
 
     # For older FastAPI/Starlette versions, request.url_for might be on request.app.url_path_for
@@ -275,10 +290,11 @@ def mock_request():
         # Return a FormData object. It can be empty or pre-filled.
         # For this example, an empty FormData is fine.
         # If your test needs specific form fields, populate them: FormData([("key", "value")])
-        return FormData() # Empty form for default mock_request
+        return FormData()  # Empty form for default mock_request
 
     request.form = AsyncMock(side_effect=mock_form_method)
     return request
+
 
 @pytest.mark.asyncio
 async def test_get_profile_management_page_success(
@@ -286,8 +302,10 @@ async def test_get_profile_management_page_success(
 ):
     # Arrange
     # Ensure the mock_profile_service returns a profile that has an openai_api_key for status checking
-    profile_with_key = MOCK_PROFILE_READ_SCHEMA # This has openai_api_key set
-    mock_profile_service.get_or_create_profile = AsyncMock(return_value=profile_with_key)
+    profile_with_key = MOCK_PROFILE_READ_SCHEMA  # This has openai_api_key set
+    mock_profile_service.get_or_create_profile = AsyncMock(
+        return_value=profile_with_key
+    )
 
     # Act
     response = await get_profile_management_page(
@@ -298,28 +316,36 @@ async def test_get_profile_management_page_success(
     )
 
     # Assert
-    assert isinstance(response, HTMLResponse) # Check if it returns an HTMLResponse (via mocked TemplateResponse)
+    assert isinstance(
+        response, HTMLResponse
+    )  # Check if it returns an HTMLResponse (via mocked TemplateResponse)
     mock_profile_service.get_or_create_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID
     )
     # Check that TemplateResponse was called with the correct template name and context
-    expected_keys_status = ApiKeyStatus(openai_api_key_set=bool(profile_with_key.openai_api_key)) # Use .openai_api_key from the schema
+    expected_keys_status = {
+        "openai_api_key_set": bool(profile_with_key.openai_api_key),
+        "google_api_key_set": bool(profile_with_key.google_api_key),
+    }
 
     mock_templates.TemplateResponse.assert_called_once()
     args, kwargs = mock_templates.TemplateResponse.call_args
-    assert args[0] == "profile.html" # Template name
-    context = args[1] # Context dict
+    assert args[0] == "profile.html"  # Template name
+    context = args[1]  # Context dict
     assert context["request"] == mock_request
     assert context["user"] == MOCK_USER
     assert context["keys_status"] == expected_keys_status
-    assert context["message"] is None # No message in query_params by default
+    assert context["message"] is None  # No message in query_params by default
+
 
 @pytest.mark.asyncio
 async def test_get_profile_management_page_with_message(
     mock_request, mock_db_session, mock_profile_service
 ):
     # Arrange
-    mock_request.query_params = QueryParams("message=Test+Message") # Simulate message in URL
+    mock_request.query_params = QueryParams(
+        "message=Test+Message"
+    )  # Simulate message in URL
 
     # Act
     await get_profile_management_page(
@@ -342,12 +368,17 @@ async def test_handle_profile_update_form_success_new_key(
 ):
     # Arrange
     new_openai_key = "new_test_openai_key"
+    new_google_key = "new_test_google_key"
     # Mock request.form() to return FormData with the new key
-    # We need to ensure the mock_request.form() is an async function that returns FormData
-    # The fixture for mock_request already sets up request.form as an AsyncMock.
-    # We can configure its return_value for this specific test if needed,
-    # or pass form fields directly to the endpoint.
-    # The endpoint uses `openai_api_key: str = Form(None)`, so we pass it directly.
+    async def mock_form():
+        return FormData(
+            [
+                ("openai_api_key", new_openai_key),
+                ("google_api_key", new_google_key),
+            ]
+        )
+
+    mock_request.form = AsyncMock(side_effect=mock_form)
 
     # Act
     response = await handle_profile_update_form(
@@ -355,7 +386,6 @@ async def test_handle_profile_update_form_success_new_key(
         user=MOCK_USER,
         db=mock_db_session,
         profile_service=mock_profile_service,
-        openai_api_key=new_openai_key, # Pass the form data directly
     )
 
     # Assert
@@ -367,16 +397,23 @@ async def test_handle_profile_update_form_success_new_key(
     assert "message=API+keys+updated+successfully." in response.headers["location"]
 
     # Verify that profile_service.update_profile was called with the correct data
-    expected_update_data = UserProfileUpdate(openai_api_key=new_openai_key)
+    expected_update_data = UserProfileUpdate(
+        openai_api_key=new_openai_key, google_api_key=new_google_key
+    )
     mock_profile_service.update_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID, profile_data=expected_update_data
     )
+
 
 @pytest.mark.asyncio
 async def test_handle_profile_update_form_no_changes(
     mock_request, mock_db_session, mock_profile_service
 ):
-    # Arrange - no new key provided, so openai_api_key will be None (default for Form)
+    # Arrange - no new key provided, so form is empty
+    async def mock_form():
+        return FormData()
+
+    mock_request.form = AsyncMock(side_effect=mock_form)
 
     # Act
     response = await handle_profile_update_form(
@@ -384,7 +421,6 @@ async def test_handle_profile_update_form_no_changes(
         user=MOCK_USER,
         db=mock_db_session,
         profile_service=mock_profile_service,
-        openai_api_key=None, # Explicitly pass None, as if form field was empty
     )
 
     # Assert
@@ -403,7 +439,14 @@ async def test_handle_profile_update_form_service_error(
     error_message = "Simulated service error"
     mock_profile_service.update_profile.side_effect = Exception(error_message)
     # Ensure get_or_create_profile is still available for error path rendering
-    mock_profile_service.get_or_create_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
+    mock_profile_service.get_or_create_profile = AsyncMock(
+        return_value=MOCK_PROFILE_READ_SCHEMA
+    )
+
+    async def mock_form():
+        return FormData([("openai_api_key", new_openai_key)])
+
+    mock_request.form = AsyncMock(side_effect=mock_form)
 
     # Reset the mock to ensure isolation
     mock_templates.TemplateResponse.reset_mock()
@@ -414,13 +457,16 @@ async def test_handle_profile_update_form_service_error(
         user=MOCK_USER,
         db=mock_db_session,
         profile_service=mock_profile_service,
-        openai_api_key=new_openai_key,
     )
 
     # Assert
     # In case of an error during update, the form should be re-rendered with an error message
-    assert isinstance(response, HTMLResponse) # Should be TemplateResponse rendering again
-    assert response.status_code == 400 # Or the status code set in the endpoint's error handling
+    assert isinstance(
+        response, HTMLResponse
+    )  # Should be TemplateResponse rendering again
+    assert (
+        response.status_code == 400
+    )  # Or the status code set in the endpoint's error handling
 
     # Check that TemplateResponse was called again for error display
     mock_templates.TemplateResponse.assert_called_with(
@@ -428,8 +474,16 @@ async def test_handle_profile_update_form_service_error(
         {
             "request": mock_request,
             "user": MOCK_USER,
-            "keys_status": ApiKeyStatus(openai_api_key_set=bool(MOCK_PROFILE_READ_SCHEMA.openai_api_key)), # Use .openai_api_key
+            "keys_status": {
+                "openai_api_key_set": bool(MOCK_PROFILE_READ_SCHEMA.openai_api_key),
+                "google_api_key_set": bool(MOCK_PROFILE_READ_SCHEMA.google_api_key),
+            },
+            "provider_list": [
+                p
+                for p in MANAGED_PROVIDERS
+                if hasattr(MOCK_PROFILE_READ_SCHEMA, f"{p}_api_key")
+            ],
             "message": f"Error updating API keys: {error_message}",
         },
-            status_code=400 # Add status_code to the expected call
+        status_code=400,
     )

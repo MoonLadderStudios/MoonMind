@@ -28,31 +28,19 @@
             <div class="alert {% if 'success' in message.lower() %}alert-success{% else %}alert-danger{% endif %}">{{ message }}</div>
         {% endif %}
 
-        <form method="POST" action="{{ request.url_for('profile_ui') }}">
+        <form method="POST" action="{{ request.url_for('update_settings_ui') }}">
+            {% for provider in provider_list %}
             <div>
-                <label for="openai_api_key">OpenAI API Key</label>
-                {% if keys_status.openai_api_key_set %}
-                    <div class="key-status status-set">OpenAI API Key is SET.</div>
+                <label for="{{ provider }}_api_key">{{ provider|capitalize }} API Key</label>
+                {% if keys_status[provider + '_api_key_set'] %}
+                    <div class="key-status status-set">{{ provider|capitalize }} API Key is SET.</div>
                     <p><em>To change it, enter a new key below. Otherwise, leave blank to keep the current key.</em></p>
                 {% else %}
-                    <div class="key-status status-not-set">OpenAI API Key is NOT SET.</div>
+                    <div class="key-status status-not-set">{{ provider|capitalize }} API Key is NOT SET.</div>
                 {% endif %}
-                <input type="password" name="openai_api_key" id="openai_api_key" placeholder="Enter new OpenAI API Key (optional)">
+                <input type="password" name="{{ provider }}_api_key" id="{{ provider }}_api_key" placeholder="Enter new {{ provider|capitalize }} API Key (optional)">
             </div>
-
-            <!-- Add fields for other API keys as needed, following the pattern above -->
-            <!-- For example:
-            <div>
-                <label for="anthropic_api_key">Anthropic API Key</label>
-                {% if keys_status.anthropic_api_key_set %}
-                    <div class="key-status status-set">Anthropic API Key is SET.</div>
-                    <p><em>To change it, enter a new key below. Otherwise, leave blank to keep the current key.</em></p>
-                {% else %}
-                    <div class="key-status status-not-set">Anthropic API Key is NOT SET.</div>
-                {% endif %}
-                <input type="password" name="anthropic_api_key" id="anthropic_api_key" placeholder="Enter new Anthropic API Key (optional)">
-            </div>
-            -->
+            {% endfor %}
 
             <button type="submit">Save API Keys</button>
         </form>
