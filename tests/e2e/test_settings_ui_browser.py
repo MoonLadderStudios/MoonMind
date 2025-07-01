@@ -35,7 +35,10 @@ def server():
     dummy_service = DummyProfileService()
 
     main_app.dependency_overrides[get_current_user] = lambda: test_user
-    main_app.dependency_overrides[get_async_session] = lambda: AsyncSession
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async_session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
+    main_app.dependency_overrides[get_async_session] = lambda: async_session_maker()
     main_app.dependency_overrides[get_profile_service] = lambda: dummy_service
 
     config = uvicorn.Config(main_app, host="127.0.0.1", port=8001, log_level="warning")
