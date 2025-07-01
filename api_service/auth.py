@@ -65,20 +65,20 @@ async def get_user_manager_context(db_session: AsyncSession) -> AsyncGenerator[U
     # No specific cleanup needed for UserManager itself here, session is managed outside.
 
 
+# Hardcoded default user details for disabled auth mode
+_DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
+_DEFAULT_USER_EMAIL = "default@example.com"
+
+
 async def get_or_create_default_user(
     db_session: AsyncSession, user_manager: UserManager
 ) -> User:
     """
     Retrieves or creates the default user if AUTH_PROVIDER is 'disabled'.
-    Uses DEFAULT_USER_ID, DEFAULT_USER_EMAIL, and DEFAULT_USER_PASSWORD from settings.
+    Uses hardcoded values for the user's ID and email.
     """
-    if not settings.oidc.DEFAULT_USER_ID or not settings.oidc.DEFAULT_USER_EMAIL:
-        raise ValueError(
-            "DEFAULT_USER_ID and DEFAULT_USER_EMAIL must be set in settings for default user functionality."
-        )
-
-    default_user_uuid = uuid.UUID(settings.oidc.DEFAULT_USER_ID)
-    default_email = settings.oidc.DEFAULT_USER_EMAIL
+    default_user_uuid = uuid.UUID(_DEFAULT_USER_ID)
+    default_email = _DEFAULT_USER_EMAIL
     default_password = settings.oidc.DEFAULT_USER_PASSWORD # Can be None if not set, UserManager handles it
 
     try:
