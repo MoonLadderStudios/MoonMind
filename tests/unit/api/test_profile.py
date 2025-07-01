@@ -466,7 +466,7 @@ async def test_handle_profile_update_form_service_error(
                 "openai_api_key_set": bool(MOCK_PROFILE_READ_SCHEMA.openai_api_key)
             },
             "provider_list": [
-                p for p in MANAGED_PROVIDERS if p in ["openai", "google"]
+                p for p in MANAGED_PROVIDERS if hasattr(MOCK_PROFILE_READ_SCHEMA, f"{p}_api_key")
             ],
             "message": f"Error updating API keys: {error_message}",
         },
