@@ -15,7 +15,7 @@ from moonmind.config.settings import settings
 
 
 @pytest.mark.asyncio
-async def test_startup_profile_seeding(monkeypatch, tmp_path):
+async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
     db_base.DATABASE_URL = db_url
     db_base.engine = create_async_engine(db_url, future=True)
@@ -25,11 +25,7 @@ async def test_startup_profile_seeding(monkeypatch, tmp_path):
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", _DEFAULT_USER_ID, raising=False)
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_EMAIL", "seed@example.com", raising=False)
-    monkeypatch.setattr(settings.openai, "openai_api_key", "sk-test", raising=False)
-    monkeypatch.setattr(settings.google, "google_api_key", "g-test", raising=False)
+
 
     with patch("api_service.main._initialize_embedding_model"), \
          patch("api_service.main._initialize_vector_store"), \
