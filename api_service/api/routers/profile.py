@@ -1,14 +1,24 @@
-from fastapi import (APIRouter, Depends, Form,  # For HTMLResponse and Form
-                     HTTPException, Request)
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,  # For HTMLResponse and Form
+    HTTPException,
+    Request,
+)
 from fastapi.responses import (  # For HTMLResponse and RedirectResponse
-    HTMLResponse, RedirectResponse)
+    HTMLResponse,
+    RedirectResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
 
-from api_service.api.schemas import (ApiKeyStatus, UserProfileRead,
-                                     UserProfileReadSanitized,
-                                     UserProfileUpdate)
+from api_service.api.schemas import (
+    UserProfileRead,
+    UserProfileReadSanitized,
+    UserProfileUpdate,
+)
+from api_service.api.constants import MANAGED_PROVIDERS
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session  # Dependency for DB session
 from api_service.db.models import User as DBUser  # User model from DB
@@ -65,7 +75,7 @@ async def update_current_user_profile(
     return updated_profile
 
 
-@router.get("/settings", response_class=HTMLResponse, name="profile_ui")
+@router.get("/settings", response_class=HTMLResponse, name="settings_ui")
 async def get_profile_management_page(
     request: Request,
     user: DBUser = Depends(get_current_user()),  # Changed dependency
@@ -78,14 +88,15 @@ async def get_profile_management_page(
     if user.id is None:
         raise HTTPException(status_code=400, detail="User ID is missing.")
 
-    profile = await profile_service.get_or_create_profile(db_session=db, user_id=user.id)
-
-    # UserProfileRead schema contains openai_api_key (decrypted if set, else None)
-    # So, we check for its truthiness.
-    keys_status = ApiKeyStatus(
-        openai_api_key_set=bool(profile.openai_api_key)
-        # Add other keys here, e.g., anthropic_api_key_set=bool(profile.anthropic_api_key)
+    profile = await profile_service.get_or_create_profile(
+        db_session=db, user_id=user.id
     )
+
+    keys_status = {
+        f"{provider}_api_key_set": bool(getattr(profile, f"{provider}_api_key", None))
+        for provider in MANAGED_PROVIDERS
+        if hasattr(profile, f"{provider}_api_key")
+    }
 
     message = request.query_params.get("message", None)
 
@@ -95,18 +106,20 @@ async def get_profile_management_page(
             "request": request,
             "user": user,
             "keys_status": keys_status,
-            "message": message
-        }
+            "provider_list": [
+                p for p in MANAGED_PROVIDERS if hasattr(profile, f"{p}_api_key")
+            ],
+            "message": message,
+        },
     )
+
 
 @router.post("/settings", response_class=HTMLResponse, name="update_settings_ui")
 async def handle_profile_update_form(
-    request: Request, # Added request parameter
+    request: Request,  # Added request parameter
     user: DBUser = Depends(get_current_user()),  # Changed dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
-    openai_api_key: str = Form(None),
-    # anthropic_api_key: str = Form(None) # Example for another key
 ):
     """
     Handles form submission for updating API keys.
@@ -114,11 +127,13 @@ async def handle_profile_update_form(
     if user.id is None:
         raise HTTPException(status_code=400, detail="User ID is missing.")
 
-    update_data = {}
-    if openai_api_key: # Only include if a new key is provided
-        update_data["openai_api_key"] = openai_api_key
-    # if anthropic_api_key:
-    #     update_data["anthropic_api_key"] = anthropic_api_key
+    form_data = await request.form()
+    update_data = {
+        f"{provider}_api_key": form_data.get(f"{provider}_api_key")
+        for provider in MANAGED_PROVIDERS
+        if form_data.get(f"{provider}_api_key")
+        and f"{provider}_api_key" in UserProfileUpdate.model_fields
+    }
 
     message = "No changes submitted."
     if update_data:
@@ -133,16 +148,30 @@ async def handle_profile_update_form(
             message = f"Error updating API keys: {e}"
             # It might be better to redirect to the GET page with an error message
             # For now, returning the form again with an error message
-            profile = await profile_service.get_or_create_profile(db_session=db, user_id=user.id)
-            keys_status = ApiKeyStatus(
-                openai_api_key_set=bool(profile.openai_api_key) # Check truthiness of the key in the schema
+            profile = await profile_service.get_or_create_profile(
+                db_session=db, user_id=user.id
             )
+            keys_status = {
+                f"{provider}_api_key_set": bool(
+                    getattr(profile, f"{provider}_api_key", None)
+                )
+                for provider in MANAGED_PROVIDERS
+                if hasattr(profile, f"{provider}_api_key")
+            }
             return templates.TemplateResponse(
                 "profile.html",
-                {"request": request, "user": user, "keys_status": keys_status, "message": message},
-                status_code=400 # Or another appropriate error code
+                {
+                    "request": request,
+                    "user": user,
+                    "keys_status": keys_status,
+                    "provider_list": [
+                        p for p in MANAGED_PROVIDERS if hasattr(profile, f"{p}_api_key")
+                    ],
+                    "message": message,
+                },
+                status_code=400,  # Or another appropriate error code
             )
 
     # Redirect to the profile page with a success/info message
-    redirect_url = request.url_for('settings_ui').include_query_params(message=message)
+    redirect_url = request.url_for("settings_ui").include_query_params(message=message)
     return RedirectResponse(url=str(redirect_url), status_code=HTTP_302_FOUND)
