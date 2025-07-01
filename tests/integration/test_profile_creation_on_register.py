@@ -36,11 +36,15 @@ async def test_profile_created_on_register(monkeypatch, tmp_path):
         assert resp.status_code == 201
         user_id = uuid.UUID(resp.json()["id"])
 
-    # allow background task to create the profile
-    await asyncio.sleep(0.1)
+    # wait for background task to create the profile
+    async def wait_for_profile_creation(user_id, session_maker, timeout=5):
+        start_time = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            async with session_maker() as session:
+                result = await session.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+                if result.scalars().first() is not None:
+                    return True
+            await asyncio.sleep(0.05)
+        return False
 
-    async with db_base.async_session_maker() as session:
-        result = await session.execute(select(UserProfile).where(UserProfile.user_id == user_id))
-        assert result.scalars().first() is not None
-
-    await asyncio.sleep(0.05)
+    assert await wait_for_profile_creation(user_id, db_base.async_session_maker)
