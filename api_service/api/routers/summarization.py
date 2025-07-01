@@ -31,8 +31,8 @@ async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
     Retrieves the user's GitHub token.
     Placeholder logic: This should eventually fetch from user.profile and decrypt.
     """
-    if not hasattr(user, "id"):
-        logger.warning("get_user_github_token called with a non-user object. Auth likely disabled.")
+    if not isinstance(user, User):
+        logger.warning("get_user_github_token called with an object that is not of type User. Auth likely disabled.")
         return None
     logger.info(f"Attempting to retrieve GitHub token for user {user.id}")
     # Simulate checking user profile; replace with actual db/profile access
