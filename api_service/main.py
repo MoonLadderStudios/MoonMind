@@ -12,6 +12,7 @@ import os  # For path operations
 from uuid import uuid4
 
 import requests
+from fastapi import APIRouter  # Added for healthz
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -32,7 +33,6 @@ from api_service.auth import (UserCreate, UserRead, UserUpdate, auth_backend,
                               fastapi_users)
 from api_service.db.models import \
     User  # Ensure User model is imported if needed for routers
-from fastapi import APIRouter # Added for healthz
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
 # Removed unused import: build_indexers
@@ -173,9 +173,7 @@ app.include_router(models_router, prefix="/v1/models")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(summarization_router.router, prefix="/summarization", tags=["Summarization"]) # Added summarization router
 app.include_router(context_protocol_router)  # Removed prefix="/context"
-app.include_router(
-    profile_router, prefix="/api/v1/profile", tags=["profile"]
-)  # Include profile router
+app.include_router(profile_router, prefix="", tags=["Profile"])  # Include profile router
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
@@ -262,8 +260,9 @@ async def startup_event():
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":
         logger.info("Auth provider is 'disabled'. Ensuring default user and profile exist on startup.")
+        from api_service.auth import (get_or_create_default_user,
+                                      get_user_manager_context)
         from api_service.db.base import get_async_session_context
-        from api_service.auth import get_user_manager_context, get_or_create_default_user
         from api_service.services.profile_service import ProfileService
 
         async with get_async_session_context() as db_session:

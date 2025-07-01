@@ -31,6 +31,9 @@ async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
     Retrieves the user's GitHub token.
     Placeholder logic: This should eventually fetch from user.profile and decrypt.
     """
+    if not isinstance(user, User):
+        logger.warning("get_user_github_token called with an object that is not of type User. Auth likely disabled.")
+        return None
     logger.info(f"Attempting to retrieve GitHub token for user {user.id}")
     # Simulate checking user profile; replace with actual db/profile access
     # Example: if hasattr(user, 'profile') and user.profile.github_access_token_encrypted:
@@ -47,6 +50,10 @@ async def get_user_llm_api_key(user: User, provider: str, db: AsyncSession) -> O
     Retrieves the API key for a given user and LLM provider.
     Placeholder logic: This should eventually fetch from user.profile and decrypt.
     """
+    if not hasattr(user, "id"):
+        logger.warning(f"get_user_llm_api_key called with a non-user object for provider {provider}. Auth likely disabled.")
+        # For "ollama", no key is needed, so we can return None. For others, this will cause the calling function to raise an error if a key is required.
+        return None
     logger.info(f"Attempting to retrieve API key for user {user.id} and provider {provider}")
     provider_lower = provider.lower()
     # Simulate checking user profile; replace with actual db/profile access
@@ -108,7 +115,8 @@ async def summarize_repository(
     Summarizes a code repository.
     Currently supports generating a README.md file.
     """
-    logger.info(f"Received repository summarization request for URL: {request.repo_url}, type: {request.summary_type}, model: {request.model} by user {user.id}")
+    user_id = user.id if hasattr(user, "id") else "unauthenticated_user"
+    logger.info(f"Received repository summarization request for URL: {request.repo_url}, type: {request.summary_type}, model: {request.model} by user {user_id}")
 
     # 1. Model and Provider Resolution
     model_to_use = request.model or settings.get_default_chat_model()
@@ -126,7 +134,7 @@ async def summarize_repository(
 
     user_llm_api_key = await get_user_llm_api_key(user, provider, db)
     if not user_llm_api_key and provider.lower() != "ollama": # Ollama might not need a key
-        logger.error(f"API key for provider {provider} not found for user {user.id}")
+        logger.error(f"API key for provider {provider} not found for user {user_id}")
         raise HTTPException(
             status_code=400,
             detail=f"API key for {provider} not found in your profile. Please add it to use this model.",
@@ -165,7 +173,7 @@ async def summarize_repository(
                         logger.warning("Cannot construct authenticated URL for non-GitHub repo automatically.")
                         raise HTTPException(status_code=400, detail=f"Failed to clone repository. Non-GitHub URL, cannot use token auth automatically: {e_clone}")
                 else:
-                    logger.error(f"Anonymous clone failed and no GitHub token found for user {user.id}.")
+                    logger.error(f"Anonymous clone failed and no GitHub token found for user {user_id}.")
                     raise HTTPException(status_code=400, detail=f"Failed to clone repository. Anonymous access failed and no GitHub token available: {e_clone}")
 
             if not cloned_successfully: # Should be caught by exceptions above, but as a safeguard
