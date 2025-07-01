@@ -149,40 +149,34 @@ async def get_rag_context(
     return retrieved_context_str
 
 
-async def get_user_api_key(user: User, provider: str, db_session: AsyncSession) -> Optional[str]:
-    """
-    Retrieves the API key for a given user and provider.
-    Placeholder logic for now.
-    """
-    # TODO: Implement actual logic to fetch API key from user's profile
-    # This will involve querying the UserProfile model and decrypting the key.
-    # For now, using placeholder logic.
-    if not hasattr(user, 'id') or not user.id:
-        logger.warning(f"User object in get_user_api_key does not have a valid ID. Type: {type(user)}. Using placeholder for testing.")
-        # This path should ideally not be hit in production if auth is working.
-        # For testing, this allows tests to proceed if user injection is problematic.
-        if provider == "OpenAI": return "sk-placeholder-openai-key-test-workaround"
-        if provider == "Google": return "google-placeholder-api-key-test-workaround"
-        if provider == "Anthropic": return "anthropic-placeholder-api-key-test-workaround"
+async def get_user_api_key(
+    user: User, provider: str, db_session: AsyncSession
+) -> Optional[str]:
+    """Return the API key for ``provider`` from the user's profile or settings."""
+
+    if not getattr(user, "id", None):
+        logger.warning(
+            "User object passed to get_user_api_key does not have a valid id"
+        )
         return None
 
-    logger.info(f"Attempting to retrieve API key for user {user.id} and provider {provider}")
-    if provider == "OpenAI":
-        # Replace with actual key retrieval from user.profile.openai_api_key_encrypted
-        # and decrypt it.
-        # Example: return user.profile.openai_api_key (after decryption)
-        logger.warning("Using placeholder logic for OpenAI API key retrieval.")
-        return "sk-placeholder-openai-key"  # Placeholder
-    elif provider == "Google":
-        # Replace with actual key retrieval, e.g., user.profile.google_api_key_encrypted
-        logger.warning("Using placeholder logic for Google API key retrieval.")
-        return "google-placeholder-api-key"  # Placeholder
-    elif provider == "Anthropic":
-        # Replace with actual key retrieval, e.g., user.profile.anthropic_api_key_encrypted
-        logger.warning("Using placeholder logic for Anthropic API key retrieval.")
-        return "anthropic-placeholder-api-key"  # Placeholder
+    profile_service = ProfileService()
+    profile = await profile_service.get_or_create_profile(
+        db_session=db_session, user_id=user.id
+    )
 
-    logger.warning(f"No API key logic defined for provider: {provider} in placeholder function.")
+    provider_lower = provider.lower()
+    key_attr = f"{provider_lower}_api_key"
+    user_key = getattr(profile, key_attr, None)
+    if user_key:
+        return user_key
+
+    settings_section = getattr(settings, provider_lower, None)
+    if settings_section is not None:
+        system_key = getattr(settings_section, key_attr, None)
+        if system_key:
+            return system_key
+
     return None
 
 
@@ -230,10 +224,13 @@ async def chat_completions(
         user_api_key = None
         if provider and provider != "Ollama":  # Only get key if provider exists and is not Ollama
             user_api_key = await get_user_api_key(user, provider, db)
-            if not user_api_key: # This implies provider is known but key is missing for user
+            if not user_api_key:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"API key for {provider} not found in your profile. Please add it to use this model.",
+                    detail=(
+                        f"API key for {provider} not found. "
+                        "Provide a key in your profile or system settings."
+                    ),
                 )
         # If provider is None here, it means model_cache.get_model_provider(model_to_use) returned None.
         # The request will proceed to the provider checks. If no provider matches,
@@ -572,14 +569,14 @@ async def handle_anthropic_request(
     )  # Based on original request messages
     completion_tokens_estimate = len(ai_message_content.split())
 
-    # Check if token usage is available in the raw response (implementation dependent)
-    # This is a placeholder, actual path to token usage might differ.
-    # Example: if anthropic_response_obj.raw and 'usage' in anthropic_response_obj.raw:
-    # prompt_tokens = anthropic_response_obj.raw['usage'].get('input_tokens', prompt_tokens_estimate)
-    # completion_tokens = anthropic_response_obj.raw['usage'].get('output_tokens', completion_tokens_estimate)
+    # Check if token usage information is available in the raw response.
+    # Example:
+    # if anthropic_response_obj.raw and 'usage' in anthropic_response_obj.raw:
+    #     prompt_tokens = anthropic_response_obj.raw['usage'].get('input_tokens', prompt_tokens_estimate)
+    #     completion_tokens = anthropic_response_obj.raw['usage'].get('output_tokens', completion_tokens_estimate)
 
     return ChatCompletionResponse(
-        id=f"cmpl-anthropic-{uuid4().hex}",  # Placeholder ID
+        id=f"cmpl-anthropic-{uuid4().hex}",
         object="chat.completion",
         created=int(time.time()),
         model=model_to_use,  # This should be the specific model name like "claude-3-opus-20240229"
