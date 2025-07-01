@@ -33,6 +33,7 @@ from api_service.auth_providers import get_current_user # Updated import
 from api_service.db.models import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
+from api_service.services.profile_service import ProfileService
 
 
 router = APIRouter()
