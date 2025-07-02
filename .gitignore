@@ -9,3 +9,8 @@ jobs/
 .env
 .env-backup
 .openhands-state-data/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

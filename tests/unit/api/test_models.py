@@ -1,11 +1,13 @@
-import pytest
+import time
 from unittest.mock import patch
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import time
 
 # Assuming the main app's router is imported correctly
 from api_service.api.routers.models import router as models_router
+
 # Assuming settings are correctly imported and used by the application
 # from moonmind.config.settings import settings # Settings might not be directly needed here anymore
 

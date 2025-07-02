@@ -30,7 +30,12 @@ class QdrantRAG:
         self.retriever = VectorIndexRetriever(
             index=self.index,
             similarity_top_k=self.similarity_top_k,
-            # embed_model can be implicitly taken from global Settings if index was built with it
+            embed_model=self.service_settings.embed_model,
+        )
+        logger.info(
+            f"Initialized QdrantRAG with index={self.index}, "
+            f"similarity_top_k={self.similarity_top_k}, "
+            f"embed_model={self.service_settings.embed_model}"
         )
 
     def retrieve_context(self, query_text: str) -> List[NodeWithScore]:
