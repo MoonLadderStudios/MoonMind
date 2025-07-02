@@ -2,15 +2,15 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.main import app, startup_event
+from api_service.api.schemas import UserProfileUpdate
 from api_service.db import base as db_base
 from api_service.db.models import Base, User
+from api_service.main import app, startup_event
 from api_service.services.profile_service import ProfileService
-from api_service.api.schemas import UserProfileUpdate
 from moonmind.config.settings import settings
 
 
@@ -25,6 +25,7 @@ async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    app.state.settings = settings
     with (
         patch("api_service.main._initialize_embedding_model"),
         patch("api_service.main._initialize_vector_store"),
@@ -75,6 +76,7 @@ async def test_keycloak_user_profile_empty(keycloak_mode, tmp_path):
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    app.state.settings = settings
     with (
         patch("api_service.main._initialize_embedding_model"),
         patch("api_service.main._initialize_vector_store"),
