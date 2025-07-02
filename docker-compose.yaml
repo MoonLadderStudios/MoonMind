@@ -41,17 +41,17 @@ services:
       - 8080:8080
     environment:
       - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:8000/v1}
-      - WEBUI_AUTH=${WEBUI_AUTH:-true}
+      - WEBUI_AUTH=${WEBUI_AUTH:-false}
       # - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true} # Keep or remove based on final setup with OIDC
       - ENABLE_OLLAMA_API=false
       # OIDC specific variables for OpenWebUI
-      - ENABLE_OAUTH_SIGNUP=true
+      - ENABLE_OAUTH_SIGNUP=${WEBUI_AUTH:-false}
       - OAUTH_PROVIDER_NAME=Keycloak # Can be changed by .env if needed
       - OAUTH_CLIENT_ID=open-webui # As defined in realm-export.json
       - OAUTH_CLIENT_SECRET= # Left blank for PKCE
       - OAUTH_SCOPES=openid email profile
       - OPENID_PROVIDER_URL=http://keycloak:8080/realms/moonmind/.well-known/openid-configuration # Internal URL for Keycloak
-      - WEBUI_FORWARD_AUTH_HEADER=true # Important for API to get the token
+      - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_AUTH:-false} # Important for API to get the token
     env_file:
       - .env
     restart: unless-stopped
@@ -96,8 +96,10 @@ services:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
     depends_on:
-      - init-db
-      - api-db
+      init-db:
+        condition: service_completed_successfully
+      api-db:
+        condition: service_started
 
   api-db:
     image: postgres:${POSTGRES_VERSION:-17}

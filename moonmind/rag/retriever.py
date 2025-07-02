@@ -30,6 +30,7 @@ class QdrantRAG:
         self.retriever = VectorIndexRetriever(
             index=self.index,
             similarity_top_k=self.similarity_top_k,
+            embed_model=self.service_settings.embed_model,
             # embed_model can be implicitly taken from global Settings if index was built with it
         )
 

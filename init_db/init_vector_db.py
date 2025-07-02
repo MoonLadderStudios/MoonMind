@@ -1,17 +1,18 @@
+import asyncio
 import logging
 import os
 import sys
-import asyncio
 
 import qdrant_client
 from llama_index.core import Settings, StorageContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 
+from api_service.api.routers.chat import get_user_api_key
+from api_service.auth import (get_or_create_default_user,
+                              get_user_manager_context)
+from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
-from api_service.auth import get_or_create_default_user, get_user_manager_context
-from api_service.db.base import get_async_session_context
-from api_service.api.routers.chat import get_user_api_key
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
@@ -574,13 +575,10 @@ if __name__ == "__main__":
 
     # Determine final exit code
     if not any_actual_indexing_performed_or_attempted:
-        logger.warning(
-            "No data sources were successfully configured and attempted for indexing. The script will exit with an error code."
-        )
         logger.info(
-            "Vector database initialization script process completed with no actions taken."
+            "No data sources were configured for indexing. Vector database was checked and is ready."
         )
-        sys.exit(1)  # Exit with 1 if no indexing was performed or attempted
     else:
-        logger.info("Vector database initialization script process completed.")
-        sys.exit(0)  # Explicitly exit with 0 if indexing was performed or attempted
+        logger.info("Vector database initialization and/or indexing process completed.")
+
+    sys.exit(0)

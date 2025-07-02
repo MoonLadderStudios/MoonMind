@@ -47,9 +47,9 @@ class GoogleSettings(BaseSettings):
     google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
     google_chat_model: str = Field("gemini-2.5-pro-exp-03-25", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
-        "models/text-embedding-004", env="GOOGLE_EMBEDDING_MODEL"
+        "models/embedding-001", env="GOOGLE_EMBEDDING_MODEL"
     )
-    google_embedding_dimensions: int = Field(768, env="GOOGLE_EMBEDDING_DIMENSIONS")
+    google_embedding_dimensions: int = Field(3072, env="GOOGLE_EMBEDDING_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     google_embed_batch_size: int = Field(100, env="GOOGLE_EMBED_BATCH_SIZE")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
