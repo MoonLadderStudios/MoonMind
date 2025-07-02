@@ -1,8 +1,8 @@
 from pathlib import Path  # Added Path
 from typing import Optional  # Keep one Optional import
 
-from pydantic import (  # Ensure AliasChoices is imported if not already
-    AliasChoices, Field, field_validator)
+from pydantic import (
+    Field, field_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -191,7 +191,8 @@ class LocalDataSettings(BaseSettings):
     """Settings for local data indexing"""
 
     local_data_path: Optional[str] = Field(
-        None, validation_alias=AliasChoices("LocalData", "LOCAL_DATA_PATH")
+        None,
+        env=["LocalData", "LOCAL_DATA_PATH"],
     )
     # Add local_data_enabled if we want a separate boolean flag, but for now, path presence implies enabled.
     # local_data_enabled: bool = Field(False, env="LOCAL_DATA_ENABLED")
