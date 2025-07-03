@@ -48,9 +48,34 @@ logger.info("Starting FastAPI...")
 def _initialize_embedding_model(app_state, app_settings):
     """Initializes and sets the embedding model and its dimensions on app_state."""
     logger.info("Initializing embedding model...")
-    app_state.embed_model, app_state.embed_dimensions = build_embed_model(app_settings)
+    app_state.embed_model, configured_dims = build_embed_model(app_settings)
+
+    detected_dims = None
+    try:
+        # Probe the embedding model to determine the real output dimensionality
+        test_vec = app_state.embed_model.embed_query("dim_check")
+        detected_dims = len(test_vec)
+    except Exception as e:  # pragma: no cover - best effort check
+        logger.error("Failed to detect embedding dimensions: %s", e)
+
+    if detected_dims and detected_dims > 0:
+        if configured_dims > 0 and configured_dims != detected_dims:
+            logger.warning(
+                "Configured embedding dimension %s does not match the model's "
+                "actual dimension %s. Continuing with configured dimension.",
+                configured_dims,
+                detected_dims,
+            )
+        elif configured_dims <= 0:
+            configured_dims = detected_dims
+    if configured_dims <= 0:
+        raise RuntimeError(
+            "Embedding dimension could not be determined. Configure a valid value."
+        )
+
+    app_state.embed_dimensions = configured_dims
     logger.info(
-        f"Embedding model initialized with dimensions: {app_state.embed_dimensions}"
+        "Embedding model initialized with dimensions: %s", app_state.embed_dimensions
     )
 
 
