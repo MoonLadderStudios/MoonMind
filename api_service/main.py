@@ -53,7 +53,7 @@ def _initialize_embedding_model(app_state, app_settings):
     detected_dims = None
     try:
         # Probe the embedding model to determine the real output dimensionality
-        test_vec = app_state.embed_model.embed_query("dim_check")
+        test_vec = app_state.embed_model.get_query_embedding("dim_check")
         detected_dims = len(test_vec)
     except Exception as e:  # pragma: no cover - best effort check
         logger.error("Failed to detect embedding dimensions: %s", e)
@@ -62,12 +62,14 @@ def _initialize_embedding_model(app_state, app_settings):
         if configured_dims > 0 and configured_dims != detected_dims:
             logger.warning(
                 "Configured embedding dimension %s does not match the model's "
-                "actual dimension %s. Continuing with configured dimension.",
+                "actual dimension %s. Using detected dimension.",
                 configured_dims,
                 detected_dims,
             )
+            configured_dims = detected_dims
         elif configured_dims <= 0:
             configured_dims = detected_dims
+
     if configured_dims <= 0:
         raise RuntimeError(
             "Embedding dimension could not be determined. Configure a valid value."
