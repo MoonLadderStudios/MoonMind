@@ -27,7 +27,7 @@ def client():
 
         # Explicitly add other common embedding methods if they are directly accessed on the mock
         # or if the spec doesn't create them automatically as callable mocks.
-        mock_embed_instance.embed_query = MagicMock(return_value=[0.1] * 100)
+        mock_embed_instance.get_query_embedding = MagicMock(return_value=[0.1] * 100)
         mock_embed_instance.embed_documents = MagicMock(return_value=[[0.1] * 100])
         mock_embed_instance.get_text_embedding = MagicMock(
             return_value=[0.1] * 100

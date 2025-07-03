@@ -45,44 +45,57 @@ from moonmind.factories.vector_store_factory import build_vector_store
 logger.info("Starting FastAPI...")
 
 
-# Helper functions for setup
 def _initialize_embedding_model(app_state, app_settings):
-    """Initializes and sets the embedding model and its dimensions on app_state."""
+    """Initializes the embedding model and records its dimensionality on app_state."""
     logger.info("Initializing embedding model...")
+
+    # Build the model and get any dimension configured in settings
     app_state.embed_model, configured_dims = build_embed_model(app_settings)
-    actual_dims = configured_dims
+
+    # -------------------------------------------------------
+    # Detect the true dimensionality produced by the model
+    # -------------------------------------------------------
+    detected_dims = None
     try:
-        # Probe the embedding model to determine the real output dimensionality
-        test_vec = app_state.embed_model.embed_query("dim_check")
-        actual_dims = len(test_vec)
-        if configured_dims != -1 and configured_dims != actual_dims:
-            logger.warning(
-                "Configured embedding dimension %s does not match the model's "
-                "actual dimension %s. Using the detected dimension instead.",
-                configured_dims,
-                actual_dims,
-            )
-    except Exception as e:  # pragma: no cover - best effort check
-        logger.error("Failed to detect embedding dimensions: %s", e)
-        # Fallback to configured dimensions if probing fails
-
-    if actual_dims <= 0:
-        if configured_dims > 0:
-            actual_dims = configured_dims
-            logger.warning(
-                "Using configured embedding dimension %s due to detection failure",
-                configured_dims,
-            )
+        if hasattr(app_state.embed_model, "embed_query"):
+            test_vec = app_state.embed_model.embed_query("dim_check")
+        elif hasattr(app_state.embed_model, "get_query_embedding"):
+            test_vec = app_state.embed_model.get_query_embedding("dim_check")
         else:
-            raise RuntimeError(
-                "Embedding dimension could not be determined. Configure a valid value."
+            raise AttributeError(
+                "Embedding model lacks 'embed_query' and 'get_query_embedding'."
             )
+        detected_dims = len(test_vec)
+    except Exception as e:  # pragma: no cover – best-effort probe
+        logger.error("Failed to detect embedding dimensions: %s", e)
 
-    app_state.embed_dimensions = actual_dims
-    logger.info(
-        "Embedding model initialized with dimensions: %s", app_state.embed_dimensions
-    )
+    # -------------------------------------------------------
+    # Decide which dimension to keep
+    # -------------------------------------------------------
+    if configured_dims and configured_dims > 0:
+        # Settings override, but warn if they disagree with what we probed
+        if detected_dims and detected_dims != configured_dims:
+            logger.warning(
+                "Configured embedding dimension %s ≠ detected %s. "
+                "Using detected dimension.",
+                configured_dims,
+                detected_dims,
+            )
+            final_dims = detected_dims
+        else:
+            final_dims = configured_dims
+    else:
+        # No valid configured dimension → rely on detection
+        final_dims = detected_dims
 
+    if not final_dims or final_dims <= 0:
+        raise RuntimeError(
+            "Embedding dimension could not be determined. "
+            "Please provide a valid value in configuration."
+        )
+
+    app_state.embed_dimensions = final_dims
+    logger.info("Embedding model initialized with dimensions: %s", final_dims)
 
 def _initialize_vector_store(app_state, app_settings):
     """Initializes and sets the vector store on app_state."""
