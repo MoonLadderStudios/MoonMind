@@ -14,6 +14,7 @@ from uuid import uuid4
 import requests
 from fastapi import APIRouter  # Added for healthz
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -170,6 +171,8 @@ app = FastAPI(
     title="MoonMind API",
     description="API for MoonMind - LLM-powered documentation search and chat interface",
     version="0.1.0",
+    docs_url="/docs",
+    openapi_url="/openapi.json",
 )
 
 # Setup templates
@@ -195,14 +198,24 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/", include_in_schema=False)
+async def docs_redirect() -> RedirectResponse:
+    """Redirect root path to Swagger UI."""
+    return RedirectResponse(url=app.docs_url)
+
+
 app.include_router(health_router, tags=["health"])
 
 # Include all routers
-app.include_router(chat_router, prefix="/v1/chat")
-app.include_router(models_router, prefix="/v1/models")
-app.include_router(documents_router, prefix="/v1/documents")
-app.include_router(summarization_router.router, prefix="/summarization", tags=["Summarization"]) # Added summarization router
-app.include_router(context_protocol_router)  # Removed prefix="/context"
+app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
+app.include_router(models_router, prefix="/v1/models", tags=["Models"])
+app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
+app.include_router(
+    summarization_router.router,
+    prefix="/summarization",
+    tags=["Summarization"],
+)  # Added summarization router
+app.include_router(context_protocol_router, tags=["Context Protocol"])  # Removed prefix="/context"
 app.include_router(profile_router, prefix="", tags=["Profile"])  # Include profile router
 
 # Auth routers
