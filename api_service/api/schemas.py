@@ -1,14 +1,20 @@
 import uuid
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserProfileBaseSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    google_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
+    google_api_key: Optional[str] = Field(
+        default=None,
+        alias="google_api_key_encrypted",
+    )
+    openai_api_key: Optional[str] = Field(
+        default=None,
+        alias="openai_api_key_encrypted",
+    )
     # Add other profile fields here as they are defined in the UserProfile model
 
 

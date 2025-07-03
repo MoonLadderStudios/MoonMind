@@ -14,6 +14,7 @@ from uuid import uuid4
 import requests
 from fastapi import APIRouter  # Added for healthz
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -44,41 +45,57 @@ from moonmind.factories.vector_store_factory import build_vector_store
 logger.info("Starting FastAPI...")
 
 
-# Helper functions for setup
 def _initialize_embedding_model(app_state, app_settings):
-    """Initializes and sets the embedding model and its dimensions on app_state."""
+    """Initializes the embedding model and records its dimensionality on app_state."""
     logger.info("Initializing embedding model...")
+
+    # Build the model and get any dimension configured in settings
     app_state.embed_model, configured_dims = build_embed_model(app_settings)
 
+    # -------------------------------------------------------
+    # Detect the true dimensionality produced by the model
+    # -------------------------------------------------------
     detected_dims = None
     try:
-        # Probe the embedding model to determine the real output dimensionality
-        test_vec = app_state.embed_model.get_query_embedding("dim_check")
+        if hasattr(app_state.embed_model, "embed_query"):
+            test_vec = app_state.embed_model.embed_query("dim_check")
+        elif hasattr(app_state.embed_model, "get_query_embedding"):
+            test_vec = app_state.embed_model.get_query_embedding("dim_check")
+        else:
+            raise AttributeError(
+                "Embedding model lacks 'embed_query' and 'get_query_embedding'."
+            )
         detected_dims = len(test_vec)
-    except Exception as e:  # pragma: no cover - best effort check
+    except Exception as e:  # pragma: no cover – best-effort probe
         logger.error("Failed to detect embedding dimensions: %s", e)
 
-    if detected_dims and detected_dims > 0:
-        if configured_dims <= 0:
-            configured_dims = detected_dims
-        elif configured_dims != detected_dims:
+    # -------------------------------------------------------
+    # Decide which dimension to keep
+    # -------------------------------------------------------
+    if configured_dims and configured_dims > 0:
+        # Settings override, but warn if they disagree with what we probed
+        if detected_dims and detected_dims != configured_dims:
             logger.warning(
-                "Configured embedding dimension %s does not match the model's "
-                "actual dimension %s. Continuing with configured value.",
+                "Configured embedding dimension %s ≠ detected %s. "
+                "Using detected dimension.",
                 configured_dims,
                 detected_dims,
             )
+            final_dims = detected_dims
+        else:
+            final_dims = configured_dims
+    else:
+        # No valid configured dimension → rely on detection
+        final_dims = detected_dims
 
-    if configured_dims <= 0:
+    if not final_dims or final_dims <= 0:
         raise RuntimeError(
-            "Embedding dimension could not be determined. Configure a valid value."
+            "Embedding dimension could not be determined. "
+            "Please provide a valid value in configuration."
         )
 
-    app_state.embed_dimensions = configured_dims
-    logger.info(
-        "Embedding model initialized with dimensions: %s", app_state.embed_dimensions
-    )
-
+    app_state.embed_dimensions = final_dims
+    logger.info("Embedding model initialized with dimensions: %s", final_dims)
 
 def _initialize_vector_store(app_state, app_settings):
     """Initializes and sets the vector store on app_state."""
@@ -167,6 +184,8 @@ app = FastAPI(
     title="MoonMind API",
     description="API for MoonMind - LLM-powered documentation search and chat interface",
     version="0.1.0",
+    docs_url="/docs",
+    openapi_url="/openapi.json",
 )
 
 # Setup templates
@@ -192,14 +211,24 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/", include_in_schema=False)
+async def docs_redirect() -> RedirectResponse:
+    """Redirect root path to Swagger UI."""
+    return RedirectResponse(url=app.docs_url)
+
+
 app.include_router(health_router, tags=["health"])
 
 # Include all routers
-app.include_router(chat_router, prefix="/v1/chat")
-app.include_router(models_router, prefix="/v1/models")
-app.include_router(documents_router, prefix="/v1/documents")
-app.include_router(summarization_router.router, prefix="/summarization", tags=["Summarization"]) # Added summarization router
-app.include_router(context_protocol_router)  # Removed prefix="/context"
+app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
+app.include_router(models_router, prefix="/v1/models", tags=["Models"])
+app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
+app.include_router(
+    summarization_router.router,
+    prefix="/summarization",
+    tags=["Summarization"],
+)  # Added summarization router
+app.include_router(context_protocol_router, tags=["Context Protocol"])  # Removed prefix="/context"
 app.include_router(profile_router, prefix="", tags=["Profile"])  # Include profile router
 
 # Auth routers
