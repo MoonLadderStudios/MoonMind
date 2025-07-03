@@ -64,6 +64,19 @@ def _initialize_embedding_model(app_state, app_settings):
     except Exception as e:  # pragma: no cover - best effort check
         logger.error("Failed to detect embedding dimensions: %s", e)
         # Fallback to configured dimensions if probing fails
+
+    if actual_dims <= 0:
+        if configured_dims > 0:
+            actual_dims = configured_dims
+            logger.warning(
+                "Using configured embedding dimension %s due to detection failure",
+                configured_dims,
+            )
+        else:
+            raise RuntimeError(
+                "Embedding dimension could not be determined. Configure a valid value."
+            )
+
     app_state.embed_dimensions = actual_dims
     logger.info(
         "Embedding model initialized with dimensions: %s", app_state.embed_dimensions
