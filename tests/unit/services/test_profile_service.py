@@ -26,3 +26,20 @@ async def test_update_profile_enforces_ownership():
         )
 
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_userprofile_read_populates_from_encrypted():
+    profile = UserProfile(
+        id=1,
+        user_id=uuid.uuid4(),
+        openai_api_key_encrypted="secret-openai",
+        google_api_key_encrypted="secret-google",
+    )
+
+    from api_service.api.schemas import UserProfileRead
+
+    read_schema = UserProfileRead.model_validate(profile)
+
+    assert read_schema.openai_api_key == "secret-openai"
+    assert read_schema.google_api_key == "secret-google"
