@@ -59,16 +59,15 @@ def _initialize_embedding_model(app_state, app_settings):
         logger.error("Failed to detect embedding dimensions: %s", e)
 
     if detected_dims and detected_dims > 0:
-        if configured_dims > 0 and configured_dims != detected_dims:
+        if configured_dims <= 0:
+            configured_dims = detected_dims
+        elif configured_dims != detected_dims:
             logger.warning(
                 "Configured embedding dimension %s does not match the model's "
-                "actual dimension %s. Using detected dimension.",
+                "actual dimension %s. Continuing with configured value.",
                 configured_dims,
                 detected_dims,
             )
-            configured_dims = detected_dims
-        elif configured_dims <= 0:
-            configured_dims = detected_dims
 
     if configured_dims <= 0:
         raise RuntimeError(
