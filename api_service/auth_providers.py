@@ -8,6 +8,7 @@ from api_service.auth import (
     auth_backend,
     current_active_user,
     fastapi_users,
+    _DEFAULT_USER_ID,
 )
 from api_service.db.models import User
 from api_service.db.base import get_async_session
@@ -18,10 +19,7 @@ async def get_default_user_from_db(
     session: AsyncSession = Depends(get_async_session),
 ) -> User:
     """Retrieve the default user from the database."""
-    user_id_str = settings.oidc.DEFAULT_USER_ID
-    if not user_id_str:
-        raise HTTPException(status_code=500, detail="DEFAULT_USER_ID not configured")
-
+    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
     try:
         user_uuid = uuid.UUID(user_id_str)
     except ValueError as exc:

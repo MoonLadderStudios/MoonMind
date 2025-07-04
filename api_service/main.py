@@ -316,8 +316,11 @@ async def startup_event():
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":
         logger.info("Auth provider is 'disabled'. Ensuring default user and profile exist on startup.")
-        from api_service.auth import (get_or_create_default_user,
-                                      get_user_manager_context)
+        from api_service.auth import (
+            get_or_create_default_user,
+            get_user_manager_context,
+            _DEFAULT_USER_ID,
+        )
         from api_service.db.base import get_async_session_context
         from api_service.services.profile_service import ProfileService
 
@@ -325,45 +328,46 @@ async def startup_event():
             async with get_user_manager_context(db_session) as user_manager:
                 try:
                     if not settings.oidc.DEFAULT_USER_ID or not settings.oidc.DEFAULT_USER_EMAIL:
-                        logger.warning("DEFAULT_USER_ID or DEFAULT_USER_EMAIL not set. Skipping default user/profile creation on startup.")
-                    else:
+                        logger.warning(
+                            "DEFAULT_USER_ID or DEFAULT_USER_EMAIL not configured. Using built-in defaults."
+                        )
+                    logger.info(
+                        f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID} on startup."
+                    )
+                    default_user = await get_or_create_default_user(
+                        db_session=db_session, user_manager=user_manager
+                    )
+                    if default_user:
                         logger.info(
-                            f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID} on startup."
+                            f"Default user {default_user.email} (ID: {default_user.id}) ensured."
                         )
-                        default_user = await get_or_create_default_user(
-                            db_session=db_session, user_manager=user_manager
+                        profile_service = ProfileService()
+                        existing_profile = await profile_service.get_profile_by_user_id(
+                            db_session=db_session, user_id=default_user.id
                         )
-                        if default_user:
+                        if existing_profile:
                             logger.info(
-                                f"Default user {default_user.email} (ID: {default_user.id}) ensured."
+                                f"Profile for default user {default_user.email} already exists (Profile ID: {existing_profile.id})."
                             )
-                            profile_service = ProfileService()
-                            existing_profile = await profile_service.get_profile_by_user_id(
-                                db_session=db_session, user_id=default_user.id
-                            )
-                            if existing_profile:
-                                logger.info(
-                                    f"Profile for default user {default_user.email} already exists (Profile ID: {existing_profile.id})."
-                                )
-                            else:
-                                profile_update = UserProfileUpdate(
-                                    google_api_key=settings.google.google_api_key,
-                                    openai_api_key=settings.openai.openai_api_key,
-                                )
-                                profile = await profile_service.update_profile(
-                                    db_session=db_session,
-                                    user_id=default_user.id,
-                                    profile_data=profile_update,
-                                )
-                                logger.info(
-                                    f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
-                                )
-                            from moonmind.models_cache import refresh_model_cache_for_user
-                            import asyncio
-                            loop = asyncio.get_running_loop()
-                            await loop.run_in_executor(None, refresh_model_cache_for_user, default_user, db_session)
                         else:
-                            logger.error("Failed to get or create default user on startup.")
+                            profile_update = UserProfileUpdate(
+                                google_api_key=settings.google.google_api_key,
+                                openai_api_key=settings.openai.openai_api_key,
+                            )
+                            profile = await profile_service.update_profile(
+                                db_session=db_session,
+                                user_id=default_user.id,
+                                profile_data=profile_update,
+                            )
+                            logger.info(
+                                f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
+                            )
+                        from moonmind.models_cache import refresh_model_cache_for_user
+                        import asyncio
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, refresh_model_cache_for_user, default_user, db_session)
+                    else:
+                        logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:
                     logger.error(
                         f"Configuration error during default user setup on startup: {ve}"
