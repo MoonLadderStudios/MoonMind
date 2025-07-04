@@ -17,7 +17,7 @@ async def health_check(): # Public
 
 
 @router.get("/")
-async def models(_user: User = Depends(get_current_user())): # Protected
+async def models(_user: User = Depends(get_current_user)): # Protected
     try:
         # Get all models from the cache
         # The data is already formatted by the cache's _fetch_all_models method

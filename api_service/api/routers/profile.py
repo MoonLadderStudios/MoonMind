@@ -1,24 +1,14 @@
-from fastapi import (
-    APIRouter,
-    Depends,
-    Form,  # For HTMLResponse and Form
-    HTTPException,
-    Request,
-)
+from fastapi import Form  # For HTMLResponse and Form
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import (  # For HTMLResponse and RedirectResponse
-    HTMLResponse,
-    RedirectResponse,
-)
+    HTMLResponse, RedirectResponse)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
 
-from api_service.api.schemas import (
-    UserProfileRead,
-    UserProfileReadSanitized,
-    UserProfileUpdate,
-)
 from api_service.api.constants import MANAGED_PROVIDERS
+from api_service.api.schemas import (UserProfileRead, UserProfileReadSanitized,
+                                     UserProfileUpdate)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session  # Dependency for DB session
 from api_service.db.models import User as DBUser  # User model from DB
@@ -41,7 +31,7 @@ async def get_profile_service() -> ProfileService:
 
 @router.get("/me", response_model=UserProfileReadSanitized)
 async def get_current_user_profile(
-    user: DBUser = Depends(get_current_user()),  # Updated dependency
+    user: DBUser = Depends(get_current_user),  # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -60,7 +50,7 @@ async def get_current_user_profile(
 @router.put("/me", response_model=UserProfileRead)
 async def update_current_user_profile(
     profile_update_data: UserProfileUpdate,
-    user: DBUser = Depends(get_current_user()),  # Updated dependency
+    user: DBUser = Depends(get_current_user),  # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -78,7 +68,7 @@ async def update_current_user_profile(
 @router.get("/settings", response_class=HTMLResponse, name="settings_ui")
 async def get_profile_management_page(
     request: Request,
-    user: DBUser = Depends(get_current_user()),  # Changed dependency
+    user: DBUser = Depends(get_current_user),  # Changed dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -117,7 +107,7 @@ async def get_profile_management_page(
 @router.post("/settings", response_class=HTMLResponse, name="update_settings_ui")
 async def handle_profile_update_form(
     request: Request,  # Added request parameter
-    user: DBUser = Depends(get_current_user()),  # Changed dependency
+    user: DBUser = Depends(get_current_user),  # Changed dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):

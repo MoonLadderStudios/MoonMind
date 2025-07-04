@@ -190,7 +190,7 @@ async def chat_completions(
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
     db: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user),
 ):
     try:
         # Extract the last user message as the query for RAG
