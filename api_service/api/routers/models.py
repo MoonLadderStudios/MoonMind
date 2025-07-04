@@ -1,8 +1,10 @@
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from api_service.auth_providers import get_current_user  # Auth dependency
+from api_service.db.models import User  # User model for type hinting
 from moonmind.models_cache import model_cache  # Import the model cache
-from api_service.auth_providers import get_current_user # Auth dependency
-from api_service.db.models import User # User model for type hinting
 
 router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
@@ -15,7 +17,7 @@ async def health_check(): # Public
 
 
 @router.get("/")
-async def models(_user: User = Depends(get_current_user)): # Protected
+async def models(_user: User = Depends(get_current_user())): # Protected
     try:
         # Get all models from the cache
         # The data is already formatted by the cache's _fetch_all_models method

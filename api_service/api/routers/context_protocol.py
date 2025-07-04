@@ -3,19 +3,18 @@ import time
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from fastapi import APIRouter, Depends, HTTPException
 from llama_index.core import Settings as LlamaSettings
 from llama_index.core import VectorStoreIndex
 from llama_index.core.schema import NodeWithScore
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, Depends, HTTPException
+from api_service.api.dependencies import get_service_context, get_vector_index
+from api_service.auth_providers import get_current_user  # Auth dependency
+from api_service.db.models import User  # User model for type hinting
 from moonmind.config.settings import settings
 from moonmind.factories.google_factory import get_google_model
 from moonmind.rag.retriever import QdrantRAG
-
-from api_service.api.dependencies import get_service_context, get_vector_index
-from api_service.auth_providers import get_current_user # Auth dependency
-from api_service.db.models import User # User model for type hinting
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -69,7 +68,7 @@ async def process_context(
     request: ContextRequest,
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
-    _user: User = Depends(get_current_user), # Protected
+    _user: User = Depends(get_current_user()), # Protected
 ):
     try:
         user_query = ""

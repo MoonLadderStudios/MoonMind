@@ -2,39 +2,34 @@ import logging
 import time
 from typing import List, Optional
 from uuid import uuid4
-import openai
-from openai import AsyncOpenAI  # Moved import to top
 
+import openai
+# Multi-provider imports from main branch
+from fastapi import APIRouter, Depends, HTTPException
 # RAG imports from feat/rag branch
 from llama_index.core import Settings as LlamaSettings
 from llama_index.core import VectorStoreIndex
 from llama_index.core.schema import NodeWithScore
-
-# Multi-provider imports from main branch
-from fastapi import APIRouter, Depends, HTTPException
-from moonmind.config.settings import settings
-from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.openai_factory import get_openai_model
-from moonmind.factories.ollama_factory import get_ollama_model, chat_with_ollama
-from moonmind.factories.anthropic_factory import AnthropicFactory
-from moonmind.rag.retriever import QdrantRAG
-from moonmind.schemas.chat_models import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    Choice,
-    ChoiceMessage,
-    Usage,
-)
-from moonmind.models_cache import model_cache
+from openai import AsyncOpenAI  # Moved import to top
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Dependencies for RAG functionality
 from api_service.api.dependencies import get_service_context, get_vector_index
 from api_service.auth_providers import get_current_user  # Updated import
-from api_service.db.models import User
-from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
+from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
-
+from moonmind.config.settings import settings
+from moonmind.factories.anthropic_factory import AnthropicFactory
+from moonmind.factories.google_factory import get_google_model
+from moonmind.factories.ollama_factory import (chat_with_ollama,
+                                               get_ollama_model)
+from moonmind.factories.openai_factory import get_openai_model
+from moonmind.models_cache import model_cache
+from moonmind.rag.retriever import QdrantRAG
+from moonmind.schemas.chat_models import (ChatCompletionRequest,
+                                          ChatCompletionResponse, Choice,
+                                          ChoiceMessage, Usage)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -155,24 +150,40 @@ async def get_user_api_key(
 ) -> Optional[str]:
     """Return the API key for ``provider`` from the user's profile or settings."""
 
-    if not getattr(user, "id", None):
+    user_has_id = getattr(user, "id", None)
+    if not user_has_id:
         logger.warning(
-            "User object passed to get_user_api_key does not have a valid id"
-        )
-        return None
-
-    profile_service = ProfileService()
-    try:
-        profile = await profile_service.get_or_create_profile(
-            db_session=db_session, user_id=user.id
-        )
-    except Exception as e:  # pragma: no cover - defensive against bad DB mocks
-        logger.warning(
-            "Failed to load user profile for %s: %s. Falling back to settings.",
-            user.id,
-            e,
+            "User object passed to get_user_api_key does not have a valid id – will skip profile lookup and fall back to system key if available."
         )
         profile = None
+    else:
+        profile_service = ProfileService()
+        try:
+            profile = await profile_service.get_or_create_profile(
+                db_session=db_session, user_id=user.id
+            )
+        except Exception as e:  # pragma: no cover - defensive against bad DB mocks
+            logger.warning(
+                "Failed to load user profile for %s: %s. Falling back to settings.",
+                user.id,
+                e,
+            )
+            profile = None
+
+    profile_service = ProfileService()
+    # If we already set profile (or None) above, the following creation isn't needed.
+    if user_has_id and profile is None:
+        try:
+            profile = await profile_service.get_or_create_profile(
+                db_session=db_session, user_id=user.id
+            )
+        except Exception as e:  # pragma: no cover - defensive against bad DB mocks
+            logger.warning(
+                "Failed to load user profile for %s: %s. Falling back to settings.",
+                user.id,
+                e,
+            )
+            profile = None
 
     provider_lower = provider.lower()
     key_attr = f"{provider_lower}_api_key"
@@ -195,7 +206,7 @@ async def chat_completions(
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
     db: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user()),
 ):
     try:
         # Extract the last user message as the query for RAG
