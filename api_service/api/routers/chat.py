@@ -150,24 +150,40 @@ async def get_user_api_key(
 ) -> Optional[str]:
     """Return the API key for ``provider`` from the user's profile or settings."""
 
-    if not getattr(user, "id", None):
+    user_has_id = getattr(user, "id", None)
+    if not user_has_id:
         logger.warning(
-            "User object passed to get_user_api_key does not have a valid id"
-        )
-        return None
-
-    profile_service = ProfileService()
-    try:
-        profile = await profile_service.get_or_create_profile(
-            db_session=db_session, user_id=user.id
-        )
-    except Exception as e:  # pragma: no cover - defensive against bad DB mocks
-        logger.warning(
-            "Failed to load user profile for %s: %s. Falling back to settings.",
-            user.id,
-            e,
+            "User object passed to get_user_api_key does not have a valid id – will skip profile lookup and fall back to system key if available."
         )
         profile = None
+    else:
+        profile_service = ProfileService()
+        try:
+            profile = await profile_service.get_or_create_profile(
+                db_session=db_session, user_id=user.id
+            )
+        except Exception as e:  # pragma: no cover - defensive against bad DB mocks
+            logger.warning(
+                "Failed to load user profile for %s: %s. Falling back to settings.",
+                user.id,
+                e,
+            )
+            profile = None
+
+    profile_service = ProfileService()
+    # If we already set profile (or None) above, the following creation isn't needed.
+    if user_has_id and profile is None:
+        try:
+            profile = await profile_service.get_or_create_profile(
+                db_session=db_session, user_id=user.id
+            )
+        except Exception as e:  # pragma: no cover - defensive against bad DB mocks
+            logger.warning(
+                "Failed to load user profile for %s: %s. Falling back to settings.",
+                user.id,
+                e,
+            )
+            profile = None
 
     provider_lower = provider.lower()
     key_attr = f"{provider_lower}_api_key"
