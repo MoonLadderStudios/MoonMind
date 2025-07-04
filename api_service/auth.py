@@ -93,11 +93,13 @@ async def get_or_create_default_user(
     db_session: AsyncSession, user_manager: UserManager
 ) -> User:
     """
-    Retrieves or creates the default user if AUTH_PROVIDER is 'disabled'.
-    Uses hardcoded values for the user's ID and email.
+    Retrieves or creates the default user if AUTH_PROVIDER is "disabled".
+    Falls back to built-in default ID and email unless overridden in settings.
     """
-    default_user_uuid = uuid.UUID(_DEFAULT_USER_ID)
-    default_email = _DEFAULT_USER_EMAIL
+    default_user_uuid = uuid.UUID(
+        settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+    )
+    default_email = settings.oidc.DEFAULT_USER_EMAIL or _DEFAULT_USER_EMAIL
     default_password = settings.oidc.DEFAULT_USER_PASSWORD # Can be None if not set, UserManager handles it
 
     try:
