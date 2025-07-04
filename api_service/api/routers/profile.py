@@ -31,7 +31,7 @@ async def get_profile_service() -> ProfileService:
 
 @router.get("/me", response_model=UserProfileReadSanitized)
 async def get_current_user_profile(
-    user: DBUser = Depends(get_current_user),  # Updated dependency
+    user: DBUser = Depends(get_current_user()),  # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -50,7 +50,7 @@ async def get_current_user_profile(
 @router.put("/me", response_model=UserProfileRead)
 async def update_current_user_profile(
     profile_update_data: UserProfileUpdate,
-    user: DBUser = Depends(get_current_user),  # Updated dependency
+    user: DBUser = Depends(get_current_user()),  # Updated dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -68,7 +68,7 @@ async def update_current_user_profile(
 @router.get("/settings", response_class=HTMLResponse, name="settings_ui")
 async def get_profile_management_page(
     request: Request,
-    user: DBUser = Depends(get_current_user),  # Changed dependency
+    user: DBUser = Depends(get_current_user()),  # Changed dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -107,7 +107,7 @@ async def get_profile_management_page(
 @router.post("/settings", response_class=HTMLResponse, name="update_settings_ui")
 async def handle_profile_update_form(
     request: Request,  # Added request parameter
-    user: DBUser = Depends(get_current_user),  # Changed dependency
+    user: DBUser = Depends(get_current_user()),  # Changed dependency
     db: AsyncSession = Depends(get_async_session),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
