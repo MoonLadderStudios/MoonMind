@@ -40,7 +40,7 @@ services:
     ports:
       - 8080:8080
     environment:
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:8000/v1}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:5000/v1}
       - WEBUI_AUTH=${WEBUI_AUTH:-false}
       # - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true} # Keep or remove based on final setup with OIDC
       - ENABLE_OLLAMA_API=false
@@ -66,14 +66,14 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     ports:
-      - "8000:8000"
+      - "5000:5000"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
-      - MODEL_CONTEXT_PROTOCOL_PORT=8000
+      - MODEL_CONTEXT_PROTOCOL_PORT=5000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       # OIDC specific variables for API service
@@ -214,7 +214,7 @@ services:
       - ./model_data:/root/.cache/huggingface/hub
       - ./tools/entrypoint-vllm.sh:/entrypoint-vllm.sh:ro
     ports:
-      - "8001:8000"
+      - "8000:8000"
     environment:
       - MODEL_NAME=${VLLM_MODEL_NAME:-ByteDance-Seed/UI-TARS-1.5-7B}
       - DTYPE=${VLLM_DTYPE:-float16}

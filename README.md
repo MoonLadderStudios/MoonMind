@@ -315,7 +315,7 @@ To build (if necessary) and start the VLLM service, run:
 docker-compose --profile vllm up -d
 ```
 
-The VLLM OpenAI-compatible API will be available at `http://localhost:8001/v1`. (Note: The service is mapped to port `8001` on the host to avoid conflicts with other services that might use port `8000`).
+The VLLM OpenAI-compatible API will be available at `http://localhost:8000/v1`.
 
 ### Accessing Logs
 

@@ -28,6 +28,6 @@ COPY api_service /app/api_service/
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
 
-EXPOSE 8000
+EXPOSE 5000
 
 CMD ["/app/api_service/entrypoint.sh"]
