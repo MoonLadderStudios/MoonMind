@@ -76,7 +76,7 @@ The MoonMind API container is configured to act as a Model Context Protocol serv
 ```yaml
 environment:
   - MODEL_CONTEXT_PROTOCOL_ENABLED=true
-  - MODEL_CONTEXT_PROTOCOL_PORT=8000
+  - MODEL_CONTEXT_PROTOCOL_PORT=5000
   - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
 labels:
   - "ai.model.context.protocol.version=0.1"
@@ -105,11 +105,11 @@ python examples/context_protocol_client.py gpt-4o
 OpenHands and other agents can connect to MoonMind's Model Context Protocol server by configuring their client to point to the MoonMind API endpoint:
 
 ```
-http://api:8000/context
+http://api:5000/context
 ```
 
 If accessing from outside the Docker network, use:
 
 ```
-http://localhost:8000/context
+http://localhost:5000/context
 ```

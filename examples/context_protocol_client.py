@@ -9,7 +9,7 @@ import sys
 import os
 
 # Default to localhost, but allow override via environment variable
-API_BASE_URL = os.environ.get("MOONMIND_API_URL", "http://localhost:8000")
+API_BASE_URL = os.environ.get("MOONMIND_API_URL", "http://localhost:5000")
 
 
 def send_context_request(messages, model="gemini-pro"):
