@@ -170,4 +170,4 @@ def test_get_jira_client_auth_error(monkeypatch):
         with pytest.raises(JiraStoryPlannerError) as exc:
             planner._get_jira_client()
 
-    assert "401 unauthorized" in str(exc.value)
+    assert "Failed to authenticate with Jira" in str(exc.value)

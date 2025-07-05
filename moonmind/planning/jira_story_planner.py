@@ -210,10 +210,11 @@ class JiraStoryPlanner:
         try:
             client = Jira(**config)
             client.myself()  # Trigger authentication
-        except Exception as e:  # pragma: no cover - network/credential errors
-            self.logger.exception("Jira authentication failed: %s", e)
+        except Exception:  # pragma: no cover - network/credential errors
+            # Avoid logging credentials from the exception message.
+            self.logger.exception("Jira authentication failed")
             raise JiraStoryPlannerError(
-                f"Failed to authenticate with Jira at {config['url']}: {e}"
-            ) from e
+                f"Failed to authenticate with Jira at {self.jira_url}"
+            ) from None
 
         return client
