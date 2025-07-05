@@ -80,7 +80,9 @@ def test_call_llm_success(monkeypatch):
     mock_model = MagicMock()
     mock_model.generate_content.return_value = _mock_gemini_response(response_text)
 
-    with patch("moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model) as mock_factory:
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ) as mock_factory:
         stories = planner._call_llm(prompt)
 
     mock_factory.assert_called_once()
@@ -106,7 +108,9 @@ def test_call_llm_invalid_json(monkeypatch):
     mock_model = MagicMock()
     mock_model.generate_content.return_value = _mock_gemini_response("not-json")
 
-    with patch("moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model):
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
         with pytest.raises(JiraStoryPlannerError):
             planner._call_llm(prompt)
 
@@ -122,7 +126,48 @@ def test_call_llm_model_error(monkeypatch):
     mock_model = MagicMock()
     mock_model.generate_content.side_effect = Exception("boom")
 
-    with patch("moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model):
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
         with pytest.raises(JiraStoryPlannerError):
             planner._call_llm(prompt)
 
+
+def test_get_jira_client_mapping(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+
+    fake_client = MagicMock()
+    with patch("atlassian.Jira", return_value=fake_client) as mock_jira:
+        client = planner._get_jira_client(cloud=False)
+
+    mock_jira.assert_called_once_with(
+        url="https://example.atlassian.net",
+        username="user",
+        password="key",
+        cloud=False,
+        backoff_and_retry=True,
+        max_backoff_seconds=16,
+        max_backoff_retries=3,
+    )
+    assert client is fake_client
+
+
+def test_get_jira_client_auth_error(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+
+    fake_client = MagicMock()
+    fake_client.myself.side_effect = Exception("401 unauthorized")
+
+    with patch("atlassian.Jira", return_value=fake_client):
+        with pytest.raises(JiraStoryPlannerError) as exc:
+            planner._get_jira_client()
+
+    assert "401 unauthorized" in str(exc.value)

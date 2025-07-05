@@ -124,9 +124,14 @@ class JiraStoryPlanner:
         if model is None:
             try:
                 model = get_google_model()
-            except (ImportError, ValueError) as e:  # pragma: no cover - expected failure types
+            except (
+                ImportError,
+                ValueError,
+            ) as e:  # pragma: no cover - expected failure types
                 self.logger.exception("Failed to initialize LLM model: %s", e)
-                raise JiraStoryPlannerError(f"Failed to initialize LLM model: {e}") from e
+                raise JiraStoryPlannerError(
+                    f"Failed to initialize LLM model: {e}"
+                ) from e
 
         try:
             response = model.generate_content(prompt)
@@ -138,7 +143,10 @@ class JiraStoryPlanner:
         try:
             if hasattr(response, "candidates") and response.candidates:
                 first_candidate = response.candidates[0]
-                if getattr(first_candidate, "content", None) and first_candidate.content.parts:
+                if (
+                    getattr(first_candidate, "content", None)
+                    and first_candidate.content.parts
+                ):
                     text_parts = [
                         part.text
                         for part in first_candidate.content.parts
@@ -167,3 +175,45 @@ class JiraStoryPlanner:
         except Exception as e:
             self.logger.exception("Story validation failed: %s", e)
             raise JiraStoryPlannerError(f"Story validation failed: {e}") from e
+
+    def _get_jira_client(self, **overrides: Any):
+        """Initialize and authenticate a Jira client.
+
+        Parameters
+        ----------
+        **overrides : Any
+            Optional keyword arguments that override default client configuration.
+
+        Returns
+        -------
+        atlassian.Jira
+            Authenticated Jira client instance.
+
+        Raises
+        ------
+        JiraStoryPlannerError
+            If authentication fails.
+        """
+        from atlassian import Jira
+
+        config = {
+            "url": self.jira_url,
+            "username": self.jira_username,
+            "password": self.jira_api_key,
+            "cloud": True,
+            "backoff_and_retry": True,
+            "max_backoff_seconds": 16,
+            "max_backoff_retries": 3,
+        }
+        config.update(overrides)
+
+        try:
+            client = Jira(**config)
+            client.myself()  # Trigger authentication
+        except Exception as e:  # pragma: no cover - network/credential errors
+            self.logger.exception("Jira authentication failed: %s", e)
+            raise JiraStoryPlannerError(
+                f"Failed to authenticate with Jira at {config['url']}: {e}"
+            ) from e
+
+        return client
