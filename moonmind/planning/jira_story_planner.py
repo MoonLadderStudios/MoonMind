@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, List, Optional
+import time
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,7 @@ class StoryDraft(BaseModel):
     issue_type: str = Field(..., description="Jira issue type")
     story_points: Optional[int] = Field(None, description="Story points estimate")
     labels: List[str] = Field(default_factory=list, description="Labels to apply")
+    key: Optional[str] = Field(None, description="Created Jira issue key")
 
 
 class JiraStoryPlanner:
@@ -257,3 +259,94 @@ class JiraStoryPlanner:
                     return field_id
 
         raise JiraStoryPlannerError("Story points field not found")
+
+    def _create_issues(self, drafts: List[StoryDraft]) -> List[StoryDraft]:
+        """Create Jira issues from the given drafts.
+
+        Parameters
+        ----------
+        drafts : List[StoryDraft]
+            Draft issue objects to create in Jira.
+
+        Returns
+        -------
+        List[StoryDraft]
+            Drafts updated with their created issue keys.
+        """
+
+        if not drafts:
+            return []
+
+        if self.dry_run:
+            return drafts
+
+        jira = self.jira_client or self._get_jira_client(**self.jira_kwargs)
+        story_points_field = self._resolve_story_points_field(jira)
+
+        created: List[StoryDraft] = []
+
+        for batch_start in range(0, len(drafts), 50):
+            batch = drafts[batch_start : batch_start + 50]
+            issue_updates = []
+            for draft in batch:
+                fields = {
+                    "project": {"key": self.jira_project_key},
+                    "summary": draft.summary,
+                    "description": draft.description,
+                    "issuetype": {"name": draft.issue_type},
+                }
+                if draft.story_points is not None:
+                    fields[story_points_field] = draft.story_points
+                if draft.labels:
+                    fields["labels"] = draft.labels
+                issue_updates.append({"fields": fields})
+
+            # Attempt bulk creation with retries on 429
+            attempts = 0
+            while True:
+                try:
+                    bulk_resp = jira.issue_create_bulk(issue_updates)
+                    break
+                except Exception as e:  # pragma: no cover - network errors
+                    if (
+                        getattr(e, "status", None) == 429
+                        or getattr(e, "status_code", None) == 429
+                        or "429" in str(e)
+                    ) and attempts < 3:
+                        time.sleep(2**attempts)
+                        attempts += 1
+                        continue
+                    raise
+
+            bulk_issues = []
+            if isinstance(bulk_resp, dict):
+                bulk_issues = bulk_resp.get("issues", [])
+            elif isinstance(bulk_resp, list):
+                bulk_issues = bulk_resp
+
+            for idx, draft in enumerate(batch):
+                key = None
+                if idx < len(bulk_issues) and isinstance(bulk_issues[idx], dict):
+                    key = bulk_issues[idx].get("key")
+                if not key:
+                    single_attempts = 0
+                    while True:
+                        try:
+                            single_resp = jira.create_issue(fields=issue_updates[idx]["fields"])
+                            if isinstance(single_resp, dict):
+                                key = single_resp.get("key")
+                            break
+                        except Exception as e:  # pragma: no cover - network errors
+                            if (
+                                getattr(e, "status", None) == 429
+                                or getattr(e, "status_code", None) == 429
+                                or "429" in str(e)
+                            ) and single_attempts < 3:
+                                time.sleep(2**single_attempts)
+                                single_attempts += 1
+                                continue
+                            raise
+                draft.key = key
+                created.append(draft)
+
+        return created
