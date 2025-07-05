@@ -359,6 +359,7 @@ class JiraStoryPlanner:
     def plan(self) -> List[StoryDraft]:
         """Execute planning and issue creation with structured logging."""
 
+        self.last_token_usage = None
         start_time = time.perf_counter()
         prompt = self._build_prompt(self.plan_text)
         prompt_str = "".join(f"{m.role}:{m.content}" for m in prompt)
