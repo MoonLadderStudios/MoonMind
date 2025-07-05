@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List, Optional
 import time
+from typing import Any, List, Optional
+import hashlib
 
 from pydantic import BaseModel, Field
 
@@ -75,6 +76,8 @@ class JiraStoryPlanner:
 
         # Placeholder for future Jira client
         self.jira_client = None
+        # Last token usage info returned by the LLM, if available
+        self.last_token_usage: Optional[Any] = None
 
     def _build_prompt(self, plan_text: str) -> list:
         """Build LLM prompt messages from raw plan text.
@@ -137,6 +140,8 @@ class JiraStoryPlanner:
 
         try:
             response = model.generate_content(prompt)
+            # Capture token usage information if available on the response
+            self.last_token_usage = getattr(response, "usage", None)
         except Exception as e:
             self.logger.exception("LLM generation error: %s", e)
             raise JiraStoryPlannerError(f"LLM generation error: {e}") from e
@@ -349,4 +354,28 @@ class JiraStoryPlanner:
                 draft.key = key
                 created.append(draft)
 
+        return created
+
+    def plan(self) -> List[StoryDraft]:
+        """Execute planning and issue creation with structured logging."""
+
+        self.last_token_usage = None
+        start_time = time.perf_counter()
+        prompt = self._build_prompt(self.plan_text)
+        prompt_str = "".join(f"{m.role}:{m.content}" for m in prompt)
+        prompt_hash = hashlib.sha256(prompt_str.encode()).hexdigest()
+
+        drafts = self._call_llm(prompt)
+        created = self._create_issues(drafts)
+
+        latency = time.perf_counter() - start_time
+        self.logger.info(
+            "jira_story_planner.completed",
+            extra={
+                "prompt_hash": prompt_hash,
+                "token_usage": self.last_token_usage,
+                "created_issue_keys": [d.key for d in created if d.key],
+                "latency": latency,
+            },
+        )
         return created

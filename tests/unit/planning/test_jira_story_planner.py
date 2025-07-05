@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -271,3 +272,32 @@ def test_create_issues_bulk_partial_failure(monkeypatch):
     assert [d.key for d in result] == ["PROJ-1", "PROJ-2"]
     fake_jira.issue_create_bulk.assert_called_once()
     fake_jira.create_issue.assert_called_once()
+
+
+def test_plan_logs_metrics(monkeypatch, caplog):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=True)
+
+    prompt = planner._build_prompt("plan")
+    prompt_str = "".join(f"{m.role}:{m.content}" for m in prompt)
+    expected_hash = hashlib.sha256(prompt_str.encode()).hexdigest()
+
+    draft = StoryDraft(summary="s", description="d", issue_type="Task", key="PROJ-1")
+
+    with patch.object(planner, "_call_llm", return_value=[draft]) as mock_call_llm, \
+         patch.object(planner, "_create_issues", return_value=[draft]) as mock_create:
+        with caplog.at_level(logging.INFO):
+            result = planner.plan()
+
+    assert result == [draft]
+    mock_call_llm.assert_called_once()
+    mock_create.assert_called_once()
+
+    record = next(rec for rec in caplog.records if rec.message == "jira_story_planner.completed")
+    assert record.levelno == logging.INFO
+    assert record.prompt_hash == expected_hash
+    assert record.created_issue_keys == ["PROJ-1"]
+    assert isinstance(record.latency, float)
