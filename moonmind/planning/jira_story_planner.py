@@ -124,7 +124,7 @@ class JiraStoryPlanner:
         if model is None:
             try:
                 model = get_google_model()
-            except Exception as e:  # pragma: no cover - unexpected failure
+            except (ImportError, ValueError) as e:  # pragma: no cover - expected failure types
                 self.logger.exception("Failed to initialize LLM model: %s", e)
                 raise JiraStoryPlannerError(f"Failed to initialize LLM model: {e}") from e
 
