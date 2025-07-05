@@ -29,6 +29,7 @@ from api_service.api.routers.context_protocol import \
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.profile import router as profile_router
+from api_service.api.routers.planning import router as planning_router
 from api_service.api.schemas import UserProfileUpdate
 # Auth imports
 from api_service.auth import (UserCreate, UserRead, UserUpdate, auth_backend,
@@ -228,6 +229,7 @@ app.include_router(
     prefix="/summarization",
     tags=["Summarization"],
 )  # Added summarization router
+app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
 app.include_router(context_protocol_router, tags=["Context Protocol"])  # Removed prefix="/context"
 app.include_router(profile_router, prefix="", tags=["Profile"])  # Include profile router
 
