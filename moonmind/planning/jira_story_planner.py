@@ -57,3 +57,31 @@ class JiraStoryPlanner:
 
         # Placeholder for future Jira client
         self.jira_client = None
+
+    def _build_prompt(self, plan_text: str) -> list:
+        """Build LLM prompt messages from raw plan text.
+
+        Parameters
+        ----------
+        plan_text : str
+            The raw text describing the plan to convert into Jira stories.
+
+        Returns
+        -------
+        list of Message
+            A list containing the system and user messages ready for an LLM
+            chat completion request.
+        """
+        from moonmind.schemas.chat_models import Message
+
+        system_prompt = (
+            "You are a Jira planning assistant. "
+            "Return ONLY a JSON array of issues using the fields "
+            "'summary', 'description', 'issue_type', 'story_points', and "
+            "'labels'."
+        )
+
+        return [
+            Message(role="system", content=system_prompt),
+            Message(role="user", content=plan_text),
+        ]
