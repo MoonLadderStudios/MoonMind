@@ -171,3 +171,38 @@ def test_get_jira_client_auth_error(monkeypatch):
             planner._get_jira_client()
 
     assert "Failed to authenticate with Jira" in str(exc.value)
+
+
+def test_resolve_story_points_field(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+
+    fake_jira = MagicMock()
+    fake_jira.get_all_fields.return_value = [
+        {"id": "customfield_10016", "name": "Story Points", "schema": {"type": "number"}}
+    ]
+
+    field_id = planner._resolve_story_points_field(fake_jira)
+    assert field_id == "customfield_10016"
+
+    # Should use cached value on subsequent calls
+    second_id = planner._resolve_story_points_field(fake_jira)
+    assert second_id == "customfield_10016"
+    fake_jira.get_all_fields.assert_called_once()
+
+
+def test_resolve_story_points_field_missing(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+
+    fake_jira = MagicMock()
+    fake_jira.get_all_fields.return_value = []
+
+    with pytest.raises(JiraStoryPlannerError):
+        planner._resolve_story_points_field(fake_jira)

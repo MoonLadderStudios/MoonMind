@@ -218,3 +218,42 @@ class JiraStoryPlanner:
             ) from None
 
         return client
+
+    def _resolve_story_points_field(self, jira_client: Any) -> str:
+        """Return the custom field id used for story points.
+
+        Parameters
+        ----------
+        jira_client : Any
+            Authenticated Jira client.
+
+        Returns
+        -------
+        str
+            The custom field id for story points.
+
+        Raises
+        ------
+        JiraStoryPlannerError
+            If the field cannot be located.
+        """
+
+        if getattr(self, "_story_points_field_id", None):
+            return self._story_points_field_id  # type: ignore[attr-defined]
+
+        try:
+            fields = jira_client.get_all_fields()
+        except Exception as e:  # pragma: no cover - network errors
+            self.logger.exception("Failed to retrieve Jira fields: %s", e)
+            raise JiraStoryPlannerError(f"Failed to retrieve Jira fields: {e}") from e
+
+        for field in fields:
+            name = str(field.get("name", "")).lower()
+            field_type = field.get("schema", {}).get("type")
+            if name == "story points" and field_type == "number":
+                field_id = field.get("id")
+                if field_id:
+                    self._story_points_field_id = field_id
+                    return field_id
+
+        raise JiraStoryPlannerError("Story points field not found")
