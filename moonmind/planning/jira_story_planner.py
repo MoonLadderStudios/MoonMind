@@ -139,7 +139,16 @@ class JiraStoryPlanner:
                 ) from e
 
         try:
-            response = model.generate_content(prompt)
+            gemini_prompt = []
+            for msg in prompt:
+                role = msg.role
+                if role == "assistant":
+                    role = "model"
+                elif role not in {"user", "model"}:
+                    role = "user"
+                gemini_prompt.append({"role": role, "parts": [msg.content]})
+
+            response = model.generate_content(gemini_prompt)
             # Capture token usage information if available on the response
             self.last_token_usage = getattr(response, "usage", None)
         except Exception as e:
@@ -172,7 +181,7 @@ class JiraStoryPlanner:
             raise JiraStoryPlannerError("LLM returned no text content")
 
         try:
-            parsed = json.loads(response_text)
+            parsed = self._extract_json(response_text)
         except Exception as e:
             self.logger.exception("Invalid JSON from LLM: %s", e)
             raise JiraStoryPlannerError(f"Invalid JSON from LLM: {e}") from e
@@ -182,6 +191,41 @@ class JiraStoryPlanner:
         except Exception as e:
             self.logger.exception("Story validation failed: %s", e)
             raise JiraStoryPlannerError(f"Story validation failed: {e}") from e
+
+    def _extract_json(self, text: str) -> Any:
+        """Extract JSON data from a text response.
+
+        Parameters
+        ----------
+        text : str
+            Raw text returned from the LLM which should contain JSON.
+
+        Returns
+        -------
+        Any
+            Parsed JSON object.
+
+        Raises
+        ------
+        json.JSONDecodeError
+            If no valid JSON could be parsed.
+        """
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+
+        import re
+
+        code_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
+        if code_match:
+            return json.loads(code_match.group(1))
+
+        array_match = re.search(r"\[[\s\S]*\]", text)
+        if array_match:
+            return json.loads(array_match.group(0))
+
+        raise json.JSONDecodeError("Invalid JSON", text, 0)
 
     def _get_jira_client(self, **overrides: Any):
         """Initialize and authenticate a Jira client.

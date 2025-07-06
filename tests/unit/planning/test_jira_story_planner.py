@@ -116,6 +116,38 @@ def test_call_llm_invalid_json(monkeypatch):
             planner._call_llm(prompt)
 
 
+def test_call_llm_json_code_block(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+    prompt = planner._build_prompt("plan")
+
+    response_text = (
+        "```json\n"
+        "[{\"summary\": \"Add login\", \"description\": \"desc\", \"issue_type\": \"Story\", \"story_points\": 3, \"labels\": [\"auth\"]}]\n"
+        "```"
+    )
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = _mock_gemini_response(response_text)
+
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
+        stories = planner._call_llm(prompt)
+
+    assert stories == [
+        StoryDraft(
+            summary="Add login",
+            description="desc",
+            issue_type="Story",
+            story_points=3,
+            labels=["auth"],
+        )
+    ]
+
+
 def test_call_llm_model_error(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
