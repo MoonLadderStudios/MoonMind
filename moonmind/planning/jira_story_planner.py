@@ -383,7 +383,8 @@ class JiraStoryPlanner:
                             except Exception:
                                 pass
                         self.logger.warning(error_msg)
-                        break # Exit retry loop to fallback
+                        # Re-raise as a planner error to ensure callers can handle it
+                        raise JiraStoryPlannerError(error_msg) from e
 
             if bulk_resp is None:
                 # Fall back to creating issues one-by-one if bulk failed or was skipped
