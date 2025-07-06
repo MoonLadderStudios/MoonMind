@@ -131,6 +131,7 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@api-db:5432/${POSTGRES_DB:-moonmind}
       - PYTHONPATH=/app
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1

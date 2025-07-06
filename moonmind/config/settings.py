@@ -1,15 +1,14 @@
 from pathlib import Path  # Added Path
 from typing import Optional  # Keep one Optional import
 
-from pydantic import (
-    Field, field_validator)
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseSettings(BaseSettings):
     """Database settings"""
 
-    POSTGRES_HOST: str = Field("localhost", env="POSTGRES_HOST")
+    POSTGRES_HOST: str = Field("api-db", env="POSTGRES_HOST")
     POSTGRES_USER: str = Field("postgres", env="POSTGRES_USER")
     POSTGRES_PASSWORD: str = Field("password", env="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field("moonmind", env="POSTGRES_DB")
@@ -45,7 +44,7 @@ class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
     google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
-    google_chat_model: str = Field("gemini-2.5-pro-exp-03-25", env="GOOGLE_CHAT_MODEL")
+    google_chat_model: str = Field("gemini-2.5-flash", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
         "models/gemini-embedding-exp-03-07", env="GOOGLE_EMBEDDING_MODEL"
     )
@@ -151,7 +150,6 @@ class AtlassianSettings(BaseSettings):
     atlassian_api_key: Optional[str] = Field(None, env="ATLASSIAN_API_KEY")
     atlassian_username: Optional[str] = Field(None, env="ATLASSIAN_USERNAME")
     atlassian_url: Optional[str] = Field(None, env="ATLASSIAN_URL")
-    atlassian_enabled: bool = Field(False, env="ATLASSIAN_ENABLED")
 
     # Nested settings for Confluence and Jira
     confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)

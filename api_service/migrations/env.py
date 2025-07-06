@@ -77,6 +77,7 @@ def run_migrations_online() -> None:
     """
     # Use POSTGRES_URL_SYNC from Pydantic settings instead of alembic.ini
     configuration = config.get_section(config.config_ini_section)
+
     # Use the database URL from settings which should respect environment variables
     configuration["sqlalchemy.url"] = (
         local_settings.database.POSTGRES_URL_SYNC

@@ -4,7 +4,8 @@ from typing import List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft
+from moonmind.planning import (JiraStoryPlanner, JiraStoryPlannerError,
+                               StoryDraft)
 
 router = APIRouter()
 
