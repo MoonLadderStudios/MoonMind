@@ -365,7 +365,9 @@ class JiraStoryPlanner:
                         bulk_resp = bulk_method(issue_updates)
                     else:
                         # Fall back to creating issues one-by-one
-                        bulk_resp = [jira.create_issue(fields=u["fields"]) for u in issue_updates]
+                        bulk_resp = [
+                            jira.create_issue(fields=u["fields"]) for u in issue_updates
+                        ]
                     break
                 except Exception as e:  # pragma: no cover - network errors
                     if (
@@ -376,7 +378,8 @@ class JiraStoryPlanner:
                         time.sleep(2**attempts)
                         attempts += 1
                         continue
-                    raise
+                    self.logger.exception("Failed to create issues: %s", e)
+                    raise JiraStoryPlannerError(f"Failed to create issues: {e}") from e
 
             bulk_issues = []
             if isinstance(bulk_resp, dict):
