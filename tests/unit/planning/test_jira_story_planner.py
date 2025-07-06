@@ -340,7 +340,7 @@ def test_create_issues_http_error(monkeypatch):
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=False)
     drafts = [StoryDraft(summary="s", description="d", issue_type="Task")]
 
-    fake_jira = MagicMock()
+    fake_jira = MagicMock(spec=["create_issues", "create_issue"])
     fake_jira.create_issues.side_effect = HTTPError("400: bad request")
 
     with patch.object(planner, "_get_jira_client", return_value=fake_jira):
