@@ -350,11 +350,22 @@ class JiraStoryPlanner:
                     fields["labels"] = draft.labels
                 issue_updates.append({"fields": fields})
 
-            # Attempt bulk creation with retries on 429
+            # Attempt bulk creation with retries on 429. Some Jira clients
+            # expose `issue_create_bulk` while others use `create_issues`.
+            bulk_method = None
+            if hasattr(jira, "issue_create_bulk"):
+                bulk_method = jira.issue_create_bulk
+            elif hasattr(jira, "create_issues"):
+                bulk_method = jira.create_issues
+
             attempts = 0
             while True:
                 try:
-                    bulk_resp = jira.issue_create_bulk(issue_updates)
+                    if bulk_method:
+                        bulk_resp = bulk_method(issue_updates)
+                    else:
+                        # Fall back to creating issues one-by-one
+                        bulk_resp = [jira.create_issue(fields=u["fields"]) for u in issue_updates]
                     break
                 except Exception as e:  # pragma: no cover - network errors
                     if (
