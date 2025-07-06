@@ -353,13 +353,10 @@ class JiraStoryPlanner:
             # Attempt bulk creation with retries on 429. Some Jira clients
             # expose `issue_create_bulk` while others use `create_issues`.
             bulk_method = None
-            candidate = getattr(jira, "issue_create_bulk", None)
-            if callable(candidate):
-                bulk_method = candidate
-            else:
-                candidate = getattr(jira, "create_issues", None)
-                if callable(candidate):
-                    bulk_method = candidate
+            if hasattr(jira, "issue_create_bulk"):
+                bulk_method = jira.issue_create_bulk
+            elif hasattr(jira, "create_issues"):
+                bulk_method = jira.create_issues
 
             attempts = 0
             bulk_resp: Any = None
