@@ -2,6 +2,7 @@ import logging
 import hashlib
 import pytest
 from unittest.mock import MagicMock, patch
+from requests.exceptions import HTTPError
 
 from moonmind.planning import (
     JiraStoryPlanner,
@@ -114,6 +115,38 @@ def test_call_llm_invalid_json(monkeypatch):
     ):
         with pytest.raises(JiraStoryPlannerError):
             planner._call_llm(prompt)
+
+
+def test_call_llm_json_code_block(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+    prompt = planner._build_prompt("plan")
+
+    response_text = (
+        "```json\n"
+        "[{\"summary\": \"Add login\", \"description\": \"desc\", \"issue_type\": \"Story\", \"story_points\": 3, \"labels\": [\"auth\"]}]\n"
+        "```"
+    )
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = _mock_gemini_response(response_text)
+
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
+        stories = planner._call_llm(prompt)
+
+    assert stories == [
+        StoryDraft(
+            summary="Add login",
+            description="desc",
+            issue_type="Story",
+            story_points=3,
+            labels=["auth"],
+        )
+    ]
 
 
 def test_call_llm_model_error(monkeypatch):
@@ -250,6 +283,31 @@ def test_create_issues_bulk_success(monkeypatch):
     fake_jira.issue_create_bulk.assert_called_once()
 
 
+def test_create_issues_create_issues_fallback(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=False)
+    drafts = [
+        StoryDraft(summary="A", description="da", issue_type="Task"),
+        StoryDraft(summary="B", description="db", issue_type="Task"),
+    ]
+
+    fake_jira = MagicMock(spec=["create_issues", "create_issue"])
+    fake_jira.create_issues.return_value = {
+        "issues": [{"key": "PROJ-1"}, {"key": "PROJ-2"}]
+    }
+
+    with patch.object(planner, "_get_jira_client", return_value=fake_jira):
+        with patch.object(planner, "_resolve_story_points_field", return_value="sp"):
+            result = planner._create_issues(drafts)
+
+    assert [d.key for d in result] == ["PROJ-1", "PROJ-2"]
+    fake_jira.create_issues.assert_called_once()
+    fake_jira.create_issue.assert_not_called()
+
+
 def test_create_issues_bulk_partial_failure(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -272,6 +330,23 @@ def test_create_issues_bulk_partial_failure(monkeypatch):
     assert [d.key for d in result] == ["PROJ-1", "PROJ-2"]
     fake_jira.issue_create_bulk.assert_called_once()
     fake_jira.create_issue.assert_called_once()
+
+
+def test_create_issues_http_error(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=False)
+    drafts = [StoryDraft(summary="s", description="d", issue_type="Task")]
+
+    fake_jira = MagicMock(spec=["create_issues", "create_issue"])
+    fake_jira.create_issues.side_effect = HTTPError("400: bad request")
+
+    with patch.object(planner, "_get_jira_client", return_value=fake_jira):
+        with patch.object(planner, "_resolve_story_points_field", return_value="sp"):
+            with pytest.raises(JiraStoryPlannerError):
+                planner._create_issues(drafts)
 
 
 def test_plan_logs_metrics(monkeypatch, caplog):

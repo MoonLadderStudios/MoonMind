@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 from typing import Any, List, Optional
-import hashlib
 
 from pydantic import BaseModel, Field
 
@@ -181,7 +181,7 @@ class JiraStoryPlanner:
             raise JiraStoryPlannerError("LLM returned no text content")
 
         try:
-            parsed = json.loads(response_text)
+            parsed = self._extract_json(response_text)
         except Exception as e:
             self.logger.exception("Invalid JSON from LLM: %s", e)
             raise JiraStoryPlannerError(f"Invalid JSON from LLM: {e}") from e
@@ -191,6 +191,41 @@ class JiraStoryPlanner:
         except Exception as e:
             self.logger.exception("Story validation failed: %s", e)
             raise JiraStoryPlannerError(f"Story validation failed: {e}") from e
+
+    def _extract_json(self, text: str) -> Any:
+        """Extract JSON data from a text response.
+
+        Parameters
+        ----------
+        text : str
+            Raw text returned from the LLM which should contain JSON.
+
+        Returns
+        -------
+        Any
+            Parsed JSON object.
+
+        Raises
+        ------
+        json.JSONDecodeError
+            If no valid JSON could be parsed.
+        """
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+
+        import re
+
+        code_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
+        if code_match:
+            return json.loads(code_match.group(1))
+
+        array_match = re.search(r"\[[\s\S]*\]", text)
+        if array_match:
+            return json.loads(array_match.group(0))
+
+        raise json.JSONDecodeError("Invalid JSON", text, 0)
 
     def _get_jira_client(self, **overrides: Any):
         """Initialize and authenticate a Jira client.
@@ -315,22 +350,46 @@ class JiraStoryPlanner:
                     fields["labels"] = draft.labels
                 issue_updates.append({"fields": fields})
 
-            # Attempt bulk creation with retries on 429
+            # Attempt bulk creation with retries on 429. Some Jira clients
+            # expose `issue_create_bulk` while others use `create_issues`.
+            bulk_method = None
+            if hasattr(jira, "issue_create_bulk"):
+                bulk_method = jira.issue_create_bulk
+            elif hasattr(jira, "create_issues"):
+                bulk_method = jira.create_issues
+
             attempts = 0
-            while True:
-                try:
-                    bulk_resp = jira.issue_create_bulk(issue_updates)
-                    break
-                except Exception as e:  # pragma: no cover - network errors
-                    if (
-                        getattr(e, "status", None) == 429
-                        or getattr(e, "status_code", None) == 429
-                        or "429" in str(e)
-                    ) and attempts < 3:
-                        time.sleep(2**attempts)
-                        attempts += 1
-                        continue
-                    raise
+            bulk_resp: Any = None
+            if bulk_method:
+                while attempts < 3:
+                    try:
+                        bulk_resp = bulk_method(issue_updates)
+                        break  # Success
+                    except Exception as e:
+                        if (
+                            getattr(e, "status", None) == 429
+                            or getattr(e, "status_code", None) == 429
+                            or "429" in str(e)
+                        ):
+                            time.sleep(2**attempts)
+                            attempts += 1
+                            continue
+
+                        # For other errors, log and break to fallback
+                        error_msg = f"Bulk issue creation failed: {e}"
+                        if hasattr(e, "response") and e.response is not None:
+                            try:
+                                error_msg += f" - {e.response.text}"
+                            except Exception:
+                                pass
+                        self.logger.warning(error_msg)
+                        # Re-raise as a planner error to ensure callers can handle it
+                        raise JiraStoryPlannerError(error_msg) from e
+
+            if bulk_resp is None:
+                # Fall back to creating issues one-by-one if bulk failed or was skipped
+                bulk_resp = []
+
 
             bulk_issues = []
             if isinstance(bulk_resp, dict):
@@ -343,23 +402,66 @@ class JiraStoryPlanner:
                 if idx < len(bulk_issues) and isinstance(bulk_issues[idx], dict):
                     key = bulk_issues[idx].get("key")
                 if not key:
-                    single_attempts = 0
-                    while True:
-                        try:
-                            single_resp = jira.create_issue(fields=issue_updates[idx]["fields"])
-                            if isinstance(single_resp, dict):
-                                key = single_resp.get("key")
-                            break
-                        except Exception as e:  # pragma: no cover - network errors
-                            if (
-                                getattr(e, "status", None) == 429
-                                or getattr(e, "status_code", None) == 429
-                                or "429" in str(e)
-                            ) and single_attempts < 3:
-                                time.sleep(2**single_attempts)
-                                single_attempts += 1
-                                continue
-                            raise
+                    try:
+                        single_attempts = 0
+                        while True:
+                            try:
+                                single_resp = jira.create_issue(fields=issue_updates[idx]["fields"])
+                                if isinstance(single_resp, dict):
+                                    key = single_resp.get("key")
+                                break
+                            except Exception as e:  # pragma: no cover - network errors
+                                if (
+                                    getattr(e, "status", None) == 429
+                                    or getattr(e, "status_code", None) == 429
+                                    or "429" in str(e)
+                                ) and single_attempts < 3:
+                                    time.sleep(2**single_attempts)
+                                    single_attempts += 1
+                                    continue
+
+                                error_text = str(e).lower()
+                                # If story points are the problem, retry without them.
+                                if "customfield_10028" in error_text and story_points_field in issue_updates[idx]["fields"]:
+                                    self.logger.warning(
+                                        f"Failed to set story points for issue {draft.summary}. Retrying without story points."
+                                    )
+                                    del issue_updates[idx]["fields"][story_points_field]
+                                    single_attempts += 1 # count as a retry
+                                    continue
+
+                                # If issue type is the problem, try a sequence of fallbacks.
+                                if "issuetype" in error_text or "issue type" in error_text:
+                                    original_type = draft.issue_type
+                                    current_type = issue_updates[idx]["fields"]["issuetype"]["name"]
+                                    fallbacks = ["Task", "Story", "Bug"]
+
+                                    # Find the next fallback type that hasn't been tried
+                                    next_type = None
+                                    if current_type == original_type:
+                                        next_type = fallbacks[0]
+                                    else:
+                                        try:
+                                            current_index = fallbacks.index(current_type)
+                                            if current_index + 1 < len(fallbacks):
+                                                next_type = fallbacks[current_index + 1]
+                                        except ValueError:
+                                            # current_type is not in our standard fallbacks, start from the beginning
+                                            next_type = fallbacks[0]
+
+                                    if next_type:
+                                        self.logger.warning(
+                                            f"Failed to create issue '{draft.summary}' with type '{current_type}'. Retrying as '{next_type}'."
+                                        )
+                                        issue_updates[idx]["fields"]["issuetype"]["name"] = next_type
+                                        single_attempts += 1
+                                        continue
+
+                                # If we've exhausted retries, raise to be caught by the outer block
+                                raise
+                    except Exception as final_error:
+                        self.logger.error(f"Could not create issue for draft '{draft.summary}' after all retries: {final_error}")
+
                 draft.key = key
                 created.append(draft)
 
