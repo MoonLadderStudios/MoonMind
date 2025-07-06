@@ -150,7 +150,6 @@ class AtlassianSettings(BaseSettings):
     atlassian_api_key: Optional[str] = Field(None, env="ATLASSIAN_API_KEY")
     atlassian_username: Optional[str] = Field(None, env="ATLASSIAN_USERNAME")
     atlassian_url: Optional[str] = Field(None, env="ATLASSIAN_URL")
-    atlassian_enabled: bool = Field(False, env="ATLASSIAN_ENABLED")
 
     # Nested settings for Confluence and Jira
     confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)
