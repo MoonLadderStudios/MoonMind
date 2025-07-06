@@ -139,7 +139,16 @@ class JiraStoryPlanner:
                 ) from e
 
         try:
-            response = model.generate_content(prompt)
+            gemini_prompt = []
+            for msg in prompt:
+                role = msg.role
+                if role == "assistant":
+                    role = "model"
+                elif role not in {"user", "model"}:
+                    role = "user"
+                gemini_prompt.append({"role": role, "parts": [msg.content]})
+
+            response = model.generate_content(gemini_prompt)
             # Capture token usage information if available on the response
             self.last_token_usage = getattr(response, "usage", None)
         except Exception as e:
