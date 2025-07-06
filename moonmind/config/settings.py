@@ -1,15 +1,14 @@
 from pathlib import Path  # Added Path
 from typing import Optional  # Keep one Optional import
 
-from pydantic import (
-    Field, field_validator)
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseSettings(BaseSettings):
     """Database settings"""
 
-    POSTGRES_HOST: str = Field("localhost", env="POSTGRES_HOST")
+    POSTGRES_HOST: str = Field("api-db", env="POSTGRES_HOST")
     POSTGRES_USER: str = Field("postgres", env="POSTGRES_USER")
     POSTGRES_PASSWORD: str = Field("password", env="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field("moonmind", env="POSTGRES_DB")

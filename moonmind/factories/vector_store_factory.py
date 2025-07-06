@@ -1,9 +1,13 @@
+import logging
+
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import Distance
 
 from ..config.settings import AppSettings
+
+logger = logging.getLogger(__name__)
 
 
 def build_vector_store(settings: AppSettings, embed_model, embed_dimensions: int = -1):
@@ -53,14 +57,18 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
                 f"a different distance metric: {existing_distance} vs {desired_distance}"
             )
     except UnexpectedResponse as e:
-        if "404" in str(e):
-            raise RuntimeError(
-                f"Qdrant collection '{settings.vector_store_collection_name}' not found. "
-                "Please ensure it is initialized by running the init_vector_db.py script "
-                "before starting the API service."
-            )
-        else:
-            raise e
+        # If the collection doesn't exist, we can create it.
+        # This is a design choice. For now, we assume it should exist.
+        logger.warning(
+            f"Qdrant collection '{settings.vector_store_collection_name}' not found. "
+            "Please ensure it is initialized if you intend to use vector search. "
+            "Vector store functionality will be disabled."
+        )
+        return None  # Return None to indicate the vector store is not available
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while building Qdrant vector store: {e}")
+        return None  # Return None for any other unexpected errors
 
     vector_store = QdrantVectorStore(
         client=client,
