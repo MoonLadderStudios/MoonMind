@@ -219,8 +219,9 @@ services:
     environment:
       - MODEL_NAME=${VLLM_MODEL_NAME:-ByteDance-Seed/UI-TARS-1.5-7B}
       - DTYPE=${VLLM_DTYPE:-float16}
-      - GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
+      - GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.95}
       - HF_HOME=/root/.cache/huggingface
+      - MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-32768}
       - NVIDIA_DRIVER_CAPABILITIES=all
     entrypoint: ["/bin/sh", "/entrypoint-vllm.sh"]
     networks:

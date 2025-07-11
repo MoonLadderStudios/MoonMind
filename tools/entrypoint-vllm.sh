@@ -18,7 +18,7 @@ python3 -m vllm.entrypoints.openai.api_server \
     --port 8000 \
     --model "${MODEL_NAME}" \
     --dtype "${DTYPE}" \
-    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.90}" \
+    --max-model-len "${MAX_MODEL_LEN}" \
     --download-dir "${HF_HOME}/hub" # Explicitly set download dir, though VLLM often respects HF_HOME
 
 echo "VLLM server started."
