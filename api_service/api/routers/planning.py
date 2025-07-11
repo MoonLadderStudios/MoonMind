@@ -8,8 +8,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from moonmind.planning import (JiraStoryPlanner, JiraStoryPlannerError,
-                               StoryDraft)
+from moonmind.planning import (
+    JiraStoryPlanner,
+    JiraStoryPlannerError,
+    StoryDraft,
+)
+from moonmind.config.settings import AppSettings
 
 router = APIRouter()
 
@@ -41,8 +45,17 @@ async def plan_jira_stories(request: JiraPlanRequest):
 @router.get("/jira/ui", response_class=HTMLResponse, name="jira_planner_ui")
 async def get_jira_planner_page(request: Request):
     """Render the Jira planning form."""
+    settings = AppSettings()
     return templates.TemplateResponse(
-        "planning.html", {"request": request, "result": None, "message": None}
+        "planning.html",
+        {
+            "request": request,
+            "result": None,
+            "message": None,
+            "atlassian_api_key": settings.atlassian.atlassian_api_key,
+            "atlassian_username": settings.atlassian.atlassian_username,
+            "atlassian_url": settings.atlassian.atlassian_url,
+        },
     )
 
 

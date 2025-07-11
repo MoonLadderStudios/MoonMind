@@ -25,11 +25,11 @@
             <label><input type="checkbox" name="dry_run" checked> Dry Run</label>
             <h2>Jira Settings</h2>
             <label for="ATLASSIAN_API_KEY">ATLASSIAN_API_KEY</label>
-            <input type="password" id="ATLASSIAN_API_KEY" name="ATLASSIAN_API_KEY" placeholder="ATLASSIAN_API_KEY">
+            <input type="password" id="ATLASSIAN_API_KEY" name="ATLASSIAN_API_KEY" placeholder="ATLASSIAN_API_KEY" value="{{ atlassian_api_key or '' }}">
             <label for="ATLASSIAN_USERNAME">ATLASSIAN_USERNAME</label>
-            <input type="text" id="ATLASSIAN_USERNAME" name="ATLASSIAN_USERNAME" placeholder="ATLASSIAN_USERNAME">
+            <input type="text" id="ATLASSIAN_USERNAME" name="ATLASSIAN_USERNAME" placeholder="ATLASSIAN_USERNAME" value="{{ atlassian_username or '' }}">
             <label for="ATLASSIAN_URL">ATLASSIAN_URL</label>
-            <input type="text" id="ATLASSIAN_URL" name="ATLASSIAN_URL" placeholder="https://jira.example.com">
+            <input type="text" id="ATLASSIAN_URL" name="ATLASSIAN_URL" placeholder="https://jira.example.com" value="{{ atlassian_url or '' }}">
             <button type="submit">Submit</button>
         </form>
         {% if message %}

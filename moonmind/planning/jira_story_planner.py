@@ -74,6 +74,13 @@ class JiraStoryPlanner:
         self.jira_username = settings.atlassian.atlassian_username
         self.jira_api_key = settings.atlassian.atlassian_api_key
 
+        if not self.dry_run and (
+            not self.jira_url or not self.jira_username or not self.jira_api_key
+        ):
+            raise JiraStoryPlannerError(
+                "ATLASSIAN_API_KEY, ATLASSIAN_USERNAME and ATLASSIAN_URL must be configured"
+            )
+
         # Placeholder for future Jira client
         self.jira_client = None
         # Last token usage info returned by the LLM, if available
@@ -217,7 +224,9 @@ class JiraStoryPlanner:
 
         import re
 
-        code_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
+        code_match = re.search(
+            r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text
+        )
         if code_match:
             return json.loads(code_match.group(1))
 
@@ -246,6 +255,11 @@ class JiraStoryPlanner:
             If authentication fails.
         """
         from atlassian import Jira
+
+        if not self.jira_url or not self.jira_username or not self.jira_api_key:
+            raise JiraStoryPlannerError(
+                "ATLASSIAN_API_KEY, ATLASSIAN_USERNAME and ATLASSIAN_URL must be configured"
+            )
 
         config = {
             "url": self.jira_url,
@@ -383,13 +397,12 @@ class JiraStoryPlanner:
                             except Exception:
                                 pass
                         self.logger.warning(error_msg)
-                        # Re-raise as a planner error to ensure callers can handle it
-                        raise JiraStoryPlannerError(error_msg) from e
+                        bulk_resp = None
+                        break
 
             if bulk_resp is None:
                 # Fall back to creating issues one-by-one if bulk failed or was skipped
                 bulk_resp = []
-
 
             bulk_issues = []
             if isinstance(bulk_resp, dict):
@@ -406,7 +419,9 @@ class JiraStoryPlanner:
                         single_attempts = 0
                         while True:
                             try:
-                                single_resp = jira.create_issue(fields=issue_updates[idx]["fields"])
+                                single_resp = jira.create_issue(
+                                    fields=issue_updates[idx]["fields"]
+                                )
                                 if isinstance(single_resp, dict):
                                     key = single_resp.get("key")
                                 break
@@ -422,18 +437,27 @@ class JiraStoryPlanner:
 
                                 error_text = str(e).lower()
                                 # If story points are the problem, retry without them.
-                                if "customfield_10028" in error_text and story_points_field in issue_updates[idx]["fields"]:
+                                if (
+                                    "customfield_10028" in error_text
+                                    and story_points_field
+                                    in issue_updates[idx]["fields"]
+                                ):
                                     self.logger.warning(
                                         f"Failed to set story points for issue {draft.summary}. Retrying without story points."
                                     )
                                     del issue_updates[idx]["fields"][story_points_field]
-                                    single_attempts += 1 # count as a retry
+                                    single_attempts += 1  # count as a retry
                                     continue
 
                                 # If issue type is the problem, try a sequence of fallbacks.
-                                if "issuetype" in error_text or "issue type" in error_text:
+                                if (
+                                    "issuetype" in error_text
+                                    or "issue type" in error_text
+                                ):
                                     original_type = draft.issue_type
-                                    current_type = issue_updates[idx]["fields"]["issuetype"]["name"]
+                                    current_type = issue_updates[idx]["fields"][
+                                        "issuetype"
+                                    ]["name"]
                                     fallbacks = ["Task", "Story", "Bug"]
 
                                     # Find the next fallback type that hasn't been tried
@@ -442,7 +466,9 @@ class JiraStoryPlanner:
                                         next_type = fallbacks[0]
                                     else:
                                         try:
-                                            current_index = fallbacks.index(current_type)
+                                            current_index = fallbacks.index(
+                                                current_type
+                                            )
                                             if current_index + 1 < len(fallbacks):
                                                 next_type = fallbacks[current_index + 1]
                                         except ValueError:
@@ -453,14 +479,18 @@ class JiraStoryPlanner:
                                         self.logger.warning(
                                             f"Failed to create issue '{draft.summary}' with type '{current_type}'. Retrying as '{next_type}'."
                                         )
-                                        issue_updates[idx]["fields"]["issuetype"]["name"] = next_type
+                                        issue_updates[idx]["fields"]["issuetype"][
+                                            "name"
+                                        ] = next_type
                                         single_attempts += 1
                                         continue
 
                                 # If we've exhausted retries, raise to be caught by the outer block
                                 raise
                     except Exception as final_error:
-                        self.logger.error(f"Could not create issue for draft '{draft.summary}' after all retries: {final_error}")
+                        self.logger.error(
+                            f"Could not create issue for draft '{draft.summary}' after all retries: {final_error}"
+                        )
 
                 draft.key = key
                 created.append(draft)
