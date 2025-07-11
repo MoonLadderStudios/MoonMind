@@ -54,6 +54,29 @@ def test_build_prompt(monkeypatch):
     ]
 
 
+def test_build_prompt_no_story_points(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(
+        plan_text="plan", jira_project_key="PROJ", include_story_points=False
+    )
+
+    messages = planner._build_prompt("plan")
+
+    from moonmind.schemas.chat_models import Message
+
+    expected_system = (
+        "You are a Jira planning assistant. Return ONLY a JSON array of issues using the fields 'summary', 'description', 'issue_type', 'labels'."
+    )
+
+    assert messages == [
+        Message(role="system", content=expected_system),
+        Message(role="user", content="plan"),
+    ]
+
+
 def _mock_gemini_response(text: str) -> MagicMock:
     """Helper to create a mock response object for the Google model."""
     part_mock = MagicMock()
@@ -257,6 +280,27 @@ def test_create_issues_dry_run(monkeypatch):
 
     mock_client.assert_not_called()
     assert result == drafts
+
+
+def test_create_issues_skip_story_points(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(
+        plan_text="plan", jira_project_key="PROJ", dry_run=False, include_story_points=False
+    )
+    drafts = [StoryDraft(summary="s", description="d", issue_type="Task")]
+
+    fake_jira = MagicMock()
+
+    with patch.object(planner, "_get_jira_client", return_value=fake_jira) as mock_client, \
+         patch.object(planner, "_resolve_story_points_field") as mock_sp:
+        result = planner._create_issues(drafts)
+
+    mock_client.assert_called_once()
+    mock_sp.assert_not_called()
+    assert result[0].key is None
 
 
 def test_create_issues_bulk_success(monkeypatch):
