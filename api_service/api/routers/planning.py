@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,7 +12,6 @@ from moonmind.planning import (
     JiraStoryPlannerError,
     StoryDraft,
 )
-from moonmind.config.settings import AppSettings
 
 router = APIRouter()
 
@@ -45,16 +43,12 @@ async def plan_jira_stories(request: JiraPlanRequest):
 @router.get("/jira/ui", response_class=HTMLResponse, name="jira_planner_ui")
 async def get_jira_planner_page(request: Request):
     """Render the Jira planning form."""
-    settings = AppSettings()
     return templates.TemplateResponse(
         "planning.html",
         {
             "request": request,
             "result": None,
             "message": None,
-            "atlassian_api_key": settings.atlassian.atlassian_api_key,
-            "atlassian_username": settings.atlassian.atlassian_username,
-            "atlassian_url": settings.atlassian.atlassian_url,
         },
     )
 
@@ -66,11 +60,6 @@ async def handle_jira_planner_form(request: Request):
     plan_text = form_data.get("plan_text", "")
     jira_project_key = form_data.get("jira_project_key", "")
     dry_run = form_data.get("dry_run") not in (None, "", "false", "off")
-
-    for var in ("ATLASSIAN_API_KEY", "ATLASSIAN_USERNAME", "ATLASSIAN_URL"):
-        val = form_data.get(var)
-        if val:
-            os.environ[var] = val
 
     message = None
     result = None
