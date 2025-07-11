@@ -42,6 +42,9 @@ class JiraStoryPlanner:
         Language model used for text processing.
     logger : logging.Logger, optional
         Logger for debug and progress messages.
+    include_story_points : bool, optional
+        If ``False``, the planner will not attempt to assign story point values
+        to created issues. Defaults to ``True``.
     **jira_kwargs : Any
         Additional arguments forwarded to the Jira client when implemented.
     """
@@ -53,6 +56,7 @@ class JiraStoryPlanner:
         dry_run: bool = True,
         llm_model: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
+        include_story_points: bool = True,
         **jira_kwargs: Any,
     ) -> None:
         self.logger = logger or logging.getLogger(__name__)
@@ -66,6 +70,7 @@ class JiraStoryPlanner:
         self.jira_project_key = jira_project_key
         self.dry_run = dry_run
         self.llm_model = llm_model
+        self.include_story_points = include_story_points
         self.jira_kwargs = jira_kwargs
 
         # Load Jira credentials from application settings
@@ -102,11 +107,17 @@ class JiraStoryPlanner:
         """
         from moonmind.schemas.chat_models import Message
 
+        fields = ["summary", "description", "issue_type"]
+        if self.include_story_points:
+            fields.append("story_points")
+        fields.append("labels")
+
+        field_list = ", ".join(f"'{f}'" for f in fields)
+
         system_prompt = (
             "You are a Jira planning assistant. "
             "Return ONLY a JSON array of issues using the fields "
-            "'summary', 'description', 'issue_type', 'story_points', and "
-            "'labels'."
+            f"{field_list}."
         )
 
         return [
@@ -344,7 +355,9 @@ class JiraStoryPlanner:
             return drafts
 
         jira = self.jira_client or self._get_jira_client(**self.jira_kwargs)
-        story_points_field = self._resolve_story_points_field(jira)
+        story_points_field = None
+        if self.include_story_points:
+            story_points_field = self._resolve_story_points_field(jira)
 
         created: List[StoryDraft] = []
 
@@ -358,7 +371,11 @@ class JiraStoryPlanner:
                     "description": draft.description,
                     "issuetype": {"name": draft.issue_type},
                 }
-                if draft.story_points is not None:
+                if (
+                    self.include_story_points
+                    and story_points_field
+                    and draft.story_points is not None
+                ):
                     fields[story_points_field] = draft.story_points
                 if draft.labels:
                     fields["labels"] = draft.labels
@@ -438,7 +455,8 @@ class JiraStoryPlanner:
                                 error_text = str(e).lower()
                                 # If story points are the problem, retry without them.
                                 if (
-                                    "customfield_10028" in error_text
+                                    self.include_story_points
+                                    and "customfield_10028" in error_text
                                     and story_points_field
                                     in issue_updates[idx]["fields"]
                                 ):
