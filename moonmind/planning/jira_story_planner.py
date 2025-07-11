@@ -112,7 +112,11 @@ class JiraStoryPlanner:
             fields.append("story_points")
         fields.append("labels")
 
-        field_list = ", ".join(f"'{f}'" for f in fields)
+        if self.include_story_points:
+            field_list = ", ".join(f"'{f}'" for f in fields[:-1])
+            field_list += f", and '{fields[-1]}'"
+        else:
+            field_list = ", ".join(f"'{f}'" for f in fields)
 
         system_prompt = (
             "You are a Jira planning assistant. "
