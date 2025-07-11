@@ -43,9 +43,6 @@ def test_post_planner_page_success():
                 "plan_text": "do work",
                 "jira_project_key": "PROJ",
                 "dry_run": "on",
-                "ATLASSIAN_API_KEY": "k",
-                "ATLASSIAN_USERNAME": "u",
-                "ATLASSIAN_URL": "http://j",
             },
         )
     assert response.status_code == 200

@@ -345,8 +345,11 @@ def test_create_issues_http_error(monkeypatch):
 
     with patch.object(planner, "_get_jira_client", return_value=fake_jira):
         with patch.object(planner, "_resolve_story_points_field", return_value="sp"):
-            with pytest.raises(JiraStoryPlannerError):
-                planner._create_issues(drafts)
+            result = planner._create_issues(drafts)
+
+    assert result[0].key is None
+    fake_jira.create_issues.assert_called_once()
+    fake_jira.create_issue.assert_called_once()
 
 
 def test_plan_logs_metrics(monkeypatch, caplog):

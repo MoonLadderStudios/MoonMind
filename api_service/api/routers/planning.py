@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Request
@@ -8,8 +7,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from moonmind.planning import (JiraStoryPlanner, JiraStoryPlannerError,
-                               StoryDraft)
+from moonmind.planning import (
+    JiraStoryPlanner,
+    JiraStoryPlannerError,
+    StoryDraft,
+)
 
 router = APIRouter()
 
@@ -42,7 +44,12 @@ async def plan_jira_stories(request: JiraPlanRequest):
 async def get_jira_planner_page(request: Request):
     """Render the Jira planning form."""
     return templates.TemplateResponse(
-        "planning.html", {"request": request, "result": None, "message": None}
+        "planning.html",
+        {
+            "request": request,
+            "result": None,
+            "message": None,
+        },
     )
 
 
@@ -53,11 +60,6 @@ async def handle_jira_planner_form(request: Request):
     plan_text = form_data.get("plan_text", "")
     jira_project_key = form_data.get("jira_project_key", "")
     dry_run = form_data.get("dry_run") not in (None, "", "false", "off")
-
-    for var in ("ATLASSIAN_API_KEY", "ATLASSIAN_USERNAME", "ATLASSIAN_URL"):
-        val = form_data.get(var)
-        if val:
-            os.environ[var] = val
 
     message = None
     result = None
