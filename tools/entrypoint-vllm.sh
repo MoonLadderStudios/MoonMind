@@ -13,7 +13,7 @@ echo "HF_HOME: ${HF_HOME}"
 # Ensure HF_HOME is respected by Hugging Face tools within VLLM
 export HF_HOME=${HF_HOME:-/root/.cache/huggingface}
 
-python -m vllm.entrypoints.openai.api_server \
+python3 -m vllm.entrypoints.openai.api_server \
     --host 0.0.0.0 \
     --port 8000 \
     --model "${MODEL_NAME}" \
