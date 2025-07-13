@@ -289,6 +289,10 @@ If using the default Ollama container, an NVIDIA GPU with appropriate drivers is
 
 The API container is powered by FastAPI and LangChain, employing Dependency Injection with abstract interfaces to enable modular service selection. It supports both OpenAI-compatible endpoints and the Model Context Protocol, making it versatile for different client applications and AI agents.
 
+## Apps
+
+Apps are higher-level workflows built on top of MoonMind. They can be invoked from the CLI or other tools using the Model Context Protocol. When started with a manifest file, the application loads reader definitions and default settings from YAML, merging them with the existing environment-based configuration.
+
 ## Running the VLLM Service
 
 This project includes a Docker Compose configuration to run a VLLM (Very Large Language Model) service with GPU acceleration, providing an OpenAI-compatible API endpoint.
