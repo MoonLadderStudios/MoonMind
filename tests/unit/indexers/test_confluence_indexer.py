@@ -3,9 +3,9 @@ from unittest.mock import MagicMock, patch
 
 from llama_index.core import ServiceContext, StorageContext
 from llama_index.core.schema import Document  # For creating mock documents
-from llama_index.readers.confluence import (
+from llama_index.readers.confluence import (  # For type hinting if needed, but will be mocked
     ConfluenceReader,
-)  # For type hinting if needed, but will be mocked
+)
 
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 

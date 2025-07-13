@@ -2,11 +2,7 @@ import logging
 import os
 from typing import Dict, Union
 
-from llama_index.core import (
-    Settings,
-    StorageContext,
-    VectorStoreIndex,
-)
+from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 
 # ---------------------------------------------------------------------------

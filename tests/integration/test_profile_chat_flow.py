@@ -47,12 +47,27 @@ async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         with (
-            patch("api_service.api.routers.chat.model_cache.get_model_provider", return_value="OpenAI"),
+            patch(
+                "api_service.api.routers.chat.model_cache.get_model_provider",
+                return_value="OpenAI",
+            ),
             patch("api_service.api.routers.chat.AsyncOpenAI") as mock_ai,
         ):
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(
-                return_value=type("Resp", (), {"choices": [type("C", (), {"message": type("M", (), {"content": "ok"})()})], "model": "gpt", "usage": None})()
+                return_value=type(
+                    "Resp",
+                    (),
+                    {
+                        "choices": [
+                            type(
+                                "C", (), {"message": type("M", (), {"content": "ok"})()}
+                            )
+                        ],
+                        "model": "gpt",
+                        "usage": None,
+                    },
+                )()
             )
             mock_ai.return_value = mock_client
             payload = {

@@ -1,13 +1,13 @@
 import uuid
-import pytest
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.services.profile_service import ProfileService
-from api_service.db.models import UserProfile
 from api_service.api.schemas import UserProfileUpdate
+from api_service.db.models import UserProfile
+from api_service.services.profile_service import ProfileService
 
 
 @pytest.mark.asyncio

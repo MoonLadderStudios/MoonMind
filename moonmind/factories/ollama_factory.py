@@ -1,6 +1,8 @@
 import logging
+from typing import Any, Dict, List
+
 import httpx
-from typing import Dict, Any, List
+
 from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)

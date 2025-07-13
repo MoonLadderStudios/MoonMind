@@ -1,18 +1,21 @@
-import uuid
 import asyncio
+import uuid
 from typing import AsyncGenerator, Optional
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
 from fastapi_users import exceptions as fastapi_users_exceptions
 from fastapi_users import schemas
-from fastapi_users.authentication import (AuthenticationBackend,
-                                          BearerTransport, JWTStrategy)
+from fastapi_users.authentication import (
+    AuthenticationBackend,
+    BearerTransport,
+    JWTStrategy,
+)
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.base import get_async_session
 from api_service.db import base as db_base
+from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
@@ -48,7 +51,10 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         asyncio.create_task(self._ensure_profile(user))
 
     async def on_after_login(
-        self, user: User, request: Optional[Request] = None, response: Optional[Response] = None
+        self,
+        user: User,
+        request: Optional[Request] = None,
+        response: Optional[Response] = None,
     ) -> None:
         # Ensure the user has a profile on first login
         asyncio.create_task(self._ensure_profile(user))
@@ -71,11 +77,14 @@ async def get_user_db(session: get_async_session = Depends(get_async_session)):
 async def get_user_manager(user_db: SQLAlchemyUserDatabase = Depends(get_user_db)):
     yield UserManager(user_db)
 
+
 from contextlib import asynccontextmanager
 
 
 @asynccontextmanager
-async def get_user_manager_context(db_session: AsyncSession) -> AsyncGenerator[UserManager, None]:
+async def get_user_manager_context(
+    db_session: AsyncSession,
+) -> AsyncGenerator[UserManager, None]:
     """Context manager for UserManager."""
     # Create a SQLAlchemyUserDatabase instance for the current session
     user_db = SQLAlchemyUserDatabase(db_session, User)
@@ -96,19 +105,21 @@ async def get_or_create_default_user(
     Retrieves or creates the default user if AUTH_PROVIDER is "disabled".
     Falls back to built-in default ID and email unless overridden in settings.
     """
-    default_user_uuid = uuid.UUID(
-        settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-    )
+    default_user_uuid = uuid.UUID(settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
     default_email = settings.oidc.DEFAULT_USER_EMAIL or _DEFAULT_USER_EMAIL
-    default_password = settings.oidc.DEFAULT_USER_PASSWORD # Can be None if not set, UserManager handles it
+    default_password = (
+        settings.oidc.DEFAULT_USER_PASSWORD
+    )  # Can be None if not set, UserManager handles it
 
     try:
         # Attempt to get user by ID first
         user = await user_manager.get(default_user_uuid)
         if user:
             return user
-    except Exception: # Catch potential errors if user_manager.get fails for non-existent user (though it usually returns None)
-        pass # User not found by ID, proceed to check by email or create
+    except (
+        Exception
+    ):  # Catch potential errors if user_manager.get fails for non-existent user (though it usually returns None)
+        pass  # User not found by ID, proceed to check by email or create
 
     # Attempt to get user by email if not found by ID
     # This handles cases where ID might change or not be the primary lookup for creation path
@@ -120,13 +131,15 @@ async def get_or_create_default_user(
             # Ideally, ID should be authoritative.
             if user_by_email.id != default_user_uuid:
                 # Log a warning about ID mismatch if logging is available
-                print(f"Warning: Default user email {default_email} exists with ID {user_by_email.id}, but expected ID {default_user_uuid}.")
+                print(
+                    f"Warning: Default user email {default_email} exists with ID {user_by_email.id}, but expected ID {default_user_uuid}."
+                )
                 # Potentially update the existing user's ID if that's desired and feasible,
                 # or raise an error. For now, we'll return the user found by email.
-                pass # Or handle more robustly
+                pass  # Or handle more robustly
             return user_by_email
     except Exception:
-        pass # User not found by email, proceed to create
+        pass  # User not found by email, proceed to create
 
     # If user not found by ID or email, create them
     user_create_data = {
@@ -167,7 +180,7 @@ async def get_or_create_default_user(
                 f"A user with email {default_email} already exists but with a different ID ({existing_user_by_email.id}) than the configured DEFAULT_USER_ID ({default_user_uuid})."
             )
         elif existing_user_by_email and existing_user_by_email.id == default_user_uuid:
-            return existing_user_by_email # Should have been caught by user_manager.get(default_user_uuid)
+            return existing_user_by_email  # Should have been caught by user_manager.get(default_user_uuid)
     except fastapi_users_exceptions.UserNotExists:
         # User doesn't exist by email, which is expected for new setup
         pass
@@ -183,11 +196,11 @@ async def get_or_create_default_user(
         email=default_email,
         hashed_password=hashed_password,
         is_active=True,
-        is_superuser=False, # Default user is not superuser unless specified
+        is_superuser=False,  # Default user is not superuser unless specified
         is_verified=True,
         # oidc_provider and oidc_subject can be null or set to 'disabled_auth_default'
         oidc_provider="default",
-        oidc_subject=str(default_user_uuid)
+        oidc_subject=str(default_user_uuid),
     )
     db_session.add(user)
     try:
@@ -198,7 +211,9 @@ async def get_or_create_default_user(
         await db_session.rollback()
         # Log error details here
         print(f"Error creating default user: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not create default user: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Could not create default user: {e}"
+        )
 
 
 bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")

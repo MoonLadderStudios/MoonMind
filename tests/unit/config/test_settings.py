@@ -1,4 +1,3 @@
-
 import pytest
 from pydantic import ValidationError
 
@@ -6,9 +5,9 @@ from moonmind.config.settings import (
     AppSettings,
     AtlassianSettings,
     GoogleSettings,
+    OIDCSettings,
     OllamaSettings,
     OpenAISettings,
-    OIDCSettings,
 )
 
 

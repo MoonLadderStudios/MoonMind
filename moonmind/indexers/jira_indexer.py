@@ -1,14 +1,14 @@
 import logging
-from typing import Dict, Union, Optional
+from typing import Dict, Optional, Union
 
 # LlamaIndex core imports
 from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 
 # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)
-from llama_index.readers.jira import (
+from llama_index.readers.jira import (  # Assuming it's directly available, adjust if it's like llama_index.readers.jira.base.JiraReader or from an integration package
     JiraReader,
-)  # Assuming it's directly available, adjust if it's like llama_index.readers.jira.base.JiraReader or from an integration package
+)
 
 
 class JiraIndexer:
@@ -87,7 +87,9 @@ class JiraIndexer:
 
         try:
             node_parser = service_context.node_parser
-        except AttributeError:  # Fallback if node_parser is not directly on Settings (older LlamaIndex or custom setup)
+        except (
+            AttributeError
+        ):  # Fallback if node_parser is not directly on Settings (older LlamaIndex or custom setup)
             self.logger.warning(
                 "service_context.node_parser not found, falling back to SimpleNodeParser.from_defaults()"
             )

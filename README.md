@@ -49,6 +49,20 @@ docker-compose down
 
 This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration (e.g., without Qdrant or with different services), you might use `docker-compose.dev.yaml` or other specific compose files.
 
+## Development
+MoonMind relies on `pre-commit` to enforce formatting and linting. Install the hooks after cloning:
+
+```bash
+pre-commit install
+```
+
+Attempting to commit with style violations will fail:
+
+```bash
+$ git commit -am "msg"
+isort....................................................................Failed
+```
+
 ## Design Principles
 1. One-click deployment with smart defaults
 2. Powerful runtime configurability

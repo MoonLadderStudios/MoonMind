@@ -10,6 +10,7 @@ from readmeai.core.pipeline import readme_agent
 
 logger = logging.getLogger(__name__)
 
+
 class ReadmeAiGenerator:
     """
     A wrapper class to programmatically invoke the readme-ai library
@@ -42,7 +43,9 @@ class ReadmeAiGenerator:
         logger.info(f"Starting README generation for {repo_path} using readme-ai.")
 
         # Use a temporary file for the output
-        with tempfile.NamedTemporaryFile(mode='w+', suffix=".md", delete=False) as temp_output:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".md", delete=False
+        ) as temp_output:
             output_path = temp_output.name
 
         output_path_str = str(output_path)
@@ -71,20 +74,26 @@ class ReadmeAiGenerator:
                     config_loader.config.llm.api_key = self.config["api_key"]
                 # Ollama typically doesn't use an API key
 
-            logger.debug(f"readme-ai config: repository={repo_path}, model={config_loader.config.llm.model}, provider={config_loader.config.llm.api}")
+            logger.debug(
+                f"readme-ai config: repository={repo_path}, model={config_loader.config.llm.model}, provider={config_loader.config.llm.api}"
+            )
 
             # Use asyncio.to_thread to run the synchronous readme_agent function
             await asyncio.to_thread(readme_agent, config_loader, output_path_str)
 
             # Read the content from the output file
-            with open(output_path_str, 'r', encoding='utf-8') as f:
+            with open(output_path_str, "r", encoding="utf-8") as f:
                 readme_content = f.read()
 
-            logger.info(f"Successfully generated README for {repo_path} at {output_path_str}.")
+            logger.info(
+                f"Successfully generated README for {repo_path} at {output_path_str}."
+            )
             return readme_content
 
         except Exception as e:
-            logger.exception(f"An error occurred while running readme-ai for {repo_path}: {e}")
+            logger.exception(
+                f"An error occurred while running readme-ai for {repo_path}: {e}"
+            )
             return None
 
         finally:
@@ -94,4 +103,6 @@ class ReadmeAiGenerator:
                 temp_file_path.unlink()
                 logger.debug(f"Temporary file {output_path_str} deleted.")
             else:
-                logger.debug(f"Temporary file {output_path_str} not found for deletion.")
+                logger.debug(
+                    f"Temporary file {output_path_str} not found for deletion."
+                )

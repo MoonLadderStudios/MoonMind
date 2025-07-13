@@ -1,5 +1,7 @@
 import logging
+
 import openai
+
 from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)

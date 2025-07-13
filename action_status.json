@@ -1,0 +1,51 @@
+{
+  "git_context": {
+    "head_branch": null,
+    "head_sha": "67c810853f9f1709769880d5689382044bf2cafc"
+  },
+  "repository": {
+    "owner": "MoonLadderStudios",
+    "name": "MoonMind"
+  },
+  "workflow_run": {
+    "id": 16245606507,
+    "workflow_name": "Add pre-commit and CI gates",
+    "url": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/16245606507",
+    "status": "completed",
+    "conclusion": "failure"
+  },
+  "failed_jobs": [
+    {
+      "id": 45868098786,
+      "name": "test",
+      "html_url": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/16245606507/job/45868098786",
+      "conclusion": "failure",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "steps": [
+        {
+          "name": "Analysis of test",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 1,
+          "error_summary": {
+            "error_clusters": [
+              {
+                "log_context": [
+                  "Failed to retrieve logs for job: test"
+                ],
+                "errors": [
+                  {
+                    "log_line_number": 1,
+                    "raw_message": "Log content unavailable."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -18,7 +18,9 @@ class UserProfileBaseSchema(BaseModel):
     # Add other profile fields here as they are defined in the UserProfile model
 
 
-class UserProfileRead(UserProfileBaseSchema):  # Renamed UserProfileSchema to UserProfileRead
+class UserProfileRead(
+    UserProfileBaseSchema
+):  # Renamed UserProfileSchema to UserProfileRead
     id: int  # Assuming 'id' is the primary key of UserProfile model
     user_id: uuid.UUID
     # google_api_key is inherited from UserProfileBaseSchema
@@ -51,6 +53,7 @@ class UserProfileCreateSchema(UserProfileBaseSchema):
 
 class ApiKeyStatus(BaseModel):
     """Schema for displaying API key status."""
+
     model_config = ConfigDict(from_attributes=True)
 
     openai_api_key_set: bool = False

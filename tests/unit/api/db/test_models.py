@@ -39,9 +39,9 @@ def test_user_model_columns():
         or "UUID" in id_type_str
         or "CHAR(36)" in id_type_str  # GUID often renders as CHAR(36)
     )
-    assert is_uuid_like, (
-        f"Expected UUID-like type, got {type(id_type)} with string representation '{id_type_str}'"
-    )
+    assert (
+        is_uuid_like
+    ), f"Expected UUID-like type, got {type(id_type)} with string representation '{id_type_str}'"
 
     assert inspector.columns["email"].type.python_type is str
     assert inspector.columns["hashed_password"].type.python_type is str
