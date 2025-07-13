@@ -6,8 +6,8 @@ from llama_index.core import ServiceContext, StorageContext
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.schema import Document  # For creating mock documents
 
-from moonmind.indexers.github_indexer import GitHubIndexer
 from moonmind.config.settings import GitHubSettings
+from moonmind.indexers.github_indexer import GitHubIndexer
 
 
 @patch(

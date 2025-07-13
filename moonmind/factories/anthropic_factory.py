@@ -1,5 +1,5 @@
-from llama_index.llms.anthropic import Anthropic
 from llama_index.core.llms.llm import LLM
+from llama_index.llms.anthropic import Anthropic
 
 from moonmind.config.settings import settings
 
@@ -26,7 +26,9 @@ class AnthropicFactory:
             ValueError: If the Anthropic API key is not configured (and not provided).
         """
         key_to_use = api_key if api_key else settings.anthropic.anthropic_api_key
-        name_to_use = model_name if model_name else settings.anthropic.anthropic_chat_model
+        name_to_use = (
+            model_name if model_name else settings.anthropic.anthropic_chat_model
+        )
 
         if not key_to_use:
             raise ValueError("Anthropic API key not configured and not provided.")

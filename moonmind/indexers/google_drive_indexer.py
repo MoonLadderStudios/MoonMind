@@ -1,10 +1,10 @@
 import logging
-from typing import List, Optional, Dict, Union
+from typing import Dict, List, Optional, Union
 
-from llama_index.core import VectorStoreIndex, Settings, StorageContext
-from llama_index.readers.google import GoogleDriveReader
-from llama_index.core.node_parser import SimpleNodeParser
 from fastapi import HTTPException
+from llama_index.core import Settings, StorageContext, VectorStoreIndex
+from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.readers.google import GoogleDriveReader
 
 
 class GoogleDriveIndexer:

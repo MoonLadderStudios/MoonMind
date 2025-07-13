@@ -5,7 +5,7 @@ from qdrant_client import QdrantClient
 client = QdrantClient(host="192.168.0.3", port=6333)
 
 # if an arg is passed, use it as the collection name, otherwise use "kobi"
-import sys # noqa E402
+import sys  # noqa E402
 
 if len(sys.argv) > 1:
     collection_name = sys.argv[1]

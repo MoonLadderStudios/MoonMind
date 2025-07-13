@@ -1,15 +1,15 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
-
-from qdrant_client.http.models import (
-    Distance,
-)  # For mocking, if needed for detailed get_collection mock
-
-from api_service.main import app
 
 # client = TestClient(app) # Removed global client
 from llama_index.core.embeddings import BaseEmbedding  # For spec (corrected path)
+from qdrant_client.http.models import (  # For mocking, if needed for detailed get_collection mock
+    Distance,
+)
+
+from api_service.main import app
 
 
 @pytest.fixture
@@ -40,8 +40,6 @@ def client():
         # Now, when TestClient(app) starts up, it will use our mocked build_embed_model
         with TestClient(app) as c:
             yield c
-
-
 
 
 @pytest.fixture(autouse=True)  # Apply to all tests in this module

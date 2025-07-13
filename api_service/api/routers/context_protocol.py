@@ -68,7 +68,7 @@ async def process_context(
     request: ContextRequest,
     vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
     llama_settings: LlamaSettings = Depends(get_service_context),
-    _user: User = Depends(get_current_user()), # Protected
+    _user: User = Depends(get_current_user()),  # Protected
 ):
     try:
         user_query = ""

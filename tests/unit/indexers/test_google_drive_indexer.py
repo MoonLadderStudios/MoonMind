@@ -2,11 +2,11 @@ import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
 from llama_index.core import ServiceContext, StorageContext
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.schema import Document  # For creating mock documents
 
-from fastapi import HTTPException
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 
 

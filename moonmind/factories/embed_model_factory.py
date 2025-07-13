@@ -12,12 +12,17 @@ def build_embed_model(settings: AppSettings, google_api_key: str | None = None):
     )
 
     if provider == "ollama":
-        return OllamaEmbedding(
-            base_url=settings.ollama.ollama_base_url,
-            model_name=settings.ollama.ollama_embedding_model,
-        ), settings.ollama.ollama_embeddings_dimensions
+        return (
+            OllamaEmbedding(
+                base_url=settings.ollama.ollama_base_url,
+                model_name=settings.ollama.ollama_embedding_model,
+            ),
+            settings.ollama.ollama_embeddings_dimensions,
+        )
     elif provider == "google":
-        key_to_use = google_api_key if google_api_key else settings.google.google_api_key
+        key_to_use = (
+            google_api_key if google_api_key else settings.google.google_api_key
+        )
         if not key_to_use:
             raise ValueError("Google API key is not configured for Google embeddings.")
         return (

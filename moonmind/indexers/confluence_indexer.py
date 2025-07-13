@@ -1,11 +1,7 @@
 import logging
 from typing import Dict, List, Optional, Union
 
-from llama_index.core import (
-    Settings,
-    StorageContext,
-    VectorStoreIndex,
-)
+from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
 from llama_index.readers.confluence import ConfluenceReader
 
@@ -167,7 +163,8 @@ class ConfluenceIndexer:
                     break
 
                 if (
-                    len(batch_docs) < num_to_request_this_batch # Corrected: compare with the number requested
+                    len(batch_docs)
+                    < num_to_request_this_batch  # Corrected: compare with the number requested
                 ):  # Assuming this means last page from Confluence itself
                     self.logger.info(
                         "Final batch fetched based on returned count vs limit (requested less than batch size or last page)."
