@@ -1,7 +1,7 @@
 import pytest
 
+from moonmind.manifest import InterpolationError, interpolate
 from moonmind.schemas import Manifest
-from moonmind.manifest import interpolate, InterpolationError
 
 
 def test_interpolate_success():

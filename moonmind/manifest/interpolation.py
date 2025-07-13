@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
-from moonmind.schemas import Manifest, AuthItem
+from moonmind.schemas import AuthItem, Manifest
 
 
 class InterpolationError(Exception):
