@@ -4,17 +4,18 @@ import time
 
 import pytest
 import uvicorn
-from playwright.sync_api import sync_playwright
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if not os.getenv("RUN_E2E_TESTS"):
+    pytest.skip("E2E tests disabled", allow_module_level=True)
+else:
+    from playwright.sync_api import sync_playwright
 
 from api_service.api.routers.profile import get_profile_service
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.main import app as main_app
-
-if not os.getenv("RUN_E2E_TESTS"):
-    pytest.skip("E2E tests disabled", allow_module_level=True)
 
 
 class DummyProfileService:
