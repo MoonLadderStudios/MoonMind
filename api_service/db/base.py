@@ -1,8 +1,9 @@
-from __future__ import annotations # Ensure this is at the very top
+from __future__ import annotations  # Ensure this is at the very top
+
+from collections.abc import AsyncGenerator  # Use collections.abc for Python 3.9+
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from collections.abc import AsyncGenerator # Use collections.abc for Python 3.9+
 
 from moonmind.config.settings import settings
 
@@ -14,9 +15,11 @@ async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit
 
 from contextlib import asynccontextmanager
 
+
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
         yield session
+
 
 @asynccontextmanager
 async def get_async_session_context() -> AsyncGenerator[AsyncSession, None]:

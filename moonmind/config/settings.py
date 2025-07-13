@@ -208,12 +208,28 @@ class OIDCSettings(BaseSettings):
         description="Authentication provider: 'disabled' or 'keycloak'.",
         env="AUTH_PROVIDER",
     )
-    OIDC_ISSUER_URL: Optional[str] = Field(None, env="OIDC_ISSUER_URL", description="URL of the OIDC provider, e.g., Keycloak.")
+    OIDC_ISSUER_URL: Optional[str] = Field(
+        None,
+        env="OIDC_ISSUER_URL",
+        description="URL of the OIDC provider, e.g., Keycloak.",
+    )
     OIDC_CLIENT_ID: Optional[str] = Field(None, env="OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET: Optional[str] = Field(None, env="OIDC_CLIENT_SECRET")
-    DEFAULT_USER_ID: Optional[str] = Field(None, env="DEFAULT_USER_ID", description="Default user ID for 'disabled' auth_provider mode.")
-    DEFAULT_USER_EMAIL: Optional[str] = Field(None, env="DEFAULT_USER_EMAIL", description="Default user email for 'disabled' auth_provider mode.")
-    DEFAULT_USER_PASSWORD: Optional[str] = Field("default_password_please_change", env="DEFAULT_USER_PASSWORD", description="Default user password for 'disabled' auth_provider mode. Used for user creation if needed.")
+    DEFAULT_USER_ID: Optional[str] = Field(
+        None,
+        env="DEFAULT_USER_ID",
+        description="Default user ID for 'disabled' auth_provider mode.",
+    )
+    DEFAULT_USER_EMAIL: Optional[str] = Field(
+        None,
+        env="DEFAULT_USER_EMAIL",
+        description="Default user email for 'disabled' auth_provider mode.",
+    )
+    DEFAULT_USER_PASSWORD: Optional[str] = Field(
+        "default_password_please_change",
+        env="DEFAULT_USER_PASSWORD",
+        description="Default user password for 'disabled' auth_provider mode. Used for user creation if needed.",
+    )
 
     model_config = SettingsConfigDict(env_prefix="")
 

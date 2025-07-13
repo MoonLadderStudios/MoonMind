@@ -1,13 +1,13 @@
-import unittest
-from unittest.mock import MagicMock, patch, call  # Removed PropertyMock
 import logging  # For silencing logger if needed, or passing a mock logger
+import unittest
+from unittest.mock import MagicMock, call, patch  # Removed PropertyMock
 
 from llama_index.core import Settings, StorageContext  # Use Settings
 from llama_index.core.schema import Document
 
-# Assuming JiraReader is in llama_index.readers.jira. If it's elsewhere, adjust path.
-
 from moonmind.indexers.jira_indexer import JiraIndexer
+
+# Assuming JiraReader is in llama_index.readers.jira. If it's elsewhere, adjust path.
 
 
 class TestJiraIndexer(unittest.TestCase):
@@ -223,7 +223,9 @@ class TestJiraIndexer(unittest.TestCase):
         mock_index_instance = mock_from_documents.return_value
         mock_index_instance.insert_nodes = MagicMock()
 
-        self.mock_jira_reader_instance.load_data.return_value = []  # No documents returned
+        self.mock_jira_reader_instance.load_data.return_value = (
+            []
+        )  # No documents returned
 
         self.mock_settings_obj.node_parser.get_nodes_from_documents.return_value = []
 

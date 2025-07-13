@@ -1,20 +1,23 @@
 import asyncio
 import logging
-import os
 from pathlib import Path
 
 # Configure basic logging for the example
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Adjust the Python path to include the project root if running from the 'tools' directory
 # This allows importing moonmind.summarization.readme_generator
 import sys
+
 tools_dir = Path(__file__).parent.resolve()
 project_root = tools_dir.parent
 sys.path.insert(0, str(project_root))
 
 from moonmind.summarization.readme_generator import ReadmeAiGenerator
+
 
 async def main():
     """
@@ -25,7 +28,7 @@ async def main():
     # Define the path to the repository for which to generate a README.
     # For this example, we'll try to generate a README for the MoonMind project itself.
     # Assumes this script is run from the 'tools' directory or project root.
-    repo_to_summarize = project_root # Path to the MoonMind repository
+    repo_to_summarize = project_root  # Path to the MoonMind repository
 
     # Ensure the path is an absolute path string
     repo_path_str = str(repo_to_summarize.resolve())
@@ -38,8 +41,8 @@ async def main():
         # "header_style": "classic", # Example, if supported
         # "llm_provider": "ollama", # Example, if supported and configured in readme-ai
         # "api_key": "YOUR_API_KEY_IF_NEEDED" # Example for specific LLM providers
-        "model": "gpt-3.5-turbo", # Specify a model if required by readme-ai or if you want a specific one
-        "tree_depth": "2", # Limit tree depth for faster processing in test
+        "model": "gpt-3.5-turbo",  # Specify a model if required by readme-ai or if you want a specific one
+        "tree_depth": "2",  # Limit tree depth for faster processing in test
     }
 
     # Check for OpenAI API key if 'openai' is the intended LLM provider (default for readme-ai)
@@ -49,7 +52,9 @@ async def main():
 
     # It's good practice to ensure the target path exists
     if not Path(repo_path_str).is_dir():
-        logger.error(f"Repository path {repo_path_str} does not exist or is not a directory.")
+        logger.error(
+            f"Repository path {repo_path_str} does not exist or is not a directory."
+        )
         return
 
     generator = ReadmeAiGenerator(config=custom_config)
@@ -75,6 +80,7 @@ async def main():
             logger.error(f"Failed to save the full README to file: {e}")
     else:
         logger.error("Failed to generate README.md using ReadmeAiGenerator.")
+
 
 if __name__ == "__main__":
     # To run this async function:

@@ -1,4 +1,5 @@
 from typing import List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -50,7 +51,9 @@ class ChatCompletionResponse(BaseModel):
     choices: List[Choice]
     usage: Optional[Usage] = None
 
+
 from enum import Enum
+
 
 class ModelProvider(Enum):
     GOOGLE = "google"

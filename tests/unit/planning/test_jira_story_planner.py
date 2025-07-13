@@ -1,14 +1,11 @@
-import logging
 import hashlib
-import pytest
+import logging
 from unittest.mock import MagicMock, patch
+
+import pytest
 from requests.exceptions import HTTPError
 
-from moonmind.planning import (
-    JiraStoryPlanner,
-    JiraStoryPlannerError,
-    StoryDraft,
-)
+from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft
 
 
 def test_init_requires_mandatory_fields():
@@ -67,9 +64,7 @@ def test_build_prompt_no_story_points(monkeypatch):
 
     from moonmind.schemas.chat_models import Message
 
-    expected_system = (
-        "You are a Jira planning assistant. Return ONLY a JSON array of issues using the fields 'summary', 'description', 'issue_type', 'labels'."
-    )
+    expected_system = "You are a Jira planning assistant. Return ONLY a JSON array of issues using the fields 'summary', 'description', 'issue_type', 'labels'."
 
     assert messages == [
         Message(role="system", content=expected_system),
@@ -150,7 +145,7 @@ def test_call_llm_json_code_block(monkeypatch):
 
     response_text = (
         "```json\n"
-        "[{\"summary\": \"Add login\", \"description\": \"desc\", \"issue_type\": \"Story\", \"story_points\": 3, \"labels\": [\"auth\"]}]\n"
+        '[{"summary": "Add login", "description": "desc", "issue_type": "Story", "story_points": 3, "labels": ["auth"]}]\n'
         "```"
     )
     mock_model = MagicMock()
@@ -239,7 +234,11 @@ def test_resolve_story_points_field(monkeypatch):
 
     fake_jira = MagicMock()
     fake_jira.get_all_fields.return_value = [
-        {"id": "customfield_10016", "name": "Story Points", "schema": {"type": "number"}}
+        {
+            "id": "customfield_10016",
+            "name": "Story Points",
+            "schema": {"type": "number"},
+        }
     ]
 
     field_id = planner._resolve_story_points_field(fake_jira)
@@ -271,9 +270,7 @@ def test_create_issues_dry_run(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
 
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=True)
-    drafts = [
-        StoryDraft(summary="s", description="d", issue_type="Task")
-    ]
+    drafts = [StoryDraft(summary="s", description="d", issue_type="Task")]
 
     with patch.object(planner, "_get_jira_client") as mock_client:
         result = planner._create_issues(drafts)
@@ -288,14 +285,21 @@ def test_create_issues_skip_story_points(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
 
     planner = JiraStoryPlanner(
-        plan_text="plan", jira_project_key="PROJ", dry_run=False, include_story_points=False
+        plan_text="plan",
+        jira_project_key="PROJ",
+        dry_run=False,
+        include_story_points=False,
     )
     drafts = [StoryDraft(summary="s", description="d", issue_type="Task")]
 
     fake_jira = MagicMock()
 
-    with patch.object(planner, "_get_jira_client", return_value=fake_jira) as mock_client, \
-         patch.object(planner, "_resolve_story_points_field") as mock_sp:
+    with (
+        patch.object(
+            planner, "_get_jira_client", return_value=fake_jira
+        ) as mock_client,
+        patch.object(planner, "_resolve_story_points_field") as mock_sp,
+    ):
         result = planner._create_issues(drafts)
 
     mock_client.assert_called_once()
@@ -409,8 +413,10 @@ def test_plan_logs_metrics(monkeypatch, caplog):
 
     draft = StoryDraft(summary="s", description="d", issue_type="Task", key="PROJ-1")
 
-    with patch.object(planner, "_call_llm", return_value=[draft]) as mock_call_llm, \
-         patch.object(planner, "_create_issues", return_value=[draft]) as mock_create:
+    with (
+        patch.object(planner, "_call_llm", return_value=[draft]) as mock_call_llm,
+        patch.object(planner, "_create_issues", return_value=[draft]) as mock_create,
+    ):
         with caplog.at_level(logging.INFO):
             result = planner.plan()
 
@@ -418,7 +424,9 @@ def test_plan_logs_metrics(monkeypatch, caplog):
     mock_call_llm.assert_called_once()
     mock_create.assert_called_once()
 
-    record = next(rec for rec in caplog.records if rec.message == "jira_story_planner.completed")
+    record = next(
+        rec for rec in caplog.records if rec.message == "jira_story_planner.completed"
+    )
     assert record.levelno == logging.INFO
     assert record.prompt_hash == expected_hash
     assert record.created_issue_keys == ["PROJ-1"]

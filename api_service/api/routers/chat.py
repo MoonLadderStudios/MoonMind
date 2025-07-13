@@ -3,9 +3,9 @@ import time
 from typing import List, Optional
 from uuid import uuid4
 
-import openai
 # Multi-provider imports from main branch
 from fastapi import APIRouter, Depends, HTTPException
+
 # RAG imports from feat/rag branch
 from llama_index.core import Settings as LlamaSettings
 from llama_index.core import VectorStoreIndex
@@ -22,14 +22,17 @@ from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.ollama_factory import (chat_with_ollama,
-                                               get_ollama_model)
+from moonmind.factories.ollama_factory import chat_with_ollama, get_ollama_model
 from moonmind.factories.openai_factory import get_openai_model
 from moonmind.models_cache import model_cache
 from moonmind.rag.retriever import QdrantRAG
-from moonmind.schemas.chat_models import (ChatCompletionRequest,
-                                          ChatCompletionResponse, Choice,
-                                          ChoiceMessage, Usage)
+from moonmind.schemas.chat_models import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    Choice,
+    ChoiceMessage,
+    Usage,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

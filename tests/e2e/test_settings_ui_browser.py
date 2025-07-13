@@ -6,11 +6,11 @@ import uvicorn
 from playwright.sync_api import sync_playwright
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.main import app as main_app
+from api_service.api.routers.profile import get_profile_service
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.api.routers.profile import get_profile_service
 from api_service.db.models import User
+from api_service.main import app as main_app
 
 
 class DummyProfileService:
@@ -35,7 +35,8 @@ def server():
     dummy_service = DummyProfileService()
 
     main_app.dependency_overrides[get_current_user] = lambda: test_user
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     async_session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
     main_app.dependency_overrides[get_async_session] = lambda: async_session_maker()

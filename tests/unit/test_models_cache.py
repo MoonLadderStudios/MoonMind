@@ -1,13 +1,13 @@
 import logging
 import time
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-from moonmind.models_cache import ModelCache, force_refresh_model_cache
 from moonmind.config import settings  # To mock API keys
-from moonmind.config.settings import (
+from moonmind.config.settings import (  # Import AppSettings class for patching
     AppSettings,
-)  # Import AppSettings class for patching
+)
+from moonmind.models_cache import ModelCache, force_refresh_model_cache
 
 # Configure basic logging for tests to see warnings/errors if needed
 logging.basicConfig(level=logging.INFO)
@@ -19,13 +19,12 @@ logging.basicConfig(level=logging.INFO)
 class TestModelCache(unittest.TestCase):
     def setUp(self):
         from threading import Lock  # Ensure Lock is imported if not already
-        # from moonmind.models_cache import ModelCache # ModelCache is already imported in this file
 
+        # from moonmind.models_cache import ModelCache # ModelCache is already imported in this file
         # Mock ModelCache.__init__ to do nothing - THIS PATCH IS NOW REMOVED/COMMENTED
         # def mock_model_cache_init(self_instance, *args, **kwargs):
         #     # print("DEBUG: Mocked ModelCache.__init__ called, truly doing nothing now.") # Optional
         #     pass
-
         # self.model_cache_init_patch = patch('moonmind.models_cache.ModelCache.__init__', side_effect=mock_model_cache_init)
         # self.mocked_init = self.model_cache_init_patch.start()
 
@@ -139,7 +138,9 @@ class TestModelCache(unittest.TestCase):
             None  # Ensure no side effect like raising an error# Patch time.sleep
         )
         self.time_sleep_patch = patch("time.sleep", MagicMock())
-        self.mock_time_sleep = self.time_sleep_patch.start()  # Patch ModelCache._periodic_refresh - but don't use autospec to avoid signature issues
+        self.mock_time_sleep = (
+            self.time_sleep_patch.start()
+        )  # Patch ModelCache._periodic_refresh - but don't use autospec to avoid signature issues
         self.periodic_refresh_patch = patch(
             "moonmind.models_cache.ModelCache._periodic_refresh"
         )

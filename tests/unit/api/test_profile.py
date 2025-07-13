@@ -9,15 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
 
 from api_service.api.constants import MANAGED_PROVIDERS
-from api_service.api.routers.profile import \
-    templates  # Import the templates object to mock it
-from api_service.api.routers.profile import (get_current_user_profile,
-                                             get_profile_management_page,
-                                             get_profile_service,
-                                             handle_profile_update_form,
-                                             update_current_user_profile)
-from api_service.api.schemas import (UserProfileRead, UserProfileReadSanitized,
-                                     UserProfileUpdate)
+from api_service.api.routers.profile import (  # Import the templates object to mock it
+    get_current_user_profile,
+    get_profile_management_page,
+    get_profile_service,
+    handle_profile_update_form,
+    update_current_user_profile,
+)
+from api_service.api.schemas import (
+    UserProfileRead,
+    UserProfileReadSanitized,
+    UserProfileUpdate,
+)
 from api_service.services.profile_service import ProfileService
 
 # Mock the templates object
@@ -369,6 +372,7 @@ async def test_handle_profile_update_form_success_new_key(
     # Arrange
     new_openai_key = "new_test_openai_key"
     new_google_key = "new_test_google_key"
+
     # Mock request.form() to return FormData with the new key
     async def mock_form():
         return FormData(

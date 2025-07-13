@@ -31,11 +31,13 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install -e .
         python -m pip install readmeai~=0.6.0
+    - name: Run pre-commit
+      run: pre-commit run --all-files
     - name: Run pytest unit tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        python -m pytest tests/unit
+        python -m pytest -q
 
   # integration:
   #   runs-on: ubuntu-latest
