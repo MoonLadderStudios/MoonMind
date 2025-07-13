@@ -1,0 +1,164 @@
+{
+  "$defs": {
+    "AuthItem": {
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "secretRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AuthItem",
+      "type": "object"
+    },
+    "Defaults": {
+      "additionalProperties": true,
+      "title": "Defaults",
+      "type": "object"
+    },
+    "Reader": {
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "init": {
+          "additionalProperties": true,
+          "title": "Init",
+          "type": "object"
+        },
+        "load_data": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Load Data",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Reader",
+      "type": "object"
+    },
+    "SecretRef": {
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "extra": {
+          "additionalProperties": true,
+          "title": "Extra",
+          "type": "object"
+        }
+      },
+      "required": [
+        "provider",
+        "key"
+      ],
+      "title": "SecretRef",
+      "type": "object"
+    },
+    "Spec": {
+      "properties": {
+        "defaults": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Defaults"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "auth": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AuthItem"
+          },
+          "title": "Auth",
+          "type": "object"
+        },
+        "readers": {
+          "items": {
+            "$ref": "#/$defs/Reader"
+          },
+          "title": "Readers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "readers"
+      ],
+      "title": "Spec",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "apiVersion": {
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "spec": {
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

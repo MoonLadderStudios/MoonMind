@@ -511,3 +511,14 @@ To execute the Confluence integration tests, run the following command from the 
 .\tools\test-integration.ps1
 ```
 The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.
+
+## Manifests
+
+Reader configurations can be validated using the `Manifest` schema. For example:
+
+```python
+from moonmind.schemas import Manifest
+manifest = Manifest.model_validate_yaml("samples/github_manifest.yaml")
+```
+
+The JSON Schema can be exported with `export_schema("manifest.schema.json")`.
