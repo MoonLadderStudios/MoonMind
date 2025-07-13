@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, RootModel, model_validator
 
 
 class SecretRef(BaseModel):
@@ -19,13 +19,10 @@ class AuthItem(BaseModel):
     secretRef: Optional[SecretRef] = None
 
     @model_validator(mode="after")
-    def check_xor(cls, values):  # type: ignore[override]
-        if (values.value is None) == (values.secretRef is None):
+    def check_xor(cls, model: "AuthItem") -> "AuthItem":  # type: ignore[override]
+        if (model.value is None) == (model.secretRef is None):
             raise ValueError("Exactly one of value or secretRef must be provided")
-        return values
-
-
-from pydantic import RootModel
+        return model
 
 
 class Defaults(RootModel[Dict[str, Any]]):
