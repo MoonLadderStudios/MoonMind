@@ -13,6 +13,8 @@ from api_service.auth import (
 )
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from api_service.services.profile_service import ProfileService
+from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
 from moonmind.config.settings import settings
 
 
@@ -76,6 +78,15 @@ def get_current_user():
         return SimpleNamespace(id=None, email="stub@example.com")
 
     return _current_user_fallback
+
+
+async def get_auth_manager(
+    db: AsyncSession = Depends(get_async_session),
+) -> AuthProviderManager:
+    """Return an AuthProviderManager wired to the given DB session."""
+    profile_provider = ProfileAuthProvider(db, ProfileService())
+    env_provider = EnvAuthProvider()
+    return AuthProviderManager(profile_provider, env_provider)
 
 
 def get_auth_router():
