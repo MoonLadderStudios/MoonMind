@@ -1,3 +1,5 @@
+import pytest
+
 import moonmind.config as config_module
 from moonmind.config.settings import AppSettings
 from moonmind.manifest.loader import ManifestLoader
@@ -21,7 +23,31 @@ spec:
     monkeypatch.setattr(config_module, "settings", AppSettings())
 
     loader = ManifestLoader(str(manifest_path))
-    manifest = loader.load()
+    manifest, new_settings = loader.load()
 
     assert isinstance(manifest, Manifest)
-    assert config_module.settings.openai.openai_enabled is False
+    assert new_settings.openai.openai_enabled is False
+
+
+def test_manifest_loader_file_not_found():
+    loader = ManifestLoader("/nonexistent/file.yaml")
+    with pytest.raises(FileNotFoundError):
+        loader.load()
+
+
+def test_manifest_loader_invalid_yaml(tmp_path):
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text("::bad_yaml")
+
+    loader = ManifestLoader(str(manifest_path))
+    with pytest.raises(ValueError):
+        loader.load()
+
+
+def test_manifest_loader_validation_error(tmp_path):
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text("invalid: value")
+
+    loader = ManifestLoader(str(manifest_path))
+    with pytest.raises(ValueError):
+        loader.load()

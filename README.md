@@ -291,7 +291,7 @@ The API container is powered by FastAPI and LangChain, employing Dependency Inje
 
 ## Apps
 
-Apps are higher-level workflows built on top of MoonMind. They can be invoked from the CLI or other tools using the Model Context Protocol. When started with a manifest file, the application loads reader definitions and default settings from YAML, merging them with the existing environment-based configuration.
+Apps are higher-level workflows built on top of MoonMind. They can be invoked from the CLI or other tools using the Model Context Protocol. When started with a manifest file, the application uses `ManifestLoader` to read reader definitions and defaults from YAML, returning a new settings instance that merges the manifest values with the environment configuration.
 
 ## Running the VLLM Service
 
