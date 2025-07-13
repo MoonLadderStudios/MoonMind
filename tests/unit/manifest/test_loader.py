@@ -1,6 +1,4 @@
-
-
-import moonmind.config.settings as settings_module
+import moonmind.config as config_module
 from moonmind.config.settings import AppSettings
 from moonmind.manifest.loader import ManifestLoader
 from moonmind.schemas import Manifest
@@ -20,10 +18,10 @@ spec:
     manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(manifest_content)
 
-    monkeypatch.setattr(settings_module, "settings", AppSettings())
+    monkeypatch.setattr(config_module, "settings", AppSettings())
 
     loader = ManifestLoader(str(manifest_path))
     manifest = loader.load()
 
     assert isinstance(manifest, Manifest)
-    assert settings_module.settings.openai.openai_enabled is False
+    assert config_module.settings.openai.openai_enabled is False

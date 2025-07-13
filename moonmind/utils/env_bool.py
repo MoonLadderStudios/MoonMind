@@ -1,4 +1,7 @@
-from distutils.util import strtobool
+try:  # Python < 3.12
+    from distutils.util import strtobool  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback for Python >= 3.12
+    from setuptools._distutils.util import strtobool
 from typing import Any, Optional
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-import moonmind.config.settings as settings_module
+import moonmind.config as settings_module
 from moonmind.config.settings import AppSettings
 from moonmind.schemas import Manifest
 
