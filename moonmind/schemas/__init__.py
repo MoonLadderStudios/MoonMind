@@ -1,10 +1,10 @@
 from .manifest_models import (
-    SecretRef,
     AuthItem,
     Defaults,
-    Reader,
-    Spec,
     Manifest,
+    Reader,
+    SecretRef,
+    Spec,
     export_schema,
 )
 

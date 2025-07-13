@@ -6,7 +6,6 @@ from pydantic import ValidationError
 
 from moonmind.schemas import Manifest, export_schema
 
-
 SAMPLE_PATH = Path("samples/github_manifest.yaml")
 
 
