@@ -1,12 +1,19 @@
-
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
+from sqlalchemy import (  # Added Uuid, String, UniqueConstraint
+    Column,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import DeclarativeBase, relationship
-from sqlalchemy import Column, ForeignKey, Integer, Text, Uuid, String, UniqueConstraint  # Added Uuid, String, UniqueConstraint
 from sqlalchemy_utils import EncryptedType  # Added EncryptedType
 
-from api_service.core.encryption import (
+from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
-)  # Added import for get_encryption_key
+)
 
 
 class Base(DeclarativeBase):
@@ -47,8 +54,12 @@ class UserProfile(Base):
     )  # Changed to Uuid
 
     # Example profile field
-    google_api_key_encrypted = Column(EncryptedType(Text, get_encryption_key), nullable=True)
-    openai_api_key_encrypted = Column(EncryptedType(Text, get_encryption_key), nullable=True)
+    google_api_key_encrypted = Column(
+        EncryptedType(Text, get_encryption_key), nullable=True
+    )
+    openai_api_key_encrypted = Column(
+        EncryptedType(Text, get_encryption_key), nullable=True
+    )
     # Add other provider keys here as needed
 
     user = relationship("User", back_populates="user_profile")

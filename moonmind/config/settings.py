@@ -1,3 +1,4 @@
+import os
 from pathlib import Path  # Added Path
 from typing import Optional  # Keep one Optional import
 
@@ -163,6 +164,18 @@ class AtlassianSettings(BaseSettings):
         super().__init__(**data)
         if self.atlassian_url and self.atlassian_url.startswith("https://https://"):
             self.atlassian_url = self.atlassian_url[8:]
+        # Pydantic does not automatically populate nested models from environment
+        # variables when they are created with ``default_factory``. Explicitly
+        # handle boolean flags for nested Confluence and Jira settings to ensure
+        # environment variables like ``ATLASSIAN_CONFLUENCE_ENABLED`` and
+        # ``ATLASSIAN_JIRA_ENABLED`` are respected.
+        confluence_env = os.getenv("ATLASSIAN_CONFLUENCE_ENABLED")
+        if confluence_env is not None:
+            self.confluence.confluence_enabled = confluence_env.lower() == "true"
+
+        jira_env = os.getenv("ATLASSIAN_JIRA_ENABLED")
+        if jira_env is not None:
+            self.jira.jira_enabled = jira_env.lower() == "true"
 
 
 class QdrantSettings(BaseSettings):
@@ -208,12 +221,28 @@ class OIDCSettings(BaseSettings):
         description="Authentication provider: 'disabled' or 'keycloak'.",
         env="AUTH_PROVIDER",
     )
-    OIDC_ISSUER_URL: Optional[str] = Field(None, env="OIDC_ISSUER_URL", description="URL of the OIDC provider, e.g., Keycloak.")
+    OIDC_ISSUER_URL: Optional[str] = Field(
+        None,
+        env="OIDC_ISSUER_URL",
+        description="URL of the OIDC provider, e.g., Keycloak.",
+    )
     OIDC_CLIENT_ID: Optional[str] = Field(None, env="OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET: Optional[str] = Field(None, env="OIDC_CLIENT_SECRET")
-    DEFAULT_USER_ID: Optional[str] = Field(None, env="DEFAULT_USER_ID", description="Default user ID for 'disabled' auth_provider mode.")
-    DEFAULT_USER_EMAIL: Optional[str] = Field(None, env="DEFAULT_USER_EMAIL", description="Default user email for 'disabled' auth_provider mode.")
-    DEFAULT_USER_PASSWORD: Optional[str] = Field("default_password_please_change", env="DEFAULT_USER_PASSWORD", description="Default user password for 'disabled' auth_provider mode. Used for user creation if needed.")
+    DEFAULT_USER_ID: Optional[str] = Field(
+        None,
+        env="DEFAULT_USER_ID",
+        description="Default user ID for 'disabled' auth_provider mode.",
+    )
+    DEFAULT_USER_EMAIL: Optional[str] = Field(
+        None,
+        env="DEFAULT_USER_EMAIL",
+        description="Default user email for 'disabled' auth_provider mode.",
+    )
+    DEFAULT_USER_PASSWORD: Optional[str] = Field(
+        "default_password_please_change",
+        env="DEFAULT_USER_PASSWORD",
+        description="Default user password for 'disabled' auth_provider mode. Used for user creation if needed.",
+    )
 
     model_config = SettingsConfigDict(env_prefix="")
 

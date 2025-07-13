@@ -72,3 +72,19 @@ dependencies = [
 where = ["."]  # Search for packages in the current directory (project root)
 include = ["moonmind*"]  # Include 'moonmind' and its sub-packages
 exclude = ["tests*", "tools*"] # Exclude tests and tools from being top-level packages
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+extend-ignore = ["E402", "E722", "F841"]
+
+[tool.pre-commit]
+repos = []

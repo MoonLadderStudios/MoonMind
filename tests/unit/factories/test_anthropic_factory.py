@@ -1,10 +1,10 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from llama_index.llms.anthropic import Anthropic as LlamaAnthropic
 
-from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.config.settings import AppSettings
+from moonmind.factories.anthropic_factory import AnthropicFactory
 
 
 @pytest.fixture

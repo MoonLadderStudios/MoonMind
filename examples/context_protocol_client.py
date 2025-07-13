@@ -4,9 +4,10 @@ Example client for the Model Context Protocol implementation in MoonMind.
 This demonstrates how an agent like OpenHands could interact with the MoonMind API.
 """
 
-import requests
-import sys
 import os
+import sys
+
+import requests
 
 # Default to localhost, but allow override via environment variable
 API_BASE_URL = os.environ.get("MOONMIND_API_URL", "http://localhost:5000")

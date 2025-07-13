@@ -1,12 +1,14 @@
 import uuid
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi import HTTPException
-from unittest.mock import AsyncMock
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_default_user_from_db
 from api_service.db.models import User
 from moonmind.config.settings import settings
+
 
 @pytest.mark.asyncio
 async def test_get_default_user_happy_path(monkeypatch):
@@ -27,6 +29,7 @@ async def test_get_default_user_happy_path(monkeypatch):
 
     assert result.id == uuid.UUID(user_id)
     mock_session.get.assert_called_once_with(User, uuid.UUID(user_id))
+
 
 @pytest.mark.asyncio
 async def test_get_default_user_invalid_id(monkeypatch):

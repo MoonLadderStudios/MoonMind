@@ -1,10 +1,10 @@
 import logging
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 # Assuming settings are accessible for modification in tests, or mock them appropriately
 from moonmind.config import settings
-from moonmind.factories.openai_factory import list_openai_models, get_openai_model
+from moonmind.factories.openai_factory import get_openai_model, list_openai_models
 
 # Configure basic logging for tests to see warnings if needed
 logging.basicConfig(level=logging.INFO)

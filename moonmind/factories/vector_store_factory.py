@@ -56,7 +56,7 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
                 f"Collection '{settings.vector_store_collection_name}' already exists with "
                 f"a different distance metric: {existing_distance} vs {desired_distance}"
             )
-    except UnexpectedResponse as e:
+    except UnexpectedResponse:
         # If the collection doesn't exist, we can create it.
         # This is a design choice. For now, we assume it should exist.
         logger.warning(
@@ -67,7 +67,9 @@ def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1)
         return None  # Return None to indicate the vector store is not available
 
     except Exception as e:
-        logger.error(f"An unexpected error occurred while building Qdrant vector store: {e}")
+        logger.error(
+            f"An unexpected error occurred while building Qdrant vector store: {e}"
+        )
         return None  # Return None for any other unexpected errors
 
     vector_store = QdrantVectorStore(

@@ -1,13 +1,13 @@
+import asyncio
 import logging
 import time
-import asyncio
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
-from moonmind.factories.google_factory import list_google_models
-from moonmind.factories.openai_factory import list_openai_models
-from moonmind.factories.ollama_factory import list_ollama_models
 from moonmind.config.settings import settings
+from moonmind.factories.google_factory import list_google_models
+from moonmind.factories.ollama_factory import list_ollama_models
+from moonmind.factories.openai_factory import list_openai_models
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,9 @@ class ModelCache:
             if settings.is_provider_enabled("openai"):
                 openai_models_raw = list_openai_models(api_key=self.openai_api_key)
                 self.logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
-                for model in (
+                for (
+                    model
+                ) in (
                     openai_models_raw
                 ):  # Assuming model is an object with an 'id' attribute
                     model_id = model.id
@@ -384,9 +386,11 @@ class ModelCache:
             time.sleep(
                 min(
                     60,
-                    self.refresh_interval_seconds / 10
-                    if self.refresh_interval_seconds > 0
-                    else 60,
+                    (
+                        self.refresh_interval_seconds / 10
+                        if self.refresh_interval_seconds > 0
+                        else 60
+                    ),
                 )
             )
 
@@ -430,6 +434,7 @@ class ModelCache:
 model_cache = ModelCache(
     refresh_interval_seconds=settings.model_cache_refresh_interval_seconds
 )
+
 
 def force_refresh_model_cache():
     """Utility function to manually trigger a cache refresh."""

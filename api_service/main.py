@@ -5,39 +5,43 @@ import logging
 from moonmind.config.logging import configure_logging
 
 configure_logging()
-logger = logging.getLogger(__name__) # Get logger after configuration
+logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
+
 # Now proceed with other imports
 from uuid import uuid4
 
 import requests
-from fastapi import APIRouter  # Added for healthz
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
-from api_service.api.routers import \
-    summarization as \
-    summarization_router  # Added import for summarization router
+from api_service.api.routers import (
+    summarization as summarization_router,  # Added import for summarization router
+)
 from api_service.api.routers.chat import router as chat_router
-from api_service.api.routers.context_protocol import \
-    router as context_protocol_router
+from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
-from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.planning import router as planning_router
+from api_service.api.routers.profile import router as profile_router
 from api_service.api.schemas import UserProfileUpdate
+
 # Auth imports
-from api_service.auth import (UserCreate, UserRead, UserUpdate, auth_backend,
-                              fastapi_users)
-from api_service.db.models import \
-    User  # Ensure User model is imported if needed for routers
+from api_service.auth import (
+    UserCreate,
+    UserRead,
+    UserUpdate,
+    auth_backend,
+    fastapi_users,
+)
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
+
 # Removed unused import: build_indexers
 from moonmind.factories.service_context_factory import build_service_context
 from moonmind.factories.storage_context_factory import build_storage_context
@@ -51,7 +55,13 @@ def _initialize_embedding_model(app_state, app_settings):
     logger.info("Initializing embedding model...")
 
     # Build the model and get any dimension configured in settings
-    app_state.embed_model, configured_dims = build_embed_model(app_settings)
+    try:
+        app_state.embed_model, configured_dims = build_embed_model(app_settings)
+    except Exception as e:
+        logger.error("Embedding model initialization failed: %s", e)
+        app_state.embed_model = None
+        app_state.embed_dimensions = None
+        return
 
     # -------------------------------------------------------
     # Detect the true dimensionality produced by the model
@@ -98,6 +108,7 @@ def _initialize_embedding_model(app_state, app_settings):
     app_state.embed_dimensions = final_dims
     logger.info("Embedding model initialized with dimensions: %s", final_dims)
 
+
 def _initialize_vector_store(app_state, app_settings):
     """Initializes and sets the vector store on app_state."""
     logger.info("Initializing vector store...")
@@ -129,14 +140,18 @@ def _initialize_oidc_provider(app: FastAPI):
     if provider == "google":
         logger.info("Initializing Google OIDC provider...")
         try:
-            discovery_url = f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
+            discovery_url = (
+                f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
+            )
             response = requests.get(discovery_url)
             response.raise_for_status()
             discovery_doc = response.json()
             jwks_uri = discovery_doc.get("jwks_uri")
             if not jwks_uri:
                 logger.error("JWKS URI not found in Google OIDC discovery document.")
-                raise RuntimeError("JWKS URI not found in Google OIDC discovery document.")
+                raise RuntimeError(
+                    "JWKS URI not found in Google OIDC discovery document."
+                )
             app.state.jwks_uri = jwks_uri
             logger.info("Successfully fetched and stored Google JWKS URI.")
         except requests.exceptions.RequestException as e:
@@ -230,8 +245,12 @@ app.include_router(
     tags=["Summarization"],
 )  # Added summarization router
 app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
-app.include_router(context_protocol_router, tags=["Context Protocol"])  # Removed prefix="/context"
-app.include_router(profile_router, prefix="", tags=["Profile"])  # Include profile router
+app.include_router(
+    context_protocol_router, tags=["Context Protocol"]
+)  # Removed prefix="/context"
+app.include_router(
+    profile_router, prefix="", tags=["Profile"]
+)  # Include profile router
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
@@ -266,9 +285,7 @@ if settings.oidc.AUTH_PROVIDER != "keycloak":
         tags=["users"],
     )
 else:
-    logger.info(
-        "AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers."
-    )
+    logger.info("AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers.")
 
 
 app.add_middleware(
@@ -307,21 +324,24 @@ async def startup_event():
     if not hasattr(app, "state"):
         # In modern FastAPI, `app.state` exists by default, but this is a safeguard.
         from starlette.datastructures import State
+
         app.state = State()
 
     _initialize_embedding_model(app.state, settings)
     _initialize_vector_store(app.state, settings)
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
-    _initialize_oidc_provider(app) # OIDC provider init like Keycloak discovery
+    _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":
-        logger.info("Auth provider is 'disabled'. Ensuring default user and profile exist on startup.")
+        logger.info(
+            "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
+        )
         from api_service.auth import (
+            _DEFAULT_USER_ID,
             get_or_create_default_user,
             get_user_manager_context,
-            _DEFAULT_USER_ID,
         )
         from api_service.db.base import get_async_session_context
         from api_service.services.profile_service import ProfileService
@@ -329,7 +349,10 @@ async def startup_event():
         async with get_async_session_context() as db_session:
             async with get_user_manager_context(db_session) as user_manager:
                 try:
-                    if not settings.oidc.DEFAULT_USER_ID or not settings.oidc.DEFAULT_USER_EMAIL:
+                    if (
+                        not settings.oidc.DEFAULT_USER_ID
+                        or not settings.oidc.DEFAULT_USER_EMAIL
+                    ):
                         logger.warning(
                             "DEFAULT_USER_ID or DEFAULT_USER_EMAIL not configured. Using built-in defaults."
                         )
@@ -364,10 +387,14 @@ async def startup_event():
                             logger.info(
                                 f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
                             )
-                        from moonmind.models_cache import refresh_model_cache_for_user
                         import asyncio
+
+                        from moonmind.models_cache import refresh_model_cache_for_user
+
                         loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, refresh_model_cache_for_user, default_user, db_session)
+                        await loop.run_in_executor(
+                            None, refresh_model_cache_for_user, default_user, db_session
+                        )
                     else:
                         logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:
@@ -380,8 +407,9 @@ async def startup_event():
                         exc_info=True,
                     )
     else:
-        logger.info(f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup.")
-
+        logger.info(
+            f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup."
+        )
 
     logger.info("Application startup events completed.")
 

@@ -1,12 +1,13 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
 
-from api_service.main import app  # Assuming your FastAPI app instance is here
-from api_service.api.dependencies import (
-    get_storage_context,
+from api_service.api.dependencies import (  # Moved import
     get_service_context,
-)  # Moved import
+    get_storage_context,
+)
+from api_service.main import app  # Assuming your FastAPI app instance is here
 
 # Create a TestClient instance
 client = TestClient(app)

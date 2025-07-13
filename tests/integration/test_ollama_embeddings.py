@@ -57,12 +57,12 @@ def test_ollama_embeddings_generation(ollama_embeddings_instance):
     sample_text = "This is a sample text to generate embeddings."
     embeddings = ollama_embeddings_instance.get_text_embedding(sample_text)
     assert isinstance(embeddings, list)
-    assert all(isinstance(e, float) for e in embeddings), (
-        "Embeddings should be a list of floats."
-    )
-    assert len(embeddings) > 10, (
-        "Embeddings should have a reasonable length (more than 10 dimensions)."
-    )  # Basic sanity check
+    assert all(
+        isinstance(e, float) for e in embeddings
+    ), "Embeddings should be a list of floats."
+    assert (
+        len(embeddings) > 10
+    ), "Embeddings should have a reasonable length (more than 10 dimensions)."  # Basic sanity check
 
 
 def test_ollama_embeddings_generation_multiple_texts(ollama_embeddings_instance):
@@ -79,12 +79,12 @@ def test_ollama_embeddings_generation_multiple_texts(ollama_embeddings_instance)
     assert len(batched_embeddings) == len(sample_texts)
     for embeddings in batched_embeddings:
         assert isinstance(embeddings, list)
-        assert all(isinstance(e, float) for e in embeddings), (
-            "Embeddings should be a list of floats."
-        )
-        assert len(embeddings) > 10, (
-            "Embeddings should have a reasonable length (more than 10 dimensions)."
-        )  # Basic sanity check
+        assert all(
+            isinstance(e, float) for e in embeddings
+        ), "Embeddings should be a list of floats."
+        assert (
+            len(embeddings) > 10
+        ), "Embeddings should have a reasonable length (more than 10 dimensions)."  # Basic sanity check
 
 
 def test_ollama_embeddings_long_prompt(ollama_embeddings_instance):
@@ -95,12 +95,12 @@ def test_ollama_embeddings_long_prompt(ollama_embeddings_instance):
     )  # Approximate token count, adjust as needed
     embeddings = ollama_embeddings_instance.get_text_embedding(long_text)
     assert isinstance(embeddings, list)
-    assert all(isinstance(e, float) for e in embeddings), (
-        "Embeddings should be a list of floats."
-    )
-    assert len(embeddings) > 10, (
-        "Embeddings should have a reasonable length (more than 10 dimensions)."
-    )  #
+    assert all(
+        isinstance(e, float) for e in embeddings
+    ), "Embeddings should be a list of floats."
+    assert (
+        len(embeddings) > 10
+    ), "Embeddings should have a reasonable length (more than 10 dimensions)."  #
 
 
 def test_ollama_embeddings_instance_creation(ollama_embeddings_instance):
@@ -152,6 +152,6 @@ def test_ollama_embeddings_confluence_document(ollama_embeddings_instance):
     assert len(embeddings) == len(documents)
     for embedding in embeddings:
         assert isinstance(embedding, list)
-        assert all(isinstance(e, float) for e in embedding), (
-            "Embeddings should be a list of floats."
-        )
+        assert all(
+            isinstance(e, float) for e in embedding
+        ), "Embeddings should be a list of floats."

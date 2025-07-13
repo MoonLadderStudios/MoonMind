@@ -1,14 +1,13 @@
 import logging
 from typing import Optional
 
+from fastapi import Request
 from llama_index.core import (
     Settings,
     StorageContext,
     VectorStoreIndex,
     load_index_from_storage,
 )
-
-from fastapi import Request
 
 
 def get_chat_provider(request: Request):

@@ -1,14 +1,18 @@
-from fastapi import Form  # For HTMLResponse and Form
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import (  # For HTMLResponse and RedirectResponse
-    HTMLResponse, RedirectResponse)
+    HTMLResponse,
+    RedirectResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_302_FOUND
 
 from api_service.api.constants import MANAGED_PROVIDERS
-from api_service.api.schemas import (UserProfileRead, UserProfileReadSanitized,
-                                     UserProfileUpdate)
+from api_service.api.schemas import (
+    UserProfileRead,
+    UserProfileReadSanitized,
+    UserProfileUpdate,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session  # Dependency for DB session
 from api_service.db.models import User as DBUser  # User model from DB

@@ -3,9 +3,9 @@ import time
 from typing import List, Optional
 from uuid import uuid4
 
-import openai
 # Multi-provider imports from main branch
 from fastapi import APIRouter, Depends, HTTPException
+
 # RAG imports from feat/rag branch
 from llama_index.core import Settings as LlamaSettings
 from llama_index.core import VectorStoreIndex
@@ -22,14 +22,17 @@ from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.ollama_factory import (chat_with_ollama,
-                                               get_ollama_model)
+from moonmind.factories.ollama_factory import chat_with_ollama, get_ollama_model
 from moonmind.factories.openai_factory import get_openai_model
 from moonmind.models_cache import model_cache
 from moonmind.rag.retriever import QdrantRAG
-from moonmind.schemas.chat_models import (ChatCompletionRequest,
-                                          ChatCompletionResponse, Choice,
-                                          ChoiceMessage, Usage)
+from moonmind.schemas.chat_models import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    Choice,
+    ChoiceMessage,
+    Usage,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -361,7 +364,10 @@ async def handle_openai_request(
     # Accessing response data according to OpenAI SDK v1.x.x
     first_choice = openai_response.choices[0]
     ai_message_content = first_choice.message.content
-    finish_reason = first_choice.finish_reason
+    # In tests we sometimes mock choices without ``finish_reason``. Default to
+    # "stop" which mirrors typical OpenAI responses when a generation completes
+    # naturally.
+    finish_reason = getattr(first_choice, "finish_reason", "stop") or "stop"
     usage_data = openai_response.usage
 
     if usage_data is None:  # Should not happen with successful chat completion
@@ -370,10 +376,10 @@ async def handle_openai_request(
         usage_data = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     return ChatCompletionResponse(
-        id=openai_response.id,
-        object=openai_response.object,  # typically "chat.completion"
-        created=openai_response.created,
-        model=openai_response.model,
+        id=getattr(openai_response, "id", ""),
+        object=getattr(openai_response, "object", "chat.completion"),
+        created=getattr(openai_response, "created", 0),
+        model=getattr(openai_response, "model", model_to_use),
         choices=[
             Choice(
                 index=0,  # SDK v1.x index is usually part of the choice object, but response schema expects it
@@ -384,9 +390,15 @@ async def handle_openai_request(
             )
         ],
         usage=Usage(  # Ensure these fields exist on usage_data
-            prompt_tokens=usage_data.prompt_tokens if usage_data else 0,
-            completion_tokens=usage_data.completion_tokens if usage_data else 0,
-            total_tokens=usage_data.total_tokens if usage_data else 0,
+            prompt_tokens=getattr(
+                usage_data, "prompt_tokens", usage_data.get("prompt_tokens", 0)
+            ),
+            completion_tokens=getattr(
+                usage_data, "completion_tokens", usage_data.get("completion_tokens", 0)
+            ),
+            total_tokens=getattr(
+                usage_data, "total_tokens", usage_data.get("total_tokens", 0)
+            ),
         ),
     )
 

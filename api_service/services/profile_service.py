@@ -6,10 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 # Updated import to use UserProfileRead and UserProfileUpdate
-from api_service.api.schemas import (UserProfileCreateSchema, UserProfileRead,
-                                     UserProfileUpdate)
+from api_service.api.schemas import (
+    UserProfileCreateSchema,
+    UserProfileRead,
+    UserProfileUpdate,
+)
 from api_service.db.models import (  # User model might be needed for context or future validation
-    User, UserProfile)
+    User,
+    UserProfile,
+)
 
 
 class ProfileService:
@@ -59,7 +64,11 @@ class ProfileService:
                 if key_in_schema.endswith("_api_key"):
                     model_field_name = f"{key_in_schema}_encrypted"
                     if hasattr(profile, model_field_name):
-                        setattr(profile, model_field_name, getattr(new_profile_data, key_in_schema))
+                        setattr(
+                            profile,
+                            model_field_name,
+                            getattr(new_profile_data, key_in_schema),
+                        )
                     # else: log warning or handle mismatch if necessary
 
             db_session.add(profile)
@@ -82,13 +91,17 @@ class ProfileService:
 
     def _apply_update_data_to_profile(self, profile: UserProfile, update_data: dict):
         for key_in_schema, value in update_data.items():
-            if key_in_schema.endswith("_api_key"):  # Handles google_api_key, openai_api_key, etc.
+            if key_in_schema.endswith(
+                "_api_key"
+            ):  # Handles google_api_key, openai_api_key, etc.
                 model_field_name = f"{key_in_schema}_encrypted"
                 # Assigning to this EncryptedType field handles encryption
                 if hasattr(profile, model_field_name):
                     setattr(profile, model_field_name, value)
                 # else: log warning or handle mismatch if necessary
-            elif hasattr(profile, key_in_schema):  # For other potential direct mapped fields
+            elif hasattr(
+                profile, key_in_schema
+            ):  # For other potential direct mapped fields
                 setattr(profile, key_in_schema, value)
             # else:
             #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")

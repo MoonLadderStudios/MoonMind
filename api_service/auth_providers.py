@@ -3,8 +3,14 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth import (_DEFAULT_USER_ID, UserCreate, UserRead,
-                              auth_backend, current_active_user, fastapi_users)
+from api_service.auth import (
+    _DEFAULT_USER_ID,
+    UserCreate,
+    UserRead,
+    auth_backend,
+    current_active_user,
+    fastapi_users,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings

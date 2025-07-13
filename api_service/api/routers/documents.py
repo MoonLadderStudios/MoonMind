@@ -3,17 +3,18 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from llama_index.core import Settings, StorageContext
 
-from api_service.api.dependencies import (get_service_context,
-                                          get_storage_context)
+from api_service.api.dependencies import get_service_context, get_storage_context
 from api_service.auth_providers import get_current_user  # Auth dependency
 from api_service.db.models import User  # User model for type hinting
 from moonmind.config.settings import settings
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 from moonmind.indexers.github_indexer import GitHubIndexer
-from moonmind.indexers.google_drive_indexer import \
-    GoogleDriveIndexer  # Added import
+from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer  # Added import
 from moonmind.schemas.documents_models import (  # Updated import path with GoogleDriveLoadRequest
-    ConfluenceLoadRequest, GitHubLoadRequest, GoogleDriveLoadRequest)
+    ConfluenceLoadRequest,
+    GitHubLoadRequest,
+    GoogleDriveLoadRequest,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ async def load_confluence_documents(
     request: ConfluenceLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
     service_context: Settings = Depends(get_service_context),
-    _user: User = Depends(get_current_user()), # Protected
+    _user: User = Depends(get_current_user()),  # Protected
 ):
     if not settings.confluence.confluence_enabled:
         raise HTTPException(status_code=500, detail="Confluence is not enabled")
@@ -97,7 +98,7 @@ async def load_github_repo(
     request: GitHubLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
     service_context: Settings = Depends(get_service_context),
-    _user: User = Depends(get_current_user()), # Protected
+    _user: User = Depends(get_current_user()),  # Protected
 ):
     """Load documents from a GitHub repository."""
     try:
@@ -144,7 +145,7 @@ async def load_google_drive_documents(
     request: GoogleDriveLoadRequest,
     storage_context: StorageContext = Depends(get_storage_context),
     service_context: Settings = Depends(get_service_context),
-    _user: User = Depends(get_current_user()), # Protected
+    _user: User = Depends(get_current_user()),  # Protected
 ):
     """Load documents from Google Drive."""
     try:
