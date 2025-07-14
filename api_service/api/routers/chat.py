@@ -157,7 +157,18 @@ async def get_user_api_key(
     manager = await get_auth_manager(db_session)
     key_name = f"{provider.upper()}_API_KEY"
     user_obj = user if getattr(user, "id", None) else None
-    return await manager.get_secret("profile", key=key_name, user=user_obj)
+    secret = await manager.get_secret("profile", key=key_name, user=user_obj)
+    if secret:
+        return secret
+
+    provider_lower = provider.lower()
+    if provider_lower == "google":
+        return settings.google.google_api_key
+    if provider_lower == "openai":
+        return settings.openai.openai_api_key
+    if provider_lower == "anthropic":
+        return settings.anthropic.anthropic_api_key
+    return None
 
 
 @router.post("/completions", response_model=ChatCompletionResponse)
