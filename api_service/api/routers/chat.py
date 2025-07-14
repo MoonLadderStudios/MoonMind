@@ -15,10 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Dependencies for RAG functionality
 from api_service.api.dependencies import get_service_context, get_vector_index
-from api_service.auth_providers import get_current_user  # Updated import
+from api_service.auth_providers import get_auth_manager, get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.factories.google_factory import get_google_model
@@ -151,55 +150,22 @@ async def get_rag_context(
 async def get_user_api_key(
     user: User, provider: str, db_session: AsyncSession
 ) -> Optional[str]:
-    """Return the API key for ``provider`` from the user's profile or settings."""
+    """Return the API key for ``provider`` using the AuthProviderManager."""
 
-    user_has_id = getattr(user, "id", None)
-    if not user_has_id:
-        logger.warning(
-            "User object passed to get_user_api_key does not have a valid id – will skip profile lookup and fall back to system key if available."
-        )
-        profile = None
-    else:
-        profile_service = ProfileService()
-        try:
-            profile = await profile_service.get_or_create_profile(
-                db_session=db_session, user_id=user.id
-            )
-        except Exception as e:  # pragma: no cover - defensive against bad DB mocks
-            logger.warning(
-                "Failed to load user profile for %s: %s. Falling back to settings.",
-                user.id,
-                e,
-            )
-            profile = None
-
-    profile_service = ProfileService()
-    # If we already set profile (or None) above, the following creation isn't needed.
-    if user_has_id and profile is None:
-        try:
-            profile = await profile_service.get_or_create_profile(
-                db_session=db_session, user_id=user.id
-            )
-        except Exception as e:  # pragma: no cover - defensive against bad DB mocks
-            logger.warning(
-                "Failed to load user profile for %s: %s. Falling back to settings.",
-                user.id,
-                e,
-            )
-            profile = None
+    manager = await get_auth_manager(db_session)
+    key_name = f"{provider.upper()}_API_KEY"
+    user_obj = user if getattr(user, "id", None) else None
+    secret = await manager.get_secret("profile", key=key_name, user=user_obj)
+    if secret:
+        return secret
 
     provider_lower = provider.lower()
-    key_attr = f"{provider_lower}_api_key"
-    user_key = getattr(profile, key_attr, None)
-    if user_key:
-        return user_key
-
-    settings_section = getattr(settings, provider_lower, None)
-    if settings_section is not None:
-        system_key = getattr(settings_section, key_attr, None)
-        if system_key:
-            return system_key
-
+    if provider_lower == "google":
+        return settings.google.google_api_key
+    if provider_lower == "openai":
+        return settings.openai.openai_api_key
+    if provider_lower == "anthropic":
+        return settings.anthropic.anthropic_api_key
     return None
 
 

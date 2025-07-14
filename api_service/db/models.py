@@ -60,6 +60,9 @@ class UserProfile(Base):
     openai_api_key_encrypted = Column(
         EncryptedType(Text, get_encryption_key), nullable=True
     )
+    github_token_encrypted = Column(
+        EncryptedType(Text, get_encryption_key), nullable=True
+    )
     # Add other provider keys here as needed
 
     user = relationship("User", back_populates="user_profile")

@@ -126,7 +126,12 @@ from api_service.db.base import get_async_session
 # MoonMind specific imports
 from moonmind.config.settings import settings
 from moonmind.models_cache import model_cache
-from moonmind.summarization.readme_generator import ReadmeAiGenerator
+
+try:
+    from moonmind.summarization.readme_generator import ReadmeAiGenerator
+except Exception as exc:  # pragma: no cover - optional dependency
+    ReadmeAiGenerator = None
+    logging.getLogger(__name__).warning("ReadmeAiGenerator unavailable: %s", exc)
 
 router = APIRouter()
 
@@ -261,6 +266,13 @@ async def summarize_repository(
 
                 # Potentially add other readme-ai specific settings from a global config or request if needed
                 # readme_config["badge_style"] = "flat-square"
+
+                if ReadmeAiGenerator is None:
+                    logger.error("ReadmeAiGenerator not available")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="readme-ai library is not installed",
+                    )
 
                 generator = ReadmeAiGenerator(config=readme_config)
                 logger.debug(

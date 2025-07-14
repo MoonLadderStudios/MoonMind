@@ -5,8 +5,15 @@ import logging
 import tempfile
 from pathlib import Path
 
-from readmeai.config.settings import ConfigLoader
-from readmeai.core.pipeline import readme_agent
+try:
+    from readmeai.config.settings import ConfigLoader
+    from readmeai.core.pipeline import readme_agent
+except Exception as exc:  # pragma: no cover - optional dep may be missing
+    ConfigLoader = None
+    readme_agent = None
+    import logging
+
+    logging.getLogger(__name__).warning("readme-ai unavailable: %s", exc)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,10 @@ class ReadmeAiGenerator:
                         or None if generation fails.
         """
         logger.info(f"Starting README generation for {repo_path} using readme-ai.")
+
+        if ConfigLoader is None or readme_agent is None:
+            logger.error("readme-ai library is not installed; cannot generate")
+            return None
 
         # Use a temporary file for the output
         with tempfile.NamedTemporaryFile(
