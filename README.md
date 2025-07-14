@@ -445,6 +445,23 @@ OPENAI_API_KEY="your_openai_api_key_here"
 # OPENAI_CHAT_MODEL="gpt-4o" # Optional
 ```
 
+### Authentication providers
+
+MoonMind resolves secrets using pluggable providers. The `profile` provider
+reads values from the current user's stored profile while the `env` provider
+falls back to environment variables. The lookup order is **profile → env →
+error**.
+
+Example manifest snippet:
+
+```yaml
+auth:
+  github_token:
+    secretRef:
+      provider: profile
+      key: GITHUB_TOKEN
+```
+
 ### Provider Key Precedence
 
 MoonMind checks user profile settings first when looking up API keys. If a key is not stored in the profile, the value from the environment is used. The default `disabled` auth mode automatically seeds the default profile with keys from `.env` so they can be managed via the UI.
