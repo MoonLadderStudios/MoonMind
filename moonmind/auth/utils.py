@@ -9,9 +9,4 @@ class RedactedSecret(str):
 
 
 def manifest_key_to_profile_field(key: str) -> str:
-    key = key.lower()
-    if key.endswith("_token"):
-        return f"{key}_encrypted"
-    if key.endswith("_api_key"):
-        return f"{key}_encrypted"
-    return f"{key}_encrypted"
+    return f"{key.lower()}_encrypted"

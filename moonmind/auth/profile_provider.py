@@ -15,7 +15,14 @@ class ProfileAuthProvider(AuthProvider):
     async def get_secret(self, *, key: str, user: User | None, **kwargs) -> str | None:
         if not user:
             return None
-        profile = await self.profile_svc.get_or_create_profile(self.db, user.id)
+        try:
+            profile = await self.profile_svc.get_or_create_profile(self.db, user.id)
+        except Exception as exc:  # pragma: no cover - graceful fallback on DB errors
+            import logging
+
+            logging.warning("Profile lookup failed: %s", exc)
+            return None
+
         field = manifest_key_to_profile_field(key)
         value = getattr(profile, field, None)
         if value is None and hasattr(profile, "id"):
