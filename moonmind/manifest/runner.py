@@ -31,7 +31,10 @@ class ManifestRunner:
                 continue
             try:
                 cls = self._load_reader_class(reader.type)
-                instance = cls(**reader.init)
+                init_args = {
+                    k: self._construct_value(v) for k, v in reader.init.items()
+                }
+                instance = cls(**init_args)
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("Failed to initialize reader %s: %s", name, exc)
                 continue
@@ -39,7 +42,10 @@ class ManifestRunner:
             reader_results: List[Any] = []
             for load_args in reader.load_data or [{}]:
                 try:
-                    data = instance.load_data(**load_args)
+                    processed_args = {
+                        k: self._construct_value(v) for k, v in load_args.items()
+                    }
+                    data = instance.load_data(**processed_args)
                     reader_results.append(data)
                 except Exception as exc:  # pragma: no cover - defensive
                     self.logger.exception(
@@ -60,3 +66,23 @@ class ManifestRunner:
             except Exception:
                 module = import_module("llama_index.readers")
                 return getattr(module, type_name)
+
+    def _load_class(self, fq_name: str):
+        """Import and return a class from its fully qualified name."""
+        module_name, class_name = fq_name.rsplit(".", 1)
+        module = import_module(module_name)
+        return getattr(module, class_name)
+
+    def _construct_value(self, value: Any) -> Any:
+        """Recursively instantiate objects defined with _type/_init blocks."""
+        if isinstance(value, dict):
+            if "_type" in value:
+                cls = self._load_class(value["_type"])
+                init_params = {
+                    k: self._construct_value(v) for k, v in value.get("_init", {}).items()
+                }
+                return cls(**init_params)
+            return {k: self._construct_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._construct_value(v) for v in value]
+        return value
