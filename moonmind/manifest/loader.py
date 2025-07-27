@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -35,7 +36,8 @@ class ManifestLoader:
 
         # Validate unique reader types
         types = [r.type for r in manifest.spec.readers]
-        duplicates = sorted({t for t in types if types.count(t) > 1})
+        counts = Counter(types)
+        duplicates = sorted([t for t, count in counts.items() if count > 1])
         if duplicates:
             joined = ", ".join(duplicates)
             raise ValueError(f"Duplicate reader type(s) found: {joined}")
