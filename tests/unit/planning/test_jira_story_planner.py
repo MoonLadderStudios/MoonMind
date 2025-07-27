@@ -40,9 +40,11 @@ def test_build_prompt(monkeypatch):
     from moonmind.schemas.chat_models import Message
 
     expected_system = (
-        "You are a Jira planning assistant. Return ONLY a JSON array of issues "
-        "using the fields 'summary', 'description', 'issue_type', 'story_points', "
-        "and 'labels'."
+        "You are a Jira planning assistant. "
+        "If the plan already includes specific stories, use those as the "
+        "issues to create and simply add any provided context to each. "
+        "Return ONLY a JSON array of issues using the fields "
+        "'summary', 'description', 'issue_type', 'story_points', and 'labels'."
     )
 
     assert messages == [
@@ -64,7 +66,13 @@ def test_build_prompt_no_story_points(monkeypatch):
 
     from moonmind.schemas.chat_models import Message
 
-    expected_system = "You are a Jira planning assistant. Return ONLY a JSON array of issues using the fields 'summary', 'description', 'issue_type', 'labels'."
+    expected_system = (
+        "You are a Jira planning assistant. "
+        "If the plan already includes specific stories, use those as the "
+        "issues to create and simply add any provided context to each. "
+        "Return ONLY a JSON array of issues using the fields "
+        "'summary', 'description', 'issue_type', 'labels'."
+    )
 
     assert messages == [
         Message(role="system", content=expected_system),
