@@ -98,6 +98,9 @@ class JiraStoryPlanner:
         ----------
         plan_text : str
             The raw text describing the plan to convert into Jira stories.
+            If the plan already lists individual stories, those entries should
+            be treated as the issues to create with any available context
+            appended.
 
         Returns
         -------
@@ -120,6 +123,8 @@ class JiraStoryPlanner:
 
         system_prompt = (
             "You are a Jira planning assistant. "
+            "If the plan already includes specific stories, use those as the "
+            "issues to create and simply add any provided context to each. "
             "Return ONLY a JSON array of issues using the fields "
             f"{field_list}."
         )
