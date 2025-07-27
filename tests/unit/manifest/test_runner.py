@@ -4,7 +4,6 @@ from unittest.mock import patch
 from moonmind.manifest.runner import ManifestRunner
 from moonmind.schemas import Manifest
 
-
 yaml_str = """
 apiVersion: moonmind/v1
 kind: Readers
@@ -31,7 +30,9 @@ class DummyReader:
 def test_runner_instantiates_and_runs():
     manifest = Manifest.model_validate_yaml(yaml_str)
 
-    with patch("moonmind.manifest.runner.download_loader", return_value=DummyReader) as dl:
+    with patch(
+        "moonmind.manifest.runner.download_loader", return_value=DummyReader
+    ) as dl:
         runner = ManifestRunner(manifest, logger=logging.getLogger("test"))
         results = runner.run()
 
@@ -52,4 +53,3 @@ def test_runner_handles_errors():
 
     # Error during load_data should result in empty list for the reader
     assert results["DummyReader"] == []
-

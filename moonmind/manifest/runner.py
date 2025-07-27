@@ -12,7 +12,9 @@ from moonmind.schemas import Manifest
 class ManifestRunner:
     """Run readers defined in a Manifest."""
 
-    def __init__(self, manifest: Manifest, logger: Optional[logging.Logger] = None) -> None:
+    def __init__(
+        self, manifest: Manifest, logger: Optional[logging.Logger] = None
+    ) -> None:
         self.manifest = manifest
         self.logger = logger or logging.getLogger(__name__)
 
@@ -58,4 +60,3 @@ class ManifestRunner:
             except Exception:
                 module = import_module("llama_index.readers")
                 return getattr(module, type_name)
-
