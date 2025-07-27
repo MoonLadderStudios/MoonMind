@@ -121,4 +121,3 @@ spec:
     manifest = Manifest.model_validate_yaml(yaml_str)
     with pytest.raises(InterpolationError):
         interpolate(manifest, {})
-

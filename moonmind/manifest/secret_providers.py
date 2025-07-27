@@ -3,12 +3,10 @@ from __future__ import annotations
 from typing import Mapping, Optional, Protocol
 
 
-
 class SecretProvider(Protocol):
     """Protocol for synchronous secret providers."""
 
-    def get_secret(self, key: str) -> Optional[str]:
-        ...
+    def get_secret(self, key: str) -> Optional[str]: ...
 
 
 class EnvSecretProvider:
@@ -67,4 +65,3 @@ class SecretProviderManager:
                 raise ValueError(f"secret not found: {key}")
             return value
         raise ValueError(f"unsupported auth provider '{provider}'")
-

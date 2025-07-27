@@ -4,6 +4,7 @@ import re
 from typing import Any, Mapping, Optional
 
 from moonmind.schemas import AuthItem, Manifest
+
 from .secret_providers import (
     EnvSecretProvider,
     ProfileSecretProvider,
@@ -111,4 +112,3 @@ def _resolve_auth_item(item: AuthItem, manager: SecretProviderManager) -> Any:
         return manager.get_secret(provider, key)
     except ValueError as exc:
         raise InterpolationError(str(exc)) from exc
-
