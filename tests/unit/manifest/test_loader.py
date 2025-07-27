@@ -51,3 +51,21 @@ def test_manifest_loader_validation_error(tmp_path):
     loader = ManifestLoader(str(manifest_path))
     with pytest.raises(ValueError):
         loader.load()
+
+
+def test_manifest_loader_duplicate_reader_types(tmp_path):
+    manifest_content = """
+apiVersion: moonmind/v1
+kind: Readers
+metadata: {}
+spec:
+  readers:
+    - type: Dummy
+    - type: Dummy
+"""
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(manifest_content)
+
+    loader = ManifestLoader(str(manifest_path))
+    with pytest.raises(ValueError, match="Duplicate reader type"):
+        loader.load()

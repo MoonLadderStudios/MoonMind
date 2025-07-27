@@ -33,6 +33,13 @@ class ManifestLoader:
         except (yaml.YAMLError, ValidationError) as exc:
             raise ValueError(f"Failed to parse manifest: {exc}") from exc
 
+        # Validate unique reader types
+        types = [r.type for r in manifest.spec.readers]
+        duplicates = sorted({t for t in types if types.count(t) > 1})
+        if duplicates:
+            joined = ", ".join(duplicates)
+            raise ValueError(f"Duplicate reader type(s) found: {joined}")
+
         if manifest.spec.defaults is not None:
             merged = {
                 **current_settings.model_dump(),
