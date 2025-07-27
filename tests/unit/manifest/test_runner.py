@@ -88,9 +88,7 @@ spec:
 
     manifest = Manifest.model_validate_yaml(yaml_nested)
 
-    with patch(
-        "moonmind.manifest.runner.download_loader", return_value=ParentReader
-    ):
+    with patch("moonmind.manifest.runner.download_loader", return_value=ParentReader):
         runner = ManifestRunner(manifest, logger=logging.getLogger("test"))
         results = runner.run()
 

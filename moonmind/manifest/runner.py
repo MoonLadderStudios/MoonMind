@@ -79,7 +79,8 @@ class ManifestRunner:
             if "_type" in value:
                 cls = self._load_class(value["_type"])
                 init_params = {
-                    k: self._construct_value(v) for k, v in value.get("_init", {}).items()
+                    k: self._construct_value(v)
+                    for k, v in value.get("_init", {}).items()
                 }
                 return cls(**init_params)
             return {k: self._construct_value(v) for k, v in value.items()}
