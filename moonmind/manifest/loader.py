@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -32,6 +33,14 @@ class ManifestLoader:
             manifest = Manifest.model_validate_yaml(manifest_path)
         except (yaml.YAMLError, ValidationError) as exc:
             raise ValueError(f"Failed to parse manifest: {exc}") from exc
+
+        # Validate unique reader types
+        types = [r.type for r in manifest.spec.readers]
+        counts = Counter(types)
+        duplicates = sorted([t for t, count in counts.items() if count > 1])
+        if duplicates:
+            joined = ", ".join(duplicates)
+            raise ValueError(f"Duplicate reader type(s) found: {joined}")
 
         if manifest.spec.defaults is not None:
             merged = {
