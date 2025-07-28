@@ -3,6 +3,7 @@ from sqlalchemy import (  # Added Uuid, String, UniqueConstraint
     Column,
     ForeignKey,
     Integer,
+    DateTime,
     String,
     Text,
     UniqueConstraint,
@@ -66,3 +67,14 @@ class UserProfile(Base):
     # Add other provider keys here as needed
 
     user = relationship("User", back_populates="user_profile")
+
+
+class ManifestRecord(Base):
+    __tablename__ = "manifest"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), unique=True, nullable=False)
+    content = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    last_indexed_at = Column(DateTime(timezone=True), nullable=True)
+
