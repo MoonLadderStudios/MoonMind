@@ -7,17 +7,23 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from moonmind.manifest import ManifestRunner, ManifestChange, compute_content_hash, detect_change
-from moonmind.schemas import Manifest
-
 from api_service.db.models import ManifestRecord
+from moonmind.manifest import (
+    ManifestChange,
+    ManifestRunner,
+    compute_content_hash,
+    detect_change,
+)
+from moonmind.schemas import Manifest
 
 
 class ManifestSyncService:
     def __init__(self, logger: Optional[logging.Logger] = None) -> None:
         self.logger = logger or logging.getLogger(__name__)
 
-    async def sync_manifest(self, db_session: AsyncSession, name: str, content: str) -> ManifestChange:
+    async def sync_manifest(
+        self, db_session: AsyncSession, name: str, content: str
+    ) -> ManifestChange:
         """Sync a single manifest by name."""
         manifest = Manifest.model_validate_yaml(content)
 

@@ -8,7 +8,6 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import Base
 from api_service.services.manifest_sync_service import ManifestSyncService
 
-
 MANIFEST_YAML = """
 apiVersion: moonmind/v1
 kind: Readers
@@ -26,7 +25,9 @@ MANIFEST_YAML_MOD = MANIFEST_YAML.replace("token: 1", "token: 2")
 @pytest.mark.asyncio
 async def test_manifest_sync_detects_changes(tmp_path):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session_maker = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

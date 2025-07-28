@@ -1,9 +1,9 @@
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (  # Added Uuid, String, UniqueConstraint
     Column,
+    DateTime,
     ForeignKey,
     Integer,
-    DateTime,
     String,
     Text,
     UniqueConstraint,
@@ -77,4 +77,3 @@ class ManifestRecord(Base):
     content = Column(Text, nullable=False)
     content_hash = Column(String(64), nullable=False)
     last_indexed_at = Column(DateTime(timezone=True), nullable=True)
-

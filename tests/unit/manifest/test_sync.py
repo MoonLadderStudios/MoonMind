@@ -1,6 +1,5 @@
-from moonmind.manifest.sync import compute_content_hash, detect_change, ManifestChange
+from moonmind.manifest.sync import ManifestChange, compute_content_hash, detect_change
 from moonmind.schemas import Manifest
-
 
 YAML1 = """
 apiVersion: moonmind/v1
