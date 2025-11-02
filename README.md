@@ -49,6 +49,24 @@ docker-compose down
 
 This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration (e.g., without Qdrant or with different services), you might use `docker-compose.dev.yaml` or other specific compose files.
 
+## Spec Kit Celery Worker
+
+MoonMind's Spec Kit automation runs on a dedicated Celery worker. The worker shares configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
+
+- `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://guest:guest@rabbitmq:5672//`).
+- `CELERY_RESULT_BACKEND` – SQLAlchemy URL for the PostgreSQL result backend (e.g., `db+postgresql://postgres:password@api-db:5432/moonmind`).
+- `CELERY_DEFAULT_QUEUE` – Default queue name for Spec Kit tasks (`speckit`).
+- `CELERY_DEFAULT_EXCHANGE` – Exchange used for the Spec Kit queue (`speckit`).
+- `CELERY_DEFAULT_ROUTING_KEY` – Routing key for Spec Kit tasks (`speckit`).
+
+After configuring the environment, start the worker from the project root:
+
+```bash
+poetry run celery -A celery_worker.speckit_worker worker -Q speckit --loglevel=info
+```
+
+The worker entrypoint in `celery_worker/speckit_worker.py` loads `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment.
+
 ## Development
 MoonMind relies on `pre-commit` to enforce formatting and linting. Install the hooks after cloning:
 
