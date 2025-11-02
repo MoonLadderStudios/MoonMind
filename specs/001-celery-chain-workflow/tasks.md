@@ -21,9 +21,9 @@ Deliver MVP with US1 only (automated phase trigger through PR). US2 adds observa
 ---
 
 ## Phase 1 – Setup
-- [ ] T001 Establish Celery worker entrypoint in `celery_worker/speckit_worker.py`
-- [ ] T002 Add RabbitMQ broker and PostgreSQL Celery result backend defaults in `config/settings.py`
-- [ ] T003 Document environment variables in ./README.md and ./.env-template
+- [x] T001 Establish Celery worker entrypoint in `celery_worker/speckit_worker.py`
+- [x] T002 Add RabbitMQ broker and PostgreSQL Celery result backend defaults in `config/settings.py`
+- [x] T003 Document environment variables in ./README.md and ./.env-template
 
 ## Phase 2 – Foundational Infrastructure
 - [ ] T004 Create database migration `api_service/migrations/versions/add_spec_workflow_tables.py` with new tables

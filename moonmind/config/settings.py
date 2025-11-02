@@ -1,6 +1,6 @@
 import os
 from pathlib import Path  # Added Path
-from typing import Optional  # Keep one Optional import
+from typing import Any, Optional  # Keep one Optional import
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +26,73 @@ class DatabaseSettings(BaseSettings):
         return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     model_config = SettingsConfigDict(env_prefix="")
+
+
+class CelerySettings(BaseSettings):
+    """Celery broker and result backend settings."""
+
+    broker_url: str = Field(
+        "amqp://guest:guest@rabbitmq:5672//",
+        env="CELERY_BROKER_URL",
+        description="AMQP URL for the Celery broker (RabbitMQ).",
+    )
+    result_backend: Optional[str] = Field(
+        None,
+        env="CELERY_RESULT_BACKEND",
+        description="Database URL used by Celery to persist task results.",
+    )
+    default_queue: str = Field(
+        "speckit",
+        env="CELERY_DEFAULT_QUEUE",
+        description="Default queue name for Spec Kit workflow tasks.",
+    )
+    default_exchange: str = Field(
+        "speckit",
+        env="CELERY_DEFAULT_EXCHANGE",
+        description="Default exchange for Spec Kit workflow tasks.",
+    )
+    default_routing_key: str = Field(
+        "speckit",
+        env="CELERY_DEFAULT_ROUTING_KEY",
+        description="Default routing key used by the Spec Kit queue.",
+    )
+    task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
+    result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
+    accept_content: tuple[str, ...] = Field(
+        ("json",),
+        env="CELERY_ACCEPT_CONTENT",
+        description="Accepted content types for Celery tasks.",
+    )
+    task_acks_late: bool = Field(True, env="CELERY_TASK_ACKS_LATE")
+    task_acks_on_failure_or_timeout: bool = Field(
+        True, env="CELERY_TASK_ACKS_ON_FAILURE_OR_TIMEOUT"
+    )
+    task_reject_on_worker_lost: bool = Field(
+        True, env="CELERY_TASK_REJECT_ON_WORKER_LOST"
+    )
+    worker_prefetch_multiplier: int = Field(
+        1, env="CELERY_WORKER_PREFETCH_MULTIPLIER"
+    )
+    imports: tuple[str, ...] = Field(
+        ("moonmind.workflows.speckit_celery.tasks",),
+        env="CELERY_IMPORTS",
+        description="Celery modules imported by the worker on startup.",
+    )
+    result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
+    result_expires: int = Field(604800, env="CELERY_RESULT_EXPIRES")
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+    @field_validator("accept_content", "imports", mode="before")
+    @classmethod
+    def _split_csv(cls, value):
+        """Allow comma-delimited strings for tuple fields."""
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return tuple(items)
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return value
 
 
 class SecuritySettings(BaseSettings):
@@ -264,6 +331,7 @@ class AppSettings(BaseSettings):
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
+    celery: CelerySettings = Field(default_factory=CelerySettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
@@ -362,6 +430,17 @@ class AppSettings(BaseSettings):
         else:
             # Fallback to google if unknown provider
             return self.google.google_chat_model
+
+    def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
+        """Populate derived Celery defaults after settings load."""
+        super().model_post_init(__context)
+        if not self.celery.result_backend:
+            db = self.database
+            self.celery.result_backend = (
+                "db+postgresql://"
+                f"{db.POSTGRES_USER}:{db.POSTGRES_PASSWORD}@"
+                f"{db.POSTGRES_HOST}:{db.POSTGRES_PORT}/{db.POSTGRES_DB}"
+            )
 
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).resolve().parent.parent.parent / ".env"),
