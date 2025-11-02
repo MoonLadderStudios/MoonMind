@@ -77,8 +77,8 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 
 - **SpecWorkflowRun**: Represents a single MoonMind invocation; stores feature identifier, Celery chain ID, task status map, artifact locations, and timestamps.
 - **CeleryTaskState**: Captures per-task execution metadata including task name, current state, start/end timestamps, log references, and structured payload.
-- **CredentialSet**: References the secret bundle used during execution, including validation timestamp and any detected issues.
-- **WorkflowArtifact**: Describes generated outputs (task ID, branch, PR URL, diff archive) with pointers to stored files or URLs for operator access.
+- **WorkflowCredentialAudit**: References the secret bundle used during execution, including validation timestamp and any detected issues.
+- **WorkflowArtifact**: Describes generated outputs by type (e.g., `codex_logs`, `codex_patch`) with paths to stored files or signed URLs for operator access.
 
 ## Success Criteria *(mandatory)*
 

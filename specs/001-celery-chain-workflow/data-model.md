@@ -30,7 +30,7 @@
   - `payload` (JSONB): Structured output (e.g., task ID, branch meta, error details).
   - `started_at` / `finished_at` (timestamp): Timing metadata.
 - **Relationships**: Many-to-one with `SpecWorkflowRun`.
-- **Validation Rules**: `task_name` unique per `workflow_run_id`+`attempt`; `payload` must contain `error_code` when status is `failed`.
+- **Validation Rules**: `task_name` unique per `workflow_run_id`+`attempt`; `payload` must contain a `code` field when status is `failed` to align with the API error schema.
 
 ### WorkflowCredentialAudit
 - **Purpose**: Captures credential validations performed before executing downstream tasks.

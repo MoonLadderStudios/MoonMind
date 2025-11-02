@@ -24,7 +24,7 @@
    poetry run celery -A moonmind.workflows.speckit_celery.tasks worker -Q speckit --loglevel=info
    ```
 4. **Configure secrets**
-   - Add `CODEX_ENV`, `CODex_DEVICE_TOKEN` (if applicable), and `GH_TOKEN` to MoonMind secret store or `.env`.
+   - Add `CODEX_ENV`, `CODEX_DEVICE_TOKEN` (if applicable), and `GH_TOKEN` to MoonMind secret store or `.env`.
    - Validate with `poetry run python -m moonmind.workflows.speckit_celery.verify_secrets` (new utility).
 
 5. **Trigger a workflow run**
