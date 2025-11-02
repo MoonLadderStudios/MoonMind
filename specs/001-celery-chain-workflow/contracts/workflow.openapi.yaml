@@ -1,0 +1,228 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Spec Kit Workflow API
+  version: '0.1.0'
+paths:
+  /api/workflows/speckit/runs:
+    post:
+      summary: Trigger the next Spec Kit phase via Celery chain
+      operationId: createSpecWorkflowRun
+      tags: [speckit-workflows]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                featureKey:
+                  type: string
+                  description: Override the auto-discovered feature identifier (optional)
+                forcePhase:
+                  type: string
+                  enum: [discover, submit, apply, publish]
+                  description: Resume the chain from a specific phase for reruns
+              additionalProperties: false
+      responses:
+        '202':
+          description: Workflow accepted for asynchronous execution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpecWorkflowRun'
+        '409':
+          description: Workflow already running for requested feature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/workflows/speckit/runs:
+    get:
+      summary: List workflow runs filtered by status or feature key
+      operationId: listSpecWorkflowRuns
+      tags: [speckit-workflows]
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, running, succeeded, failed, cancelled]
+        - in: query
+          name: featureKey
+          schema:
+            type: string
+        - in: query
+          name: createdBy
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        '200':
+          description: Collection of workflow runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SpecWorkflowRun'
+                  nextCursor:
+                    type: string
+                    nullable: true
+  /api/workflows/speckit/runs/{runId}:
+    get:
+      summary: Retrieve a single workflow run with task states and artifacts
+      operationId: getSpecWorkflowRun
+      tags: [speckit-workflows]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Workflow details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpecWorkflowRun'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/workflows/speckit/runs/{runId}/retry:
+    post:
+      summary: Retry a failed workflow run starting at its failing phase
+      operationId: retrySpecWorkflowRun
+      tags: [speckit-workflows]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  description: Operator justification for the retry action
+      responses:
+        '202':
+          description: Retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpecWorkflowRun'
+        '409':
+          description: Retry not allowed because run is not in failed state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  parameters:
+    RunId:
+      in: path
+      name: runId
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    SpecWorkflowRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        featureKey:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, cancelled]
+        phase:
+          type: string
+          enum: [discover, submit, apply, publish, complete]
+        branchName:
+          type: string
+          nullable: true
+        prUrl:
+          type: string
+          format: uri
+          nullable: true
+        codexTaskId:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowArtifact'
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowTaskState'
+      required: [id, featureKey, status, phase]
+    WorkflowTaskState:
+      type: object
+      properties:
+        taskName:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, skipped]
+        attempt:
+          type: integer
+          minimum: 1
+        payload:
+          type: object
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [taskName, status, attempt]
+    WorkflowArtifact:
+      type: object
+      properties:
+        artifactType:
+          type: string
+          enum: [codex_logs, codex_patch, gh_push_log, gh_pr_response]
+        path:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [artifactType, path]
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+      required: [code, message]
