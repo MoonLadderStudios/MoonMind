@@ -1,0 +1,402 @@
+name: Codex Commenter
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  pull-requests: write
+  issues: write
+  checks: read
+  contents: read
+
+concurrency:
+  group: codex-commenter-pr-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  check-and-comment:
+    if: >
+      !(
+        (github.event_name == 'issue_comment' &&
+         contains(github.event.comment.body || '', '@codex')) ||
+        (github.event_name == 'pull_request_review_comment' &&
+         contains(github.event.comment.body || '', '@codex')) ||
+        (github.event_name == 'pull_request_review' &&
+         contains(github.event.review.body || '', '@codex'))
+      )
+    runs-on: ubuntu-latest
+    # Allow each invocation to finish so that later events don't cancel the run
+    # while it is collecting data. The dedupe logic inside the script will prevent
+    # duplicate @codex comments when queued runs catch up.
+    steps:
+      - name: Evaluate PR and decide action
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PR_AGENT_TOKEN || github.token }}
+          script: |
+            const pr_number = context.payload.pull_request?.number || context.payload.issue?.number;
+
+            const triggeringActor = context.actor?.toLowerCase?.() || '';
+            console.log(`Triggered by actor: ${triggeringActor || 'unknown'}`);
+
+            const triggeredByCodexBot = triggeringActor.includes('chatgpt-codex-connector');
+            if (triggeredByCodexBot) {
+              console.log('Event was emitted by Codex bot. Continuing so reviewer findings can be processed.');
+            }
+
+            if (!pr_number) {
+              console.log('Not a PR event, skipping');
+              return;
+            }
+
+            if (context.payload.issue && !context.payload.issue.pull_request) {
+              console.log('Issue comment not associated with a PR, skipping');
+              return;
+            }
+
+            console.log(`Event: ${context.eventName} (action: ${context.payload.action || 'n/a'})`);
+            console.log(`Processing PR #${pr_number}`);
+
+            // Get PR details
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number
+            });
+
+            console.log(`PR: ${pr.title}`);
+            console.log(`Head SHA: ${pr.head.sha}`);
+            console.log(`PR created at: ${pr.created_at}`);
+
+            // Get commits to find the latest commit timestamp
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number,
+              per_page: 100
+            });
+
+            console.log(`Total commits: ${commits.length}`);
+
+            // If there's more than one commit, we only want to look at comments after the latest commit
+            let commentCutoffDate = new Date(pr.created_at);
+            if (commits.length > 1) {
+              const latestCommit = commits[commits.length - 1];
+              commentCutoffDate = new Date(latestCommit.commit.committer.date);
+              console.log(`Multiple commits detected. Only considering comments after: ${commentCutoffDate.toISOString()}`);
+            } else {
+              console.log(`Single commit. Considering all comments since PR creation.`);
+            }
+
+            // Check if another instance of this workflow is already running for this PR
+            const { data: workflowRuns } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'codex-commenter.yml',
+              event: context.eventName,
+              status: 'in_progress',
+              per_page: 100
+            });
+
+            const otherRunsForThisPR = workflowRuns.workflow_runs.filter(run => {
+              // Check if it's for the same PR and not this run
+              const runPR = run.pull_requests?.find(p => p.number === pr_number);
+              return runPR && run.id !== context.runId;
+            });
+
+            if (otherRunsForThisPR.length > 0) {
+              console.log(`Found ${otherRunsForThisPR.length} other active run(s) for this PR. Exiting to avoid duplicates.`);
+              return;
+            }
+
+            // Retry logic: wait for eyes reactions to clear and checks to complete
+            const MAX_RETRIES = 5;
+            const RETRY_DELAY_MS = 60000; // 1 minute base delay
+            let retryCount = 0;
+            let shouldWait = true;
+            let checkRunsExcludingSelf = [];
+
+            const waitWithJitter = async (baseDelayMs) => {
+              const jitterMs = (Math.random() * 2 - 1) * 15000; // ±15s jitter
+              const delayMs = Math.max(5000, Math.round(baseDelayMs + jitterMs));
+              console.log(`Waiting ${Math.round(delayMs / 1000)} seconds before re-checking...`);
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            };
+
+            while (shouldWait && retryCount < MAX_RETRIES) {
+              // Check for "eyes" reactions on the PR
+              const { data: reactions } = await github.rest.reactions.listForIssue({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number
+              });
+
+              const cutoffMillis = Math.max(commentCutoffDate.getTime(), Date.now() - 2 * 60 * 60 * 1000);
+              const hasEyesReaction = reactions.some(r =>
+                r.content === 'eyes' &&
+                new Date(r.created_at).getTime() >= cutoffMillis
+              );
+
+              if (hasEyesReaction) {
+                console.log(`[Attempt ${retryCount + 1}/${MAX_RETRIES}] PR has "eyes" reactions - someone is reviewing.`);
+                if (retryCount < MAX_RETRIES - 1) {
+                  retryCount++;
+                  await waitWithJitter(RETRY_DELAY_MS);
+                  continue;
+                } else {
+                  console.log('Max retries reached. Exiting.');
+                  return;
+                }
+              }
+
+              console.log('No "eyes" reactions found. Checking GitHub Actions status...');
+
+              // Check if all checks are completed, ignoring this workflow's own run
+              const { data: checkRuns } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha,
+                per_page: 100
+              });
+
+              const workflowName = context.workflow || '';
+              const currentRunId = String(context.runId || process.env.GITHUB_RUN_ID || '');
+              const currentRunFragment = currentRunId ? `/runs/${currentRunId}` : null;
+              checkRunsExcludingSelf = checkRuns.check_runs.filter(run => {
+                const runName = run.name || '';
+                const isCurrentWorkflow = runName === workflowName || runName.startsWith(`${workflowName} /`);
+                const detailsUrl = run.details_url || '';
+                const externalId = run.external_id || '';
+
+                const matchesCurrentRun = Boolean(currentRunId) && (
+                  (detailsUrl && currentRunFragment && detailsUrl.includes(currentRunFragment)) ||
+                  externalId === currentRunId
+                );
+
+                const shouldExclude = matchesCurrentRun ||
+                  (isCurrentWorkflow && run.status !== 'completed' && Boolean(currentRunId));
+
+                if (shouldExclude) {
+                  console.log(`Excluding current workflow check run: ${runName} (id ${run.id})`);
+                }
+
+                return !shouldExclude;
+              });
+
+              console.log(`Total check runs: ${checkRuns.check_runs.length}`);
+              console.log(`Check runs (excluding current workflow): ${checkRunsExcludingSelf.length}`);
+
+              const allChecksCompleted = checkRunsExcludingSelf.every(
+                run => run.status === 'completed'
+              );
+
+              if (!allChecksCompleted) {
+                console.log(`[Attempt ${retryCount + 1}/${MAX_RETRIES}] Not all checks are completed yet.`);
+                if (retryCount < MAX_RETRIES - 1) {
+                  retryCount++;
+                  await waitWithJitter(RETRY_DELAY_MS);
+                  continue;
+                } else {
+                  console.log('Max retries reached. Exiting.');
+                  return;
+                }
+              }
+
+              // Both conditions met, exit retry loop
+              shouldWait = false;
+              console.log('All checks completed and no eyes reactions. Continuing...');
+            }
+
+            console.log('Checking check statuses...');
+
+            // Check if any checks failed
+            const failureConclusions = new Set(['failure', 'timed_out', 'action_required']);
+            const hasFailures = checkRunsExcludingSelf.some(
+              run => failureConclusions.has(run.conclusion)
+            );
+
+            console.log(`Has failures: ${hasFailures}`);
+
+            // Get all PR review comments
+            const { data: reviewComments } = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number,
+              per_page: 100
+            });
+
+            // Get all issue comments
+            const { data: issueComments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              per_page: 100
+            });
+
+            const allComments = [...reviewComments, ...issueComments];
+
+            console.log(`Total comments (all time): ${allComments.length}`);
+
+            // Filter comments to only those after the cutoff date
+            let relevantComments = allComments.filter(comment => {
+              const commentDate = new Date(comment.created_at);
+              return commentDate > commentCutoffDate;
+            });
+
+            console.log(`Comments after cutoff date: ${relevantComments.length}`);
+
+            if (relevantComments.length === 0 && commits.length > 1) {
+              console.log('No post-cutoff comments found but multiple commits exist; falling back to all comments.');
+              relevantComments = allComments;
+            }
+
+            // Check for Gemini Code Assist comments (High or Critical)
+            const geminiComments = relevantComments.filter(comment => {
+              const userLogin = comment.user?.login?.toLowerCase() || '';
+              const body = comment.body || '';
+
+              // Check if it's a Gemini comment
+              const isGemini = userLogin.includes('gemini') ||
+                              body.includes('Gemini Code Assist') ||
+                              userLogin === 'gemini-code-assist';
+              if (!isGemini) return false;
+
+              // Check for High or Critical priority
+              const bodyLower = body.toLowerCase();
+              const hasHighPriority = /\b(high|critical)\b/.test(bodyLower);
+              return hasHighPriority;
+            });
+
+            console.log(`Gemini High/Critical comments: ${geminiComments.length}`);
+
+            // Check for Codex Review comments (any priority, but exclude "no issues" comments)
+            const codexComments = relevantComments.filter(comment => {
+              const userLogin = comment.user?.login?.toLowerCase() || '';
+              const body = comment.body || '';
+
+              // Check if it's a Codex comment
+              const isCodex = userLogin.includes('codex') ||
+                             userLogin === 'chatgpt-codex-connector' ||
+                             body.includes('Codex Review') ||
+                             body.includes('💡 Codex Review');
+
+              if (!isCodex) return false;
+
+              // Exclude comments that say "Didn't find any major issues"
+              const isNoIssues = body.includes("Codex Review: Didn't find any major issues.") ||
+                                body.includes("Didn't find any major issues");
+
+              if (isNoIssues) return false;
+
+              // Exclude summary-only comments (no actual issues found)
+              // Look for indicators that this is just a summary, not review findings
+              const isSummaryOnly = body.includes('## Summary') &&
+                                   !body.includes('## Issues') &&
+                                   !body.includes('suggestion') &&
+                                   !body.includes('issue') &&
+                                   !body.includes('problem') &&
+                                   !body.includes('error') &&
+                                   !body.includes('warning') &&
+                                   !body.match(/P\d\s+Badge/i); // No priority badges
+
+              return !isSummaryOnly;
+            });
+
+            console.log(`Codex Review comments (excluding no-issues): ${codexComments.length}`);
+
+            const hasReviewComments = geminiComments.length > 0 || codexComments.length > 0;
+
+            // Determine what action to take
+            let commentBody = null;
+
+            if (hasFailures && hasReviewComments) {
+              commentBody = '@codex fix comments and fix build failures';
+            } else if (hasFailures) {
+              commentBody = '@codex fix build failures';
+            } else if (hasReviewComments) {
+              commentBody = '@codex fix comments';
+            }
+
+            if (commentBody) {
+              const normalizedCommentBody = commentBody.trim();
+              const normalizedCommentBodyLower = normalizedCommentBody.toLowerCase();
+              const headSha = pr.head.sha;
+
+              let purpose = 'general';
+              if (normalizedCommentBodyLower.includes('fix comments and fix build failures')) {
+                purpose = 'comments-and-build';
+              } else if (normalizedCommentBodyLower.includes('fix build failures')) {
+                purpose = 'build-fix';
+              } else if (normalizedCommentBodyLower.includes('fix comments')) {
+                purpose = 'comment-fix';
+              }
+
+              const marker = `<!-- codex:${purpose} sha=${headSha} -->`;
+
+              const isCodexBot = (comment) => {
+                const login = comment.user?.login || '';
+                const body = comment.body || '';
+                const isBotUser = comment.user?.type === 'Bot' && /chatgpt-codex-connector/i.test(login);
+                const hasMarker = body.includes('<!-- codex:');
+                return isBotUser || hasMarker;
+              };
+
+              const alreadyForThisSha = issueComments.some(comment => (comment.body || '').includes(marker));
+              if (alreadyForThisSha) {
+                console.log(`Found existing Codex comment for ${purpose} @ ${headSha}. Skipping.`);
+                return;
+              }
+
+              const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+              const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+
+              const recentBotInvocations = issueComments.filter(comment => {
+                if (!isCodexBot(comment)) {
+                  return false;
+                }
+
+                const createdAt = new Date(comment.created_at).getTime();
+                if (createdAt < cutoff) {
+                  return false;
+                }
+
+                const body = comment.body || '';
+                return body.includes(`<!-- codex:${purpose} `);
+              });
+
+              if (recentBotInvocations.length > 0) {
+                console.log(`Recent Codex bot activity detected (<5m) for purpose '${purpose}'. Skipping to avoid spam.`);
+                return;
+              }
+
+              const { data: latestIssueComments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                per_page: 50
+              });
+
+              const duplicateOnLastPage = latestIssueComments.some(comment => (comment.body || '').includes(marker));
+              if (duplicateOnLastPage) {
+                console.log('A matching Codex comment appeared while preparing to post. Skipping to avoid duplicates.');
+                return;
+              }
+
+              const body = [marker, normalizedCommentBody].join('\n');
+
+              console.log(`Posting comment for purpose '${purpose}': ${normalizedCommentBody}`);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                body
+              });
+              console.log('Comment posted successfully!');
+            } else {
+              console.log('No action needed. PR looks good!');
+            }
