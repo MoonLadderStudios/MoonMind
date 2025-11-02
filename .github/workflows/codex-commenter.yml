@@ -29,7 +29,7 @@ jobs:
         (github.event_name == 'pull_request_review' &&
          contains(github.event.review.body || '', '@codex'))
       )
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # Allow each invocation to finish so that later events don't cancel the run
     # while it is collecting data. The dedupe logic inside the script will prevent
     # duplicate @codex comments when queued runs catch up.
@@ -219,7 +219,7 @@ jobs:
             const hasFailures = checkRunsExcludingSelf.some(
               run => failureConclusions.has(run.conclusion)
             );
-            
+
             console.log(`Has failures: ${hasFailures}`);
 
             // Get all PR review comments
