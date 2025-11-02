@@ -434,10 +434,12 @@ class AppSettings(BaseSettings):
         super().model_post_init(__context)
         if not self.celery.result_backend:
             db = self.database
-            self.celery.result_backend = (
-                "db+postgresql://"
-                f"{db.POSTGRES_USER}:{db.POSTGRES_PASSWORD}@"
-                f"{db.POSTGRES_HOST}:{db.POSTGRES_PORT}/{db.POSTGRES_DB}"
+            self.celery.result_backend = "db+postgresql://{}:{}@{}:{}/{}".format(
+                db.POSTGRES_USER,
+                db.POSTGRES_PASSWORD,
+                db.POSTGRES_HOST,
+                db.POSTGRES_PORT,
+                db.POSTGRES_DB,
             )
 
     model_config = SettingsConfigDict(
