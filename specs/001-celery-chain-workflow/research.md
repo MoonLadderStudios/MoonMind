@@ -1,9 +1,9 @@
 # Research: Celery Chain Workflow Integration
 
 ## Broker and Result Backend Selection
-- **Decision**: Use Redis 8 as the Celery broker with PostgreSQL as the result backend via `django-celery-results`-style tables implemented directly in MoonMind.
-- **Rationale**: Redis already appears in MoonMind deployment options, offers low-latency pub/sub, and simplifies horizontal scaling. Persisting results in PostgreSQL keeps long-lived workflow metadata close to the API, enables transactional updates, and survives broker pruning.
-- **Alternatives considered**: RabbitMQ (robust but adds new infrastructure management); Redis for both broker and results (simpler but complicates historical queries and retention policies).
+- **Decision**: Use RabbitMQ 3.x as the Celery broker and PostgreSQL as the durable result backend while persisting long-lived workflow records in MoonMind-managed tables.
+- **Rationale**: RabbitMQ provides reliable transport with acknowledgement semantics for the task chain, and PostgreSQL delivers durable, queryable storage so task states and artifacts survive worker restarts and broker restarts.
+- **Alternatives considered**: Redis (familiar but lacks built-in acknowledgement semantics required for guaranteed delivery in this flow); RabbitMQ RPC result backend (simple but transient and unsuitable for restart survival); Dedicated result backend service (adds complexity without additional benefit beyond PostgreSQL).
 
 ## Task Retry and Resume Strategy
 - **Decision**: Persist task progress after each Celery stage and implement idempotent tasks that can resume from stored artifacts when retries trigger.
