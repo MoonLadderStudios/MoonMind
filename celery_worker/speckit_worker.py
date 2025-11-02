@@ -19,6 +19,7 @@ def create_celery_app() -> Celery:
         task_serializer=settings.celery.task_serializer,
         result_serializer=settings.celery.result_serializer,
         accept_content=list(settings.celery.accept_content),
+        imports=list(settings.celery.imports),
         task_acks_late=settings.celery.task_acks_late,
         task_acks_on_failure_or_timeout=(
             settings.celery.task_acks_on_failure_or_timeout
@@ -28,9 +29,6 @@ def create_celery_app() -> Celery:
         result_extended=settings.celery.result_extended,
         result_expires=settings.celery.result_expires,
     )
-
-    if settings.celery.imports:
-        app.conf.imports = list(settings.celery.imports)
 
     return app
 

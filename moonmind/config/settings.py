@@ -70,16 +70,14 @@ class CelerySettings(BaseSettings):
     task_reject_on_worker_lost: bool = Field(
         True, env="CELERY_TASK_REJECT_ON_WORKER_LOST"
     )
-    worker_prefetch_multiplier: int = Field(
-        1, env="CELERY_WORKER_PREFETCH_MULTIPLIER"
-    )
+    worker_prefetch_multiplier: int = Field(1, env="CELERY_WORKER_PREFETCH_MULTIPLIER")
     imports: tuple[str, ...] = Field(
-        ("moonmind.workflows.speckit_celery.tasks",),
+        (),
         env="CELERY_IMPORTS",
         description="Celery modules imported by the worker on startup.",
     )
     result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
-    result_expires: int = Field(604800, env="CELERY_RESULT_EXPIRES")
+    result_expires: int = Field(7 * 24 * 60 * 60, env="CELERY_RESULT_EXPIRES")
 
     model_config = SettingsConfigDict(env_prefix="")
 
