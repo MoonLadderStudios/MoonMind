@@ -115,7 +115,7 @@ jobs:
             }
 
             // Retry logic: wait for eyes reactions to clear and checks to complete
-            const MAX_RETRIES = 5;
+            const MAX_RETRIES = 10;
             const RETRY_DELAY_MS = 60000; // 1 minute base delay
             let retryCount = 0;
             let shouldWait = true;
