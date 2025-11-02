@@ -2,7 +2,7 @@
 
 ## Prerequisites
 - Python 3.11 with Poetry installed
-- Redis 8 instance reachable at `redis://localhost:6379/0`
+- RabbitMQ 3.x instance reachable at `amqp://guest:guest@localhost:5672//`
 - PostgreSQL database configured via existing MoonMind settings
 - Codex CLI authenticated (`codex login`) and GitHub CLI authorized with a token that can create branches/PRs
 
@@ -21,6 +21,8 @@
    poetry run uvicorn api_service.main:app --reload
 
    # Terminal 2 - Celery worker dedicated to Spec Kit flows
+   CELERY_BROKER_URL=amqp://guest:guest@localhost:5672// \
+   CELERY_RESULT_BACKEND=rpc:// \
    poetry run celery -A moonmind.workflows.speckit_celery.tasks worker -Q speckit --loglevel=info
    ```
 4. **Configure secrets**
