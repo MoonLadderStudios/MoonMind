@@ -1,10 +1,9 @@
 import os
-from pathlib import Path  # Added Path
-from typing import Any, Optional  # Keep one Optional import
+from pathlib import Path
+from typing import Any, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
