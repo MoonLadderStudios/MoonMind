@@ -352,7 +352,7 @@ jobs:
                 return;
               }
 
-              const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+              const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
               const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
 
               const recentBotInvocations = issueComments.filter(comment => {
