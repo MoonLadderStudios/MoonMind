@@ -6,6 +6,9 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
+
 class DatabaseSettings(BaseSettings):
     """Database settings"""
 
@@ -25,7 +28,11 @@ class DatabaseSettings(BaseSettings):
         """Construct synchronous PostgreSQL URL for Alembic"""
         return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+    )
 
 
 class CelerySettings(BaseSettings):
@@ -79,7 +86,11 @@ class CelerySettings(BaseSettings):
     result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
     result_expires: int = Field(7 * 24 * 60 * 60, env="CELERY_RESULT_EXPIRES")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+    )
 
     @field_validator("accept_content", "imports", mode="before")
     @classmethod
@@ -443,7 +454,7 @@ class AppSettings(BaseSettings):
             )
 
     model_config = SettingsConfigDict(
-        env_file=str(Path(__file__).resolve().parent.parent.parent / ".env"),
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="forbid",
     )
