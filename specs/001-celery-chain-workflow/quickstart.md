@@ -2,8 +2,8 @@
 
 ## Prerequisites
 - Python 3.11 with Poetry installed
-- RabbitMQ 3.x instance reachable at `amqp://guest:guest@localhost:5672//`
-- PostgreSQL database configured via existing MoonMind settings
+- RabbitMQ 3.x instance reachable at `amqp://guest:guest@localhost:5672//` (single node using default classic queues)
+- PostgreSQL database configured via existing MoonMind settings (also serves as the Celery result backend)
 - Codex CLI authenticated (`codex login`) and GitHub CLI authorized with a token that can create branches/PRs
 
 ## Setup Steps
@@ -21,9 +21,26 @@
    poetry run uvicorn api_service.main:app --reload
 
    # Terminal 2 - Celery worker dedicated to Spec Kit flows
-   CELERY_BROKER_URL=amqp://guest:guest@localhost:5672// \
-   CELERY_RESULT_BACKEND=rpc:// \
    poetry run celery -A moonmind.workflows.speckit_celery.tasks worker -Q speckit --loglevel=info
+   ```
+   Add the following to your `.env` so Celery picks up the correct broker and result backend configuration:
+   ```dotenv
+   CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
+   CELERY_RESULT_BACKEND=db+postgresql://moonmind:***@localhost:5432/moonmind
+   ```
+   Minimal Celery configuration (for example in `celeryconfig.py`) aligned with the single-node RabbitMQ setup:
+   ```python
+   broker_url = "pyamqp://guest:guest@localhost:5672//"
+   result_backend = "db+postgresql://moonmind:***@localhost:5432/moonmind"
+
+   task_acks_late = True
+   task_acks_on_failure_or_timeout = True
+   task_reject_on_worker_lost = True
+   worker_prefetch_multiplier = 1
+   accept_content = ["json"]
+   task_serializer = result_serializer = "json"
+   result_extended = True
+   result_expires = 604800  # 7 days
    ```
 4. **Configure secrets**
    - Add `CODEX_ENV`, `CODEX_DEVICE_TOKEN` (if applicable), and `GH_TOKEN` to MoonMind secret store or `.env`.

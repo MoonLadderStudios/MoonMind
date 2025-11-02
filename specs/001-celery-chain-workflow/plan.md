@@ -10,8 +10,9 @@ Introduce a Spec Kit provider backed by a Celery Chain so MoonMind can discover 
 ## Technical Context
 
 **Language/Version**: Python 3.11 (matches existing MoonMind services and supported pyproject range)  
-**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x (broker & result backend), PostgreSQL (existing MoonMind DB for run persistence), Codex CLI, GitHub CLI
-**Storage**: PostgreSQL `spec_workflow_runs` + `spec_workflow_task_states`; RabbitMQ broker/result backend for task dispatch and RPC responses; object storage optional for large artifacts (initially local filesystem under `var/artifacts/spec_workflows/<run_id>`)
+**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x (broker), PostgreSQL (result backend & existing MoonMind DB for run persistence), Codex CLI, GitHub CLI
+**Storage**: PostgreSQL `spec_workflow_runs` + `spec_workflow_task_states` (Celery result backend and workflow history); RabbitMQ broker for task dispatch and callbacks; object storage optional for large artifacts (initially local filesystem under `var/artifacts/spec_workflows/<run_id>`)
+**Broker Topology**: Single-node RabbitMQ using default classic queues (no quorum/HA policies) with optional future DLX/TTL tuning.
 **Testing**: pytest with celery worker fixtures, contract snapshot tests for API responses  
 **Target Platform**: Linux containers (MoonMind API + Celery worker deployed via docker-compose/k8s)  
 **Project Type**: API backend with background worker  

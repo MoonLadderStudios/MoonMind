@@ -91,7 +91,8 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 
 ## Assumptions & Dependencies
 
-- MoonMind has an operational Celery deployment using RabbitMQ 3.x for both broker and RPC result backend capabilities so chain state survives worker restarts.
+- MoonMind has an operational Celery deployment using RabbitMQ 3.x for the broker and PostgreSQL as the Celery result backend so chain state and artifacts survive worker restarts.
+- The RabbitMQ broker runs as a single node with default classic queues (no HA or quorum queue policies) aligned with the initial deployment footprint.
 - Codex Cloud environment identifiers, authentication tokens, and GitHub credentials are stored in MoonMind’s secret store and mounted for workflow execution.
 - Spec Kit task definitions are maintained in a repository-accessible location compatible with the discovery task parser.
 - Network egress from the execution environment to Codex Cloud and GitHub APIs is permitted within organizational policy.
