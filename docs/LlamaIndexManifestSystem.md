@@ -116,6 +116,8 @@ Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema
 
 ### JSON Schema (abridged)
 
+> **Implementation status:** the existing loader (`moonmind/schemas/manifest_models.py`) still parses the legacy `apiVersion/kind/spec` manifests shipped in `examples/`. Treat this schema as the **proposed v0 contract** for the next revision and gate any migrations accordingly.
+
 > **Full schema** should live at `docs/schemas/manifest-v0.json` and be generated from Pydantic models in `moonmind/manifest/models.py`. This abridged form captures the core constraints.
 
 ```json
@@ -176,7 +178,10 @@ Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema
           "type": { "type": "string" },
           "params": { "type": "object", "additionalProperties": true },
           "auth": { "type": "object", "additionalProperties": true },
-          "schedule": { "type": "string" }  // "manual" or cron
+          "schedule": {
+            "type": "string",
+            "description": "\"manual\" literal or cron expression"
+          }
         }
       }
     },
@@ -252,7 +257,10 @@ Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema
         "allowlistMetadata": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "scheduling": { "type": "string" } // "manual" or cron
+    "scheduling": {
+      "type": "string",
+      "description": "\"manual\" literal or cron expression"
+    }
   },
   "additionalProperties": false
 }
@@ -333,16 +341,22 @@ metadata:
   name: "moonmind-kitchen-sink"
   tags: ["demo","full"]
 
-llm: { provider: "openai", model: "gpt-4o-mini", temperature: 0 }
+llm:
+  provider: "openai"
+  model: "gpt-4o-mini"
+  temperature: 0
 
-embeddings: { provider: "openai", model: "text-embedding-3-large", batchSize: 256 }
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-large"
+  batchSize: 256
 
 vectorStore:
   type: "qdrant"
   indexName: "mm_full_v0"
   connection:
     host: "${QDRANT_HOST}"
-    port: ${QDRANT_PORT}
+    port: "${QDRANT_PORT}"
 
 dataSources:
   - id: "github-code-docs"
@@ -373,7 +387,10 @@ dataSources:
 
 transforms:
   htmlToText: true
-  splitter: { type: "TokenTextSplitter", chunkSize: 800, chunkOverlap: 120 }
+  splitter:
+    type: "TokenTextSplitter"
+    chunkSize: 800
+    chunkOverlap: 120
   enrichMetadata:
     - type: "PathToTags"
     - type: "InferDocType"     # code|design|spec|handbook
@@ -382,14 +399,19 @@ indices:
   - id: "mm_full_vector"
     type: "VectorStoreIndex"
     sources: ["github-code-docs","gdrive-specs","local-handbook"]
-    persist: { path: "s3://moonmind-indices/mm_full_vector_v0/" }
+    persist:
+      path: "s3://moonmind-indices/mm_full_vector_v0/"
 
 retrievers:
   - id: "mm_hybrid"
     type: "Hybrid"
     indices: ["mm_full_vector"]
-    params: { topK: 10, alpha: 0.55 }
-    reranker: { type: "bge-reranker-large", topK: 5 }
+    params:
+      topK: 10
+      alpha: 0.55
+    reranker:
+      type: "bge-reranker-large"
+      topK: 5
 
 postprocessors:
   - type: "SimilarityCutoff"
