@@ -7,6 +7,14 @@ from .manifest_models import (
     Spec,
     export_schema,
 )
+from .workflow_models import (
+    CreateWorkflowRunRequest,
+    SpecWorkflowRunModel,
+    WorkflowArtifactModel,
+    WorkflowCredentialAuditModel,
+    WorkflowRunCollectionResponse,
+    WorkflowTaskStateModel,
+)
 
 __all__ = [
     "SecretRef",
@@ -16,4 +24,10 @@ __all__ = [
     "Spec",
     "Manifest",
     "export_schema",
+    "SpecWorkflowRunModel",
+    "WorkflowTaskStateModel",
+    "WorkflowArtifactModel",
+    "WorkflowCredentialAuditModel",
+    "WorkflowRunCollectionResponse",
+    "CreateWorkflowRunRequest",
 ]

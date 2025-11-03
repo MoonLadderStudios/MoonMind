@@ -15,6 +15,7 @@ from sqlalchemy_utils import EncryptedType  # Added EncryptedType
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
+from moonmind.workflows.speckit_celery import models as workflow_models  # noqa: F401
 
 
 class Base(DeclarativeBase):

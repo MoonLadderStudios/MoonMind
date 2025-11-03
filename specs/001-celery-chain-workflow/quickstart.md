@@ -52,10 +52,34 @@
      -H 'Content-Type: application/json' \
      -d '{}'
    ```
+   The response is a JSON document matching `SpecWorkflowRun` in
+   `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`. A successful
+   trigger returns HTTP `202` with the run already hydrated with task state
+   placeholders. Example keys to expect:
+
+   ```json
+   {
+     "id": "<uuid>",
+     "status": "succeeded",
+     "phase": "complete",
+     "branchName": "001-celery-chain-workflow/t999",
+     "tasks": [
+       {"taskName": "discover_next_phase", "status": "succeeded"}
+     ]
+   }
+   ```
+
+   When the Spec tasks document has no unchecked items, the discovery task
+   returns a `no_work` payload and the chain short-circuits with status
+   `succeeded`.
 6. **Monitor progress**
    ```bash
    curl http://localhost:8000/api/workflows/speckit/runs
    ```
+   The list endpoint returns a collection with `items` and `nextCursor` (always
+   `null` in the initial implementation). Use `/api/workflows/speckit/runs/<id>`
+   to retrieve a specific run including serialized task state, artifact
+   metadata, and credential audit results.
 7. **Retry on failure**
    ```bash
    curl -X POST http://localhost:8000/api/workflows/speckit/runs/{run_id}/retry \

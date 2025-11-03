@@ -103,6 +103,33 @@ class CelerySettings(BaseSettings):
         return value
 
 
+class SpecWorkflowSettings(BaseSettings):
+    """Settings specific to Spec Kit Celery workflows."""
+
+    repo_root: str = Field(".", env="SPEC_WORKFLOW_REPO_ROOT")
+    tasks_root: str = Field("specs", env="SPEC_WORKFLOW_TASKS_ROOT")
+    artifacts_root: str = Field(
+        "var/artifacts/spec_workflows", env="SPEC_WORKFLOW_ARTIFACTS_ROOT"
+    )
+    default_feature_key: str = Field(
+        "001-celery-chain-workflow", env="SPEC_WORKFLOW_DEFAULT_FEATURE_KEY"
+    )
+    codex_environment: Optional[str] = Field(None, env="CODEX_ENV")
+    codex_model: Optional[str] = Field(None, env="CODEX_MODEL")
+    codex_profile: Optional[str] = Field(None, env="CODEX_PROFILE")
+    github_repository: Optional[str] = Field(
+        None, env="SPEC_WORKFLOW_GITHUB_REPOSITORY"
+    )
+    github_token: Optional[str] = Field(None, env="SPEC_WORKFLOW_GITHUB_TOKEN")
+    test_mode: bool = Field(False, env="SPEC_WORKFLOW_TEST_MODE")
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+    )
+
+
 class SecuritySettings(BaseSettings):
     """Security settings"""
 
@@ -340,6 +367,7 @@ class AppSettings(BaseSettings):
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
+    spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
