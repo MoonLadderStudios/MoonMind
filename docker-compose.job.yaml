@@ -26,8 +26,8 @@ services:
     image: rabbitmq:3.13-management
     hostname: rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER?Variable RABBITMQ_USER is not set}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}
     ports:
       - "5672:5672"
       - "15672:15672"

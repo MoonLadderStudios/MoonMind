@@ -76,15 +76,27 @@ def _run_coro(coro: Coroutine[Any, Any, T]) -> T:
     return result["value"]
 
 
-def _sanitize_for_log(value: Any) -> Any:
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r"(password|secret|token|key|credential|auth|cookie|session)", re.IGNORECASE
+)
+_REDACTED = "***REDACTED***"
+
+
+def _sanitize_for_log(value: Any, *, _field: str | None = None) -> Any:
     """Return a log-friendly representation of the provided value."""
 
+    if _field and _SENSITIVE_KEY_PATTERN.search(_field):
+        return _REDACTED
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, (Path, UUID)):
         return str(value)
     if isinstance(value, dict):
-        return {str(key): _sanitize_for_log(item) for key, item in value.items()}
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            sanitized[key_str] = _sanitize_for_log(item, _field=key_str)
+        return sanitized
     if isinstance(value, (list, tuple, set)):
         return [_sanitize_for_log(item) for item in value]
     return str(value)
@@ -98,17 +110,37 @@ class _MetricsEmitter:
         self._prefix = prefix.rstrip(".")
         host = os.getenv("SPEC_WORKFLOW_METRICS_HOST", os.getenv("STATSD_HOST"))
         port = os.getenv("SPEC_WORKFLOW_METRICS_PORT", os.getenv("STATSD_PORT", "8125"))
-        self._enabled = bool(host)
+        self._configured = bool(host)
+        self._enabled = self._configured
         self._address: tuple[str, int] | None = None
         self._socket: socket.socket | None = None
+        self._failure_count = 0
+        self._disabled_until: float | None = None
+        self._base_backoff = 5.0
+        self._max_backoff = 60.0
 
-        if self._enabled:
+        if self._configured:
+            self._address = (str(host), int(port))
+            self._open_socket()
+
+    def _open_socket(self) -> None:
+        if not self._address:
+            return
+        try:
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        except OSError as exc:
+            self._socket = None
+            self._enabled = False
+            self._disabled_until = time.monotonic() + self._base_backoff
+            logger.warning("Failed to initialize Spec workflow metrics socket: %s", exc)
+
+    def _close_socket(self) -> None:
+        if self._socket is not None:
             try:
-                self._address = (str(host), int(port))
-                self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self._socket.close()
             except OSError:
-                self._enabled = False
-                self._address = None
+                pass
+            finally:
                 self._socket = None
 
     @staticmethod
@@ -119,20 +151,39 @@ class _MetricsEmitter:
         for key, raw_value in tags.items():
             if raw_value is None:
                 continue
-            safe_key = str(key).replace(",", "_").replace("|", "_")
-            safe_value = str(raw_value).replace(",", "_").replace("|", "_")
+            safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(key))
+            safe_value = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(raw_value))
             parts.append(f"{safe_key}:{safe_value}")
         if not parts:
             return ""
         return "|#" + ",".join(parts)
 
     def _send(self, metric: str) -> None:
-        if not self._enabled or not self._socket or not self._address:
+        if not self._configured:
+            return
+        if self._disabled_until:
+            if time.monotonic() < self._disabled_until:
+                return
+            self._disabled_until = None
+            self._enabled = True
+            self._open_socket()
+        if not self._socket or not self._address or not self._enabled:
             return
         try:
             self._socket.sendto(metric.encode("utf-8"), self._address)
-        except OSError:
-            self._enabled = False
+            self._failure_count = 0
+        except OSError as exc:
+            self._close_socket()
+            self._failure_count += 1
+            backoff = min(
+                self._base_backoff * (2 ** (self._failure_count - 1)), self._max_backoff
+            )
+            self._disabled_until = time.monotonic() + backoff
+            logger.warning(
+                "Disabling Spec workflow metrics emission for %.1fs after socket error: %s",
+                backoff,
+                exc,
+            )
 
     def increment(
         self, metric: str, *, value: int = 1, tags: Optional[Mapping[str, Any]] = None
@@ -179,7 +230,8 @@ class TaskObserver:
         self._started_at = time.perf_counter()
         sanitized = _sanitize_for_log(details)
         self._metrics.increment(
-            "task_start", tags=self._metric_tags(status="running", retry=details.get("retry"))
+            "task_start",
+            tags=self._metric_tags(status="running", retry=details.get("retry")),
         )
         logger.info(
             "Spec workflow task %s started for run %s (attempt %s) | details=%s",
@@ -198,16 +250,27 @@ class TaskObserver:
         if duration is not None:
             self._metrics.observe("task_duration", value=duration, tags=tags)
         sanitized_summary = _sanitize_for_log(summary) if summary is not None else {}
-        logger.info(
-            "Spec workflow task %s succeeded for run %s (attempt %s) in %.3fs | summary=%s",
-            self._task_name,
-            self._run_id,
-            self._attempt,
-            duration or -1.0,
-            sanitized_summary,
-        )
+        if duration is not None:
+            logger.info(
+                "Spec workflow task %s succeeded for run %s (attempt %s) in %.3fs | summary=%s",
+                self._task_name,
+                self._run_id,
+                self._attempt,
+                duration,
+                sanitized_summary,
+            )
+        else:
+            logger.info(
+                "Spec workflow task %s succeeded for run %s (attempt %s) | summary=%s",
+                self._task_name,
+                self._run_id,
+                self._attempt,
+                sanitized_summary,
+            )
 
-    def failed(self, exc: BaseException) -> None:
+    def failed(
+        self, exc: BaseException, *, details: Optional[Mapping[str, Any]] = None
+    ) -> None:
         duration = None
         if self._started_at is not None:
             duration = time.perf_counter() - self._started_at
@@ -215,14 +278,31 @@ class TaskObserver:
         self._metrics.increment("task_failure", tags=tags)
         if duration is not None:
             self._metrics.observe("task_duration", value=duration, tags=tags)
-        logger.error(
-            "Spec workflow task %s failed for run %s (attempt %s) after %.3fs: %s",
-            self._task_name,
-            self._run_id,
-            self._attempt,
-            duration or -1.0,
-            exc,
-        )
+        error_details = {
+            "type": exc.__class__.__name__,
+            "message": str(exc),
+        }
+        sanitized_error = _sanitize_for_log(error_details)
+        sanitized_details = _sanitize_for_log(details) if details is not None else None
+        if duration is not None:
+            logger.error(
+                "Spec workflow task %s failed for run %s (attempt %s) after %.3fs | error=%s | details=%s",
+                self._task_name,
+                self._run_id,
+                self._attempt,
+                duration,
+                sanitized_error,
+                sanitized_details,
+            )
+        else:
+            logger.error(
+                "Spec workflow task %s failed for run %s (attempt %s) | error=%s | details=%s",
+                self._task_name,
+                self._run_id,
+                self._attempt,
+                sanitized_error,
+                sanitized_details,
+            )
 
 
 _METRICS = _MetricsEmitter()
@@ -652,7 +732,15 @@ def discover_next_phase(
     try:
         context = _run_coro(_execute())
     except Exception as exc:
-        observer.failed(exc)
+        observer.failed(
+            exc,
+            details={
+                "run_id": run_id,
+                "attempt": attempt,
+                "feature_key": feature_key,
+                "force_phase": force_phase,
+            },
+        )
         raise
 
     summary: dict[str, Any] = {}
@@ -813,7 +901,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
     try:
         result = _run_coro(_execute())
     except Exception as exc:
-        observer.failed(exc)
+        observer.failed(exc, details=context)
         raise
 
     summary: dict[str, Any] = {}
@@ -997,7 +1085,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
     try:
         result = _run_coro(_execute())
     except Exception as exc:
-        observer.failed(exc)
+        observer.failed(exc, details=context)
         raise
 
     summary: dict[str, Any] = {}
