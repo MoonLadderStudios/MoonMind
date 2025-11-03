@@ -78,13 +78,13 @@ Allow operators to resume failed workflows from the point of failure with valida
 Force a failure after Codex apply, invoke `/api/workflows/speckit/runs/{id}/retry`, and ensure the chain resumes at the publish phase using stored artifacts.
 
 ### Tasks
-- [ ] T029 [US3] Add retry orchestration in `moonmind/workflows/speckit_celery/orchestrator.py`
-- [ ] T030 [US3] Implement credential audit persistence in `moonmind/workflows/speckit_celery/models.py`
-- [ ] T031 [US3] Validate secrets pre-flight in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T032 [US3] Expose retry endpoint in `moonmind/api/routers/workflows.py`
-- [ ] T033 [US3] Update schemas for retry responses in `moonmind/schemas/workflow_models.py`
-- [ ] T034 [US3] Extend contract tests for retry flow in `tests/contract/test_workflow_api.py`
-- [ ] T035 [US3] Add integration retry scenario in `tests/integration/workflows/test_workflow_chain.py`
+- [x] T029 [US3] Add retry orchestration in `moonmind/workflows/speckit_celery/orchestrator.py`
+- [x] T030 [US3] Implement credential audit persistence in `moonmind/workflows/speckit_celery/models.py`
+- [x] T031 [US3] Validate secrets pre-flight in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T032 [US3] Expose retry endpoint in `moonmind/api/routers/workflows.py`
+- [x] T033 [US3] Update schemas for retry responses in `moonmind/schemas/workflow_models.py`
+- [x] T034 [US3] Extend contract tests for retry flow in `tests/contract/test_workflow_api.py`
+- [x] T035 [US3] Add integration retry scenario in `tests/integration/workflows/test_workflow_chain.py`
 
 ## Phase 6 – Polish & Cross-Cutting
 - [ ] T036 Add observability hooks (logging/metrics) in `moonmind/workflows/speckit_celery/tasks.py`

@@ -355,6 +355,16 @@ class SpecWorkflowRepository:
     ) -> models.WorkflowArtifact:
         """Store a new artifact reference for the workflow run."""
 
+        existing_stmt = select(models.WorkflowArtifact).where(
+            models.WorkflowArtifact.workflow_run_id == workflow_run_id,
+            models.WorkflowArtifact.artifact_type == artifact_type,
+            models.WorkflowArtifact.path == path,
+        )
+        existing_result = await self._session.execute(existing_stmt)
+        artifact = existing_result.scalar_one_or_none()
+        if artifact is not None:
+            return artifact
+
         artifact = models.WorkflowArtifact(
             id=uuid4(),
             workflow_run_id=workflow_run_id,

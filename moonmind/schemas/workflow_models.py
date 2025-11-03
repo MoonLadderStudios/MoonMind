@@ -116,6 +116,14 @@ class WorkflowRunCollectionResponse(BaseModel):
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
 
+class RetryWorkflowRunRequest(BaseModel):
+    """Request payload for retrying a failed workflow run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    notes: Optional[str] = Field(None, alias="notes", max_length=1024)
+
+
 __all__ = [
     "SpecWorkflowRunModel",
     "WorkflowTaskStateModel",
@@ -124,4 +132,5 @@ __all__ = [
     "WorkflowCredentialAuditModel",
     "CreateWorkflowRunRequest",
     "WorkflowRunCollectionResponse",
+    "RetryWorkflowRunRequest",
 ]

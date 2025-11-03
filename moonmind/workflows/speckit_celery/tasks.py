@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -37,6 +38,14 @@ _TASK_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<body>.+)$")
 _TASK_BODY_PATTERN = re.compile(r"^(?P<identifier>\S+)(?P<title>\s+.*)?$")
 
 T = TypeVar("T")
+
+
+class CredentialValidationError(RuntimeError):
+    """Raised when workflow credentials fail validation."""
+
+    def __init__(self, audit: models.CredentialAuditResult, message: str) -> None:
+        super().__init__(message)
+        self.audit = audit
 
 
 def _run_coro(coro: Coroutine[Any, Any, T]) -> T:
@@ -142,6 +151,7 @@ async def _update_task_state(
     workflow_run_id: UUID,
     task_name: str,
     status: models.SpecWorkflowTaskStatus,
+    attempt: int = 1,
     payload: Optional[dict[str, Any]] = None,
     started_at: Optional[datetime] = None,
     finished_at: Optional[datetime] = None,
@@ -150,6 +160,7 @@ async def _update_task_state(
         workflow_run_id=workflow_run_id,
         task_name=task_name,
         status=status,
+        attempt=attempt,
         payload=payload,
         started_at=started_at,
         finished_at=finished_at,
@@ -163,6 +174,7 @@ async def _persist_failure(
     run_id: UUID,
     task_name: str,
     message: str,
+    attempt: int = 1,
 ) -> None:
     finished = _now()
     await _update_task_state(
@@ -176,6 +188,7 @@ async def _persist_failure(
             code=f"{task_name}_failed",
         ),
         finished_at=finished,
+        attempt=attempt,
     )
     await repo.update_run(
         run_id,
@@ -237,12 +250,121 @@ def _status_payload(
     return payload
 
 
+def _merge_notes(*notes: Optional[str]) -> Optional[str]:
+    parts = [note.strip() for note in notes if note and note.strip()]
+    if not parts:
+        return None
+    return "\n\n".join(parts)
+
+
+def _prepare_retry_context(context: dict[str, Any]) -> int:
+    """Normalize attempt metadata on the task context and return the attempt number."""
+
+    attempt = int(context.get("attempt", 1))
+    context["attempt"] = attempt
+    context["retry"] = bool(context.get("retry")) or attempt > 1
+    return attempt
+
+
+async def _ensure_credentials_validated(
+    repo: SpecWorkflowRepository,
+    *,
+    session,
+    context: dict[str, Any],
+    workflow_run_id: UUID,
+    task_name: str,
+    attempt: int,
+) -> None:
+    """Validate workflow credentials once and persist audit results in the context."""
+
+    if context.get("credentials_validated"):
+        return
+
+    try:
+        audit_result = await _validate_credentials(
+            repo,
+            workflow_run_id=workflow_run_id,
+            notes=context.get("retry_notes"),
+        )
+    except CredentialValidationError as exc:
+        logger.warning(
+            "Credential validation failed for run %s: %s",
+            context["run_id"],
+            exc,
+        )
+        await _persist_failure(
+            repo,
+            run_id=workflow_run_id,
+            task_name=task_name,
+            message=str(exc),
+            attempt=attempt,
+        )
+        await session.commit()
+        raise
+
+    context["credentials_validated"] = True
+    context["credential_audit_status"] = {
+        "codex": audit_result.codex_status.value,
+        "github": audit_result.github_status.value,
+    }
+
+
+async def _validate_credentials(
+    repo: SpecWorkflowRepository,
+    *,
+    workflow_run_id: UUID,
+    notes: Optional[str] = None,
+) -> models.CredentialAuditResult:
+    cfg = settings.spec_workflow
+    codex_status = models.CodexCredentialStatus.VALID
+    github_status = models.GitHubCredentialStatus.VALID
+    issues: list[str] = []
+
+    if not cfg.test_mode:
+        if not cfg.codex_environment or not cfg.codex_model:
+            codex_status = models.CodexCredentialStatus.INVALID
+            issues.append("Codex environment or model is not configured")
+        if not (cfg.github_token or os.getenv("GITHUB_TOKEN")):
+            github_status = models.GitHubCredentialStatus.INVALID
+            issues.append("GitHub token is not configured for publishing")
+
+    system_note = None
+    if issues:
+        system_note = "Credential validation detected issues:\n" + "\n".join(
+            f"- {issue}" for issue in issues
+        )
+
+    combined_notes = _merge_notes(notes, system_note)
+
+    await repo.upsert_credential_audit(
+        workflow_run_id=workflow_run_id,
+        codex_status=codex_status,
+        github_status=github_status,
+        notes=combined_notes,
+    )
+
+    result = models.CredentialAuditResult(
+        codex_status=codex_status, github_status=github_status, notes=combined_notes
+    )
+
+    if not result.is_valid():
+        reason = "; ".join(issues)
+        raise CredentialValidationError(
+            result,
+            message=f"Credential validation failed: {reason}",
+        )
+
+    return result
+
+
 @celery_app.task(name=f"{models.SpecWorkflowRun.__tablename__}.{TASK_DISCOVER}")
 def discover_next_phase(
     run_id: str,
     *,
     feature_key: Optional[str] = None,
     force_phase: Optional[str] = None,
+    attempt: int = 1,
+    retry_notes: Optional[str] = None,
 ) -> dict[str, Any]:
     """Locate the next unchecked task in the Spec Kit tasks document."""
 
@@ -256,7 +378,9 @@ def discover_next_phase(
                 raise ValueError(f"Workflow run {run_id} not found")
 
             await repo.ensure_task_state_placeholders(
-                workflow_run_id=run_uuid, task_names=TASK_SEQUENCE
+                workflow_run_id=run_uuid,
+                task_names=TASK_SEQUENCE,
+                attempt=attempt,
             )
 
             started = run.started_at or _now()
@@ -276,6 +400,7 @@ def discover_next_phase(
                     message="Discovering next Spec Kit task",
                 ),
                 started_at=_now(),
+                attempt=attempt,
             )
             await session.commit()
 
@@ -290,6 +415,7 @@ def discover_next_phase(
                     run_id=run_uuid,
                     task_name=TASK_DISCOVER,
                     message=str(exc),
+                    attempt=attempt,
                 )
                 await session.commit()
                 raise
@@ -302,13 +428,17 @@ def discover_next_phase(
                     run_id=run_uuid,
                     task_name=TASK_DISCOVER,
                     message=str(exc),
+                    attempt=attempt,
                 )
                 await session.commit()
                 raise
 
             finished = _now()
             context = _base_context(run)
-            context.update({"force_phase": force_phase})
+            context.update({"force_phase": force_phase, "attempt": attempt})
+            if retry_notes is not None:
+                context["retry_notes"] = retry_notes
+            context["retry"] = attempt > 1
 
             if discovered is None:
                 message = "All tasks in tasks.md are already complete."
@@ -323,6 +453,7 @@ def discover_next_phase(
                         result="no_work",
                     ),
                     finished_at=finished,
+                    attempt=attempt,
                 )
                 await repo.update_run(
                     run_uuid,
@@ -346,6 +477,7 @@ def discover_next_phase(
                     **payload,
                 ),
                 finished_at=finished,
+                attempt=attempt,
             )
             context["task"] = payload
             await session.commit()
@@ -359,6 +491,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
     """Submit the discovered task to Codex Cloud and persist metadata."""
 
     run_uuid = UUID(context["run_id"])
+    attempt = _prepare_retry_context(context)
 
     async def _execute() -> dict[str, Any]:
         async with get_async_session_context() as session:
@@ -371,6 +504,14 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 run_uuid,
                 phase=models.SpecWorkflowRunPhase.SUBMIT,
             )
+            await _ensure_credentials_validated(
+                repo,
+                session=session,
+                context=context,
+                workflow_run_id=run_uuid,
+                task_name=TASK_SUBMIT,
+                attempt=attempt,
+            )
             await _update_task_state(
                 repo,
                 workflow_run_id=run_uuid,
@@ -379,8 +520,15 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 payload=_status_payload(
                     models.SpecWorkflowTaskStatus.RUNNING,
                     message="Submitting task to Codex",
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 started_at=_now(),
+                attempt=attempt,
             )
             await session.commit()
 
@@ -397,6 +545,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         reason="no_work",
                     ),
                     finished_at=finished,
+                    attempt=attempt,
                 )
                 await session.commit()
                 return context
@@ -417,7 +566,11 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     "Codex submission failed for run %s", context["run_id"]
                 )
                 await _persist_failure(
-                    repo, run_id=run_uuid, task_name=TASK_SUBMIT, message=str(exc)
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_SUBMIT,
+                    message=str(exc),
+                    attempt=attempt,
                 )
                 await session.commit()
                 raise
@@ -451,8 +604,15 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     codexTaskId=result.task_id,
                     summary=result.summary,
                     logsPath=str(result.logs_path),
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 finished_at=finished,
+                attempt=attempt,
             )
             await session.commit()
             return context
@@ -465,6 +625,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
     """Retrieve the Codex patch and publish the resulting PR."""
 
     run_uuid = UUID(context["run_id"])
+    attempt = _prepare_retry_context(context)
 
     async def _execute() -> dict[str, Any]:
         async with get_async_session_context() as session:
@@ -474,6 +635,14 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"Workflow run {context['run_id']} not found")
 
             await repo.update_run(run_uuid, phase=models.SpecWorkflowRunPhase.APPLY)
+            await _ensure_credentials_validated(
+                repo,
+                session=session,
+                context=context,
+                workflow_run_id=run_uuid,
+                task_name=TASK_PUBLISH,
+                attempt=attempt,
+            )
             await _update_task_state(
                 repo,
                 workflow_run_id=run_uuid,
@@ -482,8 +651,15 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 payload=_status_payload(
                     models.SpecWorkflowTaskStatus.RUNNING,
                     message="Retrieving Codex diff and publishing to GitHub",
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 started_at=_now(),
+                attempt=attempt,
             )
             await session.commit()
 
@@ -500,6 +676,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                         reason="no_work",
                     ),
                     finished_at=finished,
+                    attempt=attempt,
                 )
                 await repo.update_run(
                     run_uuid,
@@ -548,7 +725,11 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Apply/publish failed for run %s", context["run_id"])
                 await _persist_failure(
-                    repo, run_id=run_uuid, task_name=TASK_PUBLISH, message=str(exc)
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_PUBLISH,
+                    message=str(exc),
+                    attempt=attempt,
                 )
                 await session.commit()
                 raise
@@ -583,8 +764,15 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     prUrl=publish.pr_url,
                     patchPath=str(diff.patch_path),
                     responsePath=str(publish.response_path),
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 finished_at=finished,
+                attempt=attempt,
             )
             await session.commit()
             return context
