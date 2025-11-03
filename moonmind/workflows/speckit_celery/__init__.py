@@ -1,0 +1,48 @@
+"""Celery application configuration for the Spec Kit workflow."""
+
+from __future__ import annotations
+
+from typing import Iterable
+
+from celery import Celery
+
+from moonmind.config.settings import settings
+
+CELERY_NAMESPACE = "moonmind.workflows.speckit_celery"
+_TASK_IMPORT = "moonmind.workflows.speckit_celery.tasks"
+
+
+def _merge_imports(existing: Iterable[str]) -> list[str]:
+    imports = {item for item in existing if item}
+    imports.add(_TASK_IMPORT)
+    return sorted(imports)
+
+
+def create_celery_app() -> Celery:
+    """Instantiate a Celery application configured for Spec Kit workflows."""
+
+    app = Celery(CELERY_NAMESPACE)
+    app.conf.update(
+        broker_url=settings.celery.broker_url,
+        result_backend=settings.celery.result_backend,
+        task_default_queue=settings.celery.default_queue,
+        task_default_exchange=settings.celery.default_exchange,
+        task_default_routing_key=settings.celery.default_routing_key,
+        task_serializer=settings.celery.task_serializer,
+        result_serializer=settings.celery.result_serializer,
+        accept_content=list(settings.celery.accept_content),
+        imports=_merge_imports(settings.celery.imports),
+        task_acks_late=settings.celery.task_acks_late,
+        task_acks_on_failure_or_timeout=settings.celery.task_acks_on_failure_or_timeout,
+        task_reject_on_worker_lost=settings.celery.task_reject_on_worker_lost,
+        worker_prefetch_multiplier=settings.celery.worker_prefetch_multiplier,
+        result_extended=settings.celery.result_extended,
+        result_expires=settings.celery.result_expires,
+    )
+    return app
+
+
+celery_app = create_celery_app()
+
+
+__all__ = ["celery_app", "create_celery_app", "CELERY_NAMESPACE"]
