@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,7 +10,8 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from moonmind.config.settings import settings
 from moonmind.workflows import SpecWorkflowRepository, trigger_spec_workflow_run
-from moonmind.workflows.speckit_celery import celery_app, models as workflow_models
+from moonmind.workflows.speckit_celery import celery_app
+from moonmind.workflows.speckit_celery import models as workflow_models
 
 
 @pytest.mark.asyncio
@@ -58,7 +60,7 @@ async def test_trigger_workflow_chain(tmp_path, monkeypatch):
         settings.spec_workflow, "default_feature_key", feature_key, raising=False
     )
 
-    triggered = trigger_spec_workflow_run(feature_key=feature_key)
+    triggered = await trigger_spec_workflow_run(feature_key=feature_key)
 
     async with db_base.async_session_maker() as session:
         repo = SpecWorkflowRepository(session)
@@ -74,9 +76,18 @@ async def test_trigger_workflow_chain(tmp_path, monkeypatch):
     assert run.task_states
 
     state_names = {state.task_name: state.status for state in run.task_states}
-    assert state_names["discover_next_phase"] is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
-    assert state_names["submit_codex_job"] is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
-    assert state_names["apply_and_publish"] is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+    assert (
+        state_names["discover_next_phase"]
+        is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+    )
+    assert (
+        state_names["submit_codex_job"]
+        is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+    )
+    assert (
+        state_names["apply_and_publish"]
+        is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+    )
 
     # Artifacts should be written to the configured directory
     for artifact in run.artifacts:

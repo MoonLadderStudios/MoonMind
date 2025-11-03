@@ -50,12 +50,11 @@ def _serialize_run_model(run) -> SpecWorkflowRunModel:
 )
 async def create_workflow_run(
     payload: CreateWorkflowRunRequest,
-    repo: SpecWorkflowRepository = Depends(_get_repository),
 ) -> SpecWorkflowRunModel:
     """Trigger a new workflow run for the requested feature."""
 
     try:
-        triggered: TriggeredWorkflow = trigger_spec_workflow_run(
+        triggered: TriggeredWorkflow = await trigger_spec_workflow_run(
             feature_key=payload.feature_key,
             created_by=payload.created_by,
             force_phase=payload.force_phase,
@@ -70,14 +69,7 @@ async def create_workflow_run(
             },
         ) from exc
 
-    run = await repo.get_run(triggered.run_id, with_relations=True)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "workflow_not_found", "message": "Run creation failed"},
-        )
-
-    return _serialize_run_model(run)
+    return _serialize_run_model(triggered.run)
 
 
 @router.get("/runs", response_model=WorkflowRunCollectionResponse)
@@ -108,9 +100,7 @@ async def list_workflow_runs(
         limit=limit,
         with_relations=False,
     )
-    items = [
-        SpecWorkflowRunModel.model_validate(serialize_run(run)) for run in runs
-    ]
+    items = [SpecWorkflowRunModel.model_validate(serialize_run(run)) for run in runs]
     return WorkflowRunCollectionResponse(items=items, nextCursor=None)
 
 

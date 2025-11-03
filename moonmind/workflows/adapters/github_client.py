@@ -31,7 +31,7 @@ class GitHubClient:
     ) -> None:
         self._repository = repository
         self._token = token or os.getenv("GITHUB_TOKEN")
-        self._test_mode = test_mode or bool(int(os.getenv("SPEC_WORKFLOW_TEST_MODE", "0")))
+        self._test_mode = test_mode
 
     def publish(
         self,
@@ -55,7 +55,9 @@ class GitHubClient:
                 "patch": patch_path.name,
                 "url": pr_url,
             }
-            response_path.write_text(json.dumps(response_payload, indent=2), encoding="utf-8")
+            response_path.write_text(
+                json.dumps(response_payload, indent=2), encoding="utf-8"
+            )
             return GitHubPublishResult(
                 branch_name=branch_name,
                 pr_url=pr_url,

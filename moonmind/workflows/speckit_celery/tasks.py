@@ -21,8 +21,7 @@ from moonmind.workflows.adapters import (
     GitHubClient,
     GitHubPublishResult,
 )
-from moonmind.workflows.speckit_celery import celery_app
-from moonmind.workflows.speckit_celery import models
+from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
 
 logger = get_task_logger(__name__)
@@ -62,7 +61,13 @@ def _resolve_tasks_file(feature_key: str) -> Path:
     tasks_root = Path(cfg.tasks_root)
     if not tasks_root.is_absolute():
         tasks_root = Path(cfg.repo_root) / tasks_root
-    return tasks_root / feature_key / "tasks.md"
+    tasks_root = tasks_root.resolve()
+    tasks_file = (tasks_root / feature_key / "tasks.md").resolve()
+    try:
+        tasks_file.relative_to(tasks_root)
+    except ValueError as exc:
+        raise ValueError("Invalid feature_key leading to path traversal") from exc
+    return tasks_file
 
 
 def _parse_next_task(tasks_file: Path) -> Optional[DiscoveredTask]:
@@ -214,9 +219,26 @@ def discover_next_phase(
                 effective_feature = feature_key or run.feature_key
                 tasks_file = _resolve_tasks_file(effective_feature)
                 discovered = _parse_next_task(tasks_file)
+            except FileNotFoundError as exc:
+                logger.warning("Discovery task failed for run %s: %s", run_id, exc)
+                await _persist_failure(
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_DISCOVER,
+                    message=str(exc),
+                )
+                await session.commit()
+                raise
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Discovery task failed for run %s", run_id)
-                await _persist_failure(repo, run_id=run_uuid, task_name=TASK_DISCOVER, message=str(exc))
+                logger.exception(
+                    "Discovery task failed unexpectedly for run %s", run_id
+                )
+                await _persist_failure(
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_DISCOVER,
+                    message=str(exc),
+                )
                 await session.commit()
                 raise
 
@@ -311,8 +333,12 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     artifacts_dir=artifacts_dir,
                 )
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Codex submission failed for run %s", context["run_id"])
-                await _persist_failure(repo, run_id=run_uuid, task_name=TASK_SUBMIT, message=str(exc))
+                logger.exception(
+                    "Codex submission failed for run %s", context["run_id"]
+                )
+                await _persist_failure(
+                    repo, run_id=run_uuid, task_name=TASK_SUBMIT, message=str(exc)
+                )
                 await session.commit()
                 raise
 
@@ -407,7 +433,9 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     path=str(diff.patch_path),
                 )
 
-                await repo.update_run(run_uuid, phase=models.SpecWorkflowRunPhase.PUBLISH)
+                await repo.update_run(
+                    run_uuid, phase=models.SpecWorkflowRunPhase.PUBLISH
+                )
 
                 publish: GitHubPublishResult = github_client.publish(
                     feature_key=context["feature_key"],
@@ -422,7 +450,9 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 )
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Apply/publish failed for run %s", context["run_id"])
-                await _persist_failure(repo, run_id=run_uuid, task_name=TASK_PUBLISH, message=str(exc))
+                await _persist_failure(
+                    repo, run_id=run_uuid, task_name=TASK_PUBLISH, message=str(exc)
+                )
                 await session.commit()
                 raise
 

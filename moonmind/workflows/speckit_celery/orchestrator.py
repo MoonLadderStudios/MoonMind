@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -25,8 +24,14 @@ from moonmind.workflows.speckit_celery.tasks import (
 class TriggeredWorkflow:
     """Represents a workflow run triggered via the orchestrator."""
 
-    run_id: UUID
+    run: models.SpecWorkflowRun
     celery_chain_id: str
+
+    @property
+    def run_id(self) -> UUID:
+        """Expose the workflow run identifier for backwards compatibility."""
+
+        return self.run.id
 
 
 class WorkflowConflictError(RuntimeError):
@@ -59,6 +64,7 @@ async def _create_workflow_run(
         artifacts_dir = artifacts_root / str(run.id)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         await repo.update_run(run.id, artifacts_path=str(artifacts_dir))
+        run.artifacts_path = str(artifacts_dir)
         await session.commit()
         return run
 
@@ -70,24 +76,17 @@ async def _store_chain_identifier(run_id: UUID, chain_id: str) -> None:
         await session.commit()
 
 
-def trigger_spec_workflow_run(
+async def trigger_spec_workflow_run(
     *,
     feature_key: Optional[str] = None,
-    created_by: Optional[UUID | str] = None,
+    created_by: Optional[UUID] = None,
     force_phase: Optional[str] = None,
 ) -> TriggeredWorkflow:
     """Create a workflow run and dispatch the Celery chain."""
 
     effective_feature = feature_key or settings.spec_workflow.default_feature_key
-    created_by_uuid: Optional[UUID]
-    if isinstance(created_by, UUID) or created_by is None:
-        created_by_uuid = created_by
-    else:
-        created_by_uuid = UUID(str(created_by))
 
-    run = asyncio.run(
-        _create_workflow_run(effective_feature, created_by=created_by_uuid)
-    )
+    run = await _create_workflow_run(effective_feature, created_by=created_by)
 
     task_chain = chain(
         discover_next_phase.s(
@@ -97,9 +96,10 @@ def trigger_spec_workflow_run(
         apply_and_publish.s(),
     )
     result = task_chain.apply_async()
-    asyncio.run(_store_chain_identifier(run.id, result.id))
+    await _store_chain_identifier(run.id, result.id)
+    run.celery_chain_id = result.id
 
-    return TriggeredWorkflow(run_id=run.id, celery_chain_id=result.id)
+    return TriggeredWorkflow(run=run, celery_chain_id=result.id)
 
 
 __all__ = [

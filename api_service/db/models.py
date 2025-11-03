@@ -15,7 +15,7 @@ from sqlalchemy_utils import EncryptedType  # Added EncryptedType
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
-from moonmind.workflows.speckit_celery import models as workflow_models  # noqa: F401
+from moonmind.workflows.speckit_celery import models as workflow_models
 
 
 class Base(DeclarativeBase):
@@ -78,3 +78,12 @@ class ManifestRecord(Base):
     content = Column(Text, nullable=False)
     content_hash = Column(String(64), nullable=False)
     last_indexed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+__all__ = [
+    "Base",
+    "User",
+    "UserProfile",
+    "ManifestRecord",
+    *workflow_models.__all__,
+]

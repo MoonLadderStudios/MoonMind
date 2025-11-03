@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -42,7 +41,7 @@ class CodexClient:
         self._environment = environment
         self._model = model
         self._profile = profile
-        self._test_mode = test_mode or bool(int(os.getenv("SPEC_WORKFLOW_TEST_MODE", "0")))
+        self._test_mode = test_mode
 
     # ------------------------------------------------------------------
     # Submission lifecycle
