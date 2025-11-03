@@ -1,0 +1,3 @@
+{"query": "Where are the RAG retriever components implemented?", "gold": ["moonmind/rag/retriever.py"]}
+{"query": "Which directory contains indexers for external sources?", "gold": ["moonmind/indexers/"]}
+{"query": "How are Celery workflow states persisted?", "gold": ["moonmind/workflows/speckit_celery/","api_service/migrations/versions/"]}

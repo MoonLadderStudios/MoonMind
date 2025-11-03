@@ -1,103 +1,113 @@
-apiVersion: moonmind/v1
-kind: Readers
+version: "v0"
 metadata:
-  name: moonmind-example
-  description: Example collection of data readers for MoonMind
-spec:
-  readers:
-    - type: GithubRepositoryReader
-      enabled: true
-      init:
-        github_client:
-          _type: llama_index.readers.github.github_client.GithubClient
-          _init:
-            github_token:
-              secretRef:
-                provider: profile
-                key: GITHUB_TOKEN
-            verbose: true
-            concurrent_requests: 10
-            timeout: 5
-            retries: 3
-        owner: MoonLadderStudios
-        repo: MoonMind
-        use_parser: true
-        verbose: true
-        concurrent_requests: 10
-        timeout: 5
-        retries: 3
-        filter_directories:
-          - ["tests"]
-          - "EXCLUDE"
-        filter_file_extensions:
-          - [".md", ".py", ".yaml"]
-          - "INCLUDE"
-      load_data:
-        - branch: main
+  name: "moonmind-kitchen-sink"
+  description: "Multi-source ingest with hybrid retrieval and evaluation"
+  owner: "search-platform@moonladdr"
+  tags: ["demo","full","example"]
 
-    - type: ConfluenceReader
-      enabled: true
-      settings:
-        base_url: https://moonladder.atlassian.net/wiki
-        cloud: true                       # true = Confluence Cloud
+llm:
+  provider: "openai"
+  model: "gpt-4o-mini"
+  temperature: 0.0
 
-        # --- option A: single API token --------------------------------
-        api_token:
-          secretRef:
-            provider: env
-            key: ATLASSIAN_API_KEY
-        # api_token: atsu_xxxxx...            # literal fallback
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-large"
+  batchSize: 256
 
-        # --- option B: basic-auth (username + password) --------------
-        # user_name:
-        #   secretRef: {provider: env, key: ATLASSIAN_USERNAME}
-        # password:
-        #   secretRef: {provider: vault, key: secret/confluence#password}
+vectorStore:
+  type: "qdrant"
+  indexName: "mm_full_v0"
+  connection:
+    host: "${QDRANT_HOST}"
+    port: ${QDRANT_PORT}
 
-        # --- option C: OAuth 2.0 dict ---------------------------------
-        # oauth2:
-        #   secretRef: {provider: file, key: /secrets/confluence_oauth.json}
+dataSources:
+  - id: "github-code-docs"
+    type: "GithubRepositoryReader"
+    params:
+      owner: "MoonLadderStudios"
+      repo: "MoonMind"
+      branch: "main"
+      include: ["**/*.py","**/*.md"]
+      exclude: ["tests/**","**/__pycache__/**","**/*.png","**/*.jpg"]
+      maxFiles: 5000
+    auth:
+      githubToken: "${GITHUB_TOKEN}"
+    schedule: "0 4 * * *"   # nightly cron (optional)
 
-        # --- option D: Cookie jar -------------------------------------
-        # cookies:
-        #   secretRef: {provider: file, key: /secrets/confluence_cookies.json}
+  - id: "gdrive-specs"
+    type: "GoogleDriveReader"
+    params:
+      folderId: "${SPECS_FOLDER_ID}"
+      mimeTypes: ["application/pdf","application/vnd.google-apps.document"]
 
-        include_attachments: false
+  - id: "local-handbook"
+    type: "SimpleDirectoryReader"
+    params:
+      inputDir: "./handbook"
+      recursive: true
+      requiredExts: [".md",".txt"]
 
-      sources:
-        - space_key: MOON
-          page_ids: ["123456", "789012"]
-          page_status: current
-          max_num_results: 50
-        - space_key: DOCS
-          include_attachments: true
+transforms:
+  htmlToText: true
+  splitter:
+    type: "TokenTextSplitter"
+    chunkSize: 800
+    chunkOverlap: 120
+  enrichMetadata:
+    - type: "PathToTags"
+    - type: "InferDocType"   # code|design|spec|handbook
 
-    - type: GoogleDriveReader
-      enabled: true
-      settings:
-        # --- option A: service-account key ---------------------------
-        service_account_key:
-          secretRef:
-            provider: file
-            key: /secrets/gdrive_service_account.json
+indices:
+  - id: "mm_full_vector"
+    type: "VectorStoreIndex"
+    sources: ["github-code-docs","gdrive-specs","local-handbook"]
+    persist:
+      path: "s3://moonmind-indices/mm_full_vector_v0/"
 
-        # --- option B: cached OAuth “authorized_user_info” -----------
-        # authorized_user_info:
-        #   secretRef:
-        #     provider: profile
-        #     key: gdrive_user_creds
+retrievers:
+  - id: "mm_hybrid"
+    type: "Hybrid"           # vector + BM25
+    indices: ["mm_full_vector"]
+    params:
+      topK: 10
+      alpha: 0.55            # vector weight
+    reranker:
+      type: "bge-reranker-large"
+      topK: 5
 
-        # --- option C: full client_config (interactive flow) ---------
-        # client_config:
-        #   secretRef:
-        #     provider: env
-        #     key: GDRIVE_CLIENT_CONFIG_JSON
+postprocessors:
+  - type: "SimilarityCutoff"
+    threshold: 0.74
+  - type: "PrevNextNodeFetcher"
+    window: 1
 
-        is_cloud: true                 # don’t write token.json to disk
-        drive_id: 0Bxxxxxxxxxxxxxxxxxxxxxxxxx  # optional—for shared drives
+evaluation:
+  datasets:
+    - name: "smoke"
+      path: "./examples/eval/smoke.jsonl"
+  metrics:
+    - name: "hitRate@10"
+      threshold: 0.80
+    - name: "ndcg@10"
+      threshold: 0.70
+    - name: "faithfulness"
+      threshold: 0.85
 
-      sources:
-        - folder_id: MoonMindDocs
-          recursive: true
-          mime_types: ["application/vnd.google-apps.document"]
-        - file_ids: [file_id_1, file_id_2]
+run:
+  concurrency: 12
+  batchSize: 512
+  errorPolicy: "continue"
+  dryRun: false
+
+observability:
+  tracing: "opentelemetry"
+  logs: "stdout"
+  callbacks: "llamaindex"
+
+security:
+  piiRedaction: true
+  allowlistMetadata: ["path","repo","branch","owner","docType"]
+
+scheduling: "manual"

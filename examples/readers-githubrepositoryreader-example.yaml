@@ -1,103 +1,63 @@
-apiVersion: moonmind/v1
-kind: Readers
+version: "v0"
 metadata:
-  name: moonmind-example
-  description: Example collection of data readers for MoonMind
-spec:
-  readers:
-    - type: GithubRepositoryReader
-      enabled: true
-      init:
-        github_client:
-          _type: llama_index.readers.github.github_client.GithubClient
-          _init:
-            github_token:
-              secretRef:
-                provider: profile
-                key: GITHUB_TOKEN
-            verbose: true
-            concurrent_requests: 10
-            timeout: 5
-            retries: 3
-        owner: MoonLadderStudios
-        repo: MoonMind
-        use_parser: true
-        verbose: true
-        concurrent_requests: 10
-        timeout: 5
-        retries: 3
-        filter_directories:
-          - ["tests"]
-          - "EXCLUDE"
-        filter_file_extensions:
-          - [".md", ".py", ".yaml"]
-          - "INCLUDE"
-      load_data:
-        - branch: main
+  name: "repo-docs"
+  description: "Index README + docs from MoonMind"
+  owner: "search-platform@moonladdr"
+  tags: ["docs", "example", "minimal"]
 
-    - type: ConfluenceReader
-      enabled: true
-      settings:
-        base_url: https://moonladder.atlassian.net/wiki
-        cloud: true                       # true = Confluence Cloud
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-large"
 
-        # --- option A: single API token --------------------------------
-        api_token:
-          secretRef:
-            provider: env
-            key: ATLASSIAN_API_KEY
-        # api_token: atsu_xxxxx...            # literal fallback
+vectorStore:
+  type: "pgvector"
+  indexName: "mm_repo_docs"
+  connection:
+    dsn: "${PG_DSN}"
 
-        # --- option B: basic-auth (username + password) --------------
-        # user_name:
-        #   secretRef: {provider: env, key: ATLASSIAN_USERNAME}
-        # password:
-        #   secretRef: {provider: vault, key: secret/confluence#password}
+dataSources:
+  - id: "mm-repo"
+    type: "GithubRepositoryReader"
+    params:
+      owner: "MoonLadderStudios"
+      repo: "MoonMind"
+      branch: "main"
+      include: ["README.md", "docs/**/*.md"]
+      exclude: ["**/node_modules/**", "**/*.png", "**/*.svg", "**/*.jpg"]
+      maxFiles: 500
+    auth:
+      githubToken: "${GITHUB_TOKEN}"
 
-        # --- option C: OAuth 2.0 dict ---------------------------------
-        # oauth2:
-        #   secretRef: {provider: file, key: /secrets/confluence_oauth.json}
+transforms:
+  splitter:
+    type: "TokenTextSplitter"
+    chunkSize: 1000
+    chunkOverlap: 100
+  htmlToText: true
 
-        # --- option D: Cookie jar -------------------------------------
-        # cookies:
-        #   secretRef: {provider: file, key: /secrets/confluence_cookies.json}
+indices:
+  - id: "mm_repo_vector"
+    type: "VectorStoreIndex"
+    sources: ["mm-repo"]
 
-        include_attachments: false
+retrievers:
+  - id: "mm_repo_vector_r"
+    type: "Vector"
+    indices: ["mm_repo_vector"]
+    params: { topK: 8 }
 
-      sources:
-        - space_key: MOON
-          page_ids: ["123456", "789012"]
-          page_status: current
-          max_num_results: 50
-        - space_key: DOCS
-          include_attachments: true
+postprocessors:
+  - type: "SimilarityCutoff"
+    threshold: 0.76
 
-    - type: GoogleDriveReader
-      enabled: true
-      settings:
-        # --- option A: service-account key ---------------------------
-        service_account_key:
-          secretRef:
-            provider: file
-            key: /secrets/gdrive_service_account.json
+run:
+  concurrency: 6
+  errorPolicy: "continue"
 
-        # --- option B: cached OAuth “authorized_user_info” -----------
-        # authorized_user_info:
-        #   secretRef:
-        #     provider: profile
-        #     key: gdrive_user_creds
+observability:
+  tracing: "opentelemetry"
+  logs: "stdout"
 
-        # --- option C: full client_config (interactive flow) ---------
-        # client_config:
-        #   secretRef:
-        #     provider: env
-        #     key: GDRIVE_CLIENT_CONFIG_JSON
-
-        is_cloud: true                 # don’t write token.json to disk
-        drive_id: 0Bxxxxxxxxxxxxxxxxxxxxxxxxx  # optional—for shared drives
-
-      sources:
-        - folder_id: MoonMindDocs
-          recursive: true
-          mime_types: ["application/vnd.google-apps.document"]
-        - file_ids: [file_id_1, file_id_2]
+security:
+  piiRedaction: false
+  allowlistMetadata: ["path", "repo", "branch", "owner", "docType"]
