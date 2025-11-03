@@ -41,17 +41,17 @@ Automate discovery, submission, diff application, and PR publication through a C
 Execute the POST `/api/workflows/speckit/runs` endpoint with valid secrets and verify a branch and PR are created for the next phase.
 
 ### Tasks
-- [ ] T010 [US1] Implement discovery task in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T011 [US1] Implement Codex submission task in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T012 [US1] Implement apply/PR task in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T013 [US1] Build orchestrator chain in `moonmind/workflows/speckit_celery/orchestrator.py`
-- [ ] T014 [US1] Add Codex client adapter in `moonmind/workflows/adapters/codex_client.py`
-- [ ] T015 [US1] Add GitHub client adapter in `moonmind/workflows/adapters/github_client.py`
-- [ ] T016 [US1] Expose workflow trigger endpoint in `moonmind/api/routers/workflows.py`
-- [ ] T017 [US1] Register Pydantic schemas in `moonmind/schemas/workflow_models.py`
-- [ ] T018 [US1] Write integration test `tests/integration/workflows/test_workflow_chain.py`
-- [ ] T019 [US1] Add contract test `tests/contract/test_workflow_api.py`
-- [ ] T020 [US1] Document operator workflow in `specs/001-celery-chain-workflow/quickstart.md`
+- [x] T010 [US1] Implement discovery task in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T011 [US1] Implement Codex submission task in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T012 [US1] Implement apply/PR task in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T013 [US1] Build orchestrator chain in `moonmind/workflows/speckit_celery/orchestrator.py`
+- [x] T014 [US1] Add Codex client adapter in `moonmind/workflows/adapters/codex_client.py`
+- [x] T015 [US1] Add GitHub client adapter in `moonmind/workflows/adapters/github_client.py`
+- [x] T016 [US1] Expose workflow trigger endpoint in `moonmind/api/routers/workflows.py`
+- [x] T017 [US1] Register Pydantic schemas in `moonmind/schemas/workflow_models.py`
+- [x] T018 [US1] Write integration test `tests/integration/workflows/test_workflow_chain.py`
+- [x] T019 [US1] Add contract test `tests/contract/test_workflow_api.py`
+- [x] T020 [US1] Document operator workflow in `specs/001-celery-chain-workflow/quickstart.md`
 
 ## Phase 4 – User Story 2: Monitor Workflow Progress (Priority P2)
 ### Story Goal

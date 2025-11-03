@@ -77,3 +77,18 @@ class ManifestRecord(Base):
     content = Column(Text, nullable=False)
     content_hash = Column(String(64), nullable=False)
     last_indexed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+__all__ = [
+    "Base",
+    "User",
+    "UserProfile",
+    "ManifestRecord",
+]
+
+
+from moonmind.workflows.speckit_celery import (  # noqa: E402  # isort: skip
+    models as workflow_models,
+)
+
+__all__.extend(workflow_models.__all__)

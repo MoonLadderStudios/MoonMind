@@ -5,6 +5,11 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.speckit_celery import celery_app
+from moonmind.workflows.speckit_celery.orchestrator import (
+    TriggeredWorkflow,
+    WorkflowConflictError,
+    trigger_spec_workflow_run,
+)
 from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
 
 
@@ -14,4 +19,11 @@ def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepositor
     return SpecWorkflowRepository(session)
 
 
-__all__ = ["celery_app", "get_spec_workflow_repository", "SpecWorkflowRepository"]
+__all__ = [
+    "celery_app",
+    "get_spec_workflow_repository",
+    "SpecWorkflowRepository",
+    "trigger_spec_workflow_run",
+    "WorkflowConflictError",
+    "TriggeredWorkflow",
+]

@@ -29,6 +29,7 @@ from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
+from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.schemas import UserProfileUpdate
 
 # Auth imports
@@ -251,6 +252,7 @@ app.include_router(
 app.include_router(
     profile_router, prefix="", tags=["Profile"]
 )  # Include profile router
+app.include_router(workflows_router)
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
