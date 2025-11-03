@@ -23,6 +23,21 @@ class WorkflowTaskStateModel(BaseModel):
     payload: dict[str, Any] | None = Field(None, alias="payload")
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
+    created_at: datetime | None = Field(None, alias="createdAt")
+    updated_at: datetime | None = Field(None, alias="updatedAt")
+
+
+class WorkflowTaskSummaryModel(BaseModel):
+    """Schema capturing the latest state per workflow task."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_name: str = Field(..., alias="taskName")
+    status: models.SpecWorkflowTaskStatus = Field(..., alias="status")
+    attempt: int = Field(..., alias="attempt")
+    started_at: datetime | None = Field(None, alias="startedAt")
+    finished_at: datetime | None = Field(None, alias="finishedAt")
+    updated_at: datetime | None = Field(None, alias="updatedAt")
 
 
 class WorkflowArtifactModel(BaseModel):
@@ -59,6 +74,8 @@ class SpecWorkflowRunModel(BaseModel):
     branch_name: Optional[str] = Field(None, alias="branchName")
     pr_url: Optional[str] = Field(None, alias="prUrl")
     codex_task_id: Optional[str] = Field(None, alias="codexTaskId")
+    codex_logs_path: Optional[str] = Field(None, alias="codexLogsPath")
+    codex_patch_path: Optional[str] = Field(None, alias="codexPatchPath")
     celery_chain_id: Optional[str] = Field(None, alias="celeryChainId")
     created_by: Optional[UUID] = Field(None, alias="createdBy")
     started_at: datetime | None = Field(None, alias="startedAt")
@@ -67,6 +84,9 @@ class SpecWorkflowRunModel(BaseModel):
     created_at: datetime | None = Field(None, alias="createdAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
     tasks: list[WorkflowTaskStateModel] = Field(default_factory=list, alias="tasks")
+    task_summary: list[WorkflowTaskSummaryModel] = Field(
+        default_factory=list, alias="taskSummary"
+    )
     artifacts: list[WorkflowArtifactModel] = Field(
         default_factory=list, alias="artifacts"
     )
@@ -99,6 +119,7 @@ class WorkflowRunCollectionResponse(BaseModel):
 __all__ = [
     "SpecWorkflowRunModel",
     "WorkflowTaskStateModel",
+    "WorkflowTaskSummaryModel",
     "WorkflowArtifactModel",
     "WorkflowCredentialAuditModel",
     "CreateWorkflowRunRequest",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Optional
 from uuid import UUID
 
@@ -35,12 +36,20 @@ async def _get_repository(
     return get_spec_workflow_repository(session)
 
 
-def _serialize_run_model(run) -> SpecWorkflowRunModel:
+def _serialize_run_model(
+    run,
+    *,
+    include_tasks: bool = True,
+    include_artifacts: bool = True,
+    include_credential_audit: bool = True,
+    task_states: Iterable[models.SpecWorkflowTaskState] | None = None,
+) -> SpecWorkflowRunModel:
     serialized = serialize_run(
         run,
-        include_tasks=True,
-        include_artifacts=True,
-        include_credential_audit=True,
+        include_tasks=include_tasks,
+        include_artifacts=include_artifacts,
+        include_credential_audit=include_credential_audit,
+        task_states=task_states,
     )
     return SpecWorkflowRunModel.model_validate(serialized)
 
@@ -86,6 +95,8 @@ async def list_workflow_runs(
     feature_key: Optional[str] = Query(None, alias="featureKey"),
     created_by: Optional[UUID] = Query(None, alias="createdBy"),
     limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None, alias="cursor"),
+    include_tasks: bool = Query(False, alias="includeTasks"),
     repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
 ) -> WorkflowRunCollectionResponse:
@@ -108,13 +119,28 @@ async def list_workflow_runs(
         limit=limit,
         with_relations=False,
     )
-    items = [SpecWorkflowRunModel.model_validate(serialize_run(run)) for run in runs]
+    task_state_map = await repo.list_task_states_for_runs(run.id for run in runs)
+    items = [
+        _serialize_run_model(
+            run,
+            include_tasks=include_tasks,
+            include_artifacts=False,
+            include_credential_audit=False,
+            task_states=task_state_map.get(run.id, []),
+        )
+        for run in runs
+    ]
+    # Cursor support is not yet implemented; placeholder for future pagination.
+    _ = cursor
     return WorkflowRunCollectionResponse(items=items, nextCursor=None)
 
 
 @router.get("/runs/{run_id}", response_model=SpecWorkflowRunModel)
 async def get_workflow_run(
     run_id: UUID,
+    include_tasks: bool = Query(True, alias="includeTasks"),
+    include_artifacts: bool = Query(True, alias="includeArtifacts"),
+    include_credential_audit: bool = Query(True, alias="includeCredentialAudit"),
     repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
 ) -> SpecWorkflowRunModel:
@@ -130,7 +156,12 @@ async def get_workflow_run(
             },
         )
 
-    return _serialize_run_model(run)
+    return _serialize_run_model(
+        run,
+        include_tasks=include_tasks,
+        include_artifacts=include_artifacts,
+        include_credential_audit=include_credential_audit,
+    )
 
 
 __all__ = ["router"]
