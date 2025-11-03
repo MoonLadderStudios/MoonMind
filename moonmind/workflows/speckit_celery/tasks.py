@@ -573,7 +573,8 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     attempt=attempt,
                 )
                 await session.commit()
-                raise
+                context["error"] = str(exc)
+                return context
 
             finished = _now()
             context.update(
@@ -732,7 +733,8 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     attempt=attempt,
                 )
                 await session.commit()
-                raise
+                context["error"] = str(exc)
+                return context
 
             finished = _now()
             context.update(
