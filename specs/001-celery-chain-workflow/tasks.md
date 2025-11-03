@@ -87,10 +87,10 @@ Force a failure after Codex apply, invoke `/api/workflows/speckit/runs/{id}/retr
 - [x] T035 [US3] Add integration retry scenario in `tests/integration/workflows/test_workflow_chain.py`
 
 ## Phase 6 – Polish & Cross-Cutting
-- [ ] T036 Add observability hooks (logging/metrics) in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T037 Update deployment manifests in ./docker-compose.yaml and ./docker-compose.job.yaml for Celery worker queue
-- [ ] T038 Refresh Codex agent context in ./AGENTS.md with final verification steps
-- [ ] T039 Add runbook section to `docs/ops-runbook.md`
+- [x] T036 Add observability hooks (logging/metrics) in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T037 Update deployment manifests in ./docker-compose.yaml and ./docker-compose.job.yaml for Celery worker queue
+- [x] T038 Refresh Codex agent context in ./AGENTS.md with final verification steps
+- [x] T039 Add runbook section to `docs/ops-runbook.md`
 
 ---
 

@@ -71,6 +71,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
       - MODEL_CONTEXT_PROTOCOL_PORT=5000
@@ -99,6 +100,8 @@ services:
       init-db:
         condition: service_completed_successfully
       api-db:
+        condition: service_started
+      rabbitmq:
         condition: service_started
 
   api-db:
@@ -151,6 +154,52 @@ services:
     depends_on:
       - api-db
       - qdrant
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER?Variable RABBITMQ_USER is not set}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    command: >-
+      celery -A celery_worker.speckit_worker worker
+      --loglevel=${CELERY_LOG_LEVEL:-info}
+      --queues=${CELERY_DEFAULT_QUEUE:-speckit}
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./celery_worker:/app/celery_worker:ro
+      - ./specs:/app/specs:ro
+      - ./model_data:/app/model_data
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      api-db:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
 
   ollama:
     profiles: ["ollama"]
@@ -234,6 +283,7 @@ volumes:
   qdrant-storage:
   api-db-data:
   keycloak-data:
+  rabbitmq-data:
 
 networks:
   local-network:
