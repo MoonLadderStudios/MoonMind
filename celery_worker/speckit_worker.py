@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 
-
 celery_app = speckit_celery_app
 
 # Celery uses the module-level ``app`` attribute as the default application target

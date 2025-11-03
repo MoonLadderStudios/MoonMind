@@ -250,9 +250,7 @@ def upgrade() -> None:  # noqa: D401
 def downgrade() -> None:  # noqa: D401
     """Drop workflow tables and supporting enums."""
 
-    op.drop_index(
-        "ix_workflow_artifacts_run_id", table_name="workflow_artifacts"
-    )
+    op.drop_index("ix_workflow_artifacts_run_id", table_name="workflow_artifacts")
     op.drop_table("workflow_artifacts")
 
     op.drop_table("workflow_credential_audits")
@@ -267,15 +265,9 @@ def downgrade() -> None:  # noqa: D401
     )
     op.drop_table("spec_workflow_task_states")
 
-    op.drop_index(
-        "ix_spec_workflow_runs_created_by", table_name="spec_workflow_runs"
-    )
-    op.drop_index(
-        "ix_spec_workflow_runs_status", table_name="spec_workflow_runs"
-    )
-    op.drop_index(
-        "ix_spec_workflow_runs_feature_key", table_name="spec_workflow_runs"
-    )
+    op.drop_index("ix_spec_workflow_runs_created_by", table_name="spec_workflow_runs")
+    op.drop_index("ix_spec_workflow_runs_status", table_name="spec_workflow_runs")
+    op.drop_index("ix_spec_workflow_runs_feature_key", table_name="spec_workflow_runs")
     op.drop_table("spec_workflow_runs")
 
     bind = op.get_bind()

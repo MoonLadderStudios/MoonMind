@@ -17,6 +17,18 @@ from moonmind.workflows.speckit_celery import models
 class SpecWorkflowRepository:
     """Repository exposing CRUD helpers for workflow runs and related records."""
 
+    _UPDATABLE_RUN_FIELDS = {
+        "celery_chain_id",
+        "status",
+        "phase",
+        "branch_name",
+        "pr_url",
+        "codex_task_id",
+        "artifacts_path",
+        "started_at",
+        "finished_at",
+    }
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
@@ -53,9 +65,9 @@ class SpecWorkflowRepository:
     ) -> Optional[models.SpecWorkflowRun]:
         """Return a workflow run optionally including related state."""
 
-        stmt: Select[tuple[models.SpecWorkflowRun]] = select(models.SpecWorkflowRun).where(
-            models.SpecWorkflowRun.id == run_id
-        )
+        stmt: Select[tuple[models.SpecWorkflowRun]] = select(
+            models.SpecWorkflowRun
+        ).where(models.SpecWorkflowRun.id == run_id)
         if with_relations:
             stmt = stmt.options(
                 selectinload(models.SpecWorkflowRun.task_states),
@@ -70,15 +82,19 @@ class SpecWorkflowRepository:
     ) -> Optional[models.SpecWorkflowRun]:
         """Locate a pending or running workflow for the given feature."""
 
-        stmt = select(models.SpecWorkflowRun).where(
-            models.SpecWorkflowRun.feature_key == feature_key,
-            models.SpecWorkflowRun.status.in_(
-                [
-                    models.SpecWorkflowRunStatus.PENDING,
-                    models.SpecWorkflowRunStatus.RUNNING,
-                ]
-            ),
-        ).order_by(models.SpecWorkflowRun.created_at.desc())
+        stmt = (
+            select(models.SpecWorkflowRun)
+            .where(
+                models.SpecWorkflowRun.feature_key == feature_key,
+                models.SpecWorkflowRun.status.in_(
+                    [
+                        models.SpecWorkflowRunStatus.PENDING,
+                        models.SpecWorkflowRunStatus.RUNNING,
+                    ]
+                ),
+            )
+            .order_by(models.SpecWorkflowRun.created_at.desc())
+        )
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
@@ -127,8 +143,10 @@ class SpecWorkflowRepository:
             return None
 
         for field, value in changes.items():
-            if not hasattr(run, field):
-                raise AttributeError(f"SpecWorkflowRun has no field '{field}'")
+            if field not in self._UPDATABLE_RUN_FIELDS:
+                raise AttributeError(
+                    f"SpecWorkflowRun field '{field}' cannot be updated or does not exist."
+                )
             setattr(run, field, value)
 
         await self._session.flush()
@@ -267,21 +285,25 @@ class SpecWorkflowRepository:
     ) -> Sequence[models.WorkflowArtifact]:
         """Bulk insert artifacts returning the persisted objects."""
 
-        persisted: list[models.WorkflowArtifact] = []
         now = datetime.now(UTC)
-        for artifact_type, path in artifacts:
-            obj = models.WorkflowArtifact(
+        new_artifacts = [
+            models.WorkflowArtifact(
                 id=uuid4(),
                 workflow_run_id=workflow_run_id,
                 artifact_type=artifact_type,
                 path=path,
                 created_at=now,
             )
-            self._session.add(obj)
-            persisted.append(obj)
+            for artifact_type, path in artifacts
+        ]
+
+        if not new_artifacts:
+            return []
+
+        self._session.add_all(new_artifacts)
 
         await self._session.flush()
-        return persisted
+        return new_artifacts
 
     async def list_artifacts(
         self, workflow_run_id: UUID

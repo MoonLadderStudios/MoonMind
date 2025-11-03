@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.orm import attributes
+
 from moonmind.workflows.speckit_celery import models
 
 
@@ -45,8 +47,8 @@ def serialize_artifact(artifact: models.WorkflowArtifact) -> dict[str, Any]:
 def serialize_run(
     run: models.SpecWorkflowRun,
     *,
-    include_tasks: bool = True,
-    include_artifacts: bool = True,
+    include_tasks: bool = False,
+    include_artifacts: bool = False,
     include_credential_audit: bool = False,
 ) -> dict[str, Any]:
     """Serialize a workflow run and optionally its related entities."""
@@ -69,17 +71,25 @@ def serialize_run(
     }
 
     if include_tasks:
-        tasks: Iterable[models.SpecWorkflowTaskState] = getattr(
-            run, "task_states", []
+        tasks: Iterable[models.SpecWorkflowTaskState] = (
+            run.task_states
+            if attributes.is_attribute_loaded(run, "task_states")
+            else []
         )
         data["tasks"] = [serialize_task_state(task) for task in tasks]
 
     if include_artifacts:
-        artifacts: Iterable[models.WorkflowArtifact] = getattr(run, "artifacts", [])
+        artifacts: Iterable[models.WorkflowArtifact] = (
+            run.artifacts if attributes.is_attribute_loaded(run, "artifacts") else []
+        )
         data["artifacts"] = [serialize_artifact(item) for item in artifacts]
 
     if include_credential_audit:
-        audit = getattr(run, "credential_audit", None)
+        audit = (
+            run.credential_audit
+            if attributes.is_attribute_loaded(run, "credential_audit")
+            else None
+        )
         if audit is not None:
             data["credentialAudit"] = {
                 "codexStatus": audit.codex_status.value,

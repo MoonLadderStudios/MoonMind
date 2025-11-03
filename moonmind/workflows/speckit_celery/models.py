@@ -98,7 +98,7 @@ class SpecWorkflowRun(Base):
         Enum(
             SpecWorkflowRunStatus,
             name="specworkflowrunstatus",
-            native_enum=False,
+            native_enum=True,
             validate_strings=True,
         ),
         nullable=False,
@@ -108,7 +108,7 @@ class SpecWorkflowRun(Base):
         Enum(
             SpecWorkflowRunPhase,
             name="specworkflowrunphase",
-            native_enum=False,
+            native_enum=True,
             validate_strings=True,
         ),
         nullable=False,
@@ -183,7 +183,7 @@ class SpecWorkflowTaskState(Base):
         Enum(
             SpecWorkflowTaskStatus,
             name="specworkflowtaskstatus",
-            native_enum=False,
+            native_enum=True,
             validate_strings=True,
         ),
         nullable=False,
@@ -216,9 +216,7 @@ class WorkflowCredentialAudit(Base):
 
     __tablename__ = "workflow_credential_audits"
     __table_args__ = (
-        UniqueConstraint(
-            "workflow_run_id", name="uq_workflow_credential_audit_run"
-        ),
+        UniqueConstraint("workflow_run_id", name="uq_workflow_credential_audit_run"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -229,7 +227,7 @@ class WorkflowCredentialAudit(Base):
         Enum(
             CodexCredentialStatus,
             name="workflowcodexcredentialstatus",
-            native_enum=False,
+            native_enum=True,
             validate_strings=True,
         ),
         nullable=False,
@@ -238,7 +236,7 @@ class WorkflowCredentialAudit(Base):
         Enum(
             GitHubCredentialStatus,
             name="workflowgithubcredentialstatus",
-            native_enum=False,
+            native_enum=True,
             validate_strings=True,
         ),
         nullable=False,
@@ -274,7 +272,7 @@ class WorkflowArtifact(Base):
         Enum(
             WorkflowArtifactType,
             name="workflowartifacttype",
-            native_enum=False,
+            native_enum=True,
             validate_strings=True,
         ),
         nullable=False,
