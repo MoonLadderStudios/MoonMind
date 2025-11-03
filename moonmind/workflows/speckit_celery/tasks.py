@@ -32,6 +32,7 @@ TASK_SUBMIT = "submit_codex_job"
 TASK_PUBLISH = "apply_and_publish"
 
 _TASK_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<body>.+)$")
+_TASK_BODY_PATTERN = re.compile(r"^(?P<identifier>\S+)(?P<title>\s+.*)?$")
 
 
 @dataclass(slots=True)
@@ -90,9 +91,12 @@ def _parse_next_task(tasks_file: Path) -> Optional[DiscoveredTask]:
                 continue
 
             body = match.group("body")
-            parts = body.split(" ", 1)
-            identifier = parts[0]
-            title = parts[1].strip() if len(parts) > 1 else ""
+            body_match = _TASK_BODY_PATTERN.match(body)
+            if not body_match:
+                continue
+
+            identifier = body_match.group("identifier")
+            title = (body_match.group("title") or "").strip()
             return DiscoveredTask(
                 identifier=identifier,
                 title=title,

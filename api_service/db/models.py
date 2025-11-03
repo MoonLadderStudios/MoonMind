@@ -15,7 +15,6 @@ from sqlalchemy_utils import EncryptedType  # Added EncryptedType
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
-from moonmind.workflows.speckit_celery import models as workflow_models
 
 
 class Base(DeclarativeBase):
@@ -85,5 +84,11 @@ __all__ = [
     "User",
     "UserProfile",
     "ManifestRecord",
-    *workflow_models.__all__,
 ]
+
+
+from moonmind.workflows.speckit_celery import (  # noqa: E402  # isort: skip
+    models as workflow_models,
+)
+
+__all__.extend(workflow_models.__all__)
