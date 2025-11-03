@@ -121,7 +121,7 @@ class RetryWorkflowRunRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    notes: Optional[str] = Field(None, alias="notes")
+    notes: Optional[str] = Field(None, alias="notes", max_length=1024)
 
 
 __all__ = [
