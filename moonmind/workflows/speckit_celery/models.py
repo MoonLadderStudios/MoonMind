@@ -8,6 +8,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     Enum,
     ForeignKey,
@@ -24,6 +25,8 @@ from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api_service.db.models import Base
+
+_TASK_PAYLOAD_TYPE = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 
 
 class SpecWorkflowRunStatus(str, enum.Enum):
@@ -126,13 +129,13 @@ class SpecWorkflowRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
-        server_onupdate=text("now()"),
+        server_default=text("CURRENT_TIMESTAMP"),
+        server_onupdate=text("CURRENT_TIMESTAMP"),
     )
 
     task_states: Mapped[list["SpecWorkflowTaskState"]] = relationship(
@@ -190,20 +193,20 @@ class SpecWorkflowTaskState(Base):
     )
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        MutableDict.as_mutable(JSONB), nullable=True
+        _TASK_PAYLOAD_TYPE, nullable=True
     )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
-        server_onupdate=text("now()"),
+        server_default=text("CURRENT_TIMESTAMP"),
+        server_onupdate=text("CURRENT_TIMESTAMP"),
     )
 
     workflow_run: Mapped[SpecWorkflowRun] = relationship(
@@ -244,7 +247,7 @@ class WorkflowCredentialAudit(Base):
     checked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=text("CURRENT_TIMESTAMP"),
     )
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -281,7 +284,7 @@ class WorkflowArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=text("CURRENT_TIMESTAMP"),
     )
 
     workflow_run: Mapped[SpecWorkflowRun] = relationship(

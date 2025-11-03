@@ -51,7 +51,7 @@ def _run_coro(coro: Coroutine[Any, Any, T]) -> T:
     def _runner() -> None:
         try:
             result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # pragma: no cover - propagate errors
+        except Exception as exc:  # pragma: no cover - propagate errors
             result["error"] = exc
 
     thread = threading.Thread(target=_runner, name="spec-workflow-task")

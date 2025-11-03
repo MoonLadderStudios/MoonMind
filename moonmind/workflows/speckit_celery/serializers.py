@@ -6,8 +6,6 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 
-from sqlalchemy.orm import attributes
-
 from moonmind.workflows.speckit_celery import models
 
 
@@ -137,24 +135,18 @@ def serialize_run(
 
     if include_tasks:
         tasks: Iterable[models.SpecWorkflowTaskState] = (
-            run.task_states
-            if attributes.is_attribute_loaded(run, "task_states")
-            else []
+            run.task_states if "task_states" in run.__dict__ else []
         )
         data["tasks"] = [serialize_task_state(task) for task in tasks]
 
     if include_artifacts:
         artifacts: Iterable[models.WorkflowArtifact] = (
-            run.artifacts if attributes.is_attribute_loaded(run, "artifacts") else []
+            run.artifacts if "artifacts" in run.__dict__ else []
         )
         data["artifacts"] = [serialize_artifact(item) for item in artifacts]
 
     if include_credential_audit:
-        audit = (
-            run.credential_audit
-            if attributes.is_attribute_loaded(run, "credential_audit")
-            else None
-        )
+        audit = run.credential_audit if "credential_audit" in run.__dict__ else None
         data["credentialAudit"] = _serialize_credential_audit(audit)
 
     return data

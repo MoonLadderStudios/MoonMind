@@ -52,6 +52,7 @@ def _serialize_run_model(run) -> SpecWorkflowRunModel:
 )
 async def create_workflow_run(
     payload: CreateWorkflowRunRequest,
+    repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
 ) -> SpecWorkflowRunModel:
     """Trigger a new workflow run for the requested feature."""
@@ -72,7 +73,10 @@ async def create_workflow_run(
             },
         ) from exc
 
-    return _serialize_run_model(triggered.run)
+    refreshed = await repo.get_run(triggered.run_id, with_relations=True)
+    run = refreshed or triggered.run
+
+    return _serialize_run_model(run)
 
 
 @router.get("/runs", response_model=WorkflowRunCollectionResponse)
