@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 from uuid import UUID
 
 from celery import chain
+from celery.canvas import Signature
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
-from moonmind.workflows.speckit_celery import models
+from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
 from moonmind.workflows.speckit_celery.tasks import (
     TASK_DISCOVER,
@@ -142,7 +143,7 @@ async def trigger_spec_workflow_run(
         submit_codex_job.s(),
         apply_and_publish.s(),
     )
-    result = task_chain.apply_async()
+    result = _apply_chain_safely(task_chain)
     await _store_chain_identifier(run.id, result.id)
     run.celery_chain_id = result.id
 
@@ -265,11 +266,27 @@ async def retry_spec_workflow_run(
         signatures.append(task_map[task_name].s())
 
     task_chain = chain(*signatures)
-    result = task_chain.apply_async()
+    result = _apply_chain_safely(task_chain)
     await _store_chain_identifier(run.id, result.id)
     run.celery_chain_id = result.id
 
     return TriggeredWorkflow(run=run, celery_chain_id=result.id)
+
+
+def _apply_chain_safely(task_chain: Signature) -> Any:
+    """Execute a Celery chain while avoiding eager exception propagation."""
+
+    eager = bool(getattr(celery_app.conf, "task_always_eager", False))
+    propagates = bool(getattr(celery_app.conf, "task_eager_propagates", False))
+
+    if not (eager and propagates):
+        return task_chain.apply_async()
+
+    celery_app.conf.task_eager_propagates = False
+    try:
+        return task_chain.apply_async()
+    finally:
+        celery_app.conf.task_eager_propagates = True
 
 
 __all__ = [
