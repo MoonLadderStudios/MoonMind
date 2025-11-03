@@ -257,6 +257,58 @@ def _merge_notes(*notes: Optional[str]) -> Optional[str]:
     return "\n\n".join(parts)
 
 
+def _prepare_retry_context(context: dict[str, Any]) -> int:
+    """Normalize attempt metadata on the task context and return the attempt number."""
+
+    attempt = int(context.get("attempt", 1))
+    context["attempt"] = attempt
+    context["retry"] = bool(context.get("retry")) or attempt > 1
+    return attempt
+
+
+async def _ensure_credentials_validated(
+    repo: SpecWorkflowRepository,
+    *,
+    session,
+    context: dict[str, Any],
+    workflow_run_id: UUID,
+    task_name: str,
+    attempt: int,
+) -> None:
+    """Validate workflow credentials once and persist audit results in the context."""
+
+    if context.get("credentials_validated"):
+        return
+
+    try:
+        audit_result = await _validate_credentials(
+            repo,
+            workflow_run_id=workflow_run_id,
+            notes=context.get("retry_notes"),
+        )
+    except CredentialValidationError as exc:
+        logger.warning(
+            "Credential validation failed for run %s: %s",
+            context["run_id"],
+            exc,
+        )
+        await _persist_failure(
+            repo,
+            run_id=workflow_run_id,
+            task_name=task_name,
+            message=str(exc),
+            attempt=attempt,
+        )
+        await session.commit()
+        raise
+
+    context["credentials_validated"] = True
+    context["credential_audit_status"] = {
+        "codex": audit_result.codex_status.value,
+        "github": audit_result.github_status.value,
+    }
+
+
 async def _validate_credentials(
     repo: SpecWorkflowRepository,
     *,
@@ -296,7 +348,7 @@ async def _validate_credentials(
     )
 
     if not result.is_valid():
-        reason = "; ".join(issues) if issues else (combined_notes or "Unknown credential error")
+        reason = "; ".join(issues)
         raise CredentialValidationError(
             result,
             message=f"Credential validation failed: {reason}",
@@ -439,9 +491,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
     """Submit the discovered task to Codex Cloud and persist metadata."""
 
     run_uuid = UUID(context["run_id"])
-    attempt = int(context.get("attempt", 1))
-    context.setdefault("attempt", attempt)
-    context.setdefault("retry", attempt > 1)
+    attempt = _prepare_retry_context(context)
 
     async def _execute() -> dict[str, Any]:
         async with get_async_session_context() as session:
@@ -454,34 +504,14 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 run_uuid,
                 phase=models.SpecWorkflowRunPhase.SUBMIT,
             )
-            if not context.get("credentials_validated"):
-                try:
-                    audit_result = await _validate_credentials(
-                        repo,
-                        workflow_run_id=run_uuid,
-                        notes=context.get("retry_notes"),
-                    )
-                except CredentialValidationError as exc:
-                    logger.warning(
-                        "Credential validation failed for run %s: %s",
-                        context["run_id"],
-                        exc,
-                    )
-                    await _persist_failure(
-                        repo,
-                        run_id=run_uuid,
-                        task_name=TASK_SUBMIT,
-                        message=str(exc),
-                        attempt=attempt,
-                    )
-                    await session.commit()
-                    raise
-
-                context["credentials_validated"] = True
-                context["credential_audit_status"] = {
-                    "codex": audit_result.codex_status.value,
-                    "github": audit_result.github_status.value,
-                }
+            await _ensure_credentials_validated(
+                repo,
+                session=session,
+                context=context,
+                workflow_run_id=run_uuid,
+                task_name=TASK_SUBMIT,
+                attempt=attempt,
+            )
             await _update_task_state(
                 repo,
                 workflow_run_id=run_uuid,
@@ -490,12 +520,12 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 payload=_status_payload(
                     models.SpecWorkflowTaskStatus.RUNNING,
                     message="Submitting task to Codex",
-                    codexCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "codex"
-                    ),
-                    githubCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "github"
-                    ),
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 started_at=_now(),
                 attempt=attempt,
@@ -574,12 +604,12 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     codexTaskId=result.task_id,
                     summary=result.summary,
                     logsPath=str(result.logs_path),
-                    codexCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "codex"
-                    ),
-                    githubCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "github"
-                    ),
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -595,9 +625,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
     """Retrieve the Codex patch and publish the resulting PR."""
 
     run_uuid = UUID(context["run_id"])
-    attempt = int(context.get("attempt", 1))
-    context.setdefault("attempt", attempt)
-    context.setdefault("retry", attempt > 1)
+    attempt = _prepare_retry_context(context)
 
     async def _execute() -> dict[str, Any]:
         async with get_async_session_context() as session:
@@ -607,34 +635,14 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"Workflow run {context['run_id']} not found")
 
             await repo.update_run(run_uuid, phase=models.SpecWorkflowRunPhase.APPLY)
-            if not context.get("credentials_validated"):
-                try:
-                    audit_result = await _validate_credentials(
-                        repo,
-                        workflow_run_id=run_uuid,
-                        notes=context.get("retry_notes"),
-                    )
-                except CredentialValidationError as exc:
-                    logger.warning(
-                        "Credential validation failed for run %s: %s",
-                        context["run_id"],
-                        exc,
-                    )
-                    await _persist_failure(
-                        repo,
-                        run_id=run_uuid,
-                        task_name=TASK_PUBLISH,
-                        message=str(exc),
-                        attempt=attempt,
-                    )
-                    await session.commit()
-                    raise
-
-                context["credentials_validated"] = True
-                context["credential_audit_status"] = {
-                    "codex": audit_result.codex_status.value,
-                    "github": audit_result.github_status.value,
-                }
+            await _ensure_credentials_validated(
+                repo,
+                session=session,
+                context=context,
+                workflow_run_id=run_uuid,
+                task_name=TASK_PUBLISH,
+                attempt=attempt,
+            )
             await _update_task_state(
                 repo,
                 workflow_run_id=run_uuid,
@@ -643,12 +651,12 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 payload=_status_payload(
                     models.SpecWorkflowTaskStatus.RUNNING,
                     message="Retrieving Codex diff and publishing to GitHub",
-                    codexCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "codex"
-                    ),
-                    githubCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "github"
-                    ),
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 started_at=_now(),
                 attempt=attempt,
@@ -756,12 +764,12 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     prUrl=publish.pr_url,
                     patchPath=str(diff.patch_path),
                     responsePath=str(publish.response_path),
-                    codexCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "codex"
-                    ),
-                    githubCredentialStatus=context.get("credential_audit_status", {}).get(
-                        "github"
-                    ),
+                    codexCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("codex"),
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
                 ),
                 finished_at=finished,
                 attempt=attempt,

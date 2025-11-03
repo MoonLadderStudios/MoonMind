@@ -21,6 +21,7 @@ from moonmind.workflows.speckit_celery.tasks import (
     apply_and_publish,
     discover_next_phase,
     submit_codex_job,
+    _base_context,
 )
 
 
@@ -158,7 +159,9 @@ async def retry_spec_workflow_run(
         run = await repo.get_run(run_id, with_relations=True)
         if run is None:
             raise WorkflowRetryError(
-                run_id, f"Workflow run {run_id} was not found", code="workflow_not_found"
+                run_id,
+                f"Workflow run {run_id} was not found",
+                code="workflow_not_found",
             )
 
         if run.status is not models.SpecWorkflowRunStatus.FAILED:
@@ -168,13 +171,7 @@ async def retry_spec_workflow_run(
                 code="retry_not_allowed",
             )
 
-        related_states: Iterable[models.SpecWorkflowTaskState]
-        if "task_states" in run.__dict__:
-            related_states = list(run.task_states)
-        else:
-            related_states = await repo.list_task_states(run_id)
-
-        task_states = list(related_states)
+        task_states = list(run.task_states)
         if not task_states:
             raise WorkflowRetryError(
                 run_id,
@@ -201,7 +198,7 @@ async def retry_spec_workflow_run(
         if start_index is None:
             raise WorkflowRetryError(
                 run_id,
-                "Workflow run does not have a failed stage to retry",
+                "Workflow run has already completed successfully and cannot be retried.",
                 code="retry_not_applicable",
             )
 
@@ -221,9 +218,6 @@ async def retry_spec_workflow_run(
             finished_at=None,
         )
 
-        run.status = models.SpecWorkflowRunStatus.RUNNING
-        run.phase = phase
-        run.finished_at = None
         await session.commit()
 
     base_context = _base_context(run)
@@ -243,38 +237,32 @@ async def retry_spec_workflow_run(
         }
         base_context["task"] = task_payload
 
-    if run.codex_task_id:
-        base_context["codex_task_id"] = run.codex_task_id
-    if run.codex_logs_path:
-        base_context["codex_logs_path"] = run.codex_logs_path
-    if run.codex_patch_path:
-        base_context["codex_patch_path"] = run.codex_patch_path
-    if getattr(run, "branch_name", None):
-        base_context["branch_name"] = run.branch_name
+    for attr in ("codex_task_id", "codex_logs_path", "codex_patch_path", "branch_name"):
+        value = getattr(run, attr, None)
+        if value:
+            base_context[attr] = value
 
-    signatures = []
-    if first_task == TASK_DISCOVER:
-        signatures.append(
-            discover_next_phase.s(
-                str(run.id),
-                feature_key=run.feature_key,
-                force_phase=None,
-                attempt=next_attempt,
-                retry_notes=notes,
-            )
+    task_map = {
+        TASK_DISCOVER: discover_next_phase,
+        TASK_SUBMIT: submit_codex_job,
+        TASK_PUBLISH: apply_and_publish,
+    }
+
+    first_task_name = tasks_to_run[0]
+    if first_task_name == TASK_DISCOVER:
+        first_signature = task_map[first_task_name].s(
+            str(run.id),
+            feature_key=run.feature_key,
+            force_phase=None,
+            attempt=next_attempt,
+            retry_notes=notes,
         )
-        if TASK_SUBMIT in tasks_to_run:
-            signatures.append(submit_codex_job.s())
-        if TASK_PUBLISH in tasks_to_run:
-            signatures.append(apply_and_publish.s())
     else:
-        context_payload = dict(base_context)
-        if first_task == TASK_SUBMIT:
-            signatures.append(submit_codex_job.s(context_payload))
-            if TASK_PUBLISH in tasks_to_run:
-                signatures.append(apply_and_publish.s())
-        elif first_task == TASK_PUBLISH:
-            signatures.append(apply_and_publish.s(context_payload))
+        first_signature = task_map[first_task_name].s(dict(base_context))
+
+    signatures = [first_signature]
+    for task_name in tasks_to_run[1:]:
+        signatures.append(task_map[task_name].s())
 
     task_chain = chain(*signatures)
     result = task_chain.apply_async()
