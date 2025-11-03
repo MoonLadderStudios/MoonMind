@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Coroutine, Optional, TypeVar
 from uuid import UUID
 
 from celery.utils.log import get_task_logger
@@ -33,6 +34,34 @@ TASK_PUBLISH = "apply_and_publish"
 
 _TASK_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<body>.+)$")
 _TASK_BODY_PATTERN = re.compile(r"^(?P<identifier>\S+)(?P<title>\s+.*)?$")
+
+T = TypeVar("T")
+
+
+def _run_coro(coro: Coroutine[Any, Any, T]) -> T:
+    """Execute an async coroutine from sync Celery tasks safely."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - propagate errors
+            result["error"] = exc
+
+    thread = threading.Thread(target=_runner, name="spec-workflow-task")
+    thread.start()
+    thread.join()
+
+    if "error" in result:
+        raise result["error"]
+
+    return result["value"]
 
 
 @dataclass(slots=True)
@@ -283,7 +312,7 @@ def discover_next_phase(
             await session.commit()
             return context
 
-    return asyncio.run(_execute())
+    return _run_coro(_execute())
 
 
 @celery_app.task(name=f"{models.SpecWorkflowRun.__tablename__}.{TASK_SUBMIT}")
@@ -374,7 +403,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             await session.commit()
             return context
 
-    return asyncio.run(_execute())
+    return _run_coro(_execute())
 
 
 @celery_app.task(name=f"{models.SpecWorkflowRun.__tablename__}.{TASK_PUBLISH}")
@@ -492,7 +521,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             await session.commit()
             return context
 
-    return asyncio.run(_execute())
+    return _run_coro(_execute())
 
 
 __all__ = [
