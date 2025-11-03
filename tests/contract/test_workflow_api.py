@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
-from moonmind.schemas.workflow_models import SpecWorkflowRunModel, WorkflowRunCollectionResponse
-from moonmind.workflows.speckit_celery import celery_app, models as workflow_models
+from moonmind.schemas.workflow_models import (
+    SpecWorkflowRunModel,
+    WorkflowRunCollectionResponse,
+)
+from moonmind.workflows.speckit_celery import celery_app
+from moonmind.workflows.speckit_celery import models as workflow_models
 
 
 @pytest.mark.asyncio
@@ -41,7 +49,9 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
 
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
-    monkeypatch.setattr(settings.spec_workflow, "repo_root", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        settings.spec_workflow, "repo_root", str(tmp_path), raising=False
+    )
     monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
     monkeypatch.setattr(
         settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
@@ -51,28 +61,35 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
 
     app.state.settings = settings
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/workflows/speckit/runs", json={})
-        assert response.status_code == 202
-        run_model = SpecWorkflowRunModel.model_validate(response.json())
-        assert (
-            run_model.status
-            == workflow_models.SpecWorkflowRunStatus.SUCCEEDED
-        )
-        assert (
-            run_model.phase == workflow_models.SpecWorkflowRunPhase.COMPLETE
-        )
+    test_user = SimpleNamespace(id=uuid4())
+    app.dependency_overrides[get_current_user] = lambda: test_user
 
-        list_response = await client.get("/api/workflows/speckit/runs")
-        assert list_response.status_code == 200
-        collection = WorkflowRunCollectionResponse.model_validate(list_response.json())
-        assert collection.items
-        assert collection.items[0].id == run_model.id
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post("/api/workflows/speckit/runs", json={})
+            assert response.status_code == 202
+            run_model = SpecWorkflowRunModel.model_validate(response.json())
+            assert run_model.status == workflow_models.SpecWorkflowRunStatus.SUCCEEDED
+            assert run_model.phase == workflow_models.SpecWorkflowRunPhase.COMPLETE
 
-        detail_response = await client.get(f"/api/workflows/speckit/runs/{run_model.id}")
-        assert detail_response.status_code == 200
-        detail_model = SpecWorkflowRunModel.model_validate(detail_response.json())
-        assert detail_model.id == run_model.id
-        assert detail_model.branch_name is not None
-        assert detail_model.pr_url is not None
+            list_response = await client.get("/api/workflows/speckit/runs")
+            assert list_response.status_code == 200
+            collection = WorkflowRunCollectionResponse.model_validate(
+                list_response.json()
+            )
+            assert collection.items
+            assert collection.items[0].id == run_model.id
+
+            detail_response = await client.get(
+                f"/api/workflows/speckit/runs/{run_model.id}"
+            )
+            assert detail_response.status_code == 200
+            detail_model = SpecWorkflowRunModel.model_validate(detail_response.json())
+            assert detail_model.id == run_model.id
+            assert detail_model.branch_name is not None
+            assert detail_model.pr_url is not None
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

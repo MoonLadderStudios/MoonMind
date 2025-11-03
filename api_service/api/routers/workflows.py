@@ -8,7 +8,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
+from api_service.db.models import User
 from moonmind.schemas.workflow_models import (
     CreateWorkflowRunRequest,
     SpecWorkflowRunModel,
@@ -50,6 +52,7 @@ def _serialize_run_model(run) -> SpecWorkflowRunModel:
 )
 async def create_workflow_run(
     payload: CreateWorkflowRunRequest,
+    _user: User = Depends(get_current_user()),
 ) -> SpecWorkflowRunModel:
     """Trigger a new workflow run for the requested feature."""
 
@@ -80,6 +83,7 @@ async def list_workflow_runs(
     created_by: Optional[UUID] = Query(None, alias="createdBy"),
     limit: int = Query(25, ge=1, le=100),
     repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
 ) -> WorkflowRunCollectionResponse:
     """Return workflow runs filtered by query parameters."""
 
@@ -108,6 +112,7 @@ async def list_workflow_runs(
 async def get_workflow_run(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
 ) -> SpecWorkflowRunModel:
     """Retrieve a single workflow run with related metadata."""
 
