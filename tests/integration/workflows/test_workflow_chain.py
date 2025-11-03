@@ -14,9 +14,9 @@ from moonmind.workflows import (
     retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
+from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
-from moonmind.workflows.adapters.github_client import GitHubPublishResult
 
 
 @pytest.mark.asyncio
@@ -161,8 +161,7 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
                 branch_name = f"{feature_key}/{(task_identifier or 'retry').lower()}"
                 pr_url = f"https://example.com/{feature_key}/retry"
                 response_path = (
-                    artifacts_dir
-                    / f"{branch_name.replace('/', '_')}_retry_pr.json"
+                    artifacts_dir / f"{branch_name.replace('/', '_')}_retry_pr.json"
                 )
                 response_path.write_text("{}", encoding="utf-8")
                 return GitHubPublishResult(
@@ -225,7 +224,5 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
         for state in publish_attempts
     )
     assert completed.credential_audit is not None
-    assert (
-        completed.credential_audit.notes == "Retry after fixing credentials"
-    )
+    assert completed.credential_audit.notes == "Retry after fixing credentials"
     assert fail_state["calls"] == 2

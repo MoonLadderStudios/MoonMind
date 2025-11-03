@@ -17,9 +17,9 @@ from moonmind.schemas.workflow_models import (
     SpecWorkflowRunModel,
     WorkflowRunCollectionResponse,
 )
+from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
-from moonmind.workflows.adapters.github_client import GitHubPublishResult
 
 
 @pytest.mark.asyncio
@@ -79,8 +79,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
                 branch_name = f"{feature_key}/{(task_identifier or 'retry').lower()}"
                 pr_url = f"https://example.com/{feature_key}/retry"
                 response_path = (
-                    artifacts_dir
-                    / f"{branch_name.replace('/', '_')}_retry_pr.json"
+                    artifacts_dir / f"{branch_name.replace('/', '_')}_retry_pr.json"
                 )
                 response_path.write_text("{}", encoding="utf-8")
                 return GitHubPublishResult(
