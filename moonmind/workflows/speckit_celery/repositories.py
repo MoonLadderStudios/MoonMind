@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from typing import Iterable, Optional
+from typing import Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, select
@@ -24,6 +24,8 @@ class SpecWorkflowRepository:
         "branch_name",
         "pr_url",
         "codex_task_id",
+        "codex_logs_path",
+        "codex_patch_path",
         "artifacts_path",
         "started_at",
         "finished_at",
@@ -155,6 +157,67 @@ class SpecWorkflowRepository:
     # ------------------------------------------------------------------
     # Task states
     # ------------------------------------------------------------------
+    async def ensure_task_state_placeholders(
+        self,
+        *,
+        workflow_run_id: UUID,
+        task_names: Iterable[str],
+        attempt: int = 1,
+    ) -> Sequence[models.SpecWorkflowTaskState]:
+        """Ensure placeholder task state rows exist for the given tasks.
+
+        The UI expects every step in the Celery chain to have a visible state as
+        soon as a workflow run is triggered. This helper guarantees that a
+        ``queued`` record exists for each task/attempt combination while
+        avoiding duplicate inserts when invoked multiple times.
+        """
+
+        unique_names: list[str] = []
+        seen: set[str] = set()
+        for name in task_names:
+            if not name:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            unique_names.append(name)
+
+        if not unique_names:
+            return []
+
+        stmt = select(models.SpecWorkflowTaskState).where(
+            models.SpecWorkflowTaskState.workflow_run_id == workflow_run_id,
+            models.SpecWorkflowTaskState.task_name.in_(unique_names),
+            models.SpecWorkflowTaskState.attempt == attempt,
+        )
+        existing = await self._session.execute(stmt)
+        existing_by_name = {
+            state.task_name: state for state in existing.scalars().all()
+        }
+
+        now = datetime.now(UTC)
+        created = False
+        for name in unique_names:
+            if name in existing_by_name:
+                continue
+            placeholder = models.SpecWorkflowTaskState(
+                id=uuid4(),
+                workflow_run_id=workflow_run_id,
+                task_name=name,
+                status=models.SpecWorkflowTaskStatus.QUEUED,
+                attempt=attempt,
+                payload={},
+                created_at=now,
+                updated_at=now,
+            )
+            self._session.add(placeholder)
+            existing_by_name[name] = placeholder
+            created = True
+
+        if created:
+            await self._session.flush()
+        return [existing_by_name[name] for name in unique_names]
+
     async def upsert_task_state(
         self,
         *,
@@ -216,6 +279,31 @@ class SpecWorkflowRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalars().all()
+
+    async def list_task_states_for_runs(
+        self, run_ids: Iterable[UUID]
+    ) -> dict[UUID, list[models.SpecWorkflowTaskState]]:
+        """Return task states for the provided workflow run identifiers."""
+
+        id_list = [run_id for run_id in run_ids]
+        if not id_list:
+            return {}
+
+        stmt = (
+            select(models.SpecWorkflowTaskState)
+            .where(models.SpecWorkflowTaskState.workflow_run_id.in_(id_list))
+            .order_by(
+                models.SpecWorkflowTaskState.workflow_run_id,
+                models.SpecWorkflowTaskState.created_at.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        grouped: dict[UUID, list[models.SpecWorkflowTaskState]] = {
+            run_id: [] for run_id in id_list
+        }
+        for state in result.scalars().all():
+            grouped.setdefault(state.workflow_run_id, []).append(state)
+        return grouped
 
     # ------------------------------------------------------------------
     # Credential audits & artifacts

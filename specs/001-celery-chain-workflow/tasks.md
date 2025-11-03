@@ -61,14 +61,14 @@ Provide real-time visibility into each Celery task state and related artifacts.
 Trigger a workflow run, poll GET `/api/workflows/speckit/runs/{id}`, and confirm task states, timestamps, and artifact references update as tasks progress.
 
 ### Tasks
-- [ ] T021 [US2] Extend repositories for task state queries in `moonmind/workflows/speckit_celery/repositories.py`
-- [ ] T022 [US2] Emit structured status updates in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T023 [US2] Enhance serializer outputs in `moonmind/workflows/speckit_celery/serializers.py`
-- [ ] T024 [US2] Add GET list endpoint in `moonmind/api/routers/workflows.py`
-- [ ] T025 [US2] Add GET detail endpoint in `moonmind/api/routers/workflows.py`
-- [ ] T026 [US2] Update schemas for task state responses in `moonmind/schemas/workflow_models.py`
-- [ ] T027 [US2] Persist JSONL/patch paths in `moonmind/workflows/speckit_celery/models.py`
-- [ ] T028 [US2] Write unit tests for serializers in `tests/unit/workflows/test_tasks.py`
+- [x] T021 [US2] Extend repositories for task state queries in `moonmind/workflows/speckit_celery/repositories.py`
+- [x] T022 [US2] Emit structured status updates in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T023 [US2] Enhance serializer outputs in `moonmind/workflows/speckit_celery/serializers.py`
+- [x] T024 [US2] Add GET list endpoint in `moonmind/api/routers/workflows.py`
+- [x] T025 [US2] Add GET detail endpoint in `moonmind/api/routers/workflows.py`
+- [x] T026 [US2] Update schemas for task state responses in `moonmind/schemas/workflow_models.py`
+- [x] T027 [US2] Persist JSONL/patch paths in `moonmind/workflows/speckit_celery/models.py`
+- [x] T028 [US2] Write unit tests for serializers in `tests/unit/workflows/test_tasks.py`
 
 ## Phase 5 – User Story 3: Retry or Resume Failed Chains (Priority P3)
 ### Story Goal

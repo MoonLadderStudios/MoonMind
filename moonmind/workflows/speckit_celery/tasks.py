@@ -31,6 +31,7 @@ logger = get_task_logger(__name__)
 TASK_DISCOVER = "discover_next_phase"
 TASK_SUBMIT = "submit_codex_job"
 TASK_PUBLISH = "apply_and_publish"
+TASK_SEQUENCE: tuple[str, ...] = (TASK_DISCOVER, TASK_SUBMIT, TASK_PUBLISH)
 
 _TASK_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<body>.+)$")
 _TASK_BODY_PATTERN = re.compile(r"^(?P<identifier>\S+)(?P<title>\s+.*)?$")
@@ -169,7 +170,11 @@ async def _persist_failure(
         workflow_run_id=run_id,
         task_name=task_name,
         status=models.SpecWorkflowTaskStatus.FAILED,
-        payload={"code": f"{task_name}_failed", "message": message},
+        payload=_status_payload(
+            models.SpecWorkflowTaskStatus.FAILED,
+            message=message,
+            code=f"{task_name}_failed",
+        ),
         finished_at=finished,
     )
     await repo.update_run(
@@ -214,6 +219,24 @@ def _base_context(run: models.SpecWorkflowRun) -> dict[str, Any]:
     }
 
 
+def _status_payload(
+    status: models.SpecWorkflowTaskStatus,
+    *,
+    message: Optional[str] = None,
+    code: Optional[str] = None,
+    **extras: Any,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"status": status.value}
+    if message:
+        payload["message"] = message
+    if code:
+        payload["code"] = code
+    for key, value in extras.items():
+        if value is not None:
+            payload[key] = value
+    return payload
+
+
 @celery_app.task(name=f"{models.SpecWorkflowRun.__tablename__}.{TASK_DISCOVER}")
 def discover_next_phase(
     run_id: str,
@@ -232,6 +255,10 @@ def discover_next_phase(
             if run is None:
                 raise ValueError(f"Workflow run {run_id} not found")
 
+            await repo.ensure_task_state_placeholders(
+                workflow_run_id=run_uuid, task_names=TASK_SEQUENCE
+            )
+
             started = run.started_at or _now()
             await repo.update_run(
                 run_uuid,
@@ -244,6 +271,10 @@ def discover_next_phase(
                 workflow_run_id=run_uuid,
                 task_name=TASK_DISCOVER,
                 status=models.SpecWorkflowTaskStatus.RUNNING,
+                payload=_status_payload(
+                    models.SpecWorkflowTaskStatus.RUNNING,
+                    message="Discovering next Spec Kit task",
+                ),
                 started_at=_now(),
             )
             await session.commit()
@@ -286,7 +317,11 @@ def discover_next_phase(
                     workflow_run_id=run_uuid,
                     task_name=TASK_DISCOVER,
                     status=models.SpecWorkflowTaskStatus.SUCCEEDED,
-                    payload={"status": "no_work", "message": message},
+                    payload=_status_payload(
+                        models.SpecWorkflowTaskStatus.SUCCEEDED,
+                        message=message,
+                        result="no_work",
+                    ),
                     finished_at=finished,
                 )
                 await repo.update_run(
@@ -305,7 +340,11 @@ def discover_next_phase(
                 workflow_run_id=run_uuid,
                 task_name=TASK_DISCOVER,
                 status=models.SpecWorkflowTaskStatus.SUCCEEDED,
-                payload=payload,
+                payload=_status_payload(
+                    models.SpecWorkflowTaskStatus.SUCCEEDED,
+                    message="Discovered next task",
+                    **payload,
+                ),
                 finished_at=finished,
             )
             context["task"] = payload
@@ -337,6 +376,10 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 workflow_run_id=run_uuid,
                 task_name=TASK_SUBMIT,
                 status=models.SpecWorkflowTaskStatus.RUNNING,
+                payload=_status_payload(
+                    models.SpecWorkflowTaskStatus.RUNNING,
+                    message="Submitting task to Codex",
+                ),
                 started_at=_now(),
             )
             await session.commit()
@@ -348,7 +391,11 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     workflow_run_id=run_uuid,
                     task_name=TASK_SUBMIT,
                     status=models.SpecWorkflowTaskStatus.SKIPPED,
-                    payload={"status": "skipped", "reason": "no_work"},
+                    payload=_status_payload(
+                        models.SpecWorkflowTaskStatus.SKIPPED,
+                        message="Skipped because discovery found no remaining work",
+                        reason="no_work",
+                    ),
                     finished_at=finished,
                 )
                 await session.commit()
@@ -386,6 +433,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             await repo.update_run(
                 run_uuid,
                 codex_task_id=result.task_id,
+                codex_logs_path=str(result.logs_path),
             )
             await repo.add_artifact(
                 workflow_run_id=run_uuid,
@@ -397,7 +445,13 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 workflow_run_id=run_uuid,
                 task_name=TASK_SUBMIT,
                 status=models.SpecWorkflowTaskStatus.SUCCEEDED,
-                payload={"codexTaskId": result.task_id, "summary": result.summary},
+                payload=_status_payload(
+                    models.SpecWorkflowTaskStatus.SUCCEEDED,
+                    message="Codex job submitted",
+                    codexTaskId=result.task_id,
+                    summary=result.summary,
+                    logsPath=str(result.logs_path),
+                ),
                 finished_at=finished,
             )
             await session.commit()
@@ -425,6 +479,10 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 workflow_run_id=run_uuid,
                 task_name=TASK_PUBLISH,
                 status=models.SpecWorkflowTaskStatus.RUNNING,
+                payload=_status_payload(
+                    models.SpecWorkflowTaskStatus.RUNNING,
+                    message="Retrieving Codex diff and publishing to GitHub",
+                ),
                 started_at=_now(),
             )
             await session.commit()
@@ -436,7 +494,11 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     workflow_run_id=run_uuid,
                     task_name=TASK_PUBLISH,
                     status=models.SpecWorkflowTaskStatus.SKIPPED,
-                    payload={"status": "skipped", "reason": "no_work"},
+                    payload=_status_payload(
+                        models.SpecWorkflowTaskStatus.SKIPPED,
+                        message="Skipped publish because no work was required",
+                        reason="no_work",
+                    ),
                     finished_at=finished,
                 )
                 await repo.update_run(
@@ -467,7 +529,9 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 )
 
                 await repo.update_run(
-                    run_uuid, phase=models.SpecWorkflowRunPhase.PUBLISH
+                    run_uuid,
+                    phase=models.SpecWorkflowRunPhase.PUBLISH,
+                    codex_patch_path=str(diff.patch_path),
                 )
 
                 publish: GitHubPublishResult = github_client.publish(
@@ -504,6 +568,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 phase=models.SpecWorkflowRunPhase.COMPLETE,
                 branch_name=publish.branch_name,
                 pr_url=publish.pr_url,
+                codex_patch_path=str(diff.patch_path),
                 finished_at=finished,
             )
             await _update_task_state(
@@ -511,11 +576,14 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 workflow_run_id=run_uuid,
                 task_name=TASK_PUBLISH,
                 status=models.SpecWorkflowTaskStatus.SUCCEEDED,
-                payload={
-                    "branch": publish.branch_name,
-                    "prUrl": publish.pr_url,
-                    "patchPath": str(diff.patch_path),
-                },
+                payload=_status_payload(
+                    models.SpecWorkflowTaskStatus.SUCCEEDED,
+                    message="Pull request published",
+                    branch=publish.branch_name,
+                    prUrl=publish.pr_url,
+                    patchPath=str(diff.patch_path),
+                    responsePath=str(publish.response_path),
+                ),
                 finished_at=finished,
             )
             await session.commit()

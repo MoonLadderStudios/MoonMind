@@ -120,6 +120,8 @@ class SpecWorkflowRun(Base):
     branch_name: Mapped[Optional[str]] = mapped_column(String(255))
     pr_url: Mapped[Optional[str]] = mapped_column(String(512))
     codex_task_id: Mapped[Optional[str]] = mapped_column(String(255))
+    codex_logs_path: Mapped[Optional[str]] = mapped_column(String(1024))
+    codex_patch_path: Mapped[Optional[str]] = mapped_column(String(1024))
     artifacts_path: Mapped[Optional[str]] = mapped_column(String(512))
     created_by: Mapped[Optional[UUID]] = mapped_column(
         Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
