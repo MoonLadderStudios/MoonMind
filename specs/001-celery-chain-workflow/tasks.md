@@ -26,12 +26,12 @@ Deliver MVP with US1 only (automated phase trigger through PR). US2 adds observa
 - [x] T003 Document environment variables in ./README.md and ./.env-template
 
 ## Phase 2 – Foundational Infrastructure
-- [ ] T004 Create database migration `api_service/migrations/versions/add_spec_workflow_tables.py` with new tables
-- [ ] T005 Update SQLAlchemy models in `moonmind/workflows/speckit_celery/models.py`
-- [ ] T006 Implement repositories in `moonmind/workflows/speckit_celery/repositories.py`
-- [ ] T007 [P] Define shared serializers in `moonmind/workflows/speckit_celery/serializers.py`
-- [ ] T008 Integrate Celery app setup in `moonmind/workflows/speckit_celery/__init__.py`
-- [ ] T009 Add configuration wiring in `moonmind/workflows/__init__.py`
+- [x] T004 Create database migration `api_service/migrations/versions/add_spec_workflow_tables.py` with new tables
+- [x] T005 Update SQLAlchemy models in `moonmind/workflows/speckit_celery/models.py`
+- [x] T006 Implement repositories in `moonmind/workflows/speckit_celery/repositories.py`
+- [x] T007 [P] Define shared serializers in `moonmind/workflows/speckit_celery/serializers.py`
+- [x] T008 Integrate Celery app setup in `moonmind/workflows/speckit_celery/__init__.py`
+- [x] T009 Add configuration wiring in `moonmind/workflows/__init__.py`
 
 ## Phase 3 – User Story 1: Trigger Next Spec Phase (Priority P1)
 ### Story Goal
