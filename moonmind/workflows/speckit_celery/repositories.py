@@ -302,7 +302,7 @@ class SpecWorkflowRepository:
             run_id: [] for run_id in id_list
         }
         for state in result.scalars().all():
-            grouped.setdefault(state.workflow_run_id, []).append(state)
+            grouped[state.workflow_run_id].append(state)
         return grouped
 
     # ------------------------------------------------------------------

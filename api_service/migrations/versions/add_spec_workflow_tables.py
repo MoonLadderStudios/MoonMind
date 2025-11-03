@@ -95,8 +95,6 @@ def upgrade() -> None:  # noqa: D401
         sa.Column("branch_name", sa.String(length=255), nullable=True),
         sa.Column("pr_url", sa.String(length=512), nullable=True),
         sa.Column("codex_task_id", sa.String(length=255), nullable=True),
-        sa.Column("codex_logs_path", sa.String(length=1024), nullable=True),
-        sa.Column("codex_patch_path", sa.String(length=1024), nullable=True),
         sa.Column("artifacts_path", sa.String(length=512), nullable=True),
         sa.Column("created_by", sa.Uuid(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),

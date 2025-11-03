@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
+
 from moonmind.workflows.speckit_celery import models
 
 _TASK_ORDER: tuple[str, ...] = (
@@ -106,6 +107,14 @@ def serialize_task_state(state: models.SpecWorkflowTaskState) -> SerializedTaskS
     )
 
 
+def _task_state_latest_timestamp(
+    state: models.SpecWorkflowTaskState,
+) -> datetime | None:
+    """Return the most recent timestamp associated with a task state."""
+
+    return state.updated_at or state.finished_at or state.started_at or state.created_at
+
+
 def _latest_task_states(
     states: Iterable[models.SpecWorkflowTaskState],
 ) -> list[models.SpecWorkflowTaskState]:
@@ -123,18 +132,8 @@ def _latest_task_states(
             continue
 
         if state.attempt == existing.attempt:
-            current_stamp = (
-                state.updated_at
-                or state.finished_at
-                or state.started_at
-                or state.created_at
-            )
-            existing_stamp = (
-                existing.updated_at
-                or existing.finished_at
-                or existing.started_at
-                or existing.created_at
-            )
+            current_stamp = _task_state_latest_timestamp(state)
+            existing_stamp = _task_state_latest_timestamp(existing)
             if existing_stamp is None or (
                 current_stamp is not None and current_stamp > existing_stamp
             ):

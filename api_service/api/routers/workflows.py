@@ -140,9 +140,7 @@ async def get_workflow_run(
     run_id: UUID,
     include_tasks: bool = Query(True, alias="includeTasks"),
     include_artifacts: bool = Query(True, alias="includeArtifacts"),
-    include_credential_audit: bool = Query(
-        True, alias="includeCredentialAudit"
-    ),
+    include_credential_audit: bool = Query(True, alias="includeCredentialAudit"),
     repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
 ) -> SpecWorkflowRunModel:

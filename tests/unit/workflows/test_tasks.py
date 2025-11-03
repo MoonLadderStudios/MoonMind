@@ -118,7 +118,9 @@ def test_serialize_task_summary_collapses_attempts():
         "apply_and_publish",
     ]
 
-    apply_entry = next(item for item in summary if item["taskName"] == "apply_and_publish")
+    apply_entry = next(
+        item for item in summary if item["taskName"] == "apply_and_publish"
+    )
     assert apply_entry["attempt"] == 2
     assert apply_entry["status"] == models.SpecWorkflowTaskStatus.RUNNING.value
 
