@@ -139,6 +139,7 @@ class _MetricsEmitter:
             try:
                 self._socket.close()
             except OSError:
+                # Best-effort cleanup: errors during close are non-fatal and can be ignored.
                 pass
             finally:
                 self._socket = None
