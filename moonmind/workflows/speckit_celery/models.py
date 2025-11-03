@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
@@ -73,6 +74,23 @@ class GitHubCredentialStatus(str, enum.Enum):
     VALID = "valid"
     INVALID = "invalid"
     SCOPE_MISSING = "scope_missing"
+
+
+@dataclass(slots=True)
+class CredentialAuditResult:
+    """Represents the outcome of a credential validation attempt."""
+
+    codex_status: "CodexCredentialStatus"
+    github_status: "GitHubCredentialStatus"
+    notes: Optional[str] = None
+
+    def is_valid(self) -> bool:
+        """Return ``True`` when both Codex and GitHub credentials are valid."""
+
+        return (
+            self.codex_status is CodexCredentialStatus.VALID
+            and self.github_status is GitHubCredentialStatus.VALID
+        )
 
 
 class WorkflowArtifactType(str, enum.Enum):
@@ -305,4 +323,5 @@ __all__ = [
     "GitHubCredentialStatus",
     "WorkflowArtifact",
     "WorkflowArtifactType",
+    "CredentialAuditResult",
 ]

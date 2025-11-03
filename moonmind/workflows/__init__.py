@@ -8,6 +8,8 @@ from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery.orchestrator import (
     TriggeredWorkflow,
     WorkflowConflictError,
+    WorkflowRetryError,
+    retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
 from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
@@ -24,6 +26,8 @@ __all__ = [
     "get_spec_workflow_repository",
     "SpecWorkflowRepository",
     "trigger_spec_workflow_run",
+    "retry_spec_workflow_run",
     "WorkflowConflictError",
+    "WorkflowRetryError",
     "TriggeredWorkflow",
 ]

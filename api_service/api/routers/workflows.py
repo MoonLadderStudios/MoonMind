@@ -14,6 +14,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.schemas.workflow_models import (
     CreateWorkflowRunRequest,
+    RetryWorkflowRunRequest,
     SpecWorkflowRunModel,
     WorkflowRunCollectionResponse,
 )
@@ -21,7 +22,9 @@ from moonmind.workflows import (
     SpecWorkflowRepository,
     TriggeredWorkflow,
     WorkflowConflictError,
+    WorkflowRetryError,
     get_spec_workflow_repository,
+    retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
 from moonmind.workflows.speckit_celery import models
@@ -162,6 +165,43 @@ async def get_workflow_run(
         include_artifacts=include_artifacts,
         include_credential_audit=include_credential_audit,
     )
+
+
+@router.post(
+    "/runs/{run_id}/retry",
+    response_model=SpecWorkflowRunModel,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_workflow_run(
+    run_id: UUID,
+    payload: RetryWorkflowRunRequest | None = None,
+    repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
+) -> SpecWorkflowRunModel:
+    """Retry a failed workflow run starting from the failed stage."""
+
+    notes = payload.notes if payload else None
+
+    try:
+        triggered = await retry_spec_workflow_run(run_id, notes=notes)
+    except WorkflowRetryError as exc:
+        status_code_value = (
+            status.HTTP_404_NOT_FOUND
+            if exc.code == "workflow_not_found"
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(
+            status_code=status_code_value,
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "runId": str(exc.run_id),
+            },
+        ) from exc
+
+    refreshed = await repo.get_run(triggered.run_id, with_relations=True)
+    run = refreshed or triggered.run
+    return _serialize_run_model(run)
 
 
 __all__ = ["router"]
