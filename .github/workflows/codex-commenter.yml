@@ -1,6 +1,10 @@
 name: Codex Commenter
 
 on:
+  workflow_run:
+    workflows:
+      - Build Project and Run Tests
+    types: [completed]
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -12,11 +16,22 @@ permissions:
   pull-requests: write
   issues: write
   checks: read
-  contents: read
+  contents: write
 
 concurrency:
-  group: codex-commenter-pr-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
-  cancel-in-progress: false
+  group: >-
+    codex-commenter-${{
+      github.event.pull_request.number ||
+      github.event.issue.number ||
+      (github.event.workflow_run && github.event.workflow_run.pull_requests &&
+        github.event.workflow_run.pull_requests[0] &&
+        github.event.workflow_run.pull_requests[0].number) ||
+      github.event.workflow_run.head_sha ||
+      github.event.pull_request.head.sha ||
+      github.event.workflow_run.id ||
+      github.run_id
+    }}
+  cancel-in-progress: true
 
 jobs:
   check-and-comment:
@@ -35,11 +50,46 @@ jobs:
     # duplicate @codex comments when queued runs catch up.
     steps:
       - name: Evaluate PR and decide action
+        id: eval
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PR_AGENT_TOKEN || github.token }}
           script: |
-            const pr_number = context.payload.pull_request?.number || context.payload.issue?.number;
+            let pr_number = context.payload.pull_request?.number || context.payload.issue?.number;
+            const workflowRun = context.eventName === 'workflow_run'
+              ? context.payload.workflow_run
+              : null;
+
+            core.setOutput('ready', 'false');
+            core.setOutput('pr', pr_number ? String(pr_number) : '');
+
+            const eventName = context.eventName || '';
+            const triggeringCommentBody = context.payload.comment?.body || context.payload.review?.body || '';
+
+            if (['issue_comment', 'pull_request_review_comment', 'pull_request_review'].includes(eventName)) {
+              const codexMentionPattern = /@\S*codex\S*/i;
+              if (codexMentionPattern.test(triggeringCommentBody)) {
+                console.log('Detected direct @ mention of Codex in comment event. Skipping to avoid duplicate fix requests.');
+                return;
+              }
+            }
+
+            if (workflowRun) {
+              const associatedPRs = Array.isArray(workflowRun.pull_requests)
+                ? workflowRun.pull_requests
+                : [];
+
+              if (associatedPRs.length === 0) {
+                console.log('Workflow run is not associated with a pull request. Skipping.');
+                return;
+              }
+
+              if (associatedPRs.length > 1) {
+                console.log(`Workflow run references multiple PRs (${associatedPRs.length}). Using the first.`);
+              }
+
+              pr_number = associatedPRs[0]?.number;
+            }
 
             const triggeringActor = context.actor?.toLowerCase?.() || '';
             console.log(`Triggered by actor: ${triggeringActor || 'unknown'}`);
@@ -73,6 +123,24 @@ jobs:
             console.log(`Head SHA: ${pr.head.sha}`);
             console.log(`PR created at: ${pr.created_at}`);
 
+            if (workflowRun) {
+              const runHeadSha = workflowRun.head_sha || '';
+              console.log(`Workflow run head SHA: ${runHeadSha || 'unknown'}`);
+
+              if (runHeadSha && runHeadSha !== pr.head.sha) {
+                console.log('Workflow run head SHA does not match current PR head. Run is stale, skipping.');
+                return;
+              }
+
+              const runConclusion = workflowRun.conclusion || 'unknown';
+              console.log(`Workflow run conclusion: ${runConclusion}`);
+
+              if (!['success', 'failure', 'neutral', 'cancelled', 'timed_out', 'action_required', 'skipped'].includes(runConclusion)) {
+                console.log('Workflow run is not in a final state we handle. Skipping.');
+                return;
+              }
+            }
+
             // Get commits to find the latest commit timestamp
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
@@ -94,14 +162,19 @@ jobs:
             }
 
             // Check if another instance of this workflow is already running for this PR
-            const { data: workflowRuns } = await github.rest.actions.listWorkflowRunsForRepo({
+            const listWorkflowRunsParams = {
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'codex-commenter.yml',
-              event: context.eventName,
               status: 'in_progress',
               per_page: 100
-            });
+            };
+
+            if (context.eventName && context.eventName !== 'workflow_run') {
+              listWorkflowRunsParams.event = context.eventName;
+            }
+
+            const { data: workflowRuns } = await github.rest.actions.listWorkflowRunsForRepo(listWorkflowRunsParams);
 
             const otherRunsForThisPR = workflowRuns.workflow_runs.filter(run => {
               // Check if it's for the same PR and not this run
@@ -255,6 +328,26 @@ jobs:
               relevantComments = allComments;
             }
 
+            const extractGeminiSeverity = (body) => {
+              if (!body) {
+                return null;
+              }
+
+              const patterns = [
+                /(?:^|\n)\s*(?:[-*+]\s*)?\*{0,2}(?:priority|severity)\*{0,2}\s*[:\-–—]\s*(critical|high|medium|low)\b/i,
+                /(?:^|\n)\s*(critical|high|medium|low)\s*(?:\n|$)/i,
+              ];
+
+              for (const pattern of patterns) {
+                const match = body.match(pattern);
+                if (match) {
+                  return match[1].toLowerCase();
+                }
+              }
+
+              return null;
+            };
+
             // Check for Gemini Code Assist comments (High or Critical)
             const geminiComments = relevantComments.filter(comment => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
@@ -267,9 +360,12 @@ jobs:
               if (!isGemini) return false;
 
               // Check for High or Critical priority
-              const bodyLower = body.toLowerCase();
-              const hasHighPriority = /\b(high|critical)\b/.test(bodyLower);
-              return hasHighPriority;
+              const severity = extractGeminiSeverity(body);
+              if (!severity) {
+                return false;
+              }
+
+              return severity === 'high' || severity === 'critical';
             });
 
             console.log(`Gemini High/Critical comments: ${geminiComments.length}`);
@@ -400,3 +496,17 @@ jobs:
             } else {
               console.log('No action needed. PR looks good!');
             }
+
+            const readyToMerge = !hasFailures && !hasReviewComments && !pr.draft;
+            core.setOutput('ready', String(readyToMerge));
+            core.setOutput('pr', String(pr_number));
+            console.log(`Ready for auto-merge: ${readyToMerge}`);
+
+      - name: Enable native auto-merge (squash)
+        if: steps.eval.outputs.ready == 'true'
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.PR_AGENT_TOKEN || github.token }}
+          pull-request-number: ${{ steps.eval.outputs.pr }}
+          merge-method: squash
+
