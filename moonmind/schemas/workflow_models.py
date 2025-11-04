@@ -124,6 +124,68 @@ class RetryWorkflowRunRequest(BaseModel):
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
 
 
+class SpecAutomationPhaseState(BaseModel):
+    """Schema describing a single Spec Automation phase execution."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    phase: models.SpecAutomationPhase
+    status: models.SpecAutomationTaskStatus
+    attempt: int = Field(ge=1)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class SpecAutomationArtifactSummary(BaseModel):
+    """Summary information for an automation artifact."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    artifact_id: UUID
+    name: str
+    artifact_type: models.SpecAutomationArtifactType
+    storage_path: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    expires_at: datetime | None = None
+    source_phase: models.SpecAutomationPhase | None = None
+
+
+class SpecAutomationArtifactDetail(SpecAutomationArtifactSummary):
+    """Extended artifact detail including download metadata."""
+
+    download_url: str | None = None
+
+
+class SpecAutomationRunResponse(BaseModel):
+    """Acknowledgement returned when a run is accepted."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: UUID
+    status: models.SpecAutomationRunStatus
+    accepted_at: datetime | None = None
+
+
+class SpecAutomationRunDetail(BaseModel):
+    """Detailed representation of a Spec Automation run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: UUID
+    status: models.SpecAutomationRunStatus
+    branch_name: str | None = None
+    pull_request_url: str | None = None
+    result_summary: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    phases: list[SpecAutomationPhaseState] = Field(default_factory=list)
+    artifacts: list[SpecAutomationArtifactSummary] = Field(default_factory=list)
+
+
 __all__ = [
     "SpecWorkflowRunModel",
     "WorkflowTaskStateModel",
@@ -133,4 +195,9 @@ __all__ = [
     "CreateWorkflowRunRequest",
     "WorkflowRunCollectionResponse",
     "RetryWorkflowRunRequest",
+    "SpecAutomationPhaseState",
+    "SpecAutomationArtifactSummary",
+    "SpecAutomationArtifactDetail",
+    "SpecAutomationRunResponse",
+    "SpecAutomationRunDetail",
 ]

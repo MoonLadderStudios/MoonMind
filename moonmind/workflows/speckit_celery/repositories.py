@@ -531,6 +531,25 @@ class SpecAutomationRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_run_detail(
+        self, run_id: UUID
+    ) -> Optional[
+        tuple[
+            models.SpecAutomationRun,
+            Sequence[models.SpecAutomationTaskState],
+            Sequence[models.SpecAutomationArtifact],
+        ]
+    ]:
+        """Return a run along with ordered task states and artifacts."""
+
+        run = await self.get_run(run_id)
+        if run is None:
+            return None
+
+        task_states = await self.list_task_states(run_id)
+        artifacts = await self.list_artifacts(run_id)
+        return run, task_states, artifacts
+
     async def find_by_external_ref(
         self, external_ref: str, *, repository: Optional[str] = None
     ) -> Optional[models.SpecAutomationRun]:
@@ -793,6 +812,20 @@ class SpecAutomationRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalars().all()
+
+    async def get_artifact(
+        self, *, run_id: UUID, artifact_id: UUID
+    ) -> Optional[models.SpecAutomationArtifact]:
+        """Retrieve a single artifact ensuring it belongs to the run."""
+
+        stmt = select(models.SpecAutomationArtifact).where(
+            models.SpecAutomationArtifact.id == artifact_id
+        )
+        result = await self._session.execute(stmt)
+        artifact = result.scalar_one_or_none()
+        if artifact is None or artifact.run_id != run_id:
+            return None
+        return artifact
 
 
 __all__ = ["SpecWorkflowRepository", "SpecAutomationRepository"]
