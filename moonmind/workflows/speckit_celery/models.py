@@ -470,7 +470,7 @@ class SpecAutomationTaskState(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     stdout_path: Mapped[Optional[str]] = mapped_column(String(1024))
     stderr_path: Mapped[Optional[str]] = mapped_column(String(1024))
-    metadata_: Mapped[Optional[dict[str, Any]]] = mapped_column(
+    metadata_payload: Mapped[Optional[dict[str, Any]]] = mapped_column(
         "metadata", _MUTABLE_JSON
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -493,17 +493,15 @@ class SpecAutomationTaskState(Base):
         back_populates="task_state",
     )
 
-    @property
-    def metadata(self) -> Optional[dict[str, Any]]:
+    def get_metadata(self) -> Optional[dict[str, Any]]:
         """Return the persisted task metadata payload."""
 
-        return self.metadata_
+        return self.metadata_payload
 
-    @metadata.setter
-    def metadata(self, value: Optional[dict[str, Any]]) -> None:
+    def set_metadata(self, value: Optional[dict[str, Any]]) -> None:
         """Assign the task metadata payload."""
 
-        self.metadata_ = value
+        self.metadata_payload = value
 
 
 class SpecAutomationArtifact(Base):
