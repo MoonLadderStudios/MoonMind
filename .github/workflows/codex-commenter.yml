@@ -37,12 +37,15 @@ jobs:
   check-and-comment:
     if: >
       !(
-        (github.event_name == 'issue_comment' &&
-         contains(github.event.comment.body || '', '@codex')) ||
-        (github.event_name == 'pull_request_review_comment' &&
-         contains(github.event.comment.body || '', '@codex')) ||
-        (github.event_name == 'pull_request_review' &&
-         contains(github.event.review.body || '', '@codex'))
+        !contains(github.actor || '', 'chatgpt-codex-connector') &&
+        (
+          (github.event_name == 'issue_comment' &&
+           contains(github.event.comment.body || '', '@codex')) ||
+          (github.event_name == 'pull_request_review_comment' &&
+           contains(github.event.comment.body || '', '@codex')) ||
+          (github.event_name == 'pull_request_review' &&
+           contains(github.event.review.body || '', '@codex'))
+        )
       )
     runs-on: ubuntu-latest
     # Allow each invocation to finish so that later events don't cancel the run
@@ -65,10 +68,12 @@ jobs:
 
             const eventName = context.eventName || '';
             const triggeringCommentBody = context.payload.comment?.body || context.payload.review?.body || '';
+            const triggeringActor = context.actor?.toLowerCase?.() || '';
 
             if (['issue_comment', 'pull_request_review_comment', 'pull_request_review'].includes(eventName)) {
               const codexMentionPattern = /@\S*codex\S*/i;
-              if (codexMentionPattern.test(triggeringCommentBody)) {
+              const actorIsCodex = triggeringActor.includes('chatgpt-codex-connector');
+              if (!actorIsCodex && codexMentionPattern.test(triggeringCommentBody)) {
                 console.log('Detected direct @ mention of Codex in comment event. Skipping to avoid duplicate fix requests.');
                 return;
               }
@@ -91,7 +96,6 @@ jobs:
               pr_number = associatedPRs[0]?.number;
             }
 
-            const triggeringActor = context.actor?.toLowerCase?.() || '';
             console.log(`Triggered by actor: ${triggeringActor || 'unknown'}`);
 
             const triggeredByCodexBot = triggeringActor.includes('chatgpt-codex-connector');
@@ -348,6 +352,21 @@ jobs:
               return null;
             };
 
+            const hasCodexHighPriorityFinding = (body) => {
+              if (!body) {
+                return false;
+              }
+
+              const patterns = [
+                /P0\s+Badge/i,
+                /P1\s+Badge/i,
+                /Priority\s*[:\-–—]\s*(?:P0|P1)/i,
+                /Severity\s*[:\-–—]\s*(?:P0|P1)/i,
+              ];
+
+              return patterns.some(pattern => pattern.test(body));
+            };
+
             // Check for Gemini Code Assist comments (High or Critical)
             const geminiComments = relevantComments.filter(comment => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
@@ -405,7 +424,13 @@ jobs:
 
             console.log(`Codex Review comments (excluding no-issues): ${codexComments.length}`);
 
-            const hasReviewComments = geminiComments.length > 0 || codexComments.length > 0;
+            const codexHighPriorityComments = codexComments.filter(comment =>
+              hasCodexHighPriorityFinding(comment.body || '')
+            );
+
+            console.log(`Codex high-priority (P0/P1) comments: ${codexHighPriorityComments.length}`);
+
+            const hasReviewComments = geminiComments.length > 0 || codexHighPriorityComments.length > 0;
 
             // Determine what action to take
             let commentBody = null;
