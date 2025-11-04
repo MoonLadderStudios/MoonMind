@@ -120,6 +120,7 @@ class SpecWorkspaceManager:
         """Ensure the ``runs`` directory exists and return it."""
 
         runs_root = self.runs_root
+        self._assert_within_workspace(runs_root)
         runs_root.mkdir(parents=True, exist_ok=True)
         return runs_root
 
@@ -134,6 +135,9 @@ class SpecWorkspaceManager:
         repo_path = self.repo_path(run_id)
         home_path = self.home_path(run_id)
         artifacts_path = self.artifacts_path(run_id)
+
+        for path in (run_root, repo_path, home_path, artifacts_path):
+            self._assert_within_workspace(path)
 
         for path in (run_root, repo_path, home_path, artifacts_path):
             path.mkdir(parents=True, exist_ok=True)
