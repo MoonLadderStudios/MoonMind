@@ -130,14 +130,18 @@ def _resolve_allowed_repositories(user: User) -> set[str] | None:
     """Return the repository slugs the user is permitted to access."""
 
     raw_allowed = getattr(user, "allowed_repositories", None)
-    if raw_allowed:
+    if raw_allowed is not None:
         if isinstance(raw_allowed, str):
-            raw_iterable: Iterable[str] = (value.strip() for value in raw_allowed.split(","))
+            raw_iterable = (value.strip() for value in raw_allowed.split(","))
         else:
-            raw_iterable = raw_allowed
-        allowed = {slug.strip().lower() for slug in raw_iterable if slug and slug.strip()}
-        if allowed:
-            return allowed
+            try:
+                iterator = iter(raw_allowed)
+            except TypeError:
+                raw_iterable = (str(raw_allowed).strip(),)
+            else:
+                raw_iterable = (str(value).strip() for value in iterator)
+        allowed = {slug.lower() for slug in raw_iterable if slug}
+        return allowed
 
     configured = settings.github.github_repos
     if configured:
