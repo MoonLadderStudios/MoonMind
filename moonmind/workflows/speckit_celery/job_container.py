@@ -54,7 +54,9 @@ class ContainerExecResult:
 class JobContainer:
     """Wrapper around a Docker container used for Spec Kit automation runs."""
 
-    def __init__(self, client: docker.DockerClient, container_id: str, name: str) -> None:
+    def __init__(
+        self, client: docker.DockerClient, container_id: str, name: str
+    ) -> None:
         self._client = client
         self._container_id = container_id
         self._name = name
@@ -95,7 +97,9 @@ class JobContainer:
                 f"Container {self._container_id} is not available for exec"
             ) from exc
         except DockerException as exc:  # pragma: no cover - docker SDK errors
-            raise JobContainerExecError("Failed to access job container for exec") from exc
+            raise JobContainerExecError(
+                "Failed to access job container for exec"
+            ) from exc
 
         started_at = datetime.now(UTC)
         try:
@@ -144,7 +148,9 @@ class JobContainer:
         except NotFound:
             return
         except DockerException as exc:  # pragma: no cover - docker SDK errors
-            logger.warning("Failed to load job container %s: %s", self._container_id, exc)
+            logger.warning(
+                "Failed to load job container %s: %s", self._container_id, exc
+            )
             return
 
         try:
@@ -152,9 +158,13 @@ class JobContainer:
         except NotFound:
             container = None
         except APIError as exc:  # pragma: no cover - depends on Docker daemon
-            logger.warning("Error stopping job container %s: %s", self._container_id, exc)
+            logger.warning(
+                "Error stopping job container %s: %s", self._container_id, exc
+            )
         except DockerException as exc:  # pragma: no cover
-            logger.warning("Docker error stopping container %s: %s", self._container_id, exc)
+            logger.warning(
+                "Docker error stopping container %s: %s", self._container_id, exc
+            )
 
         if not remove:
             return
@@ -166,7 +176,9 @@ class JobContainer:
         except NotFound:
             return
         except DockerException as exc:  # pragma: no cover
-            logger.warning("Failed to remove job container %s: %s", self._container_id, exc)
+            logger.warning(
+                "Failed to remove job container %s: %s", self._container_id, exc
+            )
 
 
 class JobContainerManager:
@@ -227,9 +239,7 @@ class JobContainerManager:
                 detach=True,
                 tty=False,
                 environment=dict(env_map),
-                volumes={
-                    key: dict(value) for key, value in volume_mounts.items()
-                },
+                volumes={key: dict(value) for key, value in volume_mounts.items()},
                 working_dir=workdir,
                 labels=dict(labels or {}),
                 network=network,

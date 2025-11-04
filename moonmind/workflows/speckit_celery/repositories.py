@@ -17,7 +17,9 @@ _UNSET: object = object()
 _DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)
 
 
-def _coerce_phase(value: models.SpecAutomationPhase | str) -> models.SpecAutomationPhase:
+def _coerce_phase(
+    value: models.SpecAutomationPhase | str,
+) -> models.SpecAutomationPhase:
     """Return the phase enum for ``value`` allowing string inputs."""
 
     if isinstance(value, models.SpecAutomationPhase):
@@ -479,7 +481,9 @@ class SpecAutomationRepository:
         requested_spec_input: str,
         base_branch: str = "main",
         external_ref: Optional[str] = None,
-        status: models.SpecAutomationRunStatus | str = models.SpecAutomationRunStatus.QUEUED,
+        status: (
+            models.SpecAutomationRunStatus | str
+        ) = models.SpecAutomationRunStatus.QUEUED,
         branch_name: Optional[str] = None,
         pull_request_url: Optional[str] = None,
         result_summary: Optional[str] = None,
@@ -559,8 +563,7 @@ class SpecAutomationRepository:
         )
         if status is not None:
             stmt = stmt.where(
-                models.SpecAutomationRun.status
-                == _coerce_run_status(status)
+                models.SpecAutomationRun.status == _coerce_run_status(status)
             )
         if repository is not None:
             stmt = stmt.where(models.SpecAutomationRun.repository == repository)
@@ -623,9 +626,7 @@ class SpecAutomationRepository:
             models.SpecAutomationTaskState.attempt == attempt,
         )
         existing = await self._session.execute(stmt)
-        existing_by_phase = {
-            state.phase: state for state in existing.scalars().all()
-        }
+        existing_by_phase = {state.phase: state for state in existing.scalars().all()}
 
         now = datetime.now(UTC)
         created = False
@@ -681,35 +682,24 @@ class SpecAutomationRepository:
                 id=uuid4(),
                 run_id=run_id,
                 phase=phase_enum,
-                status=status_enum,
                 attempt=attempt,
                 created_at=now,
-                updated_at=now,
             )
-            if started_at is not _UNSET:
-                state.started_at = None if started_at is None else started_at
-            if completed_at is not _UNSET:
-                state.completed_at = None if completed_at is None else completed_at
-            if stdout_path is not _UNSET:
-                state.stdout_path = None if stdout_path is None else stdout_path
-            if stderr_path is not _UNSET:
-                state.stderr_path = None if stderr_path is None else stderr_path
-            if metadata is not _UNSET:
-                state.metadata_payload = None if metadata is None else dict(metadata)
             self._session.add(state)
-        else:
-            state.status = status_enum
-            if started_at is not _UNSET:
-                state.started_at = None if started_at is None else started_at
-            if completed_at is not _UNSET:
-                state.completed_at = None if completed_at is None else completed_at
-            if stdout_path is not _UNSET:
-                state.stdout_path = None if stdout_path is None else stdout_path
-            if stderr_path is not _UNSET:
-                state.stderr_path = None if stderr_path is None else stderr_path
-            if metadata is not _UNSET:
-                state.metadata_payload = None if metadata is None else dict(metadata)
-            state.updated_at = now
+
+        state.status = status_enum
+        state.updated_at = now
+
+        if started_at is not _UNSET:
+            state.started_at = None if started_at is None else started_at
+        if completed_at is not _UNSET:
+            state.completed_at = None if completed_at is None else completed_at
+        if stdout_path is not _UNSET:
+            state.stdout_path = None if stdout_path is None else stdout_path
+        if stderr_path is not _UNSET:
+            state.stderr_path = None if stderr_path is None else stderr_path
+        if metadata is not _UNSET:
+            state.metadata_payload = None if metadata is None else dict(metadata)
 
         await self._session.flush()
         return state
@@ -784,9 +774,7 @@ class SpecAutomationRepository:
             artifact.content_type = content_type
             artifact.size_bytes = size_bytes
             artifact.expires_at = (
-                expires_at
-                if expires_at is not None
-                else artifact.expires_at
+                expires_at if expires_at is not None else artifact.expires_at
             )
             artifact.source_phase = source_phase_enum
 
