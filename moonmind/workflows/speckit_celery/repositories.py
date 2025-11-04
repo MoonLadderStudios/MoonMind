@@ -542,13 +542,11 @@ class SpecAutomationRepository:
     ]:
         """Return a run along with ordered task states and artifacts."""
 
-        run = await self.get_run(run_id)
+        run = await self.get_run(run_id, with_relations=True)
         if run is None:
             return None
 
-        task_states = await self.list_task_states(run_id)
-        artifacts = await self.list_artifacts(run_id)
-        return run, task_states, artifacts
+        return run, run.task_states, run.artifacts
 
     async def find_by_external_ref(
         self, external_ref: str, *, repository: Optional[str] = None
@@ -818,14 +816,16 @@ class SpecAutomationRepository:
     ) -> Optional[models.SpecAutomationArtifact]:
         """Retrieve a single artifact ensuring it belongs to the run."""
 
-        stmt = select(models.SpecAutomationArtifact).where(
-            models.SpecAutomationArtifact.id == artifact_id
+        stmt = (
+            select(models.SpecAutomationArtifact)
+            .options(selectinload(models.SpecAutomationArtifact.run))
+            .where(
+                models.SpecAutomationArtifact.id == artifact_id,
+                models.SpecAutomationArtifact.run_id == run_id,
+            )
         )
         result = await self._session.execute(stmt)
-        artifact = result.scalar_one_or_none()
-        if artifact is None or artifact.run_id != run_id:
-            return None
-        return artifact
+        return result.scalar_one_or_none()
 
 
 __all__ = ["SpecWorkflowRepository", "SpecAutomationRepository"]
