@@ -27,10 +27,10 @@
 
 **Purpose**: Core configuration and persistence foundations required by all user stories.
 
-- [ ] T004 Extend moonmind/config/settings.py and config.toml with spec automation job image, workspace root, and metrics toggles
-- [ ] T005 Implement workspace manager helpers for run/home/artifact directories in moonmind/workflows/speckit_celery/workspace.py
-- [ ] T006 Add SpecAutomationRun-related SQLAlchemy models in moonmind/workflows/speckit_celery/models.py
-- [ ] T007 Generate Alembic migration creating spec_automation_runs and related tables in api_service/migrations/versions/
+- [x] T004 Extend moonmind/config/settings.py and config.toml with spec automation job image, workspace root, and metrics toggles
+- [x] T005 Implement workspace manager helpers for run/home/artifact directories in moonmind/workflows/speckit_celery/workspace.py
+- [x] T006 Add SpecAutomationRun-related SQLAlchemy models in moonmind/workflows/speckit_celery/models.py
+- [x] T007 Generate Alembic migration creating spec_automation_runs and related tables in api_service/migrations/versions/
 
 **Checkpoint**: Foundation ready—user story work can proceed once configuration and schema changes land.
 

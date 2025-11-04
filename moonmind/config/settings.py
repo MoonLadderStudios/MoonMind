@@ -111,6 +111,36 @@ class SpecWorkflowSettings(BaseSettings):
     artifacts_root: str = Field(
         "var/artifacts/spec_workflows", env="SPEC_WORKFLOW_ARTIFACTS_ROOT"
     )
+    job_image: str = Field(
+        "moonmind/spec-automation-job:latest",
+        env="SPEC_AUTOMATION_JOB_IMAGE",
+        description="Container image used for Spec Automation job executions.",
+    )
+    workspace_root: str = Field(
+        "/work",
+        env="SPEC_AUTOMATION_WORKSPACE_ROOT",
+        description="Host-mounted root directory for Spec Automation workspaces.",
+    )
+    metrics_enabled: bool = Field(
+        False,
+        env="SPEC_WORKFLOW_METRICS_ENABLED",
+        description="Toggle emission of Spec Automation StatsD metrics.",
+    )
+    metrics_host: Optional[str] = Field(
+        None,
+        env="SPEC_WORKFLOW_METRICS_HOST",
+        description="Hostname for the StatsD metrics sink (optional).",
+    )
+    metrics_port: Optional[int] = Field(
+        None,
+        env="SPEC_WORKFLOW_METRICS_PORT",
+        description="Port for the StatsD metrics sink (optional).",
+    )
+    metrics_namespace: str = Field(
+        "spec_automation",
+        env="SPEC_WORKFLOW_METRICS_NAMESPACE",
+        description="Namespace/prefix applied to emitted Spec Automation metrics.",
+    )
     default_feature_key: str = Field(
         "001-celery-chain-workflow", env="SPEC_WORKFLOW_DEFAULT_FEATURE_KEY"
     )
@@ -128,6 +158,15 @@ class SpecWorkflowSettings(BaseSettings):
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
     )
+
+    @field_validator("metrics_host", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: Optional[str]) -> Optional[str]:
+        """Normalize blank metric host values to ``None``."""
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class SecuritySettings(BaseSettings):
