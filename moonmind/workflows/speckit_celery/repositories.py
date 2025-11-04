@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
-from typing import Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, select
@@ -12,6 +12,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from moonmind.workflows.speckit_celery import models
+
+_UNSET: object = object()
+_DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)
+
+
+def _coerce_phase(
+    value: models.SpecAutomationPhase | str,
+) -> models.SpecAutomationPhase:
+    """Return the phase enum for ``value`` allowing string inputs."""
+
+    if isinstance(value, models.SpecAutomationPhase):
+        return value
+    return models.SpecAutomationPhase(str(value))
+
+
+def _coerce_status(
+    value: models.SpecAutomationTaskStatus | str,
+) -> models.SpecAutomationTaskStatus:
+    """Return the task status enum for ``value`` allowing string inputs."""
+
+    if isinstance(value, models.SpecAutomationTaskStatus):
+        return value
+    return models.SpecAutomationTaskStatus(str(value))
+
+
+def _coerce_run_status(
+    value: models.SpecAutomationRunStatus | str,
+) -> models.SpecAutomationRunStatus:
+    """Return the run status enum for ``value`` allowing string inputs."""
+
+    if isinstance(value, models.SpecAutomationRunStatus):
+        return value
+    return models.SpecAutomationRunStatus(str(value))
 
 
 class SpecWorkflowRepository:
@@ -415,4 +448,351 @@ class SpecWorkflowRepository:
         return result.scalars().all()
 
 
-__all__ = ["SpecWorkflowRepository"]
+class SpecAutomationRepository:
+    """Persistence helpers for Spec Kit automation runs and related entities."""
+
+    _UPDATABLE_RUN_FIELDS = {
+        "status",
+        "branch_name",
+        "pull_request_url",
+        "result_summary",
+        "started_at",
+        "completed_at",
+        "worker_hostname",
+        "job_container_id",
+        "base_branch",
+        "external_ref",
+    }
+
+    _FIELD_CONVERTERS: dict[str, Any] = {
+        "status": _coerce_run_status,
+    }
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    # ------------------------------------------------------------------
+    # Runs
+    # ------------------------------------------------------------------
+    async def create_run(
+        self,
+        *,
+        repository: str,
+        requested_spec_input: str,
+        base_branch: str = "main",
+        external_ref: Optional[str] = None,
+        status: (
+            models.SpecAutomationRunStatus | str
+        ) = models.SpecAutomationRunStatus.QUEUED,
+        branch_name: Optional[str] = None,
+        pull_request_url: Optional[str] = None,
+        result_summary: Optional[str] = None,
+        started_at: Optional[datetime] = None,
+        completed_at: Optional[datetime] = None,
+        worker_hostname: Optional[str] = None,
+        job_container_id: Optional[str] = None,
+        run_id: Optional[UUID] = None,
+    ) -> models.SpecAutomationRun:
+        """Persist a new Spec Automation run record."""
+
+        run = models.SpecAutomationRun(
+            id=run_id or uuid4(),
+            external_ref=external_ref,
+            repository=repository,
+            base_branch=base_branch,
+            branch_name=branch_name,
+            pull_request_url=pull_request_url,
+            status=_coerce_run_status(status),
+            result_summary=result_summary,
+            requested_spec_input=requested_spec_input,
+            started_at=started_at,
+            completed_at=completed_at,
+            worker_hostname=worker_hostname,
+            job_container_id=job_container_id,
+        )
+        self._session.add(run)
+        await self._session.flush()
+        return run
+
+    async def get_run(
+        self, run_id: UUID, *, with_relations: bool = False
+    ) -> Optional[models.SpecAutomationRun]:
+        """Retrieve a Spec Automation run by identifier."""
+
+        stmt: Select[tuple[models.SpecAutomationRun]] = select(
+            models.SpecAutomationRun
+        ).where(models.SpecAutomationRun.id == run_id)
+        if with_relations:
+            stmt = stmt.options(
+                selectinload(models.SpecAutomationRun.task_states),
+                selectinload(models.SpecAutomationRun.artifacts),
+                selectinload(models.SpecAutomationRun.agent_configuration),
+            )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def find_by_external_ref(
+        self, external_ref: str, *, repository: Optional[str] = None
+    ) -> Optional[models.SpecAutomationRun]:
+        """Locate the most recent run for an external reference."""
+
+        stmt: Select[tuple[models.SpecAutomationRun]] = (
+            select(models.SpecAutomationRun)
+            .where(models.SpecAutomationRun.external_ref == external_ref)
+            .order_by(models.SpecAutomationRun.created_at.desc())
+        )
+        if repository is not None:
+            stmt = stmt.where(models.SpecAutomationRun.repository == repository)
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
+
+    async def list_runs(
+        self,
+        *,
+        status: Optional[models.SpecAutomationRunStatus] = None,
+        repository: Optional[str] = None,
+        limit: int = 25,
+        with_relations: bool = False,
+    ) -> Sequence[models.SpecAutomationRun]:
+        """List automation runs ordered by creation time."""
+
+        stmt: Select[tuple[models.SpecAutomationRun]] = (
+            select(models.SpecAutomationRun)
+            .order_by(models.SpecAutomationRun.created_at.desc())
+            .limit(limit)
+        )
+        if status is not None:
+            stmt = stmt.where(
+                models.SpecAutomationRun.status == _coerce_run_status(status)
+            )
+        if repository is not None:
+            stmt = stmt.where(models.SpecAutomationRun.repository == repository)
+        if with_relations:
+            stmt = stmt.options(
+                selectinload(models.SpecAutomationRun.task_states),
+                selectinload(models.SpecAutomationRun.artifacts),
+                selectinload(models.SpecAutomationRun.agent_configuration),
+            )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    async def update_run(
+        self, run_id: UUID, **changes: Any
+    ) -> Optional[models.SpecAutomationRun]:
+        """Apply updates to an automation run and return the refreshed entity."""
+
+        run = await self._session.get(models.SpecAutomationRun, run_id)
+        if run is None:
+            return None
+
+        for field, value in changes.items():
+            if field not in self._UPDATABLE_RUN_FIELDS:
+                raise AttributeError(
+                    f"SpecAutomationRun field '{field}' cannot be updated or does not exist."
+                )
+            converter = self._FIELD_CONVERTERS.get(field)
+            setattr(run, field, converter(value) if converter else value)
+
+        await self._session.flush()
+        return run
+
+    # ------------------------------------------------------------------
+    # Task states
+    # ------------------------------------------------------------------
+    async def ensure_task_state_placeholders(
+        self,
+        *,
+        run_id: UUID,
+        phases: Iterable[models.SpecAutomationPhase | str],
+        attempt: int = 1,
+    ) -> Sequence[models.SpecAutomationTaskState]:
+        """Ensure placeholder task state rows exist for the given phases."""
+
+        unique_phases: list[models.SpecAutomationPhase] = []
+        seen: set[models.SpecAutomationPhase] = set()
+        for raw_phase in phases:
+            phase = _coerce_phase(raw_phase)
+            if phase in seen:
+                continue
+            seen.add(phase)
+            unique_phases.append(phase)
+
+        if not unique_phases:
+            return []
+
+        stmt = select(models.SpecAutomationTaskState).where(
+            models.SpecAutomationTaskState.run_id == run_id,
+            models.SpecAutomationTaskState.phase.in_(unique_phases),
+            models.SpecAutomationTaskState.attempt == attempt,
+        )
+        existing = await self._session.execute(stmt)
+        existing_by_phase = {state.phase: state for state in existing.scalars().all()}
+
+        now = datetime.now(UTC)
+        created = False
+        for phase in unique_phases:
+            if phase in existing_by_phase:
+                continue
+            placeholder = models.SpecAutomationTaskState(
+                id=uuid4(),
+                run_id=run_id,
+                phase=phase,
+                status=models.SpecAutomationTaskStatus.PENDING,
+                attempt=attempt,
+                created_at=now,
+                updated_at=now,
+            )
+            self._session.add(placeholder)
+            existing_by_phase[phase] = placeholder
+            created = True
+
+        if created:
+            await self._session.flush()
+        return [existing_by_phase[phase] for phase in unique_phases]
+
+    async def upsert_task_state(
+        self,
+        *,
+        run_id: UUID,
+        phase: models.SpecAutomationPhase | str,
+        status: models.SpecAutomationTaskStatus | str,
+        attempt: int = 1,
+        started_at: datetime | None | object = _UNSET,
+        completed_at: datetime | None | object = _UNSET,
+        stdout_path: str | None | object = _UNSET,
+        stderr_path: str | None | object = _UNSET,
+        metadata: Optional[dict[str, Any]] | object = _UNSET,
+    ) -> models.SpecAutomationTaskState:
+        """Create or update a task state record for a phase attempt."""
+
+        phase_enum = _coerce_phase(phase)
+        status_enum = _coerce_status(status)
+
+        stmt = select(models.SpecAutomationTaskState).where(
+            models.SpecAutomationTaskState.run_id == run_id,
+            models.SpecAutomationTaskState.phase == phase_enum,
+            models.SpecAutomationTaskState.attempt == attempt,
+        )
+        existing = await self._session.execute(stmt)
+        state = existing.scalar_one_or_none()
+
+        now = datetime.now(UTC)
+        if state is None:
+            state = models.SpecAutomationTaskState(
+                id=uuid4(),
+                run_id=run_id,
+                phase=phase_enum,
+                attempt=attempt,
+                created_at=now,
+            )
+            self._session.add(state)
+
+        state.status = status_enum
+        state.updated_at = now
+
+        if started_at is not _UNSET:
+            state.started_at = None if started_at is None else started_at
+        if completed_at is not _UNSET:
+            state.completed_at = None if completed_at is None else completed_at
+        if stdout_path is not _UNSET:
+            state.stdout_path = None if stdout_path is None else stdout_path
+        if stderr_path is not _UNSET:
+            state.stderr_path = None if stderr_path is None else stderr_path
+        if metadata is not _UNSET:
+            state.metadata_payload = None if metadata is None else dict(metadata)
+
+        await self._session.flush()
+        return state
+
+    async def list_task_states(
+        self, run_id: UUID
+    ) -> Sequence[models.SpecAutomationTaskState]:
+        """Return task states ordered by creation time."""
+
+        stmt = (
+            select(models.SpecAutomationTaskState)
+            .where(models.SpecAutomationTaskState.run_id == run_id)
+            .order_by(models.SpecAutomationTaskState.created_at.asc())
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    # ------------------------------------------------------------------
+    # Artifacts
+    # ------------------------------------------------------------------
+    async def create_artifact(
+        self,
+        *,
+        run_id: UUID,
+        name: str,
+        artifact_type: models.SpecAutomationArtifactType | str,
+        storage_path: str,
+        task_state_id: Optional[UUID] = None,
+        content_type: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+        expires_at: Optional[datetime] = None,
+        source_phase: models.SpecAutomationPhase | str | None = None,
+    ) -> models.SpecAutomationArtifact:
+        """Persist an artifact reference for a Spec Automation run."""
+
+        artifact_type_enum = (
+            artifact_type
+            if isinstance(artifact_type, models.SpecAutomationArtifactType)
+            else models.SpecAutomationArtifactType(str(artifact_type))
+        )
+        source_phase_enum = (
+            _coerce_phase(source_phase) if source_phase is not None else None
+        )
+
+        stmt = select(models.SpecAutomationArtifact).where(
+            models.SpecAutomationArtifact.run_id == run_id,
+            models.SpecAutomationArtifact.artifact_type == artifact_type_enum,
+            models.SpecAutomationArtifact.storage_path == storage_path,
+        )
+        existing = await self._session.execute(stmt)
+        artifact = existing.scalar_one_or_none()
+
+        now = datetime.now(UTC)
+        if artifact is None:
+            artifact = models.SpecAutomationArtifact(
+                id=uuid4(),
+                run_id=run_id,
+                task_state_id=task_state_id,
+                name=name,
+                artifact_type=artifact_type_enum,
+                storage_path=storage_path,
+                content_type=content_type,
+                size_bytes=size_bytes,
+                expires_at=expires_at or now + _DEFAULT_ARTIFACT_RETENTION,
+                source_phase=source_phase_enum,
+                created_at=now,
+            )
+            self._session.add(artifact)
+        else:
+            artifact.name = name
+            artifact.task_state_id = task_state_id
+            artifact.content_type = content_type
+            artifact.size_bytes = size_bytes
+            artifact.expires_at = (
+                expires_at if expires_at is not None else artifact.expires_at
+            )
+            artifact.source_phase = source_phase_enum
+
+        await self._session.flush()
+        return artifact
+
+    async def list_artifacts(
+        self, run_id: UUID
+    ) -> Sequence[models.SpecAutomationArtifact]:
+        """Return artifacts persisted for the specified run."""
+
+        stmt = (
+            select(models.SpecAutomationArtifact)
+            .where(models.SpecAutomationArtifact.run_id == run_id)
+            .order_by(models.SpecAutomationArtifact.created_at.asc())
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+
+__all__ = ["SpecWorkflowRepository", "SpecAutomationRepository"]

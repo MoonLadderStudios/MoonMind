@@ -11,17 +11,24 @@ so later orchestration steps can rely on a consistent layout.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 from uuid import UUID
 
 from moonmind.config.settings import settings
+
+_BRANCH_COMPONENT_PATTERN = re.compile(r"[^a-zA-Z0-9._-]+")
 
 __all__ = [
     "RunWorkspacePaths",
     "SpecWorkspaceManager",
     "WorkspaceConfigurationError",
+    "generate_branch_name",
+    "sanitize_branch_component",
+    "with_retry_suffix",
 ]
 
 
@@ -149,6 +156,33 @@ class SpecWorkspaceManager:
             artifacts_path=artifacts_path,
         )
 
+    def build_job_environment(
+        self,
+        run_id: UUID | str,
+        *,
+        repository: str,
+        branch_name: str,
+        base_branch: str,
+        extra_env: Optional[Mapping[str, str]] = None,
+    ) -> dict[str, str]:
+        """Construct environment variables for the Spec Automation job container."""
+
+        paths = self.ensure_workspace(run_id)
+        env: dict[str, str] = {
+            "RUN_ID": str(run_id),
+            "REPOSITORY": repository,
+            "BRANCH": branch_name,
+            "BASE_BRANCH": base_branch,
+            "WORKSPACE_ROOT": str(paths.run_root),
+            "REPO_PATH": str(paths.repo_path),
+            "ARTIFACTS_PATH": str(paths.artifacts_path),
+            "HOME": str(paths.home_path),
+        }
+        if extra_env:
+            for key, value in extra_env.items():
+                env[str(key)] = str(value)
+        return env
+
     # ------------------------------------------------------------------
     # Utility helpers
     # ------------------------------------------------------------------
@@ -178,3 +212,46 @@ class SpecWorkspaceManager:
             raise WorkspaceConfigurationError(
                 f"Path {resolved} is outside workspace root {self.workspace_root}"
             )
+
+
+def sanitize_branch_component(component: str) -> str:
+    """Return a repository-branch-safe component string."""
+
+    cleaned = _BRANCH_COMPONENT_PATTERN.sub("-", component.strip())
+    cleaned = cleaned.strip("-")
+    return cleaned.lower() or "run"
+
+
+def generate_branch_name(
+    run_id: UUID | str,
+    *,
+    prefix: str = "speckit",
+    timestamp: Optional[datetime] = None,
+    suffix: Optional[str] = None,
+) -> str:
+    """Generate a deterministic branch name for a Spec Automation run."""
+
+    current = timestamp or datetime.now(UTC)
+    date_fragment = current.strftime("%Y%m%d")
+    try:
+        run_uuid = UUID(str(run_id))
+        run_fragment = run_uuid.hex[:8]
+    except (ValueError, TypeError):
+        run_fragment = sanitize_branch_component(str(run_id))[:8]
+    prefix_fragment = sanitize_branch_component(prefix)
+    tail = run_fragment
+    if suffix:
+        tail = f"{tail}-{sanitize_branch_component(suffix)}"
+    return f"{prefix_fragment}/{date_fragment}/{tail}"
+
+
+def with_retry_suffix(branch_name: str, attempt: int) -> str:
+    """Append a retry suffix for non-initial attempts while preserving hierarchy."""
+
+    if attempt <= 1:
+        return branch_name
+
+    head, sep, tail = branch_name.rpartition("/")
+    tail_component = tail or branch_name
+    updated_tail = f"{tail_component}-r{attempt}"
+    return f"{head}{sep}{updated_tail}" if sep else updated_tail

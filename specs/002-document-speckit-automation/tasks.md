@@ -44,9 +44,9 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Add spec automation repository methods for run/task/artifact persistence in moonmind/workflows/speckit_celery/repositories.py
-- [ ] T009 [US1] Implement job container lifecycle (start/exec/stop) using Docker SDK in moonmind/workflows/speckit_celery/job_container.py
-- [ ] T010 [US1] Add branch naming and workspace preparation utilities in moonmind/workflows/speckit_celery/workspace.py
+- [x] T008 [US1] Add spec automation repository methods for run/task/artifact persistence in moonmind/workflows/speckit_celery/repositories.py
+- [x] T009 [US1] Implement job container lifecycle (start/exec/stop) using Docker SDK in moonmind/workflows/speckit_celery/job_container.py
+- [x] T010 [US1] Add branch naming and workspace preparation utilities in moonmind/workflows/speckit_celery/workspace.py
 - [ ] T011 [US1] Orchestrate specify→plan→tasks execution with container phases in moonmind/workflows/speckit_celery/tasks.py
 - [ ] T012 [US1] Implement git commit/push and draft PR helpers for job container runs in moonmind/workflows/speckit_celery/tasks.py
 - [ ] T013 [US1] Cover successful automation happy path with integration test in tests/integration/workflows/test_spec_automation_pipeline.py
