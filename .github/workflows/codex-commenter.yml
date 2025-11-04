@@ -458,6 +458,8 @@ jobs:
               }
 
               const marker = `<!-- codex:${purpose} sha=${headSha} -->`;
+              const shaMarkerRegex = new RegExp(`<!--\\s*codex:[^>]*\\bsha=${headSha}\\b`, 'i');
+              const markerStripRegex = /<!--\s*codex:[^>]*sha=[^>]+-->/i;
 
               const isCodexBot = (comment) => {
                 const login = comment.user?.login || '';
@@ -467,9 +469,32 @@ jobs:
                 return isBotUser || hasMarker;
               };
 
-              const alreadyForThisSha = issueComments.some(comment => (comment.body || '').includes(marker));
-              if (alreadyForThisSha) {
-                console.log(`Found existing Codex comment for ${purpose} @ ${headSha}. Skipping.`);
+              const existingCommentForSha = issueComments.find(comment => {
+                if (!isCodexBot(comment)) {
+                  return false;
+                }
+                return shaMarkerRegex.test(comment.body || '');
+              });
+
+              if (existingCommentForSha) {
+                const existingBody = existingCommentForSha.body || '';
+                const existingMessage = existingBody.replace(markerStripRegex, '').trim();
+                const alreadyMatches = existingMessage.toLowerCase() === normalizedCommentBodyLower;
+
+                if (alreadyMatches) {
+                  console.log(`Existing Codex comment already matches desired message for ${headSha}. Skipping.`);
+                  return;
+                }
+
+                const updatedBody = [marker, normalizedCommentBody].join('\n');
+                console.log(`Updating existing Codex comment ${existingCommentForSha.id} for SHA ${headSha}.`);
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingCommentForSha.id,
+                  body: updatedBody
+                });
+                console.log('Codex comment updated successfully.');
                 return;
               }
 
