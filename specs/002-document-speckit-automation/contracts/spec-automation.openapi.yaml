@@ -1,0 +1,232 @@
+openapi: 3.0.3
+info:
+  title: Spec Automation API
+  version: '0.1.0'
+  description: >
+    Endpoints for triggering and monitoring Spec Kit automation runs that execute
+    specify/plan/tasks phases inside ephemeral job containers.
+servers:
+  - url: https://moonmind.example.com/api
+paths:
+  /spec-automation/runs:
+    post:
+      summary: Trigger a new Spec Kit automation run
+      tags: [SpecAutomationRuns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+      responses:
+        '202':
+          description: Run accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResponse'
+        '400':
+          description: Invalid request payload
+        '401':
+          description: Missing or invalid credentials
+  /spec-automation/runs/{run_id}:
+    get:
+      summary: Fetch status and metadata for a run
+      tags: [SpecAutomationRuns]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Run status and phase information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDetail'
+        '404':
+          description: Run not found
+  /spec-automation/runs/{run_id}/artifacts/{artifact_id}:
+    get:
+      summary: Retrieve artifact metadata and download link
+      tags: [SpecAutomationArtifacts]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: artifact_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Artifact metadata with presigned URL or local path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactDetail'
+        '404':
+          description: Artifact not found
+components:
+  schemas:
+    RunRequest:
+      type: object
+      required:
+        - repository
+        - specify_text
+      properties:
+        repository:
+          type: string
+          example: moonmind/moonmind
+          description: Git repository slug targeted by the automation.
+        base_branch:
+          type: string
+          default: main
+        specify_text:
+          type: string
+          description: Text passed to the speckit.specify prompt.
+        dry_run:
+          type: boolean
+          default: false
+          description: When true, prevents git push and PR creation while still collecting artifacts.
+        external_ref:
+          type: string
+          description: Optional correlation ID supplied by the caller.
+    RunResponse:
+      type: object
+      required:
+        - run_id
+        - status
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, in_progress]
+        accepted_at:
+          type: string
+          format: date-time
+    RunDetail:
+      type: object
+      required:
+        - run_id
+        - status
+        - phases
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, in_progress, succeeded, failed, no_changes]
+        branch_name:
+          type: string
+          nullable: true
+        pull_request_url:
+          type: string
+          nullable: true
+        result_summary:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        phases:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhaseState'
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactSummary'
+    PhaseState:
+      type: object
+      required:
+        - phase
+        - status
+        - attempt
+      properties:
+        phase:
+          type: string
+          enum:
+            - prepare_job
+            - start_job_container
+            - git_clone
+            - speckit_specify
+            - speckit_plan
+            - speckit_tasks
+            - commit_push
+            - open_pr
+            - cleanup
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, skipped, retrying]
+        attempt:
+          type: integer
+          minimum: 1
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        stdout_path:
+          type: string
+          nullable: true
+        stderr_path:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+    ArtifactSummary:
+      type: object
+      required:
+        - artifact_id
+        - name
+        - artifact_type
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        artifact_type:
+          type: string
+          enum:
+            - stdout_log
+            - stderr_log
+            - diff_summary
+            - commit_status
+            - metrics_snapshot
+            - environment_info
+        storage_path:
+          type: string
+          description: Local artifact path relative to /work volume.
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+    ArtifactDetail:
+      allOf:
+        - $ref: '#/components/schemas/ArtifactSummary'
+        - type: object
+          properties:
+            download_url:
+              type: string
+              description: Presigned URL or local download endpoint for the artifact.
