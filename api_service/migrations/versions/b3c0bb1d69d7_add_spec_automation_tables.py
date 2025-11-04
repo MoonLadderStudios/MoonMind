@@ -63,19 +63,6 @@ SPEC_AUTOMATION_ARTIFACT_TYPE = postgresql.ENUM(
     name="specautomationartifacttype",
 )
 
-SPEC_AUTOMATION_ARTIFACT_SOURCE = postgresql.ENUM(
-    "prepare_job",
-    "start_job_container",
-    "git_clone",
-    "speckit_specify",
-    "speckit_plan",
-    "speckit_tasks",
-    "commit_push",
-    "open_pr",
-    "cleanup",
-    name="specautomationartifactsource",
-)
-
 
 def upgrade() -> None:  # noqa: D401
     """Create Spec Automation tables and supporting enums."""
@@ -85,17 +72,23 @@ def upgrade() -> None:  # noqa: D401
     SPEC_AUTOMATION_PHASE.create(bind, checkfirst=True)
     SPEC_AUTOMATION_TASK_STATUS.create(bind, checkfirst=True)
     SPEC_AUTOMATION_ARTIFACT_TYPE.create(bind, checkfirst=True)
-    SPEC_AUTOMATION_ARTIFACT_SOURCE.create(bind, checkfirst=True)
 
     op.create_table(
         "spec_automation_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("external_ref", sa.String(length=255), nullable=True),
         sa.Column("repository", sa.String(length=255), nullable=False),
-        sa.Column("base_branch", sa.String(length=128), nullable=False, server_default="main"),
+        sa.Column(
+            "base_branch", sa.String(length=128), nullable=False, server_default="main"
+        ),
         sa.Column("branch_name", sa.String(length=255), nullable=True),
         sa.Column("pull_request_url", sa.String(length=512), nullable=True),
-        sa.Column("status", SPEC_AUTOMATION_RUN_STATUS, nullable=False, server_default="queued"),
+        sa.Column(
+            "status",
+            SPEC_AUTOMATION_RUN_STATUS,
+            nullable=False,
+            server_default="queued",
+        ),
         sa.Column("result_summary", sa.Text(), nullable=True),
         sa.Column("requested_spec_input", sa.Text(), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
@@ -207,7 +200,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column("content_type", sa.String(length=128), nullable=True),
         sa.Column("size_bytes", sa.Integer(), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("source_phase", SPEC_AUTOMATION_ARTIFACT_SOURCE, nullable=True),
+        sa.Column("source_phase", SPEC_AUTOMATION_PHASE, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -291,7 +284,6 @@ def downgrade() -> None:  # noqa: D401
     op.drop_table("spec_automation_runs")
 
     bind = op.get_bind()
-    SPEC_AUTOMATION_ARTIFACT_SOURCE.drop(bind, checkfirst=True)
     SPEC_AUTOMATION_ARTIFACT_TYPE.drop(bind, checkfirst=True)
     SPEC_AUTOMATION_TASK_STATUS.drop(bind, checkfirst=True)
     SPEC_AUTOMATION_PHASE.drop(bind, checkfirst=True)

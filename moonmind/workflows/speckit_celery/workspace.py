@@ -58,7 +58,9 @@ class SpecWorkspaceManager:
     _HOME_SUBDIR = "home"
     _ARTIFACTS_SUBDIR = "artifacts"
 
-    def __init__(self, workspace_root: Path | str, *, runs_dirname: Optional[str] = None) -> None:
+    def __init__(
+        self, workspace_root: Path | str, *, runs_dirname: Optional[str] = None
+    ) -> None:
         base = Path(workspace_root).expanduser()
         if not base.is_absolute():
             # Resolve relative paths relative to the current working directory to avoid
@@ -159,16 +161,16 @@ class SpecWorkspaceManager:
 
         artifacts_root = self.artifacts_path(run_id)
         target = artifacts_root.joinpath(*relative_parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
         self._assert_within_workspace(target)
+        self._assert_within_workspace(target.parent)
+        target.parent.mkdir(parents=True, exist_ok=True)
         return target
 
     def _assert_within_workspace(self, path: Path) -> None:
         """Ensure ``path`` does not escape the configured workspace root."""
 
         resolved = path.resolve()
-        if self.workspace_root not in resolved.parents and resolved != self.workspace_root:
+        if not resolved.is_relative_to(self.workspace_root):
             raise WorkspaceConfigurationError(
                 f"Path {resolved} is outside workspace root {self.workspace_root}"
             )
-

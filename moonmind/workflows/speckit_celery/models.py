@@ -373,7 +373,9 @@ class SpecAutomationRun(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     external_ref: Mapped[Optional[str]] = mapped_column(String(255))
     repository: Mapped[str] = mapped_column(String(255), nullable=False)
-    base_branch: Mapped[str] = mapped_column(String(128), nullable=False, default="main")
+    base_branch: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="main"
+    )
     branch_name: Mapped[Optional[str]] = mapped_column(String(255))
     pull_request_url: Mapped[Optional[str]] = mapped_column(String(512))
     status: Mapped[SpecAutomationRunStatus] = mapped_column(
@@ -525,11 +527,13 @@ class SpecAutomationArtifact(Base):
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     content_type: Mapped[Optional[str]] = mapped_column(String(128))
     size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     source_phase: Mapped[Optional[SpecAutomationPhase]] = mapped_column(
         Enum(
             SpecAutomationPhase,
-            name="specautomationartifactsource",
+            name="specautomationphase",
             native_enum=True,
             validate_strings=True,
         )
