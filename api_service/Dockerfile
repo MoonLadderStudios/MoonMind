@@ -3,7 +3,15 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 RUN apt-get update && \
-    apt-get install -y tesseract-ocr tesseract-ocr-eng git curl && \
+    apt-get install -y \
+        build-essential \
+        pkg-config \
+        libcairo2-dev \
+        libffi-dev \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        git \
+        curl && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install watchfiles

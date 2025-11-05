@@ -87,8 +87,3 @@ __all__ = [
 ]
 
 
-from moonmind.workflows.speckit_celery import (  # noqa: E402  # isort: skip
-    models as workflow_models,
-)
-
-__all__.extend(workflow_models.__all__)
