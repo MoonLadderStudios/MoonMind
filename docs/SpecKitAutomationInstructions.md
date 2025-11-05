@@ -38,7 +38,7 @@ Docker Compose automatically loads `docker-compose.override.yaml`, ensuring each
 
 ## Step 2 – Prepare your run request
 
-In a second terminal, load your credentials and craft the JSON payload that specifies the feature key and any optional overrides (forced phase or `createdBy` audit metadata). The snippet below uses `jq` to safely assemble the request:
+In a second terminal, load your credentials and craft the JSON payload that identifies the target repository, optional base branch, the Spec Kit input text, and any optional metadata overrides. The snippet below uses `jq` to safely assemble the request while avoiding temporary files with secrets:
 
 ```bash
 # Pull credentials from your preferred secret manager so they never land in
@@ -48,16 +48,22 @@ export GITHUB_TOKEN="$(op read 'op://moonmind/github-token/value')"
 export CODEX_API_KEY="$(op read 'op://moonmind/codex-api-key/value')"
 export MOONMIND_API_TOKEN="$(op read 'op://moonmind/moonmind-api-token/value')"
 
-export SPEC_AUTOMATION_FEATURE_KEY="002-document-speckit-automation"
-export SPEC_AUTOMATION_FORCE_PHASE=""          # optional: discover|submit|apply|publish
-export SPEC_AUTOMATION_CREATED_BY=""           # optional: UUID for audit trails
+export TARGET_REPO="MoonLadderStudios/moonmind" # repository slug (owner/name)
+export BASE_BRANCH="main"                      # optional: defaults to main if empty
+export SPEC_INPUT_FILE="spec-inputs/002.md"    # path to your Spec Kit text
+export SPEC_AUTOMATION_DRY_RUN="false"         # optional: true|false
+export SPEC_AUTOMATION_EXTERNAL_REF=""         # optional: correlation ID for auditing
 
 REQUEST_BODY=$(jq -n \
-  --arg feature "$SPEC_AUTOMATION_FEATURE_KEY" \
-  --arg force "$SPEC_AUTOMATION_FORCE_PHASE" \
-  --arg created "$SPEC_AUTOMATION_CREATED_BY" \
-  '{"featureKey": $feature, "forcePhase": ($force // empty), "createdBy": ($created // empty)}
-    | with_entries(select(.value != ""))'
+  --arg repo "$TARGET_REPO" \
+  --arg base "$BASE_BRANCH" \
+  --rawfile specify "$SPEC_INPUT_FILE" \
+  --arg dry "$SPEC_AUTOMATION_DRY_RUN" \
+  --arg external "$SPEC_AUTOMATION_EXTERNAL_REF" \
+  '({"repository": $repo, "specify_text": $specify}
+    + (if ($base | length) > 0 then {"base_branch": $base} else {} end)
+    + (if ($dry | length) > 0 then {"dry_run": ($dry | test("(?i)^(1|true|yes)$"))} else {} end)
+    + (if ($external | length) > 0 then {"external_ref": $external} else {} end))'
 )
 ```
 
@@ -67,11 +73,11 @@ once the run finishes.
 
 ## Step 3 – Trigger the automation run
 
-Submit the payload to the workflow orchestration API. The endpoint enqueues the Celery chain and returns the workflow run metadata, including the `id` you will use in subsequent monitoring calls:
+Submit the payload to the Spec Automation API. The endpoint enqueues the Celery chain and returns the run metadata, including the `run_id` you will use in subsequent monitoring calls:
 
 ```bash
 printf '%s' "$REQUEST_BODY" | \
-curl -sS -X POST "http://localhost:5000/api/workflows/speckit/runs" \
+curl -sS -X POST "http://localhost:5000/api/spec-automation/runs" \
   -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d @-
@@ -81,11 +87,11 @@ curl -sS -X POST "http://localhost:5000/api/workflows/speckit/runs" \
 > `localhost:5000`. If you change the Compose file or run the service directly,
 > adjust the host and port accordingly.
 
-The response conforms to `CreateWorkflowRunRequest`/`SpecWorkflowRunModel` and includes fields such as `status`, `featureKey`, and `celeryChainId` to confirm that the run was accepted.【F:moonmind/schemas/workflow_models.py†L73-L148】【F:api_service/api/routers/workflows.py†L38-L87】
+The response matches the `RunResponse` schema defined in the Spec Automation contract and includes fields such as `run_id`, `status`, and `accepted_at` so you can confirm the request was queued.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L13-L80】
 
-A successful response includes the queued status and `id` (the workflow run identifier). Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
+A successful response includes the queued status and `run_id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
 
-Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
+Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients; these settings must align with the repository slug you pass in the request.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
 
 The queued run is now ready for monitoring.
 
