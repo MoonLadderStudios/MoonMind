@@ -1,0 +1,147 @@
+openapi: 3.1.0
+info:
+  title: Spec Automation Codex Worker Extensions
+  version: 0.1.0
+  description: |
+    API additions supporting Codex OAuth volume management, deterministic queue routing,
+    and pre-flight authentication visibility for Spec Kit automation runs.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /spec-workflows/codex/shards:
+    get:
+      summary: List Codex worker shards and associated auth volume health
+      tags: [SpecAutomation]
+      responses:
+        '200':
+          description: Codex worker shard inventory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodexShardList'
+  /spec-workflows/runs/{run_id}/codex/preflight:
+    post:
+      summary: Trigger Codex pre-flight login status check for a specific run context
+      tags: [SpecAutomation]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          description: Unique identifier of the Spec automation run
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreflightRequest'
+      responses:
+        '200':
+          description: Current pre-flight status for the requested run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreflightResult'
+        '409':
+          description: Run is already executing Codex phase or has completed
+  /spec-workflows/runs/{run_id}:
+    get:
+      summary: Retrieve Spec automation run details (augmented with Codex metadata)
+      tags: [SpecAutomation]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run record including Codex shard attribution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpecAutomationRun'
+components:
+  schemas:
+    CodexShardList:
+      type: object
+      properties:
+        shards:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodexWorkerShard'
+    CodexWorkerShard:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          pattern: ^codex-[0-9]+$
+        volume_name:
+          type: string
+          pattern: ^codex_auth_[0-9]+$
+        status:
+          type: string
+          enum: [active, draining, offline]
+        last_verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        hash_modulo:
+          type: integer
+          minimum: 1
+        worker_hostname:
+          type: string
+      required: [queue_name, volume_name, status, hash_modulo]
+    PreflightRequest:
+      type: object
+      properties:
+        affinity_key:
+          type: string
+          description: Optional key to mimic routing decision outside an active run
+        force_refresh:
+          type: boolean
+          default: false
+      required: []
+    PreflightResult:
+      type: object
+      properties:
+        run_id:
+          type: string
+        queue_name:
+          type: string
+        volume_name:
+          type: string
+        status:
+          type: string
+          enum: [passed, failed, skipped]
+        checked_at:
+          type: string
+          format: date-time
+        message:
+          type: string
+      required: [run_id, queue_name, volume_name, status]
+    SpecAutomationRun:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        codex_queue:
+          type: string
+        codex_volume:
+          type: string
+        codex_preflight_status:
+          type: string
+          enum: [passed, failed, skipped]
+        codex_preflight_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, status]
