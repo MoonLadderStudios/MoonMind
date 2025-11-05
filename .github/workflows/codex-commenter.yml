@@ -297,7 +297,7 @@ jobs:
             console.log('Checking check statuses...');
 
             // Check if any checks failed
-            const failureConclusions = new Set(['failure', 'timed_out', 'action_required']);
+            const failureConclusions = new Set(['failure', 'timed_out', 'action_required', 'cancelled', 'skipped']);
             const hasFailures = checkRunsExcludingSelf.some(
               run => failureConclusions.has(run.conclusion)
             );
