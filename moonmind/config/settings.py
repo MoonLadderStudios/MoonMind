@@ -221,17 +221,14 @@ class SpecWorkflowSettings(BaseSettings):
         """Validate agent backend selections after settings load."""
 
         super().model_post_init(__context)
-        allowed = self.allowed_agent_backends or (self.agent_backend,)
         # Ensure tuples are deduplicated even when env provided sequences
-        self.allowed_agent_backends = tuple(dict.fromkeys(allowed))
+        allowed = tuple(dict.fromkeys(self.allowed_agent_backends or ()))
+        self.allowed_agent_backends = allowed
         self.agent_runtime_env_keys = tuple(
             dict.fromkeys(self.agent_runtime_env_keys or ())
         )
-        if (
-            self.allowed_agent_backends
-            and self.agent_backend not in self.allowed_agent_backends
-        ):
-            allowed_display = ", ".join(self.allowed_agent_backends)
+        if allowed and self.agent_backend not in allowed:
+            allowed_display = ", ".join(allowed)
             raise ValueError(
                 f"Agent backend '{self.agent_backend}' is not permitted. "
                 f"Allowed values: {allowed_display or '<none>'}"

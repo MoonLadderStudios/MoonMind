@@ -12,6 +12,7 @@ so later orchestration steps can rely on a consistent layout.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -34,6 +35,109 @@ __all__ = [
     "sanitize_branch_component",
     "with_retry_suffix",
 ]
+
+
+def _secure_delete_file(path: Path) -> None:
+    """Best-effort secure deletion for ``path`` if it points to a file."""
+
+    try:
+        if not path.exists():
+            return
+    except OSError:
+        return
+
+    if path.is_symlink():
+        try:
+            path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            return
+        except OSError as exc:  # pragma: no cover - depends on filesystem
+            logger.debug(
+                "Failed to remove symlink %s during secure cleanup: %s", path, exc
+            )
+        return
+
+    if path.is_file():
+        try:
+            size = path.stat().st_size
+        except OSError as exc:  # pragma: no cover - filesystem specific
+            logger.debug("Failed to stat %s before secure deletion: %s", path, exc)
+            size = 0
+
+        if size > 0:
+            try:
+                with path.open("r+b", buffering=0) as handle:
+                    remaining = size
+                    while remaining > 0:
+                        to_write = min(65536, remaining)
+                        handle.write(os.urandom(to_write))
+                        remaining -= to_write
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except FileNotFoundError:
+                return
+            except OSError as exc:  # pragma: no cover - depends on filesystem
+                logger.debug(
+                    "Failed to overwrite %s during secure deletion: %s", path, exc
+                )
+
+    try:
+        path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        return
+    except OSError as exc:  # pragma: no cover - filesystem specific
+        logger.warning("Failed to remove %s during secure deletion: %s", path, exc)
+
+
+def _secure_rmtree(path: Path) -> None:
+    """Securely delete directory trees by overwriting contents before removal."""
+
+    try:
+        if not path.exists():
+            return
+    except OSError:
+        return
+
+    if path.is_symlink() or path.is_file():
+        _secure_delete_file(path)
+        return
+
+    for root, dirs, files in os.walk(path, topdown=False):
+        root_path = Path(root)
+        for filename in files:
+            _secure_delete_file(root_path / filename)
+        for dirname in dirs:
+            child = root_path / dirname
+            if child.is_symlink():
+                try:
+                    child.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:  # pragma: no cover - filesystem specific
+                    logger.debug(
+                        "Failed to remove symlink directory %s during secure cleanup: %s",
+                        child,
+                        exc,
+                    )
+                continue
+            try:
+                child.rmdir()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:  # pragma: no cover - depends on filesystem
+                logger.debug(
+                    "Failed to remove directory %s during secure cleanup: %s",
+                    child,
+                    exc,
+                )
+
+    try:
+        path.rmdir()
+    except FileNotFoundError:
+        return
+    except OSError as exc:  # pragma: no cover - depends on filesystem
+        logger.debug("Falling back to recursive removal for %s: %s", path, exc)
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class WorkspaceConfigurationError(RuntimeError):
@@ -190,11 +294,11 @@ class SpecWorkspaceManager:
 
         if remove_artifacts:
             try:
-                shutil.rmtree(run_root)
-            except FileNotFoundError:
-                return
+                _secure_rmtree(run_root)
             except OSError as exc:  # pragma: no cover - depends on filesystem state
-                logger.warning("Failed to remove workspace %s: %s", run_root, exc)
+                logger.warning(
+                    "Failed to securely remove workspace %s: %s", run_root, exc
+                )
             return
 
         artifacts_path.mkdir(parents=True, exist_ok=True)
@@ -203,15 +307,13 @@ class SpecWorkspaceManager:
                 continue
             try:
                 if entry.is_dir():
-                    shutil.rmtree(entry)
+                    _secure_rmtree(entry)
                 else:
-                    entry.unlink(missing_ok=True)
+                    _secure_delete_file(entry)
             except FileNotFoundError:
                 continue
             except OSError as exc:  # pragma: no cover - depends on filesystem state
-                logger.warning(
-                    "Failed to clean workspace entry %s: %s", entry, exc
-                )
+                logger.warning("Failed to clean workspace entry %s: %s", entry, exc)
 
     def cleanup_job_container(
         self,
@@ -233,7 +335,18 @@ class SpecWorkspaceManager:
             )
             return False
 
-        client = docker_client or docker.from_env()
+        if docker_client is not None:
+            client = docker_client
+        else:
+            try:
+                client = docker.from_env()
+            except DockerException as exc:
+                logger.debug(
+                    "Docker client unavailable when cleaning container %s: %s",
+                    container_name,
+                    exc,
+                )
+                return False
         try:
             container = client.containers.get(container_name)
         except NotFound:
@@ -251,9 +364,7 @@ class SpecWorkspaceManager:
         except NotFound:
             return False
         except DockerException as exc:  # pragma: no cover - depends on docker env
-            logger.warning(
-                "Failed to remove job container %s: %s", container_name, exc
-            )
+            logger.warning("Failed to remove job container %s: %s", container_name, exc)
             return False
 
     def purge_expired_workspaces(
