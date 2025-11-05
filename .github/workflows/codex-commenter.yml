@@ -552,11 +552,11 @@ jobs:
             core.setOutput('pr', String(pr_number));
             console.log(`Ready for auto-merge: ${readyToMerge}`);
 
-      - name: Enable native auto-merge (squash)
+      - name: Enable native auto-merge
         if: steps.eval.outputs.ready == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ secrets.PR_AGENT_TOKEN || github.token }}
           pull-request-number: ${{ steps.eval.outputs.pr }}
-          merge-method: squash
+          merge-method: merge
 
