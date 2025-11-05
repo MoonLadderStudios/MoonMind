@@ -1,7 +1,7 @@
 """add Spec Automation persistence tables
 
 Revision ID: b3c0bb1d69d7
-Revises: 909263807406
+Revises: add_spec_workflow_tables
 Create Date: 2025-11-05 00:00:00.000000
 
 """
@@ -28,6 +28,7 @@ SPEC_AUTOMATION_RUN_STATUS = postgresql.ENUM(
     "failed",
     "no_changes",
     name="specautomationrunstatus",
+    create_type=False,
 )
 
 SPEC_AUTOMATION_PHASE = postgresql.ENUM(
@@ -41,6 +42,7 @@ SPEC_AUTOMATION_PHASE = postgresql.ENUM(
     "open_pr",
     "cleanup",
     name="specautomationphase",
+    create_type=False,
 )
 
 SPEC_AUTOMATION_TASK_STATUS = postgresql.ENUM(
@@ -51,6 +53,7 @@ SPEC_AUTOMATION_TASK_STATUS = postgresql.ENUM(
     "skipped",
     "retrying",
     name="specautomationtaskstatus",
+    create_type=False,
 )
 
 SPEC_AUTOMATION_ARTIFACT_TYPE = postgresql.ENUM(
@@ -61,17 +64,40 @@ SPEC_AUTOMATION_ARTIFACT_TYPE = postgresql.ENUM(
     "metrics_snapshot",
     "environment_info",
     name="specautomationartifacttype",
+    create_type=False,
 )
 
 
 def upgrade() -> None:  # noqa: D401
     """Create Spec Automation tables and supporting enums."""
 
-    bind = op.get_bind()
-    SPEC_AUTOMATION_RUN_STATUS.create(bind, checkfirst=True)
-    SPEC_AUTOMATION_PHASE.create(bind, checkfirst=True)
-    SPEC_AUTOMATION_TASK_STATUS.create(bind, checkfirst=True)
-    SPEC_AUTOMATION_ARTIFACT_TYPE.create(bind, checkfirst=True)
+    def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
+        """Create a PostgreSQL enum type only if it does not already exist."""
+
+        # Escape enum literals and quote identifiers so that raw SQL execution is safe.
+        literal_values = ", ".join(
+            f"'{value.replace("'", "''")}'" for value in enum_type.enums
+        )
+        type_name_literal = enum_type.name.replace("'", "''")
+        quoted_type_name = sa.sql.elements.quoted_name(enum_type.name, quote=True)
+
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_type WHERE typname = '{type_name_literal}'
+                ) THEN
+                    CREATE TYPE {quoted_type_name} AS ENUM ({literal_values});
+                END IF;
+            END $$;
+            """
+        )
+
+    _create_enum_if_missing(SPEC_AUTOMATION_RUN_STATUS)
+    _create_enum_if_missing(SPEC_AUTOMATION_PHASE)
+    _create_enum_if_missing(SPEC_AUTOMATION_TASK_STATUS)
+    _create_enum_if_missing(SPEC_AUTOMATION_ARTIFACT_TYPE)
 
     op.create_table(
         "spec_automation_runs",

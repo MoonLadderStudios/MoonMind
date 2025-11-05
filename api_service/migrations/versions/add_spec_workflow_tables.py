@@ -21,6 +21,7 @@ SPEC_WORKFLOW_RUN_STATUS = postgresql.ENUM(
     "failed",
     "cancelled",
     name="specworkflowrunstatus",
+    create_type=False,
 )
 
 SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
@@ -30,6 +31,7 @@ SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
     "publish",
     "complete",
     name="specworkflowrunphase",
+    create_type=False,
 )
 
 SPEC_WORKFLOW_TASK_STATUS = postgresql.ENUM(
@@ -39,6 +41,7 @@ SPEC_WORKFLOW_TASK_STATUS = postgresql.ENUM(
     "failed",
     "skipped",
     name="specworkflowtaskstatus",
+    create_type=False,
 )
 
 WORKFLOW_CODEX_CREDENTIAL_STATUS = postgresql.ENUM(
@@ -46,6 +49,7 @@ WORKFLOW_CODEX_CREDENTIAL_STATUS = postgresql.ENUM(
     "invalid",
     "expires_soon",
     name="workflowcodexcredentialstatus",
+    create_type=False,
 )
 
 WORKFLOW_GITHUB_CREDENTIAL_STATUS = postgresql.ENUM(
@@ -53,6 +57,7 @@ WORKFLOW_GITHUB_CREDENTIAL_STATUS = postgresql.ENUM(
     "invalid",
     "scope_missing",
     name="workflowgithubcredentialstatus",
+    create_type=False,
 )
 
 WORKFLOW_ARTIFACT_TYPE = postgresql.ENUM(
@@ -61,19 +66,42 @@ WORKFLOW_ARTIFACT_TYPE = postgresql.ENUM(
     "gh_push_log",
     "gh_pr_response",
     name="workflowartifacttype",
+    create_type=False,
 )
 
 
 def upgrade() -> None:  # noqa: D401
     """Create workflow tables and supporting enums."""
 
-    bind = op.get_bind()
-    SPEC_WORKFLOW_RUN_STATUS.create(bind, checkfirst=True)
-    SPEC_WORKFLOW_RUN_PHASE.create(bind, checkfirst=True)
-    SPEC_WORKFLOW_TASK_STATUS.create(bind, checkfirst=True)
-    WORKFLOW_CODEX_CREDENTIAL_STATUS.create(bind, checkfirst=True)
-    WORKFLOW_GITHUB_CREDENTIAL_STATUS.create(bind, checkfirst=True)
-    WORKFLOW_ARTIFACT_TYPE.create(bind, checkfirst=True)
+    def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
+        """Create a PostgreSQL enum type only if it does not already exist."""
+
+        # Escape enum literals and quote identifiers so that raw SQL execution is safe.
+        literal_values = ", ".join(
+            f"'{value.replace("'", "''")}'" for value in enum_type.enums
+        )
+        type_name_literal = enum_type.name.replace("'", "''")
+        quoted_type_name = sa.sql.elements.quoted_name(enum_type.name, quote=True)
+
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_type WHERE typname = '{type_name_literal}'
+                ) THEN
+                    CREATE TYPE {quoted_type_name} AS ENUM ({literal_values});
+                END IF;
+            END $$;
+            """
+        )
+
+    _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
+    _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)
+    _create_enum_if_missing(SPEC_WORKFLOW_TASK_STATUS)
+    _create_enum_if_missing(WORKFLOW_CODEX_CREDENTIAL_STATUS)
+    _create_enum_if_missing(WORKFLOW_GITHUB_CREDENTIAL_STATUS)
+    _create_enum_if_missing(WORKFLOW_ARTIFACT_TYPE)
 
     op.create_table(
         "spec_workflow_runs",
