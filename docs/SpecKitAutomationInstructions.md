@@ -7,7 +7,33 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 1. **Runtime services** – Bring up RabbitMQ, the Spec Kit Celery worker, and the API service together; they share the automation queue, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
 2. **Credentials** – Export a GitHub token with `repo` scope and the Codex API key so the job container can clone, push, and execute Spec Kit prompts. Set `SPEC_WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
 3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
-4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/spec-automation` endpoints require authentication. Export it as `MOONMIND_API_TOKEN` for convenience.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
+4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/spec-automation` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
+    1. **Start Keycloak** – Run `docker compose --profile keycloak up keycloak keycloak-db -d` so the `moonmind` realm is available at `http://localhost:8085`. The default admin credentials are `admin/admin` unless you set `KC_ADMIN_PW`.
+    2. **Point the API at Keycloak** – In your `.env`, set `AUTH_PROVIDER=keycloak`, `OIDC_ISSUER_URL=http://localhost:8085/realms/moonmind`, `OIDC_CLIENT_ID=api-service`, and `OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme}` (match any overrides you applied in `docker-compose.yaml`). Restart the `api` container so it reloads the settings.
+    3. **Create a user** – Sign in to the Keycloak admin console, select the `moonmind` realm, and add (or reset) a user that will own automation runs. Under the **Credentials** tab, set a non-temporary password and note the username/password pair for the next step.
+    4. **Exchange credentials for a token** – Request an access token from the OpenID Connect token endpoint. For example:
+
+        ```bash
+        export OIDC_BASE_URL="http://localhost:8085/realms/moonmind/protocol/openid-connect/token"
+        export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-api-service}"
+        export OIDC_CLIENT_SECRET="${OIDC_CLIENT_SECRET:-changeme}"
+        export MOONMIND_USERNAME="<keycloak-username>"
+        export MOONMIND_PASSWORD="<keycloak-password>"
+
+        TOKEN_RESPONSE="$(
+          curl -sS -X POST "$OIDC_BASE_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=password" \
+            -d "client_id=${OIDC_CLIENT_ID}" \
+            -d "client_secret=${OIDC_CLIENT_SECRET}" \
+            -d "username=${MOONMIND_USERNAME}" \
+            -d "password=${MOONMIND_PASSWORD}" \
+            -d "scope=openid"
+        )"
+        export MOONMIND_API_TOKEN="$(printf '%s' "$TOKEN_RESPONSE" | jq -r '.access_token')"
+        ```
+
+        The token expires based on the Keycloak realm settings (30 minutes by default). Re-run the command whenever the token lapses, or capture the refresh token from the same response if you want to automate renewal.
 
 ## Step 1 – Start the automation stack
 
