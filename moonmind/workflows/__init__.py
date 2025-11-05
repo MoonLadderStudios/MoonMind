@@ -12,7 +12,10 @@ from moonmind.workflows.speckit_celery.orchestrator import (
     retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
-from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
+from moonmind.workflows.speckit_celery.repositories import (
+    SpecAutomationRepository,
+    SpecWorkflowRepository,
+)
 
 
 def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepository:
@@ -21,10 +24,20 @@ def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepositor
     return SpecWorkflowRepository(session)
 
 
+def get_spec_automation_repository(
+    session: AsyncSession,
+) -> SpecAutomationRepository:
+    """Factory helper returning the Spec Automation repository."""
+
+    return SpecAutomationRepository(session)
+
+
 __all__ = [
     "celery_app",
     "get_spec_workflow_repository",
+    "get_spec_automation_repository",
     "SpecWorkflowRepository",
+    "SpecAutomationRepository",
     "trigger_spec_workflow_run",
     "retry_spec_workflow_run",
     "WorkflowConflictError",

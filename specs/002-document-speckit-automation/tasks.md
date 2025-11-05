@@ -63,11 +63,11 @@
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Define SpecAutomation response schemas in moonmind/schemas/workflow_models.py
-- [ ] T015 [US2] Expose run detail and artifact query helpers in moonmind/workflows/speckit_celery/repositories.py
-- [ ] T016 [US2] Implement Spec Automation API router per contract in api_service/api/routers/spec_automation.py
-- [ ] T017 [US2] Register router with FastAPI and ensure dependency wiring in api_service/main.py
-- [ ] T018 [US2] Add API tests covering run detail and artifact endpoints in tests/unit/api/test_spec_automation.py
+- [x] T014 [US2] Define SpecAutomation response schemas in moonmind/schemas/workflow_models.py
+- [x] T015 [US2] Expose run detail and artifact query helpers in moonmind/workflows/speckit_celery/repositories.py
+- [x] T016 [US2] Implement Spec Automation API router per contract in api_service/api/routers/spec_automation.py
+- [x] T017 [US2] Register router with FastAPI and ensure dependency wiring in api_service/main.py
+- [x] T018 [US2] Add API tests covering run detail and artifact endpoints in tests/unit/api/test_spec_automation.py
 
 **Checkpoint**: Operators can retrieve run status and artifacts via documented API endpoints.
 
