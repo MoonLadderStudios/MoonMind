@@ -1,379 +1,237 @@
-# Spec Kit Automation — Technical Design Document
+# Spec Kit Automation — Architecture & Operations
 
-**Status:** Draft
+**Status:** Final
 **Owners:** MoonMind Eng
-**Last updated:** Nov 3, 2025
-**Related prior art:** `specs\001-celery-chain-workflow` (Celery chain best practices & context propagation)
+**Last Updated:** Nov 13, 2025
+**Related Artifacts:** `/specs/002-document-speckit-automation/*`, Celery chain guidance in `specs/001-celery-chain-workflow`
 
 ---
 
-## 1) Goal & Scope (unchanged)
+## 1. Overview
 
-Provide an automated pipeline that:
+Spec Kit Automation runs the `/speckit.specify`, `/speckit.plan`, and `/speckit.tasks` prompts against a target repository and
+packages the results as a draft Pull Request. A Celery worker launches an ephemeral job container per run, ensuring the toolchain
+(`git`, `gh`, Codex CLI, prompts) executes in a predictable environment while repository metadata, artifacts, and metrics are
+recorded for operators.
 
-1. Accepts a **Celery** task with `specify_text` and `repo` (plus optional flags).
-2. Clones the repo **inside a short-lived job container**; sets `HOME` for Spec Kit + Codex CLI.
-3. Runs, in order:
+Key responsibilities:
 
-   * `codex /prompts:speckit.specify "<specify_text>"`
-   * `codex /prompts:speckit.plan`
-   * `codex /prompts:speckit.tasks`
-4. Commits changes to a new branch and **opens a Pull Request**.
-5. Keeps the “agent” backend **swappable** (Codex CLI by default).
-
-**Key change vs earlier draft:** Celery **workers themselves run in Docker** and orchestrate *per-run job containers* via the Docker socket (DooD). A **named volume** (`speckit_workspaces`) holds per-run workspaces shared between worker and job containers.
+1. Accept automation requests via Celery (`celery_worker/speckit_worker.py`).
+2. Use `moonmind/workflows/speckit_celery/tasks.py` to orchestrate run phases (`discover_next_phase`, `submit_codex_job`,
+   `apply_and_publish`).
+3. Manage Docker job containers with `moonmind/workflows/speckit_celery/job_container.py` and workspace lifecycles via
+   `moonmind/workflows/speckit_celery/workspace.py`.
+4. Persist run/task metadata through `moonmind/workflows/speckit_celery/repositories.py` into PostgreSQL tables seeded by the
+   Alembic migration in `api_service/migrations/versions/`.
+5. Surface results through the FastAPI router in `api_service/api/routers/spec_automation.py` and supporting schemas.
 
 ---
 
-## 2) High-Level Architecture
+## 2. Component Architecture
 
-### 2.1 Components
+### 2.1 Celery Worker
 
-* **Celery Worker (containerized)**
+* Containerized Celery process (see `celery_worker/` compose service) with the Docker SDK available.
+* Mounts:
+  * `/var/run/docker.sock` to control job containers.
+  * Named volume `speckit_workspaces` → `/work` for shared workspaces.
+* Coordinates work through `_TASK_SEQUENCE` in `tasks.py` ensuring deterministic discover → submit → publish transitions.
+* Emits StatsD metrics via `_MetricsEmitter` when `SPEC_WORKFLOW_METRICS_ENABLED=true` and host/port values are supplied.
 
-  * Runs the Celery app and holds the Docker client (CLI or SDK).
-  * Mounts:
+### 2.2 Job Container
 
-    * `speckit_workspaces` (named volume) → `/work`
-    * `/var/run/docker.sock` (to launch job containers)
-  * Starts/stops a **job container** per run; passes secrets as env vars.
+* Image configured by `SPEC_AUTOMATION_JOB_IMAGE` (defaults to `moonmind/spec-automation-job:latest`).
+* Starts with a `sleep infinity` command; Celery issues `docker exec` operations using `JobContainer.exec()`.
+* Environment variables include:
+  * `HOME=/work/runs/{run_id}/home` for Codex CLI state.
+  * Git identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) and GitHub auth tokens.
+  * Agent configuration snapshot fields (`CODEX_ENV`, `CODEX_MODEL`, etc.).
+* Secrets are injected at runtime and redacted from structured logs by `_redact_environment()`.
 
-* **Job Container (ephemeral, per run)**
+### 2.3 Persistence Layer
 
-  * Contains the toolchain: `git`, `gh` CLI, **Codex CLI** (default agent), Spec Kit prompts, bash, jq, etc.
-  * Mounts `speckit_workspaces:/work`.
-  * Uses **unique per-run directories**:
+* SQLAlchemy models in `models.py` back `spec_automation_runs`, `spec_automation_run_tasks`, and
+  `spec_automation_task_artifacts` tables.
+* Repository methods handle run lifecycle, phase state, and artifact registration with idempotent upserts.
+* Task payloads record credential audits and agent configurations alongside run metadata for troubleshooting.
 
-    * workspace: `/work/runs/{run_id}`
-    * repo path: `/work/runs/{run_id}/repo`
-    * **HOME**: `/work/runs/{run_id}/home`
+### 2.4 API Surface
 
-* **GitHub Integration**
+* `/api/spec-automation/runs/{id}` returns run metadata, phase status, and artifact references.
+* `/api/spec-automation/runs/{id}/artifacts/{artifact_id}` streams artifact contents from the workspace root.
+* Schemas defined in `moonmind/schemas/workflow_models.py` ensure API compatibility with downstream dashboards.
 
-  * All git/gh operations run **inside the job container** (ensures consistent git identity & HOME).
+---
 
-* **Artifact Store (optional)**
+## 3. Execution Lifecycle
 
-  * Persist logs and outputs under `/work/runs/{run_id}/artifacts` (backed by the named volume, or uploaded afterwards).
+1. **Kickoff** – `kickoff_spec_run.delay(...)` (Celery task) validates request options and ensures a `SpecAutomationRun` row
+   exists.
+2. **Workspace Prep** – `SpecWorkspaceManager` creates `/work/runs/{run_id}` directories (repo, home, artifacts) and registers
+   clean-up callbacks respecting retention policy.
+3. **Container Start** – `JobContainerManager.start()` launches the job container with collected secrets and agent env.
+4. **Discovery Phase** – `_run_discover_phase()` reads `tasks.md`, marks items complete/incomplete, and determines next actions.
+5. **Submission Phase** – `_run_submit_phase()` invokes the configured agent backend (Codex CLI by default) to generate plan and
+   task updates, capturing stdout/stderr artifacts.
+6. **Publish Phase** – `_run_publish_phase()` commits repo changes, pushes to `spec_automation/{run_id}` branch, and opens a draft
+   PR via `GitHubClient`.
+7. **Finalization** – Metrics, audit records, and artifacts are persisted; containers and workspace directories are removed unless
+   retention is requested.
 
-### 2.2 Sequence Diagram (updated)
+Failures at any step mark the run with terminal status and stop downstream phases. Cleanup routines still execute and emit their
+own metrics/log entries.
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant P as Producer / API
-  participant B as Celery Broker
-  participant W as Celery Worker (container)
-  participant D as Docker Engine (host)
-  participant J as Job Container (ephemeral)
-  participant GH as GitHub
+---
 
-  P->>B: enqueue kickoff(specify_text, repo, opts)
-  B->>W: deliver task
-  W->>D: docker run --name job-{run_id} -v speckit_workspaces:/work ...
-  D-->>W: container id
-  W->>J: prepare /work/runs/{run_id}/...; set HOME
-  W->>J: git clone; checkout -b branch
-  W->>J: codex /prompts:speckit.specify "<text>"
-  W->>J: codex /prompts:speckit.plan
-  W->>J: codex /prompts:speckit.tasks
-  W->>J: git add/commit/push
-  W->>GH: gh pr create (inside J)
-  GH-->>W: PR URL
-  W-->>P: result {run_id, pr_url, logs}
-  W->>D: docker rm -f job-{run_id}
+## 4. Container Images & Compose Topology
+
+| Component | Path | Notes |
+|-----------|------|-------|
+| Worker image | `images/worker/Dockerfile` | Python 3.11, Celery app, Docker SDK, no heavy toolchain. |
+| Job image | `images/job/Dockerfile` | Ubuntu 22.04 base, Git/GitHub CLI, Codex CLI, Spec Kit prompts, jq/curl. |
+| Compose services | `docker-compose.yaml` | Declares `celery-worker`, `api`, RabbitMQ broker, and shared `speckit_workspaces` volume. |
+
+`docker compose up rabbitmq celery-worker api` is sufficient for local validation when secrets are supplied via environment
+variables.
+
+---
+
+## 5. Workspace Layout & Retention
+
+```
+/work
+└── runs/
+    └── <run_id>/
+        ├── repo/        # Cloned repository
+        ├── home/        # HOME for Codex CLI & gh
+        └── artifacts/   # Structured logs, diffs, credential audit reports
 ```
 
----
-
-## 3) Container Images
-
-### 3.1 Worker Image (lightweight)
-
-* Purpose: run Celery; orchestrate Docker.
-* Includes: Python 3.11, Celery, Docker CLI or SDK, minimal shell utils.
-* Does **not** need Codex CLI or build toolchains.
-
-```Dockerfile
-# ./images/worker/Dockerfile
-FROM python:3.11-slim
-RUN pip install celery docker pydantic[dotenv]  # + your app deps
-WORKDIR /app
-COPY app/ /app
-ENV PYTHONUNBUFFERED=1
-# ENTRYPOINT provided by compose: celery -A app.celery_app worker ...
-```
-
-### 3.2 Job Image (toolchain)
-
-* Purpose: run Spec Kit phases and git/gh tasks.
-* Includes: `git`, `gh`, **Codex CLI** + Spec Kit prompts, bash, curl, jq, language runtimes if needed.
-* Version-pinned for reproducibility.
-
-```Dockerfile
-# ./images/job/Dockerfile
-FROM ubuntu:22.04
-RUN apt-get update && apt-get install -y \
-    git gh curl jq bash ca-certificates python3 python3-pip \
- && rm -rf /var/lib/apt/lists/*
-
-# Install Codex CLI & Spec Kit prompts (pin versions)
-# RUN curl -fsSL ... | bash
-# COPY prompts/ /usr/local/share/spec-kit/prompts/
-
-ENV PATH="/usr/local/bin:${PATH}"
-```
+* `SpecWorkspaceManager.ensure_workspace()` creates directories with `0o750` permissions and records cleanup metadata.
+* `cleanup_expired_workspaces()` prunes runs older than the configured TTL (default 7 days) unless marked for retention.
+* Artifact files are linked to database rows so operators can retrieve them via API or direct filesystem access.
 
 ---
 
-## 4) docker-compose
+## 6. Credentials & Security
 
-```yaml
-version: "3.9"
-services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
-
-  worker:
-    build: ./images/worker
-    command: celery -A app.celery_app worker --loglevel=INFO -Q speckit --concurrency=2
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - AGENT_BACKEND=codex
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - CODEX_API_KEY=${CODEX_API_KEY}
-      - DEFAULT_BASE_BRANCH=main
-    volumes:
-      - speckit_workspaces:/work
-      - /var/run/docker.sock:/var/run/docker.sock  # Worker launches job containers
-    # (optional) securityContext / runAsNonRoot if using rootless Docker
-
-volumes:
-  speckit_workspaces:
-```
-
-> The worker **does not** carry heavy tools; those live in the **job** image used for each run.
+* `JobContainer` collects secrets from:
+  * Process environment (`GITHUB_TOKEN`, `CODEX_API_KEY`, `SPEC_AUTOMATION_SECRET_*`, etc.).
+  * `SpecWorkflowSettings` overrides (GitHub App tokens, agent runtime overrides).
+  * Per-run options (`runtime_environment`) supplied with kickoff requests.
+* `_redact_environment()` replaces sensitive values with `***REDACTED***` before logging.
+* Git commits use `Spec Kit Bot` identity by default; overrides come from environment variables or request payloads.
+* Docker socket access is limited to the Celery worker container. Production deploys SHOULD run the worker on hardened hosts or via
+  rootless Docker to reduce blast radius.
+* Cleanup steps (`JobContainerManager.stop()`, `SpecWorkspaceManager.cleanup_workspace()`) execute in `finally` blocks to prevent
+  residual containers or volumes even on error paths.
 
 ---
 
-## 5) Workspace Layout & HOME
+## 7. Observability & Artifacts
 
-* Named volume: `speckit_workspaces`
-* Per run:
+### 7.1 Metrics
 
-  * `/work/runs/{run_id}/home` ← **HOME**
-  * `/work/runs/{run_id}/repo`
-  * `/work/runs/{run_id}/artifacts`
+* Controlled by `SPEC_WORKFLOW_METRICS_ENABLED` (boolean) with optional `SPEC_WORKFLOW_METRICS_HOST`, `SPEC_WORKFLOW_METRICS_PORT`,
+  and `SPEC_WORKFLOW_METRICS_NAMESPACE`.
+* Metrics include `run.start`, `run.finish`, `phase.duration`, `phase.retry`, and `cleanup.duration` counters/timers tagged with
+  `{run_id, phase, repo, result}`.
+* When StatsD endpoints are unreachable, `_MetricsEmitter` backs off exponentially and logs warnings without failing the run.
 
-This guarantees a clean, writable HOME for Codex CLI/Spec Kit and isolates state between runs.
+### 7.2 Logging
 
----
+* Structured logs use `_sanitize_for_log()` to avoid leaking secrets while preserving context such as `branch_name` or
+  `container_id`.
+* Each phase attaches stdout/stderr to artifacts; Celery logs reference artifact IDs for quick retrieval.
 
-## 6) Celery Orchestration (unchanged flow, updated internals)
+### 7.3 Artifacts
 
-We keep the **chain** pattern from `001-celery-chain-workflow` and pass an immutable `ctx`:
+* Stored under `/work/runs/{run_id}/artifacts/`:
+  * `discover-next-phase.log`, `submit-codex-job.log`, `apply-and-publish.log` (stdout/stderr pairs).
+  * `diff-summary.txt` summarizing git changes (`git diff --stat`).
+  * `credential-audit.json` recording injected environment keys (values redacted).
+  * `commit_status.env` flagging whether changes were pushed.
 
-1. `prepare_job(ctx)`
-2. `start_job_container(ctx)` **(new)**
-3. `git_clone(ctx)`                 ← runs *inside* job container
-4. `run_speckit_phase(ctx, "speckit.specify", input=specify_text)`
-5. `run_speckit_phase(ctx, "speckit.plan")`
-6. `run_speckit_phase(ctx, "speckit.tasks")`
-7. `commit_push_branch(ctx)`        ← inside job container
-8. `open_pull_request(ctx)`         ← inside job container
-9. `stop_job_container(ctx)` **(new)**
-10. `finalize_job(ctx)`
-
-### 6.1 New/updated task summaries
-
-* **`start_job_container(ctx)`**
-
-  * Creates `/work/runs/{run_id}` (on the host via the worker or as the job container’s first step).
-  * Runs:
-    `docker run --detach --name job-{run_id} -v speckit_workspaces:/work --env-file <(secrets) <job-image> sleep infinity`
-  * Stores `container_id` in `ctx`.
-  * Exports env for the job container:
-
-    * `HOME=/work/runs/{run_id}/home`
-    * `GITHUB_TOKEN`, `CODEX_API_KEY`, `GIT_AUTHOR_*`, `BASE_BRANCH`, etc.
-
-* **`git_clone(ctx)`** (inside the job container)
-
-  ```bash
-  mkdir -p "$HOME"
-  git config --global user.name  "${GIT_AUTHOR_NAME:-Spec Kit Bot}"
-  git config --global user.email "${GIT_AUTHOR_EMAIL:-bot@example.com}"
-  git clone --branch "${BASE_BRANCH:-main}" \
-    "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" /work/runs/${RUN_ID}/repo
-  cd /work/runs/${RUN_ID}/repo
-  git checkout -b "${BRANCH}"
-  ```
-
-* **`run_speckit_phase(ctx, phase_name, input_text=None)`** (inside job container)
-
-  ```bash
-  cd /work/runs/${RUN_ID}/repo
-  if [ -n "${INPUT_TEXT:-}" ]; then
-    codex /prompts:${PHASE} "${INPUT_TEXT}"
-  else
-    codex /prompts:${PHASE}
-  fi
-  ```
-
-* **`commit_push_branch(ctx)`** (inside job container)
-
-  ```bash
-  cd /work/runs/${RUN_ID}/repo
-  if ! git diff --quiet; then
-    git add -A
-    git commit -m "chore(spec-kit): apply specify/plan/tasks"
-    git push --set-upstream origin "${BRANCH}"
-    echo "changes_pushed=1" > /work/runs/${RUN_ID}/artifacts/commit_status.env
-  else
-    echo "changes_pushed=0" > /work/runs/${RUN_ID}/artifacts/commit_status.env
-  fi
-  ```
-
-* **`open_pull_request(ctx)`** (inside job container)
-
-  ```bash
-  cd /work/runs/${RUN_ID}/repo
-  if [ "$(grep -o 'changes_pushed=1' /work/runs/${RUN_ID}/artifacts/commit_status.env | wc -l)" -gt 0 ]; then
-    gh pr create \
-      --base "${BASE_BRANCH:-main}" \
-      --head "${BRANCH}" \
-      --title "Spec Kit: ${REPO} — ${RUN_ID_SHORT}" \
-      --body "Automated changes via speckit.{specify,plan,tasks}" \
-      --draft
-  fi
-  ```
-
-* **`stop_job_container(ctx)`**
-
-  * `docker rm -f job-{run_id}` (always attempt, ignore if already gone)
-
-**Retries, timeouts, and structured logs** remain as in the earlier spec (per-phase `soft_time_limit`, exponential backoff, immutable `ctx`).
+Operators can fetch artifacts via the API router or by inspecting the mounted volume inside the worker container.
 
 ---
 
-## 7) Agent Adapter (swappable, unchanged interface)
+## 8. Operational Runbook
 
-The orchestration still calls an adapter:
+1. **Provision Secrets** – Export `GITHUB_TOKEN`, `CODEX_API_KEY`, and optional agent overrides before starting the worker.
+2. **Start Services** – `docker compose up rabbitmq celery-worker api` (see Quickstart for additional options).
+3. **Dispatch Runs** – Use `kickoff_spec_run.delay(...)` or the REST endpoint defined in the contracts package.
+4. **Monitor Execution** –
+   * Celery logs show phase transitions and container IDs.
+   * StatsD metrics feed dashboards when enabled.
+   * `/api/spec-automation/runs/{run_id}` exposes status, timestamps, agent metadata, and artifact references.
+5. **Review Results** – Pull artifacts or inspect the GitHub draft PR branch (`spec_automation/{run_id_short}` by default).
+6. **Handle Failures** –
+   * Container start errors usually indicate missing `SPEC_AUTOMATION_JOB_IMAGE` or Docker socket issues.
+   * Git/GitHub failures emit retry metrics and log the last stderr payload; inspect `apply-and-publish.log`.
+   * Credential validation failures raise `CredentialValidationError` with audit artifacts for debugging.
+7. **Cleanup** – `docker compose down` stops services; remove stale workspaces with `docker volume rm speckit_workspaces` when no
+   runs require retention.
+
+---
+
+## 9. Testing & Validation
+
+* **Unit tests** – `tests/unit/workflows/test_spec_automation_env.py` validates cleanup and agent selection controls; API schemas are
+  covered by `tests/unit/api/test_spec_automation.py`.
+* **Integration tests** – `tests/integration/workflows/test_spec_automation_pipeline.py` exercises a full happy-path run with a stub
+  agent.
+* **Manual smoke** – Trigger a dry-run (`options={"dry_run": True}`) to verify workspace provisioning, artifact creation, and PR skip
+  logic without pushing commits.
+
+---
+
+## 10. Reference Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `SPEC_AUTOMATION_JOB_IMAGE` | Docker image for job container executions. |
+| `SPEC_AUTOMATION_WORKSPACE_ROOT` | Host path for the shared workspace mount (default `/work`). |
+| `SPEC_AUTOMATION_AGENT_BACKEND` | Selected agent adapter (`codex_cli`, others allowed via `SPEC_AUTOMATION_ALLOWED_AGENT_BACKENDS`). |
+| `SPEC_WORKFLOW_METRICS_*` | Enable and configure StatsD emission. |
+| `SPEC_WORKFLOW_GITHUB_TOKEN` | Optional override for GitHub auth if not provided via environment. |
+| `CODEX_API_KEY` | Credential for Codex CLI agent executions. |
+| `SPEC_WORKFLOW_TEST_MODE` | When `true`, skips git push/PR creation but still writes artifacts for validation. |
+
+These values complement the defaults defined in `moonmind/config/settings.py` and can be supplied through `.env`, compose
+environment blocks, or deployment secrets managers.
+
+---
+
+## 11. Rollout Considerations
+
+1. Begin with dry-run mode to validate repository coverage and artifact quality.
+2. Gradually enable real pushes for allow-listed repositories; GitHub draft PRs are labeled `spec-kit` and `automation`.
+3. Monitor StatsD metrics and API run reports for error trends before scaling worker concurrency beyond the default.
+4. Capture job container images in artifact registries with semantic tags to coordinate upgrades with prompt pack releases.
+
+---
+
+## 12. Reference Snippets
+
+### 12.1 Starting a Job Container
 
 ```python
-class SpecKitAgent(Protocol):
-    def run_prompt(self, prompt_ref: str, input_text: Optional[str], cwd: str, env: Mapping[str, str]) -> CommandResult: ...
+from moonmind.workflows.speckit_celery.job_container import JobContainerManager
+
+manager = JobContainerManager()
+container = manager.start(run_id, environment=env)
+
+try:
+    result = container.exec(["git", "status"], cwd="/work/runs/{run_id}/repo")
+finally:
+    manager.stop(container)
 ```
 
-* **Default**: `CodexCliAgent` runs `codex /prompts:<phase> [input_text]` **inside the job container** (via `docker exec`).
-* Future agents: implement the same interface; the worker chooses the adapter via `AGENT_BACKEND`.
+### 12.2 Branch & PR Policy
 
----
+* Branch: `spec_automation/{YYYYMMDD}/{run_id_short}` (configurable via request options).
+* Commit message: `chore(spec-kit): apply specify/plan/tasks`.
+* Draft PR title: `Spec Kit Automation – {repo} – {run_id_short}` with labels `spec-kit`, `automation`.
 
-## 8) Exec Strategy (worker → job container)
-
-Use Docker SDK (preferred) or CLI from the **worker** container:
-
-```python
-def exec_in_job(container_id: str, cmd: list[str], cwd: str|None=None, env: dict[str, str]|None=None):
-    # Compose: cd + command; pass env; capture stdout/stderr; return exit code
-    # (Implementation mirrors existing container_exec utility but targets job container)
-```
-
-All phases (`git_clone`, `run_speckit_phase`, PR creation) call `exec_in_job`.
-
----
-
-## 9) Security Considerations (updated for docker.sock)
-
-* **docker.sock exposure**: grants the worker control over the Docker host. Mitigations:
-
-  * Run the worker on an isolated host/node.
-  * Prefer **rootless Docker** if feasible; constrain worker user permissions.
-  * Add AppArmor/SELinux profiles; restrict network (optional: user-defined network allowing only GitHub endpoints).
-* **Secrets**: inject via env at `docker run` time; mask in logs; never write PAT/API keys to files.
-* **GitHub tokens**: prefer GitHub App installation tokens; scope to target repo only.
-* **Per-run isolation**: unique HOME & workspace paths inside named volume.
-* **Cleanup**: `stop_job_container` + periodic GC for `/work/runs/*` older than TTL.
-
----
-
-## 10) Observability & Artifacts
-
-* **Logs**: structured fields `{run_id, repo, phase, container_id, branch}`.
-* **Artifacts** in `/work/runs/{run_id}/artifacts/`:
-
-  * `phase-<name>.stdout.log`, `phase-<name>.stderr.log`
-  * `diff-summary.txt`
-  * `commit_status.env`
-* **Metrics**: phase durations, exit codes, counts of retries. Monitor via Flower/Prometheus.
-
----
-
-## 11) Error Handling (unchanged semantics)
-
-| Failure           | Handling                                     |
-| ----------------- | -------------------------------------------- |
-| Job image missing | Fail fast in `start_job_container`; alert    |
-| Clone fails       | Stop chain; attach stderr                    |
-| Agent error       | Retry (transient); else stop & attach logs   |
-| Push fails        | Retry; fallback branch suffix `-r{n}`        |
-| PR create fails   | Retry with backoff; return `pr_pending=true` |
-| Timeouts          | Kill job container; mark `phase_timeout`     |
-| No changes        | Mark `no_diff=true`; skip PR (default)       |
-
----
-
-## 12) Testing
-
-* **Unit**: adapters (success/fail/timeout), branch naming, no-diff handling.
-* **Integration**: spin a disposable repo; run full chain with a **stub agent** (deterministic outputs).
-* **Chaos**: kill job container mid-phase → verify cleanup and idempotent retries.
-
----
-
-## 13) Rollout
-
-1. Dry-run (no push/PR; capture diffs).
-2. Allowlist repos; PRs as **draft** with `spec-kit` labels.
-3. Scale concurrency; per-repo rate limit.
-4. Add more agents; A/B per language.
-
----
-
-## 14) Reference Snippets
-
-### 14.1 Start/stop job container (worker side)
-
-```python
-import docker, os
-
-def start_job_container(run_id: str, env: dict[str, str]) -> str:
-    client = docker.from_env()
-    container = client.containers.run(
-        image=os.environ.get("JOB_IMAGE", "moon/spec-kit-job:stable"),
-        name=f"job-{run_id}",
-        command=["sleep", "infinity"],
-        environment=env,
-        volumes={"speckit_workspaces": {"bind": "/work", "mode": "rw"}},
-        detach=True
-    )
-    return container.id
-
-def stop_job_container(container_id: str):
-    client = docker.from_env()
-    try:
-        client.containers.get(container_id).remove(force=True)
-    except Exception:
-        pass
-```
-
-### 14.2 Branch/PR policy
-
-* **Branch**: `speckit/{YYYYMMDD}/{run_id_short}`
-* **Commit**: `chore(spec-kit): apply specify/plan/tasks`
-* **PR Title**: `Spec Kit: {repo} — {run_id_short}`
-* **Labels**: `spec-kit`, `automation`
-* **Draft**: default `true` (configurable)
+These conventions ensure downstream analytics can group runs by feature key and run identifier.

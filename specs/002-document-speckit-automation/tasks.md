@@ -94,9 +94,9 @@
 
 **Purpose**: Documentation, ops alignment, and validation of the quickstart experience.
 
-- [ ] T023 Update docs/SpecKitAutomation.md with finalized architecture and operational guidance
-- [ ] T024 Refresh quickstart instructions and validation steps in specs/002-document-speckit-automation/quickstart.md
-- [ ] T025 Document run operations and monitoring tips in specs/002-document-speckit-automation/plan.md and AGENTS.md
+- [x] T023 Update docs/SpecKitAutomation.md with finalized architecture and operational guidance
+- [x] T024 Refresh quickstart instructions and validation steps in specs/002-document-speckit-automation/quickstart.md
+- [x] T025 Document run operations and monitoring tips in specs/002-document-speckit-automation/plan.md and AGENTS.md
 
 ---
 
