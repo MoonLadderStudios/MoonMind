@@ -72,6 +72,37 @@ tools/
 
 **Structure Decision**: Extend existing Celery worker and workflow orchestration modules under `celery_worker/` and `moonmind/workflows/speckit_celery/`, augmenting documentation and compose definitions without introducing new top-level packages.
 
+## Operations Runbook (Phase 6)
+
+1. **Pre-flight checks**
+   - Confirm Docker daemon access and ensure the `speckit_workspaces` volume exists (created automatically by Compose if missing).
+   - Export runtime secrets: `GITHUB_TOKEN`, `CODEX_API_KEY`, and optional StatsD settings (`SPEC_WORKFLOW_METRICS_ENABLED`, `SPEC_WORKFLOW_METRICS_HOST`, `SPEC_WORKFLOW_METRICS_PORT`).
+   - Set `SPEC_WORKFLOW_TEST_MODE=true` for dry runs that should skip git push/PR while still generating artifacts.
+   - Override agent metadata via `SPEC_AUTOMATION_AGENT_VERSION` / `SPEC_AUTOMATION_PROMPT_PACK_VERSION` when coordinating prompt updates.
+2. **Launch services**
+   - `docker compose up rabbitmq celery-worker api` — API container applies Alembic migrations; Celery worker mounts `/var/run/docker.sock` and the shared workspace volume.
+   - Verify worker readiness in logs (look for `Spec workflow task discover_next_phase started`).
+3. **Trigger automation**
+   - Python REPL helper: `asyncio.run(trigger_spec_workflow_run(feature_key="002-document-speckit-automation"))`.
+   - REST helper: `POST /api/spec-automation/runs` (see contracts) to enqueue via FastAPI.
+4. **Monitor execution**
+   - Tail Celery logs: `docker compose logs -f celery-worker` to follow `discover_next_phase`, `submit_codex_job`, `apply_and_publish` progress.
+   - Observe StatsD metrics when enabled (prefix `spec_automation.*`) for phase durations, retries, cleanup timing.
+   - Query run status: `curl http://localhost:8080/api/spec-automation/runs/<run_id>` for branch/PR metadata, credential audit snapshot, and artifact IDs.
+5. **Review artifacts**
+   - Inspect `/work/runs/<run_id>/artifacts` via `docker compose exec celery-worker ls /work/runs/<run_id>/artifacts`.
+   - Retrieve diff summaries or logs with `docker compose cp` when attaching evidence to reviews/incidents.
+6. **Cleanup**
+   - `docker compose down` followed by `docker volume rm speckit_workspaces` (optional) resets cached workspaces between test cycles.
+
+## Monitoring & Incident Response Notes
+
+- **Metrics expectations**: `_MetricsEmitter` emits `task_start`, `task_success`, `task_failure`, and `task_duration` tagged with `{run_id, task, attempt}`. Alert on sustained `task_failure` increments or missing `task_success` for >15 minutes per run.
+- **Credential validation**: `CredentialValidationError` raises early if Codex/GitHub tokens are misconfigured. Review the `credential-audit.json` artifact and confirm env overrides via `settings.spec_workflow` or exported variables.
+- **Container lifecycle**: `JobContainerManager` tears down job containers. If orphaned `job-<run_id>` containers persist, remove manually and invoke `SpecWorkspaceManager.cleanup_expired_workspaces()` for workspace hygiene.
+- **Retry guidance**: Use `retry_spec_workflow_run(run_id, notes=...)` from the orchestrator when resuming failed runs; notes surface in the API payload for auditing.
+- **API availability**: Run detail endpoints live under `/api/spec-automation`; ensure the API container remains healthy so dashboards can retrieve status and artifacts.
+
 ## Complexity Tracking
 
 > **Fill ONLY if Constitution Check has violations that must be justified**
