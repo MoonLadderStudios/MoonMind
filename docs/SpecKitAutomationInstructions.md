@@ -57,11 +57,15 @@ Submit the payload to the Spec Automation API. The endpoint returns a run identi
 
 ```bash
 printf '%s' "$REQUEST_BODY" | \
-curl -sS -X POST "http://localhost:8080/api/spec-automation/runs" \
+curl -sS -X POST "http://localhost:5000/api/spec-automation/runs" \
   -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d @-
 ```
+
+> **Note:** The default `docker-compose.yaml` maps the FastAPI service to
+> `localhost:5000`. If you change the Compose file or run the service directly,
+> adjust the host and port accordingly.
 
 A successful response includes the queued status and `run_id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L154】
 
@@ -74,7 +78,7 @@ A successful response includes the queued status and `run_id`. Behind the scenes
 2. **Status API** – Poll run state (phases, branch, PR URL, artifacts) using the run identifier returned earlier:
    ```bash
    curl -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
-     "http://localhost:8080/api/spec-automation/runs/<run_id>"
+     "http://localhost:5000/api/spec-automation/runs/<run_id>"
    ```
 3. **Artifacts** – Inspect logs and generated assets under `/work/runs/<run_id>/artifacts` or download them through `/api/spec-automation/runs/<run_id>/artifacts/<artifact_id>` as needed.【F:docs/SpecKitAutomation.md†L131-L156】【F:specs/002-document-speckit-automation/quickstart.md†L82-L106】【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L32-L77】
 
