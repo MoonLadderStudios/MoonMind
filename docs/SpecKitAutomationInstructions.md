@@ -17,28 +17,11 @@ From the repository root, start the supporting services in one terminal so the w
 docker compose up rabbitmq celery-worker api
 ```
 
-Leave the stack running. To launch job containers successfully, the Celery worker needs access to the host Docker socket and a shared `speckit_workspaces` volume that is also readable by the API service. The base `docker-compose.yaml` does not wire these mounts, so create an override file before starting the stack:
-
-```bash
-cat <<'EOF' > docker-compose.override.yaml
-services:
-  celery-worker:
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - speckit_workspaces:/work/runs
-  api:
-    volumes:
-      - speckit_workspaces:/work/runs:ro
-volumes:
-  speckit_workspaces:
-EOF
-```
-
-Docker Compose automatically loads `docker-compose.override.yaml`, ensuring each run gets an isolated workspace under `/work/runs/<run_id>` while the worker can orchestrate job containers.【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
+Leave the stack running. The default `docker-compose.yaml` now mounts the host Docker socket and provisions a shared `speckit_workspaces` volume so the Celery worker can launch job containers while the API retains read-only access to generated artifacts. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docker-compose.yaml†L90-L198】【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
 
 ## Step 2 – Prepare your run request
 
-In a second terminal, load your credentials and craft the JSON payload that specifies the feature key and any optional overrides (forced phase or `createdBy` audit metadata). The snippet below uses `jq` to safely assemble the request:
+In a second terminal, load your credentials and craft the JSON payload that identifies the target repository, optional base branch, the Spec Kit input text, and any optional metadata overrides. The snippet below uses `jq` to safely assemble the request while avoiding temporary files with secrets:
 
 ```bash
 # Pull credentials from your preferred secret manager so they never land in
@@ -48,16 +31,22 @@ export GITHUB_TOKEN="$(op read 'op://moonmind/github-token/value')"
 export CODEX_API_KEY="$(op read 'op://moonmind/codex-api-key/value')"
 export MOONMIND_API_TOKEN="$(op read 'op://moonmind/moonmind-api-token/value')"
 
-export SPEC_AUTOMATION_FEATURE_KEY="002-document-speckit-automation"
-export SPEC_AUTOMATION_FORCE_PHASE=""          # optional: discover|submit|apply|publish
-export SPEC_AUTOMATION_CREATED_BY=""           # optional: UUID for audit trails
+export TARGET_REPO="MoonLadderStudios/moonmind" # repository slug (owner/name)
+export BASE_BRANCH="main"                      # optional: defaults to main if empty
+export SPEC_INPUT_FILE="spec-inputs/002.md"    # path to your Spec Kit text
+export SPEC_AUTOMATION_DRY_RUN="false"         # optional: true|false
+export SPEC_AUTOMATION_EXTERNAL_REF=""         # optional: correlation ID for auditing
 
 REQUEST_BODY=$(jq -n \
-  --arg feature "$SPEC_AUTOMATION_FEATURE_KEY" \
-  --arg force "$SPEC_AUTOMATION_FORCE_PHASE" \
-  --arg created "$SPEC_AUTOMATION_CREATED_BY" \
-  '{"featureKey": $feature, "forcePhase": ($force // empty), "createdBy": ($created // empty)}
-    | with_entries(select(.value != ""))'
+  --arg repo "$TARGET_REPO" \
+  --arg base "$BASE_BRANCH" \
+  --rawfile specify "$SPEC_INPUT_FILE" \
+  --arg dry "$SPEC_AUTOMATION_DRY_RUN" \
+  --arg external "$SPEC_AUTOMATION_EXTERNAL_REF" \
+  '({"repository": $repo, "specify_text": $specify}
+    + (if ($base | length) > 0 then {"base_branch": $base} else {} end)
+    + (if ($dry | length) > 0 then {"dry_run": ($dry | test("(?i)^(1|true|yes)$"))} else {} end)
+    + (if ($external | length) > 0 then {"external_ref": $external} else {} end))'
 )
 ```
 
@@ -67,11 +56,11 @@ once the run finishes.
 
 ## Step 3 – Trigger the automation run
 
-Submit the payload to the workflow orchestration API. The endpoint enqueues the Celery chain and returns the workflow run metadata, including the `id` you will use in subsequent monitoring calls:
+Submit the payload to the Spec Automation API. The endpoint enqueues the Celery chain and returns the run metadata, including the `run_id` you will use in subsequent monitoring calls:
 
 ```bash
 printf '%s' "$REQUEST_BODY" | \
-curl -sS -X POST "http://localhost:5000/api/workflows/speckit/runs" \
+curl -sS -X POST "http://localhost:5000/api/spec-automation/runs" \
   -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d @-
@@ -81,11 +70,22 @@ curl -sS -X POST "http://localhost:5000/api/workflows/speckit/runs" \
 > `localhost:5000`. If you change the Compose file or run the service directly,
 > adjust the host and port accordingly.
 
-The response conforms to `CreateWorkflowRunRequest`/`SpecWorkflowRunModel` and includes fields such as `status`, `featureKey`, and `celeryChainId` to confirm that the run was accepted.【F:moonmind/schemas/workflow_models.py†L73-L148】【F:api_service/api/routers/workflows.py†L38-L87】
+The response matches the `RunResponse` schema defined in the Spec Automation contract and includes fields such as `run_id`, `status`, and `accepted_at` so you can confirm the request was queued.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L13-L80】
 
-A successful response includes the queued status and `id` (the workflow run identifier). Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
+A successful response includes the queued status and `run_id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
 
-Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
+Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients; these settings must align with the repository slug you pass in the request.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
+
+### Using Postman to submit the request
+
+If you prefer a graphical client, you can send the same request through Postman:
+
+1. **Create a collection (optional)** – Add a new collection called “Spec Automation” and define a collection-level variable named `base_url` with the value `http://localhost:5000` so requests automatically follow your environment. You can mirror environment-specific overrides (e.g., staging vs. production) by creating additional Postman environments.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
+2. **Add the request** – Create a `POST {{base_url}}/api/spec-automation/runs` request inside the collection. Set the **Authorization** type to **Bearer Token** and paste the `MOONMIND_API_TOKEN` value captured earlier; Postman will include it as the `Authorization: Bearer …` header on send. Set the **Headers** tab to include `Content-Type: application/json` if it is not automatically populated.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L80】
+3. **Populate the body** – In the **Body** tab, choose **raw** + **JSON** and paste the same payload you generated above. You can reference Postman variables (e.g., `{{repository}}`, `{{base_branch}}`, `{{specify_text}}`) to avoid editing raw values for future runs. When you need to send file contents, paste the text directly into the JSON string or use Postman’s `pm.sendRequest` pre-request script to read from a local file and inject it into the body before send.【F:docs/SpecKitAutomation.md†L66-L112】【F:specs/002-document-speckit-automation/spec.md†L11-L45】
+4. **Send and inspect** – Click **Send**. The response pane displays the `RunResponse` payload, including the `run_id`. Save the response to the collection if you plan to reuse the schema for regression testing or share the run metadata with reviewers.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L13-L80】
+
+Postman saves the request history, so after the first configuration you can re-run the automation by updating only the repository slug or Spec input variables. Pair the collection with Postman’s built-in environments to toggle between local development and remote deployments without rewriting the request body.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
 
 The queued run is now ready for monitoring.
 
