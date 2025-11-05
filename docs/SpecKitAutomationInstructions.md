@@ -1,11 +1,11 @@
 # Spec Kit Automation Instructions
 
-These instructions describe how to launch the Spec Kit automation pipeline so that, after you supply credentials, the desired repository, and the Spec Kit input text, the system handles cloning, running `/speckit.specify`, `/speckit.plan`, and `/speckit.tasks`, committing any changes, and opening a draft pull request automatically.【F:docs/SpecKitAutomation.md†L12-L78】【F:specs/002-document-speckit-automation/spec.md†L11-L45】
+These instructions describe how to launch the Spec Kit automation pipeline so that, after you supply credentials, the desired repository, and the Spec Kit input text, the system handles cloning, running `/speckit.specify`, `/speckit.plan`, and `/speckit.tasks`, committing any changes, and opening a draft pull request automatically—now with persistent Codex authentication that is sharded across three dedicated worker queues and volumes.【F:docs/SpecKitAutomation.md†L10-L83】【F:specs/002-document-speckit-automation/spec.md†L11-L45】
 
 ## Prerequisites
 
-1. **Runtime services** – Bring up RabbitMQ, the Spec Kit Celery worker, and the API service together; they share the automation queue, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
-2. **Credentials** – Export a GitHub token with `repo` scope and the Codex API key so the job container can clone, push, and execute Spec Kit prompts. Set `SPEC_WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
+1. **Runtime services** – Bring up RabbitMQ, the Spec Kit API service, and all Celery workers (the default worker plus the three Codex shards) so they share the automation queue, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L39-L92】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
+2. **Credentials** – Export a GitHub token with `repo` scope so the job container can clone, push, and execute Spec Kit prompts. The Codex CLI now uses ChatGPT OAuth that is stored in the codex_auth_* volumes instead of a static API key; plan time to complete the interactive login described below. Set `SPEC_WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:docs/SpecKitAutomation.md†L112-L143】【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】
 3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
 4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/spec-automation` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
     1. **Start Keycloak** – Run `docker compose --profile keycloak up keycloak keycloak-db -d` so the `moonmind` realm is available at `http://localhost:8085`. The default admin credentials are `admin/admin` unless you set `KC_ADMIN_PW`.
@@ -40,10 +40,31 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 From the repository root, start the supporting services in one terminal so the worker can accept automation jobs:
 
 ```bash
-docker compose up rabbitmq celery-worker api
+docker compose up rabbitmq api celery-worker celery-codex-0 celery-codex-1 celery-codex-2
 ```
 
-Leave the stack running. The default `docker-compose.yaml` now mounts the host Docker socket and provisions a shared `speckit_workspaces` volume so the Celery worker can launch job containers while the API retains read-only access to generated artifacts. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docker-compose.yaml†L90-L198】【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
+Leave the stack running. The default `docker-compose.yaml` now mounts the host Docker socket, provisions a shared `speckit_workspaces` volume, and introduces codex_auth_* volumes that are wired to the Codex workers so every run can mount the correct persistent ChatGPT credentials under `$HOME/.codex`. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docs/SpecKitAutomation.md†L39-L109】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
+
+### Step 1a – Authenticate Codex volumes (Sign in with ChatGPT)
+
+Run the ChatGPT sign-in flow once per Codex worker so the associated `codex_auth_*` volume stores the OAuth session that will be mounted into future job containers. Exec into each Codex worker and launch the job image with the worker’s volume attached to `$HOME/.codex` to complete `codex login` and immediately verify the status before exiting:
+
+```bash
+# Worker 0
+docker compose exec celery-codex-0 bash -lc '
+  CODEX_VOLUME_NAME=${CODEX_VOLUME_NAME:-codex_auth_0}
+  SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest}
+  docker run --rm -it \
+    -e HOME=/work/codex-home \
+    -v ${CODEX_VOLUME_NAME}:/work/codex-home/.codex \
+    ${SPEC_AUTOMATION_JOB_IMAGE} \
+    bash -lc "codex login && codex login status"
+'
+
+# Repeat for celery-codex-1/2, swapping the CODEX volume name to codex_auth_1 and codex_auth_2.
+```
+
+When the CLI opens a browser prompt, choose **Sign in with ChatGPT** and finish the OAuth flow. The `codex login status` check should succeed before you close the session. If you ever prune a codex_auth_* volume, repeat the same steps to restore the login for that worker.【F:docs/SpecKitAutomation.md†L47-L143】
 
 ## Step 2 – Prepare your run request
 
