@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Mapping, Optional, Sequence
@@ -13,6 +14,7 @@ import docker
 from docker.errors import APIError, DockerException, NotFound
 
 from moonmind.config.settings import settings
+from moonmind.workflows.speckit_celery.workspace import SpecWorkspaceManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,65 @@ _DEFAULT_COMMAND: tuple[str, ...] = ("sleep", "infinity")
 _DEFAULT_VOLUME_NAME = os.getenv(
     "SPEC_AUTOMATION_WORKSPACE_VOLUME", "speckit_workspaces"
 )
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r"(password|secret|token|key|credential|auth|cookie|session)", re.IGNORECASE
+)
+_SECRET_ENV_KEYS: tuple[str, ...] = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "CODEX_API_KEY",
+)
+_SECRET_ENV_PREFIXES: tuple[str, ...] = (
+    "CODEX_",
+    "GIT_AUTHOR_",
+    "GIT_COMMITTER_",
+    "SPEC_AUTOMATION_SECRET_",
+    "SPEC_WORKFLOW_SECRET_",
+    "GITHUB_",
+    "GH_",
+)
+_REDACTED = "***REDACTED***"
+
+
+def _collect_secret_environment() -> dict[str, str]:
+    """Return environment variables containing sensitive credentials."""
+
+    collected: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if key in _SECRET_ENV_KEYS or any(
+            key.startswith(prefix) for prefix in _SECRET_ENV_PREFIXES
+        ):
+            collected[key] = value
+
+    github_token = settings.spec_workflow.github_token
+    if github_token:
+        collected["GITHUB_TOKEN"] = github_token
+
+    codex_env = settings.spec_workflow.codex_environment
+    if codex_env:
+        collected.setdefault("CODEX_ENV", codex_env)
+
+    codex_model = settings.spec_workflow.codex_model
+    if codex_model:
+        collected.setdefault("CODEX_MODEL", codex_model)
+
+    codex_profile = settings.spec_workflow.codex_profile
+    if codex_profile:
+        collected.setdefault("CODEX_PROFILE", codex_profile)
+
+    return collected
+
+
+def _redact_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Return a copy of ``environment`` with sensitive keys redacted."""
+
+    sanitized: dict[str, str] = {}
+    for key, value in environment.items():
+        if _SENSITIVE_KEY_PATTERN.search(key):
+            sanitized[key] = _REDACTED
+        else:
+            sanitized[key] = value
+    return sanitized
 
 
 class JobContainerError(RuntimeError):
@@ -209,13 +270,15 @@ class JobContainerManager:
         """Start a detached job container and return its wrapper instance."""
 
         run_ref = str(run_id)
-        container_name = name or f"spec-automation-job-{run_ref}"
+        container_name = name or SpecWorkspaceManager.job_container_name(run_ref)
         effective_image = image or settings.spec_workflow.job_image
         effective_command = command or _DEFAULT_COMMAND
         env_map: dict[str, str] = dict(environment or {})
+        env_map.update(_collect_secret_environment())
         env_map.setdefault(
             "HOME", f"{settings.spec_workflow.workspace_root}/runs/{run_ref}/home"
         )
+        redacted_env = _redact_environment(env_map)
 
         volume_mounts = (
             volumes
@@ -252,17 +315,34 @@ class JobContainerManager:
                 run_id,
                 effective_image,
                 exc,
+                extra={
+                    "run_id": run_ref,
+                    "container_name": container_name,
+                    "environment": redacted_env,
+                },
             )
             raise JobContainerStartError(str(exc)) from exc
         except DockerException as exc:  # pragma: no cover
             logger.error(
-                "Docker error while starting job container for run %s: %s", run_id, exc
+                "Docker error while starting job container for run %s: %s",
+                run_id,
+                exc,
+                extra={
+                    "run_id": run_ref,
+                    "container_name": container_name,
+                    "environment": redacted_env,
+                },
             )
             raise JobContainerStartError(str(exc)) from exc
 
         logger.info(
             "Started Spec Automation job container",
-            extra={"run_id": run_ref, "container_id": container.id},
+            extra={
+                "run_id": run_ref,
+                "container_id": container.id,
+                "container_name": container.name,
+                "environment": redacted_env,
+            },
         )
         return JobContainer(self._client, container.id, container.name)
 
