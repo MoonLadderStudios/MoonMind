@@ -40,6 +40,26 @@ _SECRET_ENV_PREFIXES: tuple[str, ...] = (
     "GH_",
 )
 _REDACTED = "***REDACTED***"
+_SECRET_ENV_KEYS_UPPER = tuple(key.upper() for key in _SECRET_ENV_KEYS)
+_SECRET_ENV_PREFIXES_UPPER = tuple(prefix.upper() for prefix in _SECRET_ENV_PREFIXES)
+_NON_SECRET_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_TIME",
+        "LC_NUMERIC",
+        "LC_COLLATE",
+        "PWD",
+        "USER",
+        "LOGNAME",
+        "TERM",
+        "HOSTNAME",
+    }
+)
 
 
 def _collect_secret_environment() -> dict[str, str]:
@@ -58,17 +78,32 @@ def _collect_secret_environment() -> dict[str, str]:
 
     codex_env = settings.spec_workflow.codex_environment
     if codex_env:
-        collected.setdefault("CODEX_ENV", codex_env)
+        collected["CODEX_ENV"] = codex_env
 
     codex_model = settings.spec_workflow.codex_model
     if codex_model:
-        collected.setdefault("CODEX_MODEL", codex_model)
+        collected["CODEX_MODEL"] = codex_model
 
     codex_profile = settings.spec_workflow.codex_profile
     if codex_profile:
-        collected.setdefault("CODEX_PROFILE", codex_profile)
+        collected["CODEX_PROFILE"] = codex_profile
 
     return collected
+
+
+def _should_redact_key(key: str) -> bool:
+    """Return ``True`` when ``key`` is likely to reference a secret."""
+
+    upper = key.upper()
+    if upper in _NON_SECRET_ENV_KEYS:
+        return False
+    if upper in _SECRET_ENV_KEYS_UPPER:
+        return True
+    if any(upper.startswith(prefix) for prefix in _SECRET_ENV_PREFIXES_UPPER):
+        return True
+    if _SENSITIVE_KEY_PATTERN.search(key):
+        return True
+    return True
 
 
 def _redact_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -76,7 +111,7 @@ def _redact_environment(environment: Mapping[str, str]) -> dict[str, str]:
 
     sanitized: dict[str, str] = {}
     for key, value in environment.items():
-        if _SENSITIVE_KEY_PATTERN.search(key):
+        if _should_redact_key(key):
             sanitized[key] = _REDACTED
         else:
             sanitized[key] = value

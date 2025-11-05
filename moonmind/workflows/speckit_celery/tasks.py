@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Coroutine, Mapping, Optional, TypeVar
+from typing import Any, Coroutine, Mapping, Optional, Sequence, TypeVar
 from uuid import UUID
 
 from celery.utils.log import get_task_logger
@@ -340,6 +340,30 @@ class AgentConfigurationSnapshot:
     runtime_env: dict[str, str]
 
 
+def _normalize_runtime_env_keys(value: Any) -> tuple[str, ...]:
+    """Coerce ``value`` into a tuple of distinct, non-empty key names."""
+
+    if value is None:
+        return ()
+    if isinstance(value, Mapping):
+        raise ValueError("agent_runtime_env_keys override must not be a mapping")
+    if isinstance(value, str):
+        candidates: Sequence[object] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        candidates = value
+    else:
+        candidates = (value,)
+
+    normalized: list[str] = []
+    for item in candidates:
+        text = str(item).strip()
+        if not text:
+            continue
+        normalized.append(text)
+
+    return tuple(dict.fromkeys(normalized))
+
+
 def select_agent_configuration(
     overrides: Optional[Mapping[str, Any]] = None,
 ) -> AgentConfigurationSnapshot:
@@ -352,7 +376,7 @@ def select_agent_configuration(
     if not backend:
         raise ValueError("Agent backend selection must not be blank")
 
-    allowed = cfg.allowed_agent_backends or (backend,)
+    allowed = cfg.allowed_agent_backends
     if allowed and backend not in allowed:
         allowed_display = ", ".join(allowed)
         raise ValueError(
@@ -371,12 +395,9 @@ def select_agent_configuration(
 
     runtime_keys_override = overrides.get("agent_runtime_env_keys")
     if runtime_keys_override is None:
-        runtime_keys = cfg.agent_runtime_env_keys
+        runtime_keys = tuple(dict.fromkeys(cfg.agent_runtime_env_keys))
     else:
-        if isinstance(runtime_keys_override, str):
-            runtime_keys = (runtime_keys_override,)
-        else:
-            runtime_keys = tuple(str(key) for key in runtime_keys_override)
+        runtime_keys = _normalize_runtime_env_keys(runtime_keys_override)
 
     runtime_env: dict[str, str] = {}
     for key in runtime_keys:
@@ -414,12 +435,14 @@ async def persist_agent_configuration(
 ) -> models.SpecAutomationAgentConfiguration:
     """Persist the agent configuration snapshot for a run and log the outcome."""
 
+    redacted_env = {key: _REDACTED for key in snapshot.runtime_env}
+
     record = await repo.upsert_agent_configuration(
         run_id=run_id,
         agent_backend=snapshot.backend,
         agent_version=snapshot.version,
         prompt_pack_version=snapshot.prompt_pack_version,
-        runtime_env=dict(snapshot.runtime_env),
+        runtime_env=redacted_env,
     )
 
     logger.info(
@@ -431,7 +454,7 @@ async def persist_agent_configuration(
                     "backend": snapshot.backend,
                     "version": snapshot.version,
                     "promptPackVersion": snapshot.prompt_pack_version,
-                    "runtimeEnv": snapshot.runtime_env,
+                    "runtimeEnv": redacted_env,
                 }
             ),
         },

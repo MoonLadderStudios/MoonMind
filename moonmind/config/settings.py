@@ -193,28 +193,29 @@ class SpecWorkflowSettings(BaseSettings):
             return None
         return value
 
-    @field_validator(
-        "allowed_agent_backends", "agent_runtime_env_keys", mode="before"
-    )
+    @field_validator("allowed_agent_backends", "agent_runtime_env_keys", mode="before")
     @classmethod
-    def _split_agent_csv(
-        cls, value: Optional[str | Sequence[str]]
-    ) -> tuple[str, ...]:
+    def _split_agent_csv(cls, value: Optional[str | Sequence[str]]) -> tuple[str, ...]:
         """Allow comma-delimited strings for tuple-based agent settings."""
 
         if value is None:
             return ()
+
         if isinstance(value, str):
-            items = [item.strip() for item in value.split(",") if item.strip()]
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
         else:
-            items = [str(item).strip() for item in value if str(item).strip()]
+            raw_items = (value,)
+
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
         if not items:
             return ()
+
         # Preserve order while removing duplicates.
-        seen: dict[str, None] = {}
-        for item in items:
-            seen.setdefault(item, None)
-        return tuple(seen.keys())
+        return tuple(dict.fromkeys(items))
 
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Validate agent backend selections after settings load."""
@@ -232,8 +233,8 @@ class SpecWorkflowSettings(BaseSettings):
         ):
             allowed_display = ", ".join(self.allowed_agent_backends)
             raise ValueError(
-                "Agent backend '%s' is not permitted. Allowed values: %s"
-                % (self.agent_backend, allowed_display or "<none>")
+                f"Agent backend '{self.agent_backend}' is not permitted. "
+                f"Allowed values: {allowed_display or '<none>'}"
             )
 
 

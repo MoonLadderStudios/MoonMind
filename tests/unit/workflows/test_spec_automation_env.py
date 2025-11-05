@@ -81,7 +81,9 @@ def test_cleanup_job_container_invokes_docker(monkeypatch, tmp_path):
     dummy_client = SimpleNamespace(containers=DummyContainers())
     dummy_module = SimpleNamespace(
         from_env=lambda: dummy_client,
-        errors=SimpleNamespace(DockerException=DummyDockerException, NotFound=DummyNotFound),
+        errors=SimpleNamespace(
+            DockerException=DummyDockerException, NotFound=DummyNotFound
+        ),
     )
 
     monkeypatch.setitem(sys.modules, "docker", dummy_module)
@@ -129,7 +131,9 @@ def _reset_agent_settings(monkeypatch) -> None:
     """Reset agent-related settings to predictable defaults."""
 
     monkeypatch.setattr(settings.spec_workflow, "agent_backend", "codex_cli")
-    monkeypatch.setattr(settings.spec_workflow, "allowed_agent_backends", ("codex_cli",))
+    monkeypatch.setattr(
+        settings.spec_workflow, "allowed_agent_backends", ("codex_cli",)
+    )
     monkeypatch.setattr(settings.spec_workflow, "agent_version", "1.0.0")
     monkeypatch.setattr(settings.spec_workflow, "prompt_pack_version", "2025.11")
     monkeypatch.setattr(
@@ -225,4 +229,13 @@ async def test_persist_agent_configuration_calls_repository(monkeypatch):
     assert recorded["agent_backend"] == "codex_cli"
     assert recorded["agent_version"] == "1.0.0"
     assert recorded["prompt_pack_version"] == "2025.11"
-    assert recorded["runtime_env"] == {"CODEX_API_KEY": "secret"}
+    assert recorded["runtime_env"] == {"CODEX_API_KEY": "***REDACTED***"}
+
+
+def test_select_agent_configuration_rejects_mapping_runtime_keys(monkeypatch):
+    """Mappings passed as runtime key overrides should raise a clear error."""
+
+    _reset_agent_settings(monkeypatch)
+
+    with pytest.raises(ValueError):
+        select_agent_configuration({"agent_runtime_env_keys": {"CODEX": "value"}})
