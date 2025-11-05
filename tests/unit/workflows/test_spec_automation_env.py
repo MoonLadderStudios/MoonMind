@@ -1,12 +1,18 @@
 import os
 import sys
 from datetime import UTC, datetime, timedelta
+from typing import Optional
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from moonmind.config.settings import settings
+from moonmind.workflows.speckit_celery.job_container import (
+    JobContainerManager,
+    _collect_secret_environment,
+)
 from moonmind.workflows.speckit_celery.tasks import (
     AgentConfigurationSnapshot,
     persist_agent_configuration,
@@ -75,7 +81,7 @@ def test_cleanup_job_container_invokes_docker(monkeypatch, tmp_path):
     class DummyContainers:
         def get(self, name: str) -> DummyContainer:
             if name not in containers:
-                raise DummyNotFound
+                raise DummyNotFound()
             return containers[name]
 
     dummy_client = SimpleNamespace(containers=DummyContainers())
@@ -87,6 +93,7 @@ def test_cleanup_job_container_invokes_docker(monkeypatch, tmp_path):
     )
 
     monkeypatch.setitem(sys.modules, "docker", dummy_module)
+    monkeypatch.setitem(sys.modules, "docker.errors", dummy_module.errors)
 
     assert manager.cleanup_job_container(run_id) is True
     assert removed["count"] == 1
@@ -118,6 +125,29 @@ def test_purge_expired_workspaces_removes_old(monkeypatch, tmp_path):
         return True
 
     monkeypatch.setattr(manager, "cleanup_job_container", _fake_cleanup)
+
+    original_stat = Path.stat
+
+    def _fake_stat(self: Path, *, follow_symlinks: bool = True):
+        result = original_stat(self, follow_symlinks=follow_symlinks)
+        if self == old_paths.run_root:
+            old_time = datetime.now(UTC) - timedelta(days=8)
+            timestamp = old_time.timestamp()
+
+            class _StatProxy:
+                def __init__(self, base, ts: float) -> None:
+                    self._base = base
+                    self._timestamp = ts
+
+                def __getattr__(self, name: str):
+                    if name in {"st_mtime", "st_ctime"}:
+                        return self._timestamp
+                    return getattr(self._base, name)
+
+            return _StatProxy(result, timestamp)
+        return result
+
+    monkeypatch.setattr(Path, "stat", _fake_stat)
 
     removed = manager.purge_expired_workspaces(retention=timedelta(days=7))
 
@@ -239,3 +269,64 @@ def test_select_agent_configuration_rejects_mapping_runtime_keys(monkeypatch):
 
     with pytest.raises(ValueError):
         select_agent_configuration({"agent_runtime_env_keys": {"CODEX": "value"}})
+
+
+def test_collect_secret_environment_includes_runtime_overrides(monkeypatch):
+    """Runtime environment overrides should be included in injected secrets."""
+
+    monkeypatch.setattr(
+        settings.spec_workflow, "agent_runtime_env_keys", ("CUSTOM_KEY", "CODEX_ENV")
+    )
+    monkeypatch.setenv("CUSTOM_KEY", "from-os")
+    monkeypatch.setenv("CODEX_ENV", "env-value")
+    monkeypatch.setattr(settings.spec_workflow, "codex_environment", "config-value")
+
+    result = _collect_secret_environment({"CUSTOM_KEY": "override", "EXTRA": 42})
+
+    assert result["CUSTOM_KEY"] == "override"
+    assert result["EXTRA"] == "42"
+    assert result["CODEX_ENV"] == "config-value"
+
+
+def test_job_container_start_injects_runtime_environment(monkeypatch):
+    """Job container start should forward runtime environment variables."""
+
+    injected: dict[str, object] = {}
+
+    def fake_collect(runtime_environment=None):
+        injected["runtime"] = runtime_environment
+        secrets = {"SECRET": "value"}
+        if runtime_environment:
+            secrets.update(runtime_environment)
+        return secrets
+
+    monkeypatch.setattr(
+        "moonmind.workflows.speckit_celery.job_container._collect_secret_environment",
+        fake_collect,
+    )
+
+    class DummyContainers:
+        def __init__(self) -> None:
+            self.environment: Optional[dict[str, str]] = None
+
+        def run(self, *args, **kwargs):
+            self.environment = kwargs.get("environment")
+            return SimpleNamespace(id="container-id", name="container-name")
+
+    dummy_client = SimpleNamespace(containers=DummyContainers())
+    monkeypatch.setattr(settings.spec_workflow, "job_image", "example:latest")
+    monkeypatch.setattr(settings.spec_workflow, "workspace_root", "/tmp/workspace")
+
+    manager = JobContainerManager(docker_client=dummy_client)
+    manager.start(
+        "run-123",
+        environment={"BASE": "1"},
+        runtime_environment={"CUSTOM": "value"},
+        cleanup_existing=False,
+    )
+
+    assert injected["runtime"] == {"CUSTOM": "value"}
+    assert dummy_client.containers.environment is not None
+    assert dummy_client.containers.environment["BASE"] == "1"
+    assert dummy_client.containers.environment["SECRET"] == "value"
+    assert dummy_client.containers.environment["CUSTOM"] == "value"

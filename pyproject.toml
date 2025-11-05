@@ -50,6 +50,7 @@ dependencies = [
     "PyYAML>=6.0.2",
     "asyncpg~=0.30.0",
     "SQLAlchemy~=2.0.41",
+    "docker~=7.1.0",
     "fastapi-keycloak~=1.1.0",
     "fastapi-users[sqlalchemy]~=13.0.0",
     "PyJWT[crypto]~=2.8.0",

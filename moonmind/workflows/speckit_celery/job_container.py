@@ -62,7 +62,9 @@ _NON_SECRET_ENV_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _collect_secret_environment() -> dict[str, str]:
+def _collect_secret_environment(
+    runtime_environment: Optional[Mapping[str, object]] = None,
+) -> dict[str, str]:
     """Return environment variables containing sensitive credentials."""
 
     collected: dict[str, str] = {}
@@ -87,6 +89,22 @@ def _collect_secret_environment() -> dict[str, str]:
     codex_profile = settings.spec_workflow.codex_profile
     if codex_profile:
         collected["CODEX_PROFILE"] = codex_profile
+
+    runtime_keys = getattr(settings.spec_workflow, "agent_runtime_env_keys", ())
+    for candidate in runtime_keys or ():
+        key = str(candidate).strip()
+        if not key or key in collected:
+            continue
+        value = os.getenv(key)
+        if value is not None:
+            collected[key] = value
+
+    if runtime_environment:
+        for raw_key, raw_value in runtime_environment.items():
+            key = str(raw_key).strip()
+            if not key or raw_value is None:
+                continue
+            collected[key] = str(raw_value)
 
     return collected
 
@@ -293,6 +311,7 @@ class JobContainerManager:
         image: Optional[str] = None,
         command: Optional[Sequence[str] | str] = None,
         environment: Optional[Mapping[str, str]] = None,
+        runtime_environment: Optional[Mapping[str, object]] = None,
         volumes: Optional[Mapping[str, Mapping[str, str]]] = None,
         workdir: Optional[str] = None,
         labels: Optional[Mapping[str, str]] = None,
@@ -309,7 +328,9 @@ class JobContainerManager:
         effective_image = image or settings.spec_workflow.job_image
         effective_command = command or _DEFAULT_COMMAND
         env_map: dict[str, str] = dict(environment or {})
-        env_map.update(_collect_secret_environment())
+        env_map.update(
+            _collect_secret_environment(runtime_environment=runtime_environment)
+        )
         env_map.setdefault(
             "HOME", f"{settings.spec_workflow.workspace_root}/runs/{run_ref}/home"
         )
