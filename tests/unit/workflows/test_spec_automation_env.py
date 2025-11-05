@@ -1,9 +1,9 @@
 import os
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import Optional
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 from uuid import uuid4
 
 import pytest
