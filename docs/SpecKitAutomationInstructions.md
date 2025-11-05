@@ -24,9 +24,13 @@ Leave the stack running; the Celery worker mounts `/var/run/docker.sock` and the
 In a second terminal, load your credentials and craft the JSON payload that names the target repository, optional base branch, and the specification text. The snippet below uses `jq` to safely embed multi-line input:
 
 ```bash
-export GITHUB_TOKEN="<github_pat>"
-export CODEX_API_KEY="<codex_api_key>"
-export MOONMIND_API_TOKEN="<bearer_token>"
+# Pull credentials from your preferred secret manager so they never land in
+# shell history. The example below uses the 1Password CLI; substitute `pass`,
+# `aws secretsmanager`, or another tool that fits your environment.
+export GITHUB_TOKEN="$(op read 'op://moonmind/github-token/value')"
+export CODEX_API_KEY="$(op read 'op://moonmind/codex-api-key/value')"
+export MOONMIND_API_TOKEN="$(op read 'op://moonmind/moonmind-api-token/value')"
+
 export TARGET_REPO="owner/example-repo"
 export SPEC_INPUT_FILE="path/to/spec-input.md"
 export BASE_BRANCH="main"                     # optional override
@@ -35,11 +39,15 @@ export SPEC_AUTOMATION_DRY_RUN="false"        # set to "true" to skip push/PR
 REQUEST_BODY=$(jq -n \
   --arg repo "$TARGET_REPO" \
   --arg base "$BASE_BRANCH" \
-  --arg specify "$(cat "$SPEC_INPUT_FILE")" \
+  --rawfile specify "$SPEC_INPUT_FILE" \
   --arg dry "$SPEC_AUTOMATION_DRY_RUN" \
-  '{repository: $repo, base_branch: $base, specify_text: $specify, dry_run: ($dry == "true")}'
+  '{"repository": $repo, "base_branch": $base, "specify_text": $specify, "dry_run": ($dry == "true")}'
 )
 ```
+
+If you cannot rely on a secrets manager, temporarily disable shell history
+(`set +o history`) before exporting the variables, and remember to `unset` them
+once the run finishes.
 
 The automation records the supplied spec input in the `requested_spec_input` field and stores it alongside all phase artifacts for future auditing.【F:moonmind/workflows/speckit_celery/models.py†L362-L413】【F:moonmind/workflows/speckit_celery/repositories.py†L477-L510】
 
@@ -48,10 +56,11 @@ The automation records the supplied spec input in the `requested_spec_input` fie
 Submit the payload to the Spec Automation API. The endpoint returns a run identifier that you can use to poll status and fetch artifacts:
 
 ```bash
+printf '%s' "$REQUEST_BODY" | \
 curl -sS -X POST "http://localhost:8080/api/spec-automation/runs" \
   -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "${REQUEST_BODY}"
+  -d @-
 ```
 
 A successful response includes the queued status and `run_id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L154】
@@ -83,8 +92,7 @@ Because each run uses an isolated workspace and redacts sensitive environment va
 To shut down the environment, stop the Compose stack and prune cached workspaces once all artifacts have been collected:
 
 ```bash
-docker compose down
-docker volume rm speckit_workspaces
+docker compose down --volumes
 ```
 
 This removes the worker containers and deletes cached workspaces so future automation runs start from a clean slate.【F:docs/SpecKitAutomation.md†L94-L113】【F:specs/002-document-speckit-automation/quickstart.md†L109-L118】
