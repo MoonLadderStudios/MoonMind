@@ -90,6 +90,7 @@ services:
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
+      - speckit_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
@@ -187,11 +188,13 @@ services:
     env_file:
       - .env
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./celery_worker:/app/celery_worker:ro
       - ./specs:/app/specs:ro
       - ./model_data:/app/model_data
+      - speckit_workspaces:/work/runs
     depends_on:
       rabbitmq:
         condition: service_started
@@ -284,6 +287,7 @@ volumes:
   api-db-data:
   keycloak-data:
   rabbitmq-data:
+  speckit_workspaces:
 
 networks:
   local-network:
