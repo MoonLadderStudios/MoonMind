@@ -17,7 +17,24 @@ From the repository root, start the supporting services in one terminal so the w
 docker compose up rabbitmq celery-worker api
 ```
 
-Leave the stack running; the Celery worker mounts `/var/run/docker.sock` and the shared `speckit_workspaces` volume so that each run gets an isolated workspace under `/work/runs/<run_id>`.【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】
+Leave the stack running. To launch job containers successfully, the Celery worker needs access to the host Docker socket and a shared `speckit_workspaces` volume that is also readable by the API service. The base `docker-compose.yaml` does not wire these mounts, so create an override file before starting the stack:
+
+```bash
+cat <<'EOF' > docker-compose.override.yaml
+services:
+  celery-worker:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - speckit_workspaces:/work/runs
+  api:
+    volumes:
+      - speckit_workspaces:/work/runs:ro
+volumes:
+  speckit_workspaces:
+EOF
+```
+
+Docker Compose automatically loads `docker-compose.override.yaml`, ensuring each run gets an isolated workspace under `/work/runs/<run_id>` while the worker can orchestrate job containers.【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
 
 ## Step 2 – Prepare your run request
 
