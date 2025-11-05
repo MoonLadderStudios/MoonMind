@@ -74,15 +74,23 @@ def upgrade() -> None:  # noqa: D401
     """Create workflow tables and supporting enums."""
 
     def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
-        literal_values = ", ".join(f"'{value}'" for value in enum_type.enums)
+        """Create a PostgreSQL enum type only if it does not already exist."""
+
+        # Escape enum literals and quote identifiers so that raw SQL execution is safe.
+        literal_values = ", ".join(
+            f"'{value.replace("'", "''")}'" for value in enum_type.enums
+        )
+        type_name_literal = enum_type.name.replace("'", "''")
+        quoted_type_name = sa.sql.elements.quoted_name(enum_type.name, quote=True)
+
         op.execute(
             f"""
             DO $$
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_type WHERE typname = '{enum_type.name}'
+                    SELECT 1 FROM pg_type WHERE typname = '{type_name_literal}'
                 ) THEN
-                    CREATE TYPE {enum_type.name} AS ENUM ({literal_values});
+                    CREATE TYPE {quoted_type_name} AS ENUM ({literal_values});
                 END IF;
             END $$;
             """
