@@ -47,49 +47,38 @@ Leave the stack running. The default `docker-compose.yaml` now mounts the host D
 
 ## Step 2 – Prepare your run request
 
-In a second terminal, load your credentials and craft the JSON payload that identifies the target repository, optional base branch, the Spec Kit input text, and any optional metadata overrides. The snippet below uses `jq` to safely assemble the request while avoiding temporary files with secrets:
+Use Postman to compose the request that kicks off a Spec Automation run.
 
-```bash
-# Pull credentials from your preferred secret manager so they never land in
-# shell history. The example below uses the 1Password CLI; substitute `pass`,
-# `aws secretsmanager`, or another tool that fits your environment.
-export GITHUB_TOKEN="$(op read 'op://moonmind/github-token/value')"
-export CODEX_API_KEY="$(op read 'op://moonmind/codex-api-key/value')"
-export MOONMIND_API_TOKEN="$(op read 'op://moonmind/moonmind-api-token/value')"
+1. **Create (or select) an environment** – Add variables such as `base_url` (`http://localhost:5000`), `moonmind_api_token`, `repository`, `base_branch`, and `spec_input`. Keeping credentials in Postman variables prevents them from leaking into shell history while making the request reusable across workspaces.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
+2. **Define the request** – Inside a collection, add a `POST {{base_url}}/api/spec-automation/runs` request. Set the **Authorization** tab to **Bearer Token** and reference `{{moonmind_api_token}}` so the header updates automatically. Confirm the **Headers** tab includes `Content-Type: application/json`.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L80】
+3. **Populate the body** – Choose **raw** + **JSON** and paste the payload below. You can replace literal values with Postman variables (for example, `"repository": "{{repository}}"` or `"specify_text": "{{spec_input}}"`) to tailor future runs without editing the JSON.
+4. **Send the request** – Click **Send** to enqueue the workflow. Save the response so you can reference the returned `run_id` in later steps.
 
-export TARGET_REPO="MoonLadderStudios/moonmind" # repository slug (owner/name)
-export BASE_BRANCH="main"                      # optional: defaults to main if empty
-export SPEC_INPUT_FILE="spec-inputs/002.md"    # path to your Spec Kit text
-export SPEC_AUTOMATION_DRY_RUN="false"         # optional: true|false
-export SPEC_AUTOMATION_EXTERNAL_REF=""         # optional: correlation ID for auditing
-
-REQUEST_BODY=$(jq -n \
-  --arg repo "$TARGET_REPO" \
-  --arg base "$BASE_BRANCH" \
-  --rawfile specify "$SPEC_INPUT_FILE" \
-  --arg dry "$SPEC_AUTOMATION_DRY_RUN" \
-  --arg external "$SPEC_AUTOMATION_EXTERNAL_REF" \
-  '({"repository": $repo, "specify_text": $specify}
-    + (if ($base | length) > 0 then {"base_branch": $base} else {} end)
-    + (if ($dry | length) > 0 then {"dry_run": ($dry | test("(?i)^(1|true|yes)$"))} else {} end)
-    + (if ($external | length) > 0 then {"external_ref": $external} else {} end))'
-)
+```json
+{
+  "repository": "MoonLadderStudios/moonmind",
+  "base_branch": "main",
+  "specify_text": "# Spec title\n\n- Goal: Validate automation from Postman\n- Scope: /speckit.specify, /speckit.plan, /speckit.tasks",
+  "dry_run": false,
+  "external_ref": "postman-demo-001"
+}
 ```
-
-If you cannot rely on a secrets manager, temporarily disable shell history
-(`set +o history`) before exporting the variables, and remember to `unset` them
-once the run finishes.
 
 ## Step 3 – Trigger the automation run
 
-Submit the payload to the Spec Automation API. The endpoint enqueues the Celery chain and returns the run metadata, including the `run_id` you will use in subsequent monitoring calls:
+Submit the payload to the Spec Automation API. The endpoint enqueues the Celery chain and returns the run metadata, including the `run_id` you will use in subsequent monitoring calls. If you need a shell-friendly alternative to Postman (for CI or scripted runs), send the same JSON body with `curl`:
 
 ```bash
-printf '%s' "$REQUEST_BODY" | \
 curl -sS -X POST "http://localhost:5000/api/spec-automation/runs" \
   -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d @-
+  -d '{
+    "repository": "MoonLadderStudios/moonmind",
+    "base_branch": "main",
+    "specify_text": "# Spec title\n\n- Goal: Validate automation from Postman\n- Scope: /speckit.specify, /speckit.plan, /speckit.tasks",
+    "dry_run": false,
+    "external_ref": "postman-demo-001"
+  }'
 ```
 
 > **Note:** The default `docker-compose.yaml` maps the FastAPI service to
@@ -101,19 +90,6 @@ The response matches the `RunResponse` schema defined in the Spec Automation con
 A successful response includes the queued status and `run_id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
 
 Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients; these settings must align with the repository slug you pass in the request.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
-
-### Using Postman to submit the request
-
-If you prefer a graphical client, you can send the same request through Postman:
-
-1. **Create a collection (optional)** – Add a new collection called “Spec Automation” and define a collection-level variable named `base_url` with the value `http://localhost:5000` so requests automatically follow your environment. You can mirror environment-specific overrides (e.g., staging vs. production) by creating additional Postman environments.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
-2. **Add the request** – Create a `POST {{base_url}}/api/spec-automation/runs` request inside the collection. Set the **Authorization** type to **Bearer Token** and paste the `MOONMIND_API_TOKEN` value captured earlier; Postman will include it as the `Authorization: Bearer …` header on send. Set the **Headers** tab to include `Content-Type: application/json` if it is not automatically populated.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L80】
-3. **Populate the body** – In the **Body** tab, choose **raw** + **JSON** and paste the same payload you generated above. You can reference Postman variables (e.g., `{{repository}}`, `{{base_branch}}`, `{{specify_text}}`) to avoid editing raw values for future runs. When you need to send file contents, paste the text directly into the JSON string or use Postman’s `pm.sendRequest` pre-request script to read from a local file and inject it into the body before send.【F:docs/SpecKitAutomation.md†L66-L112】【F:specs/002-document-speckit-automation/spec.md†L11-L45】
-4. **Send and inspect** – Click **Send**. The response pane displays the `RunResponse` payload, including the `run_id`. Save the response to the collection if you plan to reuse the schema for regression testing or share the run metadata with reviewers.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L13-L80】
-
-Postman saves the request history, so after the first configuration you can re-run the automation by updating only the repository slug or Spec input variables. Pair the collection with Postman’s built-in environments to toggle between local development and remote deployments without rewriting the request body.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
-
-The queued run is now ready for monitoring.
 
 ## Step 4 – Monitor progress
 
