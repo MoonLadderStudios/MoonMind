@@ -127,6 +127,11 @@ jobs:
             console.log(`Head SHA: ${pr.head.sha}`);
             console.log(`PR created at: ${pr.created_at}`);
 
+            if ((pr.state || '').toLowerCase() !== 'open') {
+              console.log(`PR is not open (state: ${pr.state}). Skipping auto-merge logic.`);
+              return;
+            }
+
             if (workflowRun) {
               const runHeadSha = workflowRun.head_sha || '';
               console.log(`Workflow run head SHA: ${runHeadSha || 'unknown'}`);
