@@ -13,11 +13,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.spec_automation import router, _get_repository
+from api_service.api.routers.spec_automation import _get_repository, router
 from api_service.auth_providers import get_current_user
 from moonmind.config import settings
 from moonmind.workflows.speckit_celery import models
-
 
 ALLOWED_REPOSITORY = "moonladder/moonmind"
 
@@ -124,7 +123,7 @@ def _build_run(run_id: UUID | None = None) -> SimpleNamespace:
 
 
 def test_get_run_detail_success(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace]
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
     run_id = uuid4()
@@ -156,7 +155,7 @@ def test_get_run_detail_success(
 
 
 def test_get_run_detail_not_found(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace]
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
     run_id = uuid4()
@@ -169,7 +168,7 @@ def test_get_run_detail_not_found(
 
 
 def test_get_artifact_detail_success(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace]
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
     run_id = uuid4()
@@ -195,13 +194,11 @@ def test_get_artifact_detail_success(
         payload["download_url"]
         == f"http://testserver/api/spec-automation/runs/{run_id}/artifacts/{artifact.id}/download"
     )
-    repo.get_artifact.assert_awaited_once_with(
-        run_id=run_id, artifact_id=artifact.id
-    )
+    repo.get_artifact.assert_awaited_once_with(run_id=run_id, artifact_id=artifact.id)
 
 
 def test_get_artifact_detail_not_found(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace]
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
     run_id = uuid4()
@@ -213,13 +210,11 @@ def test_get_artifact_detail_not_found(
     )
 
     assert response.status_code == 404
-    repo.get_artifact.assert_awaited_once_with(
-        run_id=run_id, artifact_id=artifact_id
-    )
+    repo.get_artifact.assert_awaited_once_with(run_id=run_id, artifact_id=artifact_id)
 
 
 def test_get_run_detail_forbidden(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace]
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, user = client
     run_id = uuid4()
@@ -234,7 +229,7 @@ def test_get_run_detail_forbidden(
 
 
 def test_get_artifact_detail_forbidden(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace]
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, user = client
     run_id = uuid4()
@@ -292,7 +287,10 @@ def test_download_artifact_success(
 
     assert response.status_code == 200
     assert response.content == b"artifact body"
-    assert 'filename="phase-speckit_plan.stdout"' in response.headers["content-disposition"]
+    assert (
+        'filename="phase-speckit_plan.stdout"'
+        in response.headers["content-disposition"]
+    )
     assert response.headers["content-type"].startswith("text/plain")
 
 

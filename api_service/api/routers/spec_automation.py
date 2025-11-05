@@ -14,13 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from moonmind.config import settings
 from moonmind.schemas.workflow_models import (
     SpecAutomationArtifactDetail,
     SpecAutomationArtifactSummary,
     SpecAutomationPhaseState,
     SpecAutomationRunDetail,
 )
-from moonmind.config import settings
 from moonmind.workflows import SpecAutomationRepository, get_spec_automation_repository
 from moonmind.workflows.speckit_celery import models
 
@@ -110,8 +110,7 @@ def _serialize_run_detail(
         for state in sorted(task_states, key=_phase_sort_key)
     ]
     artifact_summaries = [
-        _serialize_artifact_summary(artifact)
-        for artifact in artifacts
+        _serialize_artifact_summary(artifact) for artifact in artifacts
     ]
     return SpecAutomationRunDetail(
         run_id=run.id,
@@ -145,7 +144,9 @@ def _resolve_allowed_repositories(user: User) -> set[str] | None:
 
     configured = settings.github.github_repos
     if configured:
-        allowed = {slug.strip().lower() for slug in configured.split(",") if slug.strip()}
+        allowed = {
+            slug.strip().lower() for slug in configured.split(",") if slug.strip()
+        }
         if allowed:
             return allowed
 
@@ -180,7 +181,11 @@ def _resolve_artifact_file(storage_path: str) -> Path:
     """Resolve an artifact storage path to a filesystem location within the artifact root."""
 
     base = Path(settings.spec_workflow.artifacts_root).resolve()
-    candidate = (base / storage_path).resolve() if not Path(storage_path).is_absolute() else Path(storage_path).resolve()
+    candidate = (
+        (base / storage_path).resolve()
+        if not Path(storage_path).is_absolute()
+        else Path(storage_path).resolve()
+    )
     try:
         candidate.relative_to(base)
     except ValueError as exc:
@@ -246,7 +251,10 @@ async def get_spec_automation_artifact(
         if run is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "run_not_found", "message": "Automation run not found."},
+                detail={
+                    "code": "run_not_found",
+                    "message": "Automation run not found.",
+                },
             )
     _ensure_run_access(run, user)
 

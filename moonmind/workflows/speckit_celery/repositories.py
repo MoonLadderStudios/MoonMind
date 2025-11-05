@@ -531,9 +531,7 @@ class SpecAutomationRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_run_detail(
-        self, run_id: UUID
-    ) -> Optional[
+    async def get_run_detail(self, run_id: UUID) -> Optional[
         tuple[
             models.SpecAutomationRun,
             Sequence[models.SpecAutomationTaskState],
