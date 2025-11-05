@@ -11,16 +11,21 @@ so later orchestration steps can rely on a consistent layout.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 from uuid import UUID
 
 from moonmind.config.settings import settings
 
 _BRANCH_COMPONENT_PATTERN = re.compile(r"[^a-zA-Z0-9._-]+")
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "RunWorkspacePaths",
@@ -30,6 +35,109 @@ __all__ = [
     "sanitize_branch_component",
     "with_retry_suffix",
 ]
+
+
+def _secure_delete_file(path: Path) -> None:
+    """Best-effort secure deletion for ``path`` if it points to a file."""
+
+    try:
+        if not path.exists():
+            return
+    except OSError:
+        return
+
+    if path.is_symlink():
+        try:
+            path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            return
+        except OSError as exc:  # pragma: no cover - depends on filesystem
+            logger.debug(
+                "Failed to remove symlink %s during secure cleanup: %s", path, exc
+            )
+        return
+
+    if path.is_file():
+        try:
+            size = path.stat().st_size
+        except OSError as exc:  # pragma: no cover - filesystem specific
+            logger.debug("Failed to stat %s before secure deletion: %s", path, exc)
+            size = 0
+
+        if size > 0:
+            try:
+                with path.open("r+b", buffering=0) as handle:
+                    remaining = size
+                    while remaining > 0:
+                        to_write = min(65536, remaining)
+                        handle.write(os.urandom(to_write))
+                        remaining -= to_write
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except FileNotFoundError:
+                return
+            except OSError as exc:  # pragma: no cover - depends on filesystem
+                logger.debug(
+                    "Failed to overwrite %s during secure deletion: %s", path, exc
+                )
+
+    try:
+        path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        return
+    except OSError as exc:  # pragma: no cover - filesystem specific
+        logger.warning("Failed to remove %s during secure deletion: %s", path, exc)
+
+
+def _secure_rmtree(path: Path) -> None:
+    """Securely delete directory trees by overwriting contents before removal."""
+
+    try:
+        if not path.exists():
+            return
+    except OSError:
+        return
+
+    if path.is_symlink() or path.is_file():
+        _secure_delete_file(path)
+        return
+
+    for root, dirs, files in os.walk(path, topdown=False):
+        root_path = Path(root)
+        for filename in files:
+            _secure_delete_file(root_path / filename)
+        for dirname in dirs:
+            child = root_path / dirname
+            if child.is_symlink():
+                try:
+                    child.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:  # pragma: no cover - filesystem specific
+                    logger.debug(
+                        "Failed to remove symlink directory %s during secure cleanup: %s",
+                        child,
+                        exc,
+                    )
+                continue
+            try:
+                child.rmdir()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:  # pragma: no cover - depends on filesystem
+                logger.debug(
+                    "Failed to remove directory %s during secure cleanup: %s",
+                    child,
+                    exc,
+                )
+
+    try:
+        path.rmdir()
+    except FileNotFoundError:
+        return
+    except OSError as exc:  # pragma: no cover - depends on filesystem
+        logger.debug("Falling back to recursive removal for %s: %s", path, exc)
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class WorkspaceConfigurationError(RuntimeError):
@@ -61,6 +169,8 @@ class SpecWorkspaceManager:
     """
 
     RUNS_DIRNAME_DEFAULT = "runs"
+    DEFAULT_RETENTION = timedelta(days=7)
+    _CONTAINER_PREFIX = "spec-automation-job-"
     _REPO_SUBDIR = "repo"
     _HOME_SUBDIR = "home"
     _ARTIFACTS_SUBDIR = "artifacts"
@@ -99,6 +209,12 @@ class SpecWorkspaceManager:
         """Return the directory under which individual run folders are stored."""
 
         return self.workspace_root / self._runs_dirname
+
+    @staticmethod
+    def job_container_name(run_id: UUID | str) -> str:
+        """Return the deterministic container name for a workflow run."""
+
+        return f"{SpecWorkspaceManager._CONTAINER_PREFIX}{run_id}"
 
     def run_root(self, run_id: UUID | str) -> Path:
         """Path to the root directory for the provided run identifier."""
@@ -155,6 +271,154 @@ class SpecWorkspaceManager:
             home_path=home_path,
             artifacts_path=artifacts_path,
         )
+
+    # ------------------------------------------------------------------
+    # Cleanup helpers
+    # ------------------------------------------------------------------
+    def cleanup_workspace(
+        self,
+        run_id: UUID | str,
+        *,
+        remove_artifacts: bool = False,
+    ) -> None:
+        """Remove run directories while respecting artifact retention policies."""
+
+        run_root = self.run_root(run_id)
+        artifacts_path = self.artifacts_path(run_id)
+
+        for path in (run_root, artifacts_path):
+            self._assert_within_workspace(path)
+
+        if not run_root.exists():
+            return
+
+        if remove_artifacts:
+            try:
+                _secure_rmtree(run_root)
+            except OSError as exc:  # pragma: no cover - depends on filesystem state
+                logger.warning(
+                    "Failed to securely remove workspace %s: %s", run_root, exc
+                )
+            return
+
+        artifacts_path.mkdir(parents=True, exist_ok=True)
+        for entry in run_root.iterdir():
+            if entry == artifacts_path:
+                continue
+            try:
+                if entry.is_dir():
+                    _secure_rmtree(entry)
+                else:
+                    _secure_delete_file(entry)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:  # pragma: no cover - depends on filesystem state
+                logger.warning("Failed to clean workspace entry %s: %s", entry, exc)
+
+    def cleanup_job_container(
+        self,
+        run_id: UUID | str,
+        *,
+        docker_client: Any = None,
+    ) -> bool:
+        """Stop and remove the job container associated with ``run_id``."""
+
+        container_name = self.job_container_name(run_id)
+        try:
+            import docker
+            from docker.errors import DockerException, NotFound
+        except Exception as exc:  # pragma: no cover - defensive in non-docker envs
+            logger.debug(
+                "Docker SDK unavailable when cleaning container %s: %s",
+                container_name,
+                exc,
+            )
+            return False
+
+        if docker_client is not None:
+            client = docker_client
+        else:
+            try:
+                client = docker.from_env()
+            except DockerException as exc:
+                logger.debug(
+                    "Docker client unavailable when cleaning container %s: %s",
+                    container_name,
+                    exc,
+                )
+                return False
+        try:
+            container = client.containers.get(container_name)
+        except NotFound:
+            return False
+        except DockerException as exc:  # pragma: no cover - depends on docker env
+            logger.warning(
+                "Unable to inspect job container %s: %s", container_name, exc
+            )
+            return False
+
+        try:
+            container.remove(force=True)
+            logger.info("Removed job container %s", container_name)
+            return True
+        except NotFound:
+            return False
+        except DockerException as exc:  # pragma: no cover - depends on docker env
+            logger.warning("Failed to remove job container %s: %s", container_name, exc)
+            return False
+
+    def purge_expired_workspaces(
+        self,
+        *,
+        retention: Optional[timedelta] = None,
+        now: Optional[datetime] = None,
+        docker_client: Any = None,
+    ) -> list[Path]:
+        """Permanently delete workspaces older than ``retention``."""
+
+        retention_window = retention or self.DEFAULT_RETENTION
+        cutoff = (now or datetime.now(UTC)) - retention_window
+
+        runs_root = self.runs_root
+        if not runs_root.exists():
+            return []
+
+        removed: list[Path] = []
+        for candidate in runs_root.iterdir():
+            try:
+                self._assert_within_workspace(candidate)
+            except WorkspaceConfigurationError:
+                continue
+            if not candidate.is_dir():
+                continue
+
+            try:
+                stat = candidate.stat()
+            except FileNotFoundError:
+                continue
+
+            modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+            created = datetime.fromtimestamp(stat.st_ctime, tz=UTC)
+            newest = max(modified, created)
+            if newest > cutoff:
+                continue
+
+            run_id = candidate.name
+            self.cleanup_job_container(run_id, docker_client=docker_client)
+
+            try:
+                shutil.rmtree(candidate)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:  # pragma: no cover - depends on filesystem state
+                logger.warning(
+                    "Failed to purge expired workspace %s: %s", candidate, exc
+                )
+                continue
+
+            removed.append(candidate)
+
+        return removed
 
     def build_job_environment(
         self,

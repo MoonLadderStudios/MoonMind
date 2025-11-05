@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -152,6 +152,31 @@ class SpecWorkflowSettings(BaseSettings):
     )
     github_token: Optional[str] = Field(None, env="SPEC_WORKFLOW_GITHUB_TOKEN")
     test_mode: bool = Field(False, env="SPEC_WORKFLOW_TEST_MODE")
+    agent_backend: str = Field(
+        "codex_cli",
+        env="SPEC_AUTOMATION_AGENT_BACKEND",
+        description="Active agent backend identifier for Spec Kit automation runs.",
+    )
+    allowed_agent_backends: tuple[str, ...] = Field(
+        ("codex_cli",),
+        env="SPEC_AUTOMATION_ALLOWED_AGENT_BACKENDS",
+        description="Whitelisted agent backend identifiers for Spec Kit automation.",
+    )
+    agent_version: str = Field(
+        "unspecified",
+        env="SPEC_AUTOMATION_AGENT_VERSION",
+        description="Version string recorded with the agent configuration snapshot.",
+    )
+    prompt_pack_version: Optional[str] = Field(
+        None,
+        env="SPEC_AUTOMATION_PROMPT_PACK_VERSION",
+        description="Spec Kit prompt pack version associated with the selected agent.",
+    )
+    agent_runtime_env_keys: tuple[str, ...] = Field(
+        ("CODEX_ENV", "CODEX_MODEL", "CODEX_PROFILE", "CODEX_API_KEY"),
+        env="SPEC_AUTOMATION_AGENT_RUNTIME_ENV_KEYS",
+        description="Environment variable names forwarded to the agent runtime snapshot.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="",
@@ -167,6 +192,47 @@ class SpecWorkflowSettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("allowed_agent_backends", "agent_runtime_env_keys", mode="before")
+    @classmethod
+    def _split_agent_csv(cls, value: Optional[str | Sequence[str]]) -> tuple[str, ...]:
+        """Allow comma-delimited strings for tuple-based agent settings."""
+
+        if value is None:
+            return ()
+
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            raw_items = (value,)
+
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+        if not items:
+            return ()
+
+        # Preserve order while removing duplicates.
+        return tuple(dict.fromkeys(items))
+
+    def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
+        """Validate agent backend selections after settings load."""
+
+        super().model_post_init(__context)
+        # Ensure tuples are deduplicated even when env provided sequences
+        allowed = tuple(dict.fromkeys(self.allowed_agent_backends or ()))
+        self.allowed_agent_backends = allowed
+        self.agent_runtime_env_keys = tuple(
+            dict.fromkeys(self.agent_runtime_env_keys or ())
+        )
+        if allowed and self.agent_backend not in allowed:
+            allowed_display = ", ".join(allowed)
+            raise ValueError(
+                f"Agent backend '{self.agent_backend}' is not permitted. "
+                f"Allowed values: {allowed_display or '<none>'}"
+            )
 
 
 class SecuritySettings(BaseSettings):

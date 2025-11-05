@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
@@ -610,6 +610,44 @@ class SpecAutomationRepository:
 
         await self._session.flush()
         return run
+
+    async def upsert_agent_configuration(
+        self,
+        *,
+        run_id: UUID,
+        agent_backend: str,
+        agent_version: str,
+        prompt_pack_version: Optional[str] = None,
+        runtime_env: Optional[Mapping[str, str]] = None,
+    ) -> models.SpecAutomationAgentConfiguration:
+        """Create or update the agent configuration snapshot for a run."""
+
+        stmt = select(models.SpecAutomationAgentConfiguration).where(
+            models.SpecAutomationAgentConfiguration.run_id == run_id
+        )
+        existing = await self._session.execute(stmt)
+        config = existing.scalar_one_or_none()
+
+        payload = dict(runtime_env or {})
+
+        if config is None:
+            config = models.SpecAutomationAgentConfiguration(
+                id=uuid4(),
+                run_id=run_id,
+                agent_backend=agent_backend,
+                agent_version=agent_version,
+                prompt_pack_version=prompt_pack_version,
+                runtime_env=payload or None,
+            )
+            self._session.add(config)
+        else:
+            config.agent_backend = agent_backend
+            config.agent_version = agent_version
+            config.prompt_pack_version = prompt_pack_version
+            config.runtime_env = payload or None
+
+        await self._session.flush()
+        return config
 
     # ------------------------------------------------------------------
     # Task states

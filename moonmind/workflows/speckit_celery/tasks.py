@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Coroutine, Mapping, Optional, TypeVar
+from typing import Any, Coroutine, Mapping, Optional, Sequence, TypeVar
 from uuid import UUID
 
 from celery.utils.log import get_task_logger
@@ -26,7 +26,10 @@ from moonmind.workflows.adapters import (
     GitHubPublishResult,
 )
 from moonmind.workflows.speckit_celery import celery_app, models
-from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
+from moonmind.workflows.speckit_celery.repositories import (
+    SpecAutomationRepository,
+    SpecWorkflowRepository,
+)
 
 logger = get_task_logger(__name__)
 
@@ -325,6 +328,138 @@ class DiscoveredTask:
             "phase": self.phase,
             "lineNumber": self.line_number,
         }
+
+
+@dataclass(slots=True)
+class AgentConfigurationSnapshot:
+    """Snapshot of the agent configuration applied to a Spec Automation run."""
+
+    backend: str
+    version: str
+    prompt_pack_version: Optional[str]
+    runtime_env: dict[str, str]
+
+
+def _normalize_runtime_env_keys(value: Any) -> tuple[str, ...]:
+    """Coerce ``value`` into a tuple of distinct, non-empty key names."""
+
+    if value is None:
+        return ()
+    if isinstance(value, Mapping):
+        raise ValueError("agent_runtime_env_keys override must not be a mapping")
+    if isinstance(value, str):
+        candidates: Sequence[object] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        candidates = value
+    else:
+        candidates = (value,)
+
+    normalized: list[str] = []
+    for item in candidates:
+        text = str(item).strip()
+        if not text:
+            continue
+        normalized.append(text)
+
+    return tuple(dict.fromkeys(normalized))
+
+
+def select_agent_configuration(
+    overrides: Optional[Mapping[str, Any]] = None,
+) -> AgentConfigurationSnapshot:
+    """Determine the agent configuration for an automation run."""
+
+    cfg = settings.spec_workflow
+    overrides = overrides or {}
+
+    backend = str(overrides.get("agent_backend") or cfg.agent_backend or "").strip()
+    if not backend:
+        raise ValueError("Agent backend selection must not be blank")
+
+    allowed = cfg.allowed_agent_backends
+    if allowed and backend not in allowed:
+        allowed_display = ", ".join(allowed)
+        raise ValueError(
+            f"Agent backend '{backend}' is not permitted; allowed: {allowed_display}"
+        )
+
+    version = str(overrides.get("agent_version") or cfg.agent_version or "").strip()
+    if not version:
+        raise ValueError("Agent version must be provided for auditability")
+
+    prompt_pack = overrides.get("prompt_pack_version")
+    if prompt_pack is None:
+        prompt_pack_value = cfg.prompt_pack_version
+    else:
+        prompt_pack_value = str(prompt_pack).strip() or None
+
+    runtime_keys_override = overrides.get("agent_runtime_env_keys")
+    if runtime_keys_override is None:
+        runtime_keys = tuple(dict.fromkeys(cfg.agent_runtime_env_keys))
+    else:
+        runtime_keys = _normalize_runtime_env_keys(runtime_keys_override)
+
+    runtime_env: dict[str, str] = {}
+    for key in runtime_keys:
+        key_str = str(key).strip()
+        if not key_str:
+            continue
+        value = os.getenv(key_str)
+        if value is not None:
+            runtime_env[key_str] = value
+
+    override_env = overrides.get("agent_runtime_env")
+    if isinstance(override_env, Mapping):
+        for key, value in override_env.items():
+            key_str = str(key).strip()
+            if not key_str:
+                continue
+            if value is None:
+                runtime_env.pop(key_str, None)
+            else:
+                runtime_env[key_str] = str(value)
+
+    return AgentConfigurationSnapshot(
+        backend=backend,
+        version=version,
+        prompt_pack_version=prompt_pack_value,
+        runtime_env=runtime_env,
+    )
+
+
+async def persist_agent_configuration(
+    repo: SpecAutomationRepository,
+    *,
+    run_id: UUID,
+    snapshot: AgentConfigurationSnapshot,
+) -> models.SpecAutomationAgentConfiguration:
+    """Persist the agent configuration snapshot for a run and log the outcome."""
+
+    redacted_env = {key: _REDACTED for key in snapshot.runtime_env}
+
+    record = await repo.upsert_agent_configuration(
+        run_id=run_id,
+        agent_backend=snapshot.backend,
+        agent_version=snapshot.version,
+        prompt_pack_version=snapshot.prompt_pack_version,
+        runtime_env=redacted_env,
+    )
+
+    logger.info(
+        "Recorded agent configuration for Spec Automation run",
+        extra={
+            "run_id": str(run_id),
+            "agent": _sanitize_for_log(
+                {
+                    "backend": snapshot.backend,
+                    "version": snapshot.version,
+                    "promptPackVersion": snapshot.prompt_pack_version,
+                    "runtimeEnv": redacted_env,
+                }
+            ),
+        },
+    )
+    return record
 
 
 def _now() -> datetime:

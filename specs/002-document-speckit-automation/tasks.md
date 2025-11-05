@@ -81,10 +81,10 @@
 
 ### Implementation for User Story 3
 
-- [ ] T019 [US3] Inject secrets as env vars and redact sensitive logs in moonmind/workflows/speckit_celery/job_container.py
-- [ ] T020 [US3] Implement workspace and container cleanup routines with retention policy in moonmind/workflows/speckit_celery/workspace.py
-- [ ] T021 [US3] Add agent configuration selection and persistence to moonmind/workflows/speckit_celery/tasks.py
-- [ ] T022 [US3] Add unit tests covering cleanup and agent selection behaviors in tests/unit/workflows/test_spec_automation_env.py
+- [x] T019 [US3] Inject secrets as env vars and redact sensitive logs in moonmind/workflows/speckit_celery/job_container.py
+- [x] T020 [US3] Implement workspace and container cleanup routines with retention policy in moonmind/workflows/speckit_celery/workspace.py
+- [x] T021 [US3] Add agent configuration selection and persistence to moonmind/workflows/speckit_celery/tasks.py
+- [x] T022 [US3] Add unit tests covering cleanup and agent selection behaviors in tests/unit/workflows/test_spec_automation_env.py
 
 **Checkpoint**: Runs leave no residual credentials, clean up containers/workspaces, and honour agent configuration toggles.
 
