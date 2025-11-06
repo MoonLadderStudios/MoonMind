@@ -64,12 +64,12 @@
 
 ### Implementation for User Story 2
 
-- [ ] T013 [P] [US2] Add Celery routing helper for codex shard queues in `moonmind/workflows/speckit_celery/celeryconfig.py`
-- [ ] T014 [US2] Wire Celery app to new shard queues and routing in `moonmind/workflows/speckit_celery/__init__.py`
-- [ ] T015 [US2] Compute shard affinity keys and attach queue metadata when scheduling Codex jobs in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T016 [US2] Define codex worker services and volumes in `docker-compose.yaml` and `docker-compose.job.yaml`
-- [ ] T017 [P] [US2] Emit queue and volume diagnostics for each Codex run in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T018 [P] [US2] Add deterministic routing tests covering shard selection in `tests/unit/workflows/test_tasks.py`
+- [x] T013 [P] [US2] Add Celery routing helper for codex shard queues in `moonmind/workflows/speckit_celery/celeryconfig.py`
+- [x] T014 [US2] Wire Celery app to new shard queues and routing in `moonmind/workflows/speckit_celery/__init__.py`
+- [x] T015 [US2] Compute shard affinity keys and attach queue metadata when scheduling Codex jobs in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T016 [US2] Define codex worker services and volumes in `docker-compose.yaml` and `docker-compose.job.yaml`
+- [x] T017 [P] [US2] Emit queue and volume diagnostics for each Codex run in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T018 [P] [US2] Add deterministic routing tests covering shard selection in `tests/unit/workflows/test_tasks.py`
 
 **Checkpoint**: Codex tasks fan out across dedicated queues with auditable routing data while other work stays unaffected.
 

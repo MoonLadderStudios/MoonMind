@@ -7,6 +7,10 @@ from typing import Iterable
 from celery import Celery
 
 from moonmind.config.settings import settings
+from moonmind.workflows.speckit_celery.celeryconfig import (
+    build_task_router,
+    get_codex_shard_router,
+)
 
 CELERY_NAMESPACE = "moonmind.workflows.speckit_celery"
 _TASK_IMPORT = "moonmind.workflows.speckit_celery.tasks"
@@ -22,6 +26,7 @@ def create_celery_app() -> Celery:
     """Instantiate a Celery application configured for Spec Kit workflows."""
 
     app = Celery(CELERY_NAMESPACE)
+    shard_router = get_codex_shard_router()
     app.conf.update(
         broker_url=settings.celery.broker_url,
         result_backend=settings.celery.result_backend,
@@ -38,6 +43,8 @@ def create_celery_app() -> Celery:
         worker_prefetch_multiplier=settings.celery.worker_prefetch_multiplier,
         result_extended=settings.celery.result_extended,
         result_expires=settings.celery.result_expires,
+        task_queues=shard_router.build_queues(include_default=True),
+        task_routes=build_task_router(shard_router),
     )
     return app
 
