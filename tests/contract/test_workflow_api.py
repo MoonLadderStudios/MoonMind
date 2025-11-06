@@ -116,7 +116,10 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         _fake_github_client,
     )
 
+    preflight_calls = {"count": 0}
+
     def _fake_preflight_check(*, volume_name=None, timeout=60):
+        preflight_calls["count"] += 1
         return workflow_tasks.CodexPreflightResult(
             status=workflow_models.CodexPreflightStatus.PASSED,
             message="Codex login status check passed",
@@ -126,12 +129,6 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "moonmind.workflows.speckit_celery.tasks._run_codex_preflight_check",
         _fake_preflight_check,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.speckit_celery.tasks.run_codex_preflight_check",
-        lambda volume_name=None, timeout=60: _fake_preflight_check(
-            volume_name=volume_name, timeout=timeout
-        ),
     )
 
     app.state.settings = settings
@@ -198,15 +195,13 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert final_model.pr_url is not None
             assert fail_state["calls"] == 2
 
-            shard_response = await client.get(
-                "/api/workflows/speckit/codex/shards"
-            )
+            shard_response = await client.get("/api/workflows/speckit/codex/shards")
             assert shard_response.status_code == 200
-            shard_model = CodexShardListResponse.model_validate(
-                shard_response.json()
-            )
+            shard_model = CodexShardListResponse.model_validate(shard_response.json())
             assert any(shard.queue_name == "codex-0" for shard in shard_model.shards)
-            assert any(shard.volume_name == "codex_auth_0" for shard in shard_model.shards)
+            assert any(
+                shard.volume_name == "codex_auth_0" for shard in shard_model.shards
+            )
 
             preflight_response = await client.post(
                 f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
@@ -216,19 +211,46 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             preflight_model = CodexPreflightResultModel.model_validate(
                 preflight_response.json()
             )
-            assert (
-                preflight_model.status
-                == workflow_models.CodexPreflightStatus.PASSED
-            )
+            assert preflight_model.status == workflow_models.CodexPreflightStatus.PASSED
             assert preflight_model.volume_name == "codex_auth_0"
             assert preflight_model.queue_name == "codex-0"
+            assert preflight_calls["count"] == 1
+
+            cached_response = await client.post(
+                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                json={},
+            )
+            assert cached_response.status_code == 200
+            cached_model = CodexPreflightResultModel.model_validate(
+                cached_response.json()
+            )
+            assert cached_model.checked_at == preflight_model.checked_at
+            assert preflight_calls["count"] == 1
+
+            forced_response = await client.post(
+                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                json={"forceRefresh": True},
+            )
+            assert forced_response.status_code == 200
+            forced_model = CodexPreflightResultModel.model_validate(
+                forced_response.json()
+            )
+            assert preflight_calls["count"] == 2
+            assert forced_model.checked_at >= cached_model.checked_at
+
+            invalid_affinity = await client.post(
+                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                json={"affinityKey": "bad key"},
+            )
+            assert invalid_affinity.status_code == 422
+            assert preflight_calls["count"] == 2
 
             refreshed = await client.get("/api/workflows/speckit/codex/shards")
-            refreshed_model = CodexShardListResponse.model_validate(
-                refreshed.json()
-            )
+            refreshed_model = CodexShardListResponse.model_validate(refreshed.json())
             target_shard = next(
-                shard for shard in refreshed_model.shards if shard.queue_name == "codex-0"
+                shard
+                for shard in refreshed_model.shards
+                if shard.queue_name == "codex-0"
             )
             assert (
                 target_shard.volume_status

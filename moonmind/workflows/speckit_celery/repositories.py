@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -98,6 +98,11 @@ class SpecWorkflowRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def commit(self) -> None:
+        """Persist pending changes for the current transaction."""
+
+        await self._session.commit()
 
     # ------------------------------------------------------------------
     # Workflow runs
@@ -238,21 +243,31 @@ class SpecWorkflowRepository:
         queue_names = [shard.queue_name for shard in shards]
         latest_by_queue: dict[str, models.SpecWorkflowRun] = {}
         if queue_names:
-            run_stmt: Select[tuple[models.SpecWorkflowRun]] = (
-                select(models.SpecWorkflowRun)
-                .where(models.SpecWorkflowRun.codex_queue.in_(queue_names))
-                .order_by(
-                    models.SpecWorkflowRun.codex_queue.asc(),
-                    models.SpecWorkflowRun.created_at.desc(),
+            ranked_runs_sq = (
+                select(
+                    models.SpecWorkflowRun.id.label("run_id"),
+                    func.row_number()
+                    .over(
+                        partition_by=models.SpecWorkflowRun.codex_queue,
+                        order_by=models.SpecWorkflowRun.created_at.desc(),
+                    )
+                    .label("row_number"),
                 )
+                .where(models.SpecWorkflowRun.codex_queue.in_(queue_names))
+                .subquery()
             )
+
+            latest_run_ids_stmt: Select[tuple[int]] = select(
+                ranked_runs_sq.c.run_id
+            ).where(ranked_runs_sq.c.row_number == 1)
+
+            run_stmt: Select[tuple[models.SpecWorkflowRun]] = select(
+                models.SpecWorkflowRun
+            ).where(models.SpecWorkflowRun.id.in_(latest_run_ids_stmt))
             run_result = await self._session.execute(run_stmt)
             for run in run_result.scalars().all():
                 queue = run.codex_queue
-                if not queue:
-                    continue
-                existing = latest_by_queue.get(queue)
-                if existing is None or run.created_at > existing.created_at:
+                if queue:
                     latest_by_queue[queue] = run
 
         health: list[CodexShardHealth] = []
@@ -270,14 +285,10 @@ class SpecWorkflowRepository:
                     volume_last_verified_at=(
                         volume.last_verified_at if volume else None
                     ),
-                    volume_worker_affinity=(
-                        volume.worker_affinity if volume else None
-                    ),
+                    volume_worker_affinity=(volume.worker_affinity if volume else None),
                     volume_notes=volume.notes if volume else None,
                     latest_run_id=latest_run.id if latest_run else None,
-                    latest_run_status=(
-                        latest_run.status if latest_run else None
-                    ),
+                    latest_run_status=(latest_run.status if latest_run else None),
                     latest_preflight_status=(
                         latest_run.codex_preflight_status if latest_run else None
                     ),
@@ -317,9 +328,9 @@ class SpecWorkflowRepository:
         if not name:
             return None
 
-        stmt: Select[tuple[models.CodexAuthVolume]] = select(models.CodexAuthVolume).where(
-            models.CodexAuthVolume.name == name
-        )
+        stmt: Select[tuple[models.CodexAuthVolume]] = select(
+            models.CodexAuthVolume
+        ).where(models.CodexAuthVolume.name == name)
         stmt = stmt.limit(1)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Optional
 import asyncio
+import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -40,6 +41,34 @@ from moonmind.workflows.speckit_celery.serializers import serialize_run
 from moonmind.workflows.speckit_celery.tasks import run_codex_preflight_check
 
 router = APIRouter(prefix="/api/workflows/speckit", tags=["speckit-workflows"])
+
+
+_AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _normalize_affinity_key(raw: str | None) -> str | None:
+    """Validate and normalize a user supplied affinity key."""
+
+    if raw is None:
+        return None
+
+    candidate = raw.strip()
+    if not candidate:
+        return None
+
+    if not _AFFINITY_KEY_PATTERN.fullmatch(candidate):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_affinity_key",
+                "message": (
+                    "affinityKey must be 1-128 characters and contain only "
+                    "letters, numbers, period, underscore, colon, or hyphen."
+                ),
+            },
+        )
+
+    return candidate
 
 
 async def _get_repository(
@@ -122,12 +151,11 @@ async def trigger_codex_preflight(
     queue_name = run.codex_queue
     shard = run.codex_shard
     volume_name = run.codex_volume
+    affinity_key = _normalize_affinity_key(payload.affinity_key)
 
     if not queue_name:
         affinity_source = (
-            payload.affinity_key
-            or run.feature_key
-            or (run.codex_task_id or str(run.id))
+            affinity_key or run.feature_key or (run.codex_task_id or str(run.id))
         )
         queue_name = router.queue_for_key(affinity_source)
 
@@ -151,42 +179,73 @@ async def trigger_codex_preflight(
             },
         )
 
-    checked_at = datetime.now(UTC)
-    preflight = await asyncio.to_thread(
-        run_codex_preflight_check, volume_name=volume_name
+    reuse_preflight = (
+        not payload.force_refresh
+        and run.codex_preflight_status is not None
+        and run.codex_volume == volume_name
     )
 
-    updates = {
-        "codex_preflight_status": preflight.status,
-        "codex_preflight_message": preflight.message,
-        "codex_volume": volume_name,
-    }
-    if queue_name:
-        updates.setdefault("codex_queue", queue_name)
-    await repo.update_run(run_id, **updates)
+    if reuse_preflight:
+        preflight_status = run.codex_preflight_status
+        preflight_message = run.codex_preflight_message
+        checked_at = run.updated_at or datetime.now(UTC)
+    else:
+        checked_at = datetime.now(UTC)
+        preflight_result = await asyncio.to_thread(
+            run_codex_preflight_check, volume_name=volume_name
+        )
+        preflight_status = preflight_result.status
+        preflight_message = preflight_result.message
 
-    if volume_name:
+    updates: dict[str, object] = {}
+    if queue_name and queue_name != run.codex_queue:
+        updates["codex_queue"] = queue_name
+    if volume_name and volume_name != run.codex_volume:
+        updates["codex_volume"] = volume_name
+
+    if not reuse_preflight:
+        updates.update(
+            {
+                "codex_preflight_status": preflight_status,
+                "codex_preflight_message": preflight_message,
+            }
+        )
+
+    if updates:
+        await repo.update_run(run_id, **updates)
+
+    if volume_name and not reuse_preflight:
         volume_updates: dict[str, object] = {}
-        if preflight.status is models.CodexPreflightStatus.PASSED:
+        if preflight_status is models.CodexPreflightStatus.PASSED:
             volume_updates["status"] = models.CodexAuthVolumeStatus.READY
             volume_updates["last_verified_at"] = checked_at
-        elif preflight.status is models.CodexPreflightStatus.FAILED:
+        elif preflight_status is models.CodexPreflightStatus.FAILED:
             volume_updates["status"] = models.CodexAuthVolumeStatus.NEEDS_AUTH
         if volume_updates:
-            try:
-                await repo.update_codex_auth_volume(volume_name, **volume_updates)
-            except AttributeError:  # pragma: no cover - defensive guard
-                pass
+            updated_volume = await repo.update_codex_auth_volume(
+                volume_name, **volume_updates
+            )
+            if updated_volume is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "codex_volume_not_registered",
+                        "message": (
+                            "The resolved Codex auth volume is no longer registered. "
+                            "Re-authenticate the volume before retrying."
+                        ),
+                    },
+                )
 
-    await repo._session.commit()
+    await repo.commit()
 
     return CodexPreflightResultModel(
         run_id=run.id,
         queue_name=queue_name,
         volume_name=volume_name,
-        status=preflight.status,
+        status=preflight_status,
         checked_at=checked_at,
-        message=preflight.message,
+        message=preflight_message,
     )
 
 
