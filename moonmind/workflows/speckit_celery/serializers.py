@@ -68,6 +68,10 @@ class SerializedRun(TypedDict, total=False):
     branchName: str | None
     prUrl: str | None
     codexTaskId: str | None
+    codexQueue: str | None
+    codexVolume: str | None
+    codexPreflightStatus: str | None
+    codexPreflightMessage: str | None
     codexLogsPath: str | None
     codexPatchPath: str | None
     celeryChainId: str | None
@@ -210,6 +214,14 @@ def serialize_run(
         branchName=run.branch_name,
         prUrl=run.pr_url,
         codexTaskId=run.codex_task_id,
+        codexQueue=run.codex_queue,
+        codexVolume=run.codex_volume,
+        codexPreflightStatus=(
+            run.codex_preflight_status.value
+            if run.codex_preflight_status is not None
+            else None
+        ),
+        codexPreflightMessage=run.codex_preflight_message,
         codexLogsPath=run.codex_logs_path,
         codexPatchPath=run.codex_patch_path,
         celeryChainId=run.celery_chain_id,

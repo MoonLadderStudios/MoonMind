@@ -28,11 +28,11 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T003 Expand Spec Kit settings for CODEX shard configuration in `moonmind/config/settings.py`
-- [ ] T004 Add CodexAuthVolume/CodexWorkerShard models and new run metadata fields in `moonmind/workflows/speckit_celery/models.py`
-- [ ] T005 Create Alembic migration adding Codex shard tables and run columns in `api_service/migrations/versions/*_codex_shards.py`
-- [ ] T006 Update Spec workflow repositories to persist shard and pre-flight fields in `moonmind/workflows/speckit_celery/repositories.py`
-- [ ] T007 Surface Codex shard metadata in API serializers and schemas via `moonmind/workflows/speckit_celery/serializers.py` and `moonmind/schemas/workflow_models.py`
+- [x] T003 Expand Spec Kit settings for CODEX shard configuration in `moonmind/config/settings.py`
+- [x] T004 Add CodexAuthVolume/CodexWorkerShard models and new run metadata fields in `moonmind/workflows/speckit_celery/models.py`
+- [x] T005 Create Alembic migration adding Codex shard tables and run columns in `api_service/migrations/versions/*_codex_shards.py`
+- [x] T006 Update Spec workflow repositories to persist shard and pre-flight fields in `moonmind/workflows/speckit_celery/repositories.py`
+- [x] T007 Surface Codex shard metadata in API serializers and schemas via `moonmind/workflows/speckit_celery/serializers.py` and `moonmind/schemas/workflow_models.py`
 
 **Checkpoint**: Foundation ready—Codex shard metadata can be stored and returned end-to-end.
 
