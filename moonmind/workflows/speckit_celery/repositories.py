@@ -118,6 +118,20 @@ class SpecWorkflowRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def codex_shard_exists(self, queue_name: str) -> bool:
+        """Return ``True`` when a Codex worker shard is registered for ``queue_name``."""
+
+        if not queue_name:
+            return False
+
+        stmt = (
+            select(models.CodexWorkerShard.queue_name)
+            .where(models.CodexWorkerShard.queue_name == queue_name)
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
     async def find_active_run_for_feature(
         self, feature_key: str
     ) -> Optional[models.SpecWorkflowRun]:

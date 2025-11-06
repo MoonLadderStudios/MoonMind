@@ -6,9 +6,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import celery.app.task as celery_task
 import pytest
 
 from moonmind.workflows.speckit_celery import models, tasks
+from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
 from moonmind.workflows.speckit_celery.serializers import (
     serialize_run,
     serialize_task_state,
@@ -475,3 +477,105 @@ def test_submit_codex_job_preflight_skipped(monkeypatch, tmp_path):
     )
 
     assert task_updates[-1]["status"] == models.SpecWorkflowTaskStatus.SUCCEEDED
+
+
+def test_codex_routing_deterministic_queue_selection(monkeypatch):
+    """Codex tasks should hash to a stable queue based on the affinity key."""
+
+    calls: list[dict[str, object]] = []
+
+    def capture_apply_async(
+        self,
+        args=None,
+        kwargs=None,
+        task_id=None,
+        producer=None,
+        link=None,
+        link_error=None,
+        shadow=None,
+        **options,
+    ):
+        calls.append({"args": args, "kwargs": kwargs, "options": options})
+        return object()
+
+    monkeypatch.setattr(
+        celery_task.Task,
+        "apply_async",
+        capture_apply_async,
+        raising=False,
+    )
+
+    base_context = {
+        "feature_key": "001-celery-oauth-volumes",
+        "artifacts_path": "var/artifacts/spec_workflows",
+        "task": {"taskId": "T020"},
+    }
+    context_one = dict(base_context)
+    context_one["run_id"] = str(uuid4())
+    context_two = dict(base_context)
+    context_two["run_id"] = str(uuid4())
+
+    affinity_key = tasks._derive_codex_affinity_key(dict(context_one))
+    assert tasks._derive_codex_affinity_key(dict(context_two)) == affinity_key
+    router = get_codex_shard_router()
+    expected_queue = router.queue_for_key(affinity_key)
+
+    tasks.submit_codex_job.apply_async((context_one,))
+    tasks.submit_codex_job.apply_async((context_two,))
+
+    assert len(calls) == 2
+    for call in calls:
+        queued_context = call["args"][0]
+        assert call["options"]["queue"] == expected_queue
+        assert queued_context["codex_queue"] == expected_queue
+        assert queued_context["codex_affinity_key"] == affinity_key
+        assert queued_context["codex_shard_index"] == router.shard_for_key(affinity_key)
+
+
+def test_codex_routing_reuses_existing_queue(monkeypatch):
+    """Downstream Codex tasks should honor the queue established during submit."""
+
+    calls: list[dict[str, object]] = []
+
+    def capture_apply_async(
+        self,
+        args=None,
+        kwargs=None,
+        task_id=None,
+        producer=None,
+        link=None,
+        link_error=None,
+        shadow=None,
+        **options,
+    ):
+        calls.append({"args": args, "kwargs": kwargs, "options": options})
+        return object()
+
+    monkeypatch.setattr(
+        celery_task.Task,
+        "apply_async",
+        capture_apply_async,
+        raising=False,
+    )
+
+    context = {
+        "run_id": str(uuid4()),
+        "feature_key": "001-celery-oauth-volumes",
+        "artifacts_path": "var/artifacts/spec_workflows",
+        "task": {"taskId": "T021"},
+    }
+
+    tasks.submit_codex_job.apply_async((context,))
+    assert calls, "submit_codex_job should invoke apply_async"
+    submit_queue = calls[-1]["options"]["queue"]
+    assert submit_queue.startswith("codex-")
+    assert context["codex_queue"] == submit_queue
+
+    calls.clear()
+    tasks.apply_and_publish.apply_async((context,))
+    assert calls, "apply_and_publish should invoke apply_async"
+    publish_queue = calls[-1]["options"]["queue"]
+    assert publish_queue == submit_queue
+    routed_context = calls[-1]["args"][0]
+    assert routed_context["codex_queue"] == submit_queue
+    assert routed_context["codex_shard_index"] == context["codex_shard_index"]
