@@ -46,6 +46,14 @@ router = APIRouter(prefix="/api/workflows/speckit", tags=["speckit-workflows"])
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
+def _ensure_utc_timestamp(timestamp: datetime | None) -> datetime:
+    if timestamp is None:
+        return datetime.now(UTC)
+    if timestamp.tzinfo is None or timestamp.tzinfo.utcoffset(timestamp) is None:
+        return timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
+
+
 def _normalize_affinity_key(raw: str | None) -> str | None:
     """Validate and normalize a user supplied affinity key."""
 
@@ -188,7 +196,7 @@ async def trigger_codex_preflight(
     if reuse_preflight:
         preflight_status = run.codex_preflight_status
         preflight_message = run.codex_preflight_message
-        checked_at = run.updated_at or datetime.now(UTC)
+        checked_at = _ensure_utc_timestamp(run.updated_at)
     else:
         checked_at = datetime.now(UTC)
         preflight_result = await asyncio.to_thread(
