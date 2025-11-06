@@ -77,6 +77,30 @@ class GitHubCredentialStatus(str, enum.Enum):
     SCOPE_MISSING = "scope_missing"
 
 
+class CodexAuthVolumeStatus(str, enum.Enum):
+    """Health states for persisted Codex authentication volumes."""
+
+    READY = "ready"
+    NEEDS_AUTH = "needs_auth"
+    ERROR = "error"
+
+
+class CodexWorkerShardStatus(str, enum.Enum):
+    """Lifecycle states for Codex-focused Celery workers."""
+
+    ACTIVE = "active"
+    DRAINING = "draining"
+    OFFLINE = "offline"
+
+
+class CodexPreflightStatus(str, enum.Enum):
+    """Result of the Codex login pre-flight verification."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 @dataclass(slots=True)
 class CredentialAuditResult:
     """Represents the outcome of a credential validation attempt."""
@@ -139,6 +163,23 @@ class SpecWorkflowRun(Base):
     branch_name: Mapped[Optional[str]] = mapped_column(String(255))
     pr_url: Mapped[Optional[str]] = mapped_column(String(512))
     codex_task_id: Mapped[Optional[str]] = mapped_column(String(255))
+    codex_queue: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("codex_worker_shards.queue_name", ondelete="SET NULL"),
+    )
+    codex_volume: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("codex_auth_volumes.name", ondelete="SET NULL"),
+    )
+    codex_preflight_status: Mapped[Optional[CodexPreflightStatus]] = mapped_column(
+        Enum(
+            CodexPreflightStatus,
+            name="codexpreflightstatus",
+            native_enum=True,
+            validate_strings=True,
+        )
+    )
+    codex_preflight_message: Mapped[Optional[str]] = mapped_column(Text)
     codex_logs_path: Mapped[Optional[str]] = mapped_column(String(1024))
     codex_patch_path: Mapped[Optional[str]] = mapped_column(String(1024))
     artifacts_path: Mapped[Optional[str]] = mapped_column(String(512))
@@ -170,6 +211,16 @@ class SpecWorkflowRun(Base):
         back_populates="workflow_run",
         cascade="all, delete-orphan",
         order_by="WorkflowArtifact.created_at",
+    )
+    codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
+        "CodexAuthVolume",
+        back_populates="runs",
+        foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
+    )
+    codex_shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
+        "CodexWorkerShard",
+        back_populates="runs",
+        foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
     )
     credential_audit: Mapped[Optional["WorkflowCredentialAudit"]] = relationship(
         "WorkflowCredentialAudit",
@@ -310,6 +361,102 @@ class WorkflowArtifact(Base):
 
     workflow_run: Mapped[SpecWorkflowRun] = relationship(
         "SpecWorkflowRun", back_populates="artifacts"
+    )
+
+
+class CodexAuthVolume(Base):
+    """Persistent Codex authentication volume mapped to a worker shard."""
+
+    __tablename__ = "codex_auth_volumes"
+    __table_args__ = (
+        UniqueConstraint(
+            "worker_affinity", name="uq_codex_auth_volumes_worker_affinity"
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    worker_affinity: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[CodexAuthVolumeStatus] = mapped_column(
+        Enum(
+            CodexAuthVolumeStatus,
+            name="codexauthvolumestatus",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=CodexAuthVolumeStatus.NEEDS_AUTH,
+    )
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        server_onupdate=text("CURRENT_TIMESTAMP"),
+    )
+
+    shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
+        "CodexWorkerShard", back_populates="volume", uselist=False
+    )
+    runs: Mapped[list[SpecWorkflowRun]] = relationship(
+        SpecWorkflowRun,
+        back_populates="codex_auth_volume",
+        primaryjoin="CodexAuthVolume.name == SpecWorkflowRun.codex_volume",
+    )
+
+
+class CodexWorkerShard(Base):
+    """Celery worker dedicated to Codex tasks and its routing metadata."""
+
+    __tablename__ = "codex_worker_shards"
+    __table_args__ = (
+        UniqueConstraint("volume_name", name="uq_codex_worker_shards_volume_name"),
+    )
+
+    queue_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    volume_name: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("codex_auth_volumes.name", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[CodexWorkerShardStatus] = mapped_column(
+        Enum(
+            CodexWorkerShardStatus,
+            name="codexworkershardstatus",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=CodexWorkerShardStatus.ACTIVE,
+    )
+    hash_modulo: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    worker_hostname: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        server_onupdate=text("CURRENT_TIMESTAMP"),
+    )
+
+    volume: Mapped[CodexAuthVolume] = relationship(
+        CodexAuthVolume, back_populates="shard", foreign_keys=[volume_name]
+    )
+    runs: Mapped[list[SpecWorkflowRun]] = relationship(
+        SpecWorkflowRun,
+        back_populates="codex_shard",
+        primaryjoin="CodexWorkerShard.queue_name == SpecWorkflowRun.codex_queue",
     )
 
 
