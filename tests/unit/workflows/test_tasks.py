@@ -290,7 +290,7 @@ def test_submit_codex_job_preflight_failure(monkeypatch):
 
     monkeypatch.setattr(tasks, "_update_task_state", fake_update_task_state)
 
-    async def fake_ensure_credentials_validated(**_kwargs):
+    async def fake_ensure_credentials_validated(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(
@@ -418,7 +418,7 @@ def test_submit_codex_job_preflight_skipped(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tasks, "_update_task_state", fake_update_task_state)
 
-    async def fake_ensure_credentials_validated(**_kwargs):
+    async def fake_ensure_credentials_validated(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(
