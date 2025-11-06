@@ -48,9 +48,7 @@ def upgrade() -> None:
         sa.Column("worker_affinity", sa.String(length=255), nullable=False),
         sa.Column(
             "status",
-            postgresql.ENUM(
-                name="codexauthvolumestatus", create_type=False
-            ),
+            postgresql.ENUM(name="codexauthvolumestatus", create_type=False),
             nullable=False,
             server_default=sa.text("'needs_auth'::codexauthvolumestatus"),
         ),
@@ -67,7 +65,6 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
-            server_onupdate=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.PrimaryKeyConstraint("name", name="pk_codex_auth_volumes"),
         sa.UniqueConstraint(
@@ -81,9 +78,7 @@ def upgrade() -> None:
         sa.Column("volume_name", sa.String(length=64), nullable=False),
         sa.Column(
             "status",
-            postgresql.ENUM(
-                name="codexworkershardstatus", create_type=False
-            ),
+            postgresql.ENUM(name="codexworkershardstatus", create_type=False),
             nullable=False,
             server_default=sa.text("'active'::codexworkershardstatus"),
         ),
@@ -102,7 +97,6 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
-            server_onupdate=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.ForeignKeyConstraint(
             ["volume_name"],
@@ -111,9 +105,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("queue_name", name="pk_codex_worker_shards"),
-        sa.UniqueConstraint(
-            "volume_name", name="uq_codex_worker_shards_volume_name"
-        ),
+        sa.UniqueConstraint("volume_name", name="uq_codex_worker_shards_volume_name"),
     )
 
     op.add_column(
@@ -128,9 +120,7 @@ def upgrade() -> None:
         "spec_workflow_runs",
         sa.Column(
             "codex_preflight_status",
-            postgresql.ENUM(
-                name="codexpreflightstatus", create_type=False
-            ),
+            postgresql.ENUM(name="codexpreflightstatus", create_type=False),
             nullable=True,
         ),
     )
@@ -156,8 +146,54 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION codex_touch_updated_at()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+        END;
+        $$ LANGUAGE 'plpgsql';
+        """
+    )
+
+    op.execute(
+        """
+        CREATE TRIGGER trg_codex_auth_volumes_updated_at
+        BEFORE UPDATE ON codex_auth_volumes
+        FOR EACH ROW
+        EXECUTE PROCEDURE codex_touch_updated_at();
+        """
+    )
+
+    op.execute(
+        """
+        CREATE TRIGGER trg_codex_worker_shards_updated_at
+        BEFORE UPDATE ON codex_worker_shards
+        FOR EACH ROW
+        EXECUTE PROCEDURE codex_touch_updated_at();
+        """
+    )
+
 
 def downgrade() -> None:
+    op.execute(
+        """
+        DROP TRIGGER IF EXISTS trg_codex_worker_shards_updated_at ON codex_worker_shards;
+        """
+    )
+    op.execute(
+        """
+        DROP TRIGGER IF EXISTS trg_codex_auth_volumes_updated_at ON codex_auth_volumes;
+        """
+    )
+    op.execute(
+        """
+        DROP FUNCTION IF EXISTS codex_touch_updated_at();
+        """
+    )
+
     op.drop_constraint(
         "fk_spec_workflow_runs_codex_volume", "spec_workflow_runs", type_="foreignkey"
     )

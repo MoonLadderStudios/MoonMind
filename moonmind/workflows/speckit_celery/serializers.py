@@ -216,11 +216,7 @@ def serialize_run(
         codexTaskId=run.codex_task_id,
         codexQueue=run.codex_queue,
         codexVolume=run.codex_volume,
-        codexPreflightStatus=(
-            run.codex_preflight_status.value
-            if run.codex_preflight_status is not None
-            else None
-        ),
+        codexPreflightStatus=getattr(run.codex_preflight_status, "value", None),
         codexPreflightMessage=run.codex_preflight_message,
         codexLogsPath=run.codex_logs_path,
         codexPatchPath=run.codex_patch_path,

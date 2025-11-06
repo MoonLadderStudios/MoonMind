@@ -152,6 +152,7 @@ class SpecWorkflowSettings(BaseSettings):
         env="CODEX_SHARDS",
         description="Number of Codex worker shards available for routing.",
         gt=0,
+        le=64,
     )
     codex_queue: Optional[str] = Field(
         None,
@@ -205,16 +206,8 @@ class SpecWorkflowSettings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    @field_validator("metrics_host", mode="before")
-    @classmethod
-    def _blank_to_none(cls, value: Optional[str]) -> Optional[str]:
-        """Normalize blank metric host values to ``None``."""
-
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
     @field_validator(
+        "metrics_host",
         "codex_environment",
         "codex_model",
         "codex_profile",
@@ -224,8 +217,8 @@ class SpecWorkflowSettings(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _strip_optional(cls, value: Optional[str]) -> Optional[str]:
-        """Normalize optional Codex settings by stripping blanks."""
+    def _strip_and_blank_to_none(cls, value: Optional[str]) -> Optional[str]:
+        """Normalize optional string settings by stripping whitespace and treating blanks as ``None``."""
 
         if isinstance(value, str):
             stripped = value.strip()
