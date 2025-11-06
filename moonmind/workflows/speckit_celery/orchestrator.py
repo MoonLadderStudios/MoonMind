@@ -108,8 +108,14 @@ async def _create_workflow_run(
         artifacts_root = Path(settings.spec_workflow.artifacts_root)
         artifacts_dir = artifacts_root / str(run.id)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        await repo.update_run(run.id, artifacts_path=str(artifacts_dir))
+        update_fields: dict[str, object] = {"artifacts_path": str(artifacts_dir)}
+        codex_volume = settings.spec_workflow.codex_volume_name
+        if codex_volume:
+            update_fields["codex_volume"] = codex_volume
+        await repo.update_run(run.id, **update_fields)
         run.artifacts_path = str(artifacts_dir)
+        if codex_volume:
+            run.codex_volume = codex_volume
         await session.commit()
         return run
 
@@ -224,6 +230,9 @@ async def retry_spec_workflow_run(
     base_context = _base_context(run)
     base_context["attempt"] = next_attempt
     base_context["retry"] = True
+    codex_volume = run.codex_volume or settings.spec_workflow.codex_volume_name
+    if codex_volume:
+        base_context.setdefault("codex_volume", codex_volume)
     if notes:
         base_context["retry_notes"] = notes
 

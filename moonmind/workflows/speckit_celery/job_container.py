@@ -336,16 +336,23 @@ class JobContainerManager:
         )
         redacted_env = _redact_environment(env_map)
 
-        volume_mounts = (
-            volumes
-            if volumes is not None
-            else {
+        if volumes is None:
+            volume_mounts: dict[str, Mapping[str, str]] = {
                 _DEFAULT_VOLUME_NAME: {
                     "bind": settings.spec_workflow.workspace_root,
                     "mode": "rw",
                 }
             }
-        )
+        else:
+            volume_mounts = {key: dict(value) for key, value in volumes.items()}
+
+        codex_volume = settings.spec_workflow.codex_volume_name
+        if codex_volume:
+            codex_target = os.path.join(env_map["HOME"], ".codex")
+            volume_mounts[codex_volume] = {
+                "bind": codex_target,
+                "mode": "rw",
+            }
 
         if cleanup_existing:
             self._cleanup_existing(container_name)
