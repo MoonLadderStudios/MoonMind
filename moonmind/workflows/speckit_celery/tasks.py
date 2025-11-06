@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Coroutine, Mapping, Optional, Sequence, TypeVar
 from uuid import UUID
 
+import docker
 from celery.utils.log import get_task_logger
+from docker.errors import APIError, DockerException
+from requests.exceptions import ReadTimeout
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
@@ -51,6 +54,18 @@ class CredentialValidationError(RuntimeError):
     def __init__(self, audit: models.CredentialAuditResult, message: str) -> None:
         super().__init__(message)
         self.audit = audit
+
+
+@dataclass(slots=True)
+class CodexPreflightResult:
+    """Outcome of the Codex login status verification."""
+
+    status: models.CodexPreflightStatus
+    message: Optional[str] = None
+    volume: Optional[str] = None
+    exit_code: Optional[int] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
 
 
 def _run_coro(coro: Coroutine[Any, Any, T]) -> T:
@@ -586,6 +601,151 @@ def _build_github_client() -> GitHubClient:
     )
 
 
+def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
+    """Collapse Codex pre-flight output into a short human-readable summary."""
+
+    combined = (stderr or "").strip() or (stdout or "").strip()
+    if not combined:
+        return None
+    condensed = re.sub(r"\s+", " ", combined)
+    if len(condensed) > 512:
+        return condensed[:509] + "..."
+    return condensed
+
+
+def _run_codex_preflight_check(*, timeout: int = 60) -> CodexPreflightResult:
+    """Execute ``codex login status`` using the configured auth volume."""
+
+    volume = settings.spec_workflow.codex_volume_name
+    if not volume:
+        logger.info(
+            "Skipping Codex pre-flight check because no auth volume is configured",
+        )
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.SKIPPED,
+            message="Codex auth volume not configured for this worker.",
+        )
+
+    image = (
+        settings.spec_workflow.codex_login_check_image
+        or settings.spec_workflow.job_image
+    )
+    stdout = ""
+    stderr = ""
+    exit_code: Optional[int] = None
+    client: Optional[docker.DockerClient] = None
+
+    try:
+        client = docker.from_env()
+        container = client.containers.run(
+            image,
+            command=["bash", "-lc", "codex login status"],
+            environment={"HOME": "/home/app"},
+            volumes={volume: {"bind": "/home/app/.codex", "mode": "ro"}},
+            detach=True,
+            auto_remove=True,
+            tty=False,
+        )
+        try:
+            wait_result = container.wait(timeout=timeout)
+            exit_code = int(wait_result.get("StatusCode", 1))
+        except ReadTimeout:
+            try:
+                container.stop(timeout=5)
+            except DockerException as stop_exc:  # pragma: no cover - defensive
+                logger.debug(
+                    "Codex pre-flight container stop failed after timeout: %s",
+                    stop_exc,
+                    extra={"codex_volume": volume},
+                )
+            message = (
+                f"Codex login status check timed out after {timeout} seconds for "
+                f"volume '{volume}'."
+            )
+            logger.warning(
+                "Codex pre-flight check timed out",
+                extra={"codex_volume": volume, "timeout_seconds": timeout},
+            )
+            return CodexPreflightResult(
+                status=models.CodexPreflightStatus.FAILED,
+                message=message,
+                volume=volume,
+            )
+        try:
+            stdout_bytes = container.logs(stdout=True, stderr=False) or b""
+            stderr_bytes = container.logs(stdout=False, stderr=True) or b""
+        except (APIError, DockerException):
+            stdout_bytes = b""
+            stderr_bytes = b""
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+    except DockerException as exc:
+        message = f"Unable to execute Codex login status for volume '{volume}': {exc}"
+        logger.warning(
+            "Codex pre-flight check failed to start",
+            extra={"codex_volume": volume, "error": str(exc)},
+        )
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.FAILED,
+            message=message,
+            volume=volume,
+        )
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except DockerException as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "Failed to close Docker client after Codex pre-flight check: %s",
+                    exc,
+                    extra={"codex_volume": volume},
+                )
+
+    summary = _summarize_preflight_output(stdout, stderr)
+    if exit_code == 0:
+        message = summary or "Codex login status check passed."
+        logger.info(
+            "Codex pre-flight check passed",
+            extra={
+                "codex_volume": volume,
+                "codex_preflight_exit_code": exit_code,
+                "codex_preflight_summary": summary,
+            },
+        )
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.PASSED,
+            message=message,
+            volume=volume,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    remediation = (
+        f"Codex login status failed for volume '{volume}'. "
+        "Re-authenticate this shard using `codex login` and retry."
+    )
+    if summary:
+        remediation = f"{remediation} Details: {summary}"
+
+    logger.warning(
+        "Codex pre-flight check failed",
+        extra={
+            "codex_volume": volume,
+            "codex_preflight_exit_code": exit_code,
+            "codex_preflight_summary": summary,
+        },
+    )
+    return CodexPreflightResult(
+        status=models.CodexPreflightStatus.FAILED,
+        message=remediation,
+        volume=volume,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
 def _resolve_artifacts_dir(run: models.SpecWorkflowRun) -> Path:
     if run.artifacts_path:
         return Path(run.artifacts_path)
@@ -595,11 +755,15 @@ def _resolve_artifacts_dir(run: models.SpecWorkflowRun) -> Path:
 
 
 def _base_context(run: models.SpecWorkflowRun) -> dict[str, Any]:
-    return {
+    context: dict[str, Any] = {
         "run_id": str(run.id),
         "feature_key": run.feature_key,
         "artifacts_path": str(_resolve_artifacts_dir(run)),
     }
+    codex_volume = run.codex_volume or settings.spec_workflow.codex_volume_name
+    if codex_volume:
+        context["codex_volume"] = codex_volume
+    return context
 
 
 def _status_payload(
@@ -968,6 +1132,60 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 return context
 
             discovered = context.get("task") or {}
+
+            preflight = _run_codex_preflight_check()
+            if preflight.volume:
+                context["codex_volume"] = preflight.volume
+            else:
+                context.setdefault(
+                    "codex_volume", settings.spec_workflow.codex_volume_name
+                )
+            context["codex_preflight_status"] = preflight.status.value
+            context["codex_preflight_message"] = preflight.message
+            context["codex_preflight_exit_code"] = preflight.exit_code
+            if preflight.status is models.CodexPreflightStatus.FAILED:
+                failure_message = preflight.message or (
+                    "Codex login status check failed before submission."
+                )
+                finished = _now()
+                await _update_task_state(
+                    repo,
+                    workflow_run_id=run_uuid,
+                    task_name=TASK_SUBMIT,
+                    status=models.SpecWorkflowTaskStatus.FAILED,
+                    payload=_status_payload(
+                        models.SpecWorkflowTaskStatus.FAILED,
+                        message=failure_message,
+                        code="codex_preflight_failed",
+                        codexPreflightStatus=preflight.status.value,
+                        codexVolume=context.get("codex_volume"),
+                    ),
+                    finished_at=finished,
+                    attempt=attempt,
+                )
+                await repo.update_run(
+                    run_uuid,
+                    status=models.SpecWorkflowRunStatus.FAILED,
+                    codex_preflight_status=preflight.status,
+                    codex_preflight_message=preflight.message,
+                    codex_volume=context.get("codex_volume"),
+                    finished_at=finished,
+                )
+                await session.commit()
+                raise RuntimeError(failure_message)
+
+            await repo.update_run(
+                run_uuid,
+                codex_preflight_status=preflight.status,
+                codex_preflight_message=preflight.message,
+                codex_volume=(
+                    preflight.volume
+                    or context.get("codex_volume")
+                    or settings.spec_workflow.codex_volume_name
+                ),
+            )
+            await session.commit()
+
             client = _build_codex_client()
             artifacts_dir = _resolve_artifacts_dir(run)
 

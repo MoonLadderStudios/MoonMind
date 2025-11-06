@@ -46,11 +46,11 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 [P] [US1] Mount worker-specific Codex auth volume when starting job containers in `moonmind/workflows/speckit_celery/job_container.py`
-- [ ] T009 [P] [US1] Implement Codex pre-flight login helper using Docker mounts in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T010 [US1] Gate Codex submission on pre-flight success and persist status/message in `moonmind/workflows/speckit_celery/tasks.py`
-- [ ] T011 [US1] Record mounted volume metadata on the workflow context in `moonmind/workflows/speckit_celery/orchestrator.py`
-- [ ] T012 [P] [US1] Add unit coverage for volume mount and pre-flight failure handling in `tests/unit/workflows/test_tasks.py`
+- [x] T008 [P] [US1] Mount worker-specific Codex auth volume when starting job containers in `moonmind/workflows/speckit_celery/job_container.py`
+- [x] T009 [P] [US1] Implement Codex pre-flight login helper using Docker mounts in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T010 [US1] Gate Codex submission on pre-flight success and persist status/message in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T011 [US1] Record mounted volume metadata on the workflow context in `moonmind/workflows/speckit_celery/orchestrator.py`
+- [x] T012 [P] [US1] Add unit coverage for volume mount and pre-flight failure handling in `tests/unit/workflows/test_tasks.py`
 
 **Checkpoint**: Codex phases reuse persistent auth, and failures halt before execution with clear remediation instructions.
 

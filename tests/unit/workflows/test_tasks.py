@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from moonmind.workflows.speckit_celery import models
+import pytest
+
+from moonmind.workflows.speckit_celery import models, tasks
 from moonmind.workflows.speckit_celery.serializers import (
     serialize_run,
     serialize_task_state,
@@ -170,3 +173,305 @@ def test_serialize_run_includes_summary_and_paths():
     assert "tasks" not in serialized_min
     assert serialized_min["taskSummary"]
     assert serialized_min["taskSummary"][0]["taskName"] == "discover_next_phase"
+
+
+def test_base_context_includes_codex_volume(monkeypatch):
+    """Base workflow context should surface the configured Codex volume."""
+
+    now = datetime.now(UTC)
+    run = models.SpecWorkflowRun(
+        id=uuid4(),
+        feature_key="001-celery-oauth-volumes",
+        celery_chain_id=None,
+        status=models.SpecWorkflowRunStatus.PENDING,
+        phase=models.SpecWorkflowRunPhase.DISCOVER,
+        branch_name=None,
+        pr_url=None,
+        codex_task_id=None,
+        codex_queue=None,
+        codex_volume=None,
+        codex_preflight_status=None,
+        codex_preflight_message=None,
+        codex_logs_path=None,
+        codex_patch_path=None,
+        artifacts_path=None,
+        created_by=None,
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "codex_volume_name",
+        "codex_auth_fallback",
+        raising=False,
+    )
+
+    context = tasks._base_context(run)
+    assert context["codex_volume"] == "codex_auth_fallback"
+
+    run.codex_volume = "codex_auth_primary"
+    context = tasks._base_context(run)
+    assert context["codex_volume"] == "codex_auth_primary"
+
+
+def test_submit_codex_job_preflight_failure(monkeypatch):
+    """Pre-flight failures should mark the run failed and surface remediation."""
+
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    run = models.SpecWorkflowRun(
+        id=run_id,
+        feature_key="001-celery-oauth-volumes",
+        celery_chain_id=None,
+        status=models.SpecWorkflowRunStatus.PENDING,
+        phase=models.SpecWorkflowRunPhase.DISCOVER,
+        branch_name=None,
+        pr_url=None,
+        codex_task_id=None,
+        codex_queue=None,
+        codex_volume=None,
+        codex_preflight_status=None,
+        codex_preflight_message=None,
+        codex_logs_path=None,
+        codex_patch_path=None,
+        artifacts_path="var/artifacts/spec_workflows",
+        created_by=None,
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    commits: list[int] = []
+
+    @asynccontextmanager
+    async def dummy_session_context():
+        class DummySession:
+            async def commit(self) -> None:
+                commits.append(1)
+
+        yield DummySession()
+
+    monkeypatch.setattr(tasks, "get_async_session_context", dummy_session_context)
+
+    repo_instances: list[object] = []
+
+    class DummyRepo:
+        def __init__(self, session):
+            self.session = session
+            self.update_calls: list[dict[str, object]] = []
+
+        async def get_run(self, workflow_run_id):
+            assert workflow_run_id == run_id
+            return run
+
+        async def update_run(self, workflow_run_id, **changes):
+            assert workflow_run_id == run_id
+            self.update_calls.append(changes)
+            for key, value in changes.items():
+                setattr(run, key, value)
+            return run
+
+    def repo_factory(session):
+        repo = DummyRepo(session)
+        repo_instances.append(repo)
+        return repo
+
+    monkeypatch.setattr(tasks, "SpecWorkflowRepository", repo_factory)
+
+    task_updates: list[dict[str, object]] = []
+
+    async def fake_update_task_state(*_, **kwargs):
+        task_updates.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(tasks, "_update_task_state", fake_update_task_state)
+
+    async def fake_ensure_credentials_validated(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        tasks,
+        "_ensure_credentials_validated",
+        fake_ensure_credentials_validated,
+    )
+
+    failure_result = tasks.CodexPreflightResult(
+        status=models.CodexPreflightStatus.FAILED,
+        message="Codex login required",
+        volume="codex_auth_0",
+        exit_code=1,
+    )
+
+    monkeypatch.setattr(
+        tasks,
+        "_run_codex_preflight_check",
+        lambda: failure_result,
+    )
+
+    def fail_if_client_built():
+        raise AssertionError("Codex client should not be built when pre-flight fails")
+
+    monkeypatch.setattr(tasks, "_build_codex_client", fail_if_client_built)
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow, "codex_volume_name", "codex_auth_0", raising=False
+    )
+
+    context = {"run_id": str(run_id), "feature_key": run.feature_key, "task": {}}
+
+    with pytest.raises(RuntimeError) as excinfo:
+        tasks.submit_codex_job(context)
+
+    assert "Codex login required" in str(excinfo.value)
+    assert context["codex_preflight_status"] == models.CodexPreflightStatus.FAILED.value
+    assert context["codex_volume"] == "codex_auth_0"
+
+    repo = repo_instances[0]
+    assert any(
+        call.get("codex_preflight_status") == models.CodexPreflightStatus.FAILED
+        for call in repo.update_calls
+    )
+    assert repo.update_calls[-1]["status"] == models.SpecWorkflowRunStatus.FAILED
+
+    assert task_updates[-1]["payload"]["code"] == "codex_preflight_failed"
+    assert commits.count(1) >= 2
+
+
+def test_submit_codex_job_preflight_skipped(monkeypatch, tmp_path):
+    """Skipped pre-flight checks should allow submission to proceed."""
+
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    run = models.SpecWorkflowRun(
+        id=run_id,
+        feature_key="001-celery-oauth-volumes",
+        celery_chain_id=None,
+        status=models.SpecWorkflowRunStatus.PENDING,
+        phase=models.SpecWorkflowRunPhase.DISCOVER,
+        branch_name=None,
+        pr_url=None,
+        codex_task_id=None,
+        codex_queue=None,
+        codex_volume=None,
+        codex_preflight_status=None,
+        codex_preflight_message=None,
+        codex_logs_path=None,
+        codex_patch_path=None,
+        artifacts_path=str(tmp_path),
+        created_by=None,
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    commits: list[int] = []
+
+    @asynccontextmanager
+    async def dummy_session_context():
+        class DummySession:
+            async def commit(self) -> None:
+                commits.append(1)
+
+        yield DummySession()
+
+    monkeypatch.setattr(tasks, "get_async_session_context", dummy_session_context)
+
+    class DummyRepo:
+        def __init__(self, session):
+            self.session = session
+            self.update_calls: list[dict[str, object]] = []
+            self.artifacts: list[dict[str, object]] = []
+
+        async def get_run(self, workflow_run_id):
+            assert workflow_run_id == run_id
+            return run
+
+        async def update_run(self, workflow_run_id, **changes):
+            assert workflow_run_id == run_id
+            self.update_calls.append(changes)
+            for key, value in changes.items():
+                setattr(run, key, value)
+            return run
+
+        async def add_artifact(self, workflow_run_id, **kwargs):
+            assert workflow_run_id == run_id
+            self.artifacts.append(kwargs)
+
+    repo_instances: list[DummyRepo] = []
+
+    def repo_factory(session):
+        repo = DummyRepo(session)
+        repo_instances.append(repo)
+        return repo
+
+    monkeypatch.setattr(tasks, "SpecWorkflowRepository", repo_factory)
+
+    task_updates: list[dict[str, object]] = []
+
+    async def fake_update_task_state(*_, **kwargs):
+        task_updates.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(tasks, "_update_task_state", fake_update_task_state)
+
+    async def fake_ensure_credentials_validated(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        tasks,
+        "_ensure_credentials_validated",
+        fake_ensure_credentials_validated,
+    )
+
+    skip_result = tasks.CodexPreflightResult(
+        status=models.CodexPreflightStatus.SKIPPED,
+        message="Codex auth volume not configured",
+        volume=None,
+    )
+
+    monkeypatch.setattr(
+        tasks,
+        "_run_codex_preflight_check",
+        lambda: skip_result,
+    )
+
+    class DummyClient:
+        def submit(self, **_kwargs):
+            return tasks.CodexSubmissionResult(
+                task_id="codex-123",
+                logs_path=tmp_path / "codex-123.jsonl",
+                summary="submitted",
+            )
+
+    monkeypatch.setattr(tasks, "_build_codex_client", lambda: DummyClient())
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "codex_volume_name",
+        "codex_auth_default",
+        raising=False,
+    )
+
+    context = {"run_id": str(run_id), "feature_key": run.feature_key, "task": {}}
+
+    result = tasks.submit_codex_job(context)
+
+    assert result["codex_task_id"] == "codex-123"
+    assert result["codex_preflight_status"] == models.CodexPreflightStatus.SKIPPED.value
+    assert result["codex_volume"] == "codex_auth_default"
+
+    assert repo_instances, "Repository factory should have been invoked"
+    update_calls = repo_instances[0].update_calls
+    assert any(
+        call.get("codex_preflight_status") == models.CodexPreflightStatus.SKIPPED
+        for call in update_calls
+    )
+    assert all(
+        call.get("status") != models.SpecWorkflowRunStatus.FAILED
+        for call in update_calls
+    )
+
+    assert task_updates[-1]["status"] == models.SpecWorkflowTaskStatus.SUCCEEDED
