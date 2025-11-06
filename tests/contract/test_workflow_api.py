@@ -14,12 +14,15 @@ from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
+    CodexPreflightResultModel,
+    CodexShardListResponse,
     SpecWorkflowRunModel,
     WorkflowRunCollectionResponse,
 )
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
+from moonmind.workflows.speckit_celery import tasks as workflow_tasks
 
 
 @pytest.mark.asyncio
@@ -35,6 +38,20 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
 
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    async with db_base.async_session_maker() as session:
+        volume = workflow_models.CodexAuthVolume(
+            name="codex_auth_0",
+            worker_affinity="celery-codex-0",
+            status=workflow_models.CodexAuthVolumeStatus.NEEDS_AUTH,
+        )
+        shard = workflow_models.CodexWorkerShard(
+            queue_name="codex-0",
+            volume_name=volume.name,
+            status=workflow_models.CodexWorkerShardStatus.ACTIVE,
+        )
+        session.add_all([volume, shard])
+        await session.commit()
 
     feature_key = "001-celery-chain-workflow"
     specs_dir = tmp_path / "specs" / feature_key
@@ -57,6 +74,10 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(
         settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
     )
+    monkeypatch.setattr(
+        settings.spec_workflow, "codex_volume_name", "codex_auth_0", raising=False
+    )
+    monkeypatch.setattr(settings.spec_workflow, "codex_shards", 1, raising=False)
     monkeypatch.setitem(celery_app.conf, "task_always_eager", True)
     monkeypatch.setitem(celery_app.conf, "task_eager_propagates", True)
 
@@ -93,6 +114,24 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "moonmind.workflows.speckit_celery.tasks._build_github_client",
         _fake_github_client,
+    )
+
+    def _fake_preflight_check(*, volume_name=None, timeout=60):
+        return workflow_tasks.CodexPreflightResult(
+            status=workflow_models.CodexPreflightStatus.PASSED,
+            message="Codex login status check passed",
+            volume=volume_name or "codex_auth_0",
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.speckit_celery.tasks._run_codex_preflight_check",
+        _fake_preflight_check,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.speckit_celery.tasks.run_codex_preflight_check",
+        lambda volume_name=None, timeout=60: _fake_preflight_check(
+            volume_name=volume_name, timeout=timeout
+        ),
     )
 
     app.state.settings = settings
@@ -158,5 +197,42 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert final_model.branch_name is not None
             assert final_model.pr_url is not None
             assert fail_state["calls"] == 2
+
+            shard_response = await client.get(
+                "/api/workflows/speckit/codex/shards"
+            )
+            assert shard_response.status_code == 200
+            shard_model = CodexShardListResponse.model_validate(
+                shard_response.json()
+            )
+            assert any(shard.queue_name == "codex-0" for shard in shard_model.shards)
+            assert any(shard.volume_name == "codex_auth_0" for shard in shard_model.shards)
+
+            preflight_response = await client.post(
+                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                json={},
+            )
+            assert preflight_response.status_code == 200
+            preflight_model = CodexPreflightResultModel.model_validate(
+                preflight_response.json()
+            )
+            assert (
+                preflight_model.status
+                == workflow_models.CodexPreflightStatus.PASSED
+            )
+            assert preflight_model.volume_name == "codex_auth_0"
+            assert preflight_model.queue_name == "codex-0"
+
+            refreshed = await client.get("/api/workflows/speckit/codex/shards")
+            refreshed_model = CodexShardListResponse.model_validate(
+                refreshed.json()
+            )
+            target_shard = next(
+                shard for shard in refreshed_model.shards if shard.queue_name == "codex-0"
+            )
+            assert (
+                target_shard.volume_status
+                == workflow_models.CodexAuthVolumeStatus.READY
+            )
     finally:
         app.dependency_overrides.pop(get_current_user, None)

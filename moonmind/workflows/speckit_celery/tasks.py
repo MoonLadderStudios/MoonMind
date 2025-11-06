@@ -760,10 +760,12 @@ def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
     return condensed
 
 
-def _run_codex_preflight_check(*, timeout: int = 60) -> CodexPreflightResult:
+def _run_codex_preflight_check(
+    *, timeout: int = 60, volume_name: str | None = None
+) -> CodexPreflightResult:
     """Execute ``codex login status`` using the configured auth volume."""
 
-    volume = settings.spec_workflow.codex_volume_name
+    volume = volume_name or settings.spec_workflow.codex_volume_name
     if not volume:
         logger.info(
             "Skipping Codex pre-flight check because no auth volume is configured",
@@ -891,6 +893,14 @@ def _run_codex_preflight_check(*, timeout: int = 60) -> CodexPreflightResult:
         stdout=stdout,
         stderr=stderr,
     )
+
+
+def run_codex_preflight_check(
+    *, volume_name: str | None = None, timeout: int = 60
+) -> CodexPreflightResult:
+    """Public wrapper to execute the Codex login status check."""
+
+    return _run_codex_preflight_check(timeout=timeout, volume_name=volume_name)
 
 
 def _resolve_artifacts_dir(run: models.SpecWorkflowRun) -> Path:
@@ -1623,4 +1633,5 @@ __all__ = [
     "discover_next_phase",
     "submit_codex_job",
     "apply_and_publish",
+    "run_codex_preflight_check",
 ]

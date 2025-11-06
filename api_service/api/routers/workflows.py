@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Optional
+import asyncio
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,7 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
+    CodexPreflightRequest,
+    CodexPreflightResultModel,
+    CodexShardHealthModel,
+    CodexShardListResponse,
     CreateWorkflowRunRequest,
     RetryWorkflowRunRequest,
     SpecWorkflowRunModel,
@@ -28,7 +35,9 @@ from moonmind.workflows import (
     trigger_spec_workflow_run,
 )
 from moonmind.workflows.speckit_celery import models
+from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
 from moonmind.workflows.speckit_celery.serializers import serialize_run
+from moonmind.workflows.speckit_celery.tasks import run_codex_preflight_check
 
 router = APIRouter(prefix="/api/workflows/speckit", tags=["speckit-workflows"])
 
@@ -55,6 +64,130 @@ def _serialize_run_model(
         task_states=task_states,
     )
     return SpecWorkflowRunModel.model_validate(serialized)
+
+
+@router.get("/codex/shards", response_model=CodexShardListResponse)
+async def list_codex_shards(
+    repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
+) -> CodexShardListResponse:
+    """Return Codex shard health and associated volume metadata."""
+
+    shard_health = await repo.list_codex_shard_health()
+    shards = [
+        CodexShardHealthModel(
+            queue_name=entry.queue_name,
+            status=entry.shard_status,
+            hash_modulo=entry.hash_modulo,
+            worker_hostname=entry.worker_hostname,
+            volume_name=entry.volume_name,
+            volume_status=entry.volume_status,
+            volume_last_verified_at=entry.volume_last_verified_at,
+            volume_worker_affinity=entry.volume_worker_affinity,
+            volume_notes=entry.volume_notes,
+            latest_run_id=entry.latest_run_id,
+            latest_run_status=entry.latest_run_status,
+            latest_preflight_status=entry.latest_preflight_status,
+            latest_preflight_message=entry.latest_preflight_message,
+            latest_preflight_checked_at=entry.latest_preflight_checked_at,
+        )
+        for entry in shard_health
+    ]
+    return CodexShardListResponse(shards=shards)
+
+
+@router.post(
+    "/runs/{run_id}/codex/preflight",
+    response_model=CodexPreflightResultModel,
+)
+async def trigger_codex_preflight(
+    run_id: UUID,
+    payload: CodexPreflightRequest,
+    repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
+) -> CodexPreflightResultModel:
+    """Run the Codex login status check for the specified workflow run."""
+
+    run = await repo.get_run(run_id, with_relations=True)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "workflow_not_found",
+                "message": f"Workflow run {run_id} was not found",
+            },
+        )
+
+    router = get_codex_shard_router()
+    queue_name = run.codex_queue
+    shard = run.codex_shard
+    volume_name = run.codex_volume
+
+    if not queue_name:
+        affinity_source = (
+            payload.affinity_key
+            or run.feature_key
+            or (run.codex_task_id or str(run.id))
+        )
+        queue_name = router.queue_for_key(affinity_source)
+
+    if shard is None or (queue_name and shard.queue_name != queue_name):
+        shard = await repo.get_codex_shard(queue_name or "", with_volume=True)
+
+    if volume_name is None:
+        if run.codex_auth_volume is not None:
+            volume_name = run.codex_auth_volume.name
+        elif shard is not None and shard.volume_name:
+            volume_name = shard.volume_name
+        elif settings.spec_workflow.codex_volume_name:
+            volume_name = settings.spec_workflow.codex_volume_name
+
+    if not volume_name:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "codex_volume_missing",
+                "message": "Codex auth volume could not be resolved for the requested run.",
+            },
+        )
+
+    checked_at = datetime.now(UTC)
+    preflight = await asyncio.to_thread(
+        run_codex_preflight_check, volume_name=volume_name
+    )
+
+    updates = {
+        "codex_preflight_status": preflight.status,
+        "codex_preflight_message": preflight.message,
+        "codex_volume": volume_name,
+    }
+    if queue_name:
+        updates.setdefault("codex_queue", queue_name)
+    await repo.update_run(run_id, **updates)
+
+    if volume_name:
+        volume_updates: dict[str, object] = {}
+        if preflight.status is models.CodexPreflightStatus.PASSED:
+            volume_updates["status"] = models.CodexAuthVolumeStatus.READY
+            volume_updates["last_verified_at"] = checked_at
+        elif preflight.status is models.CodexPreflightStatus.FAILED:
+            volume_updates["status"] = models.CodexAuthVolumeStatus.NEEDS_AUTH
+        if volume_updates:
+            try:
+                await repo.update_codex_auth_volume(volume_name, **volume_updates)
+            except AttributeError:  # pragma: no cover - defensive guard
+                pass
+
+    await repo._session.commit()
+
+    return CodexPreflightResultModel(
+        run_id=run.id,
+        queue_name=queue_name,
+        volume_name=volume_name,
+        status=preflight.status,
+        checked_at=checked_at,
+        message=preflight.message,
+    )
 
 
 @router.post(
