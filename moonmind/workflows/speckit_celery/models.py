@@ -417,9 +417,7 @@ class CodexWorkerShard(Base):
 
     __tablename__ = "codex_worker_shards"
     __table_args__ = (
-        UniqueConstraint(
-            "volume_name", name="uq_codex_worker_shards_volume_name"
-        ),
+        UniqueConstraint("volume_name", name="uq_codex_worker_shards_volume_name"),
     )
 
     queue_name: Mapped[str] = mapped_column(String(64), primary_key=True)

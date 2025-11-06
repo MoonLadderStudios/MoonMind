@@ -79,9 +79,7 @@ class SpecWorkflowRunModel(BaseModel):
     codex_preflight_status: Optional[models.CodexPreflightStatus] = Field(
         None, alias="codexPreflightStatus"
     )
-    codex_preflight_message: Optional[str] = Field(
-        None, alias="codexPreflightMessage"
-    )
+    codex_preflight_message: Optional[str] = Field(None, alias="codexPreflightMessage")
     codex_logs_path: Optional[str] = Field(None, alias="codexLogsPath")
     codex_patch_path: Optional[str] = Field(None, alias="codexPatchPath")
     celery_chain_id: Optional[str] = Field(None, alias="celeryChainId")
