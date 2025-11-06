@@ -418,4 +418,12 @@ docker run --rm -i -v codex_auth_1:/dst alpine sh -lc "tar xzf - -C /dst" < code
 
 ⸻
 
+⸻
+
+15. Release Notes
+
+- **2025-11-05 – Celery OAuth volume polish**: Executed targeted regression coverage after sharded routing and Codex auth updates.
+  - `poetry run pytest tests/unit/workflows/test_tasks.py` (Spec workflow task and routing unit suite) – passed.
+  - `poetry run pytest tests/contract/test_workflow_api.py` (Codex shard health and pre-flight contract) – passed.
+
 That’s it. With these changes, you preserve the existing ephemeral job-container model while ensuring Codex CLI stays signed in via three persistent, reusable authentication volumes—cleanly mapped to three dedicated Codex worker queues.
