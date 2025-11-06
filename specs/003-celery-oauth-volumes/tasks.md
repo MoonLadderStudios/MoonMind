@@ -98,8 +98,8 @@
 
 **Purpose**: Finalize operational guidance and validate new workflows end-to-end.
 
-- [ ] T025 [P] Document new Codex routing metrics and logging expectations in `docs/ops-runbook.md`
-- [ ] T026 Execute targeted regression tests for updated workflows (`tests/unit/workflows/test_tasks.py`, `tests/contract/test_workflow_api.py`) and capture outcomes in release notes
+- [x] T025 [P] Document new Codex routing metrics and logging expectations in `docs/ops-runbook.md`
+- [x] T026 Execute targeted regression tests for updated workflows (`tests/unit/workflows/test_tasks.py`, `tests/contract/test_workflow_api.py`) and capture outcomes in release notes
 
 ---
 
