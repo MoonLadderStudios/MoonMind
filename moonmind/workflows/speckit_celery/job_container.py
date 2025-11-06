@@ -349,10 +349,13 @@ class JobContainerManager:
         codex_volume = settings.spec_workflow.codex_volume_name
         if codex_volume:
             codex_target = os.path.join(env_map["HOME"], ".codex")
-            volume_mounts[codex_volume] = {
-                "bind": codex_target,
-                "mode": "rw",
-            }
+            volume_mounts.setdefault(
+                codex_volume,
+                {
+                    "bind": codex_target,
+                    "mode": "ro",
+                },
+            )
 
         if cleanup_existing:
             self._cleanup_existing(container_name)
