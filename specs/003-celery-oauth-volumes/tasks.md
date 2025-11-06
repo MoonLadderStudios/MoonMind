@@ -17,8 +17,8 @@
 
 **Purpose**: Prepare shared configuration artifacts so all environments expose Codex queue and volume settings.
 
-- [ ] T001 Add CODEX shard and login placeholders to `.env-template`
-- [ ] T002 [P] Mirror CODEX shard and login placeholders in `.env.vllm-template`
+- [x] T001 Add CODEX shard and login placeholders to `.env-template`
+- [x] T002 [P] Mirror CODEX shard and login placeholders in `.env.vllm-template`
 
 ---
 
