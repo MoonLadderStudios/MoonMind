@@ -35,6 +35,7 @@ concurrency:
 
 jobs:
   check-and-comment:
+    # Suppress human @codex pings, but allow Codex-bot-initiated events
     if: >
       !(
         !contains(github.actor || '', 'chatgpt-codex-connector') &&
@@ -48,9 +49,6 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    # Allow each invocation to finish so that later events don't cancel the run
-    # while it is collecting data. The dedupe logic inside the script will prevent
-    # duplicate @codex comments when queued runs catch up.
     steps:
       - name: Evaluate PR and decide action
         id: eval
@@ -69,7 +67,9 @@ jobs:
             const eventName = context.eventName || '';
             const triggeringCommentBody = context.payload.comment?.body || context.payload.review?.body || '';
             const triggeringActor = context.actor?.toLowerCase?.() || '';
+            const workflowName = context.workflow || '';
 
+            // Suppress only human @codex mentions; allow Codex-bot
             if (['issue_comment', 'pull_request_review_comment', 'pull_request_review'].includes(eventName)) {
               const codexMentionPattern = /@\S*codex\S*/i;
               const actorIsCodex = triggeringActor.includes('chatgpt-codex-connector');
@@ -127,6 +127,7 @@ jobs:
             console.log(`Head SHA: ${pr.head.sha}`);
             console.log(`PR created at: ${pr.created_at}`);
 
+            // Skip when PR is not open
             if ((pr.state || '').toLowerCase() !== 'open') {
               console.log(`PR is not open (state: ${pr.state}). Skipping auto-merge logic.`);
               return;
@@ -160,7 +161,7 @@ jobs:
 
             console.log(`Total commits: ${commits.length}`);
 
-            // If there's more than one commit, we only want to look at comments after the latest commit
+            // If there's more than one commit, only consider comments after the latest commit
             let commentCutoffDate = new Date(pr.created_at);
             if (commits.length > 1) {
               const latestCommit = commits[commits.length - 1];
@@ -170,29 +171,29 @@ jobs:
               console.log(`Single commit. Considering all comments since PR creation.`);
             }
 
-            // Check if another instance of this workflow is already running for this PR
+            // Check if another instance of THIS workflow is already running for this PR
             const listWorkflowRunsParams = {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'codex-commenter.yml',
               status: 'in_progress',
               per_page: 100
             };
-
             if (context.eventName && context.eventName !== 'workflow_run') {
               listWorkflowRunsParams.event = context.eventName;
             }
 
             const { data: workflowRuns } = await github.rest.actions.listWorkflowRunsForRepo(listWorkflowRunsParams);
 
-            const otherRunsForThisPR = workflowRuns.workflow_runs.filter(run => {
-              // Check if it's for the same PR and not this run
+            // Filter to this same workflow name to avoid unrelated CI causing early exit
+            const sameWorkflowRuns = (workflowRuns.workflow_runs || []).filter(run => (run.name || '') === workflowName);
+
+            const otherRunsForThisPR = sameWorkflowRuns.filter(run => {
               const runPR = run.pull_requests?.find(p => p.number === pr_number);
               return runPR && run.id !== context.runId;
             });
 
             if (otherRunsForThisPR.length > 0) {
-              console.log(`Found ${otherRunsForThisPR.length} other active run(s) for this PR. Exiting to avoid duplicates.`);
+              console.log(`Found ${otherRunsForThisPR.length} other active run(s) of this workflow for this PR. Exiting to avoid duplicates.`);
               return;
             }
 
@@ -211,7 +212,7 @@ jobs:
             };
 
             while (shouldWait && retryCount < MAX_RETRIES) {
-              // Check for "eyes" reactions on the PR
+              // Check for "eyes" reactions on the PR (recent-only window)
               const { data: reactions } = await github.rest.reactions.listForIssue({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -246,7 +247,6 @@ jobs:
                 per_page: 100
               });
 
-              const workflowName = context.workflow || '';
               const currentRunId = String(context.runId || process.env.GITHUB_RUN_ID || '');
               const currentRunFragment = currentRunId ? `/runs/${currentRunId}` : null;
               checkRunsExcludingSelf = checkRuns.check_runs.filter(run => {
@@ -294,10 +294,10 @@ jobs:
               console.log('All checks completed and no eyes reactions. Continuing...');
             }
 
-            console.log('Checking check statuses...');
+            console.log('Checking check conclusions...');
 
-            // Check if any checks failed
-            const failureConclusions = new Set(['failure', 'timed_out', 'action_required', 'cancelled', 'skipped']);
+            // Treat "skipped" as non-failure
+            const failureConclusions = new Set(['failure', 'timed_out', 'action_required', 'cancelled']);
             const hasFailures = checkRunsExcludingSelf.some(
               run => failureConclusions.has(run.conclusion)
             );
@@ -358,17 +358,13 @@ jobs:
             };
 
             const hasCodexHighPriorityFinding = (body) => {
-              if (!body) {
-                return false;
-              }
-
+              if (!body) return false;
               const patterns = [
                 /P0\s+Badge/i,
                 /P1\s+Badge/i,
                 /Priority\s*[:\-–—]\s*(?:P0|P1)/i,
                 /Severity\s*[:\-–—]\s*(?:P0|P1)/i,
               ];
-
               return patterns.some(pattern => pattern.test(body));
             };
 
@@ -376,58 +372,31 @@ jobs:
             const geminiComments = relevantComments.filter(comment => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
-
-              // Check if it's a Gemini comment
               const isGemini = userLogin.includes('gemini') ||
-                              body.includes('Gemini Code Assist') ||
-                              userLogin === 'gemini-code-assist';
+                               body.includes('Gemini Code Assist') ||
+                               userLogin === 'gemini-code-assist';
               if (!isGemini) return false;
-
-              // Check for High or Critical priority
               const severity = extractGeminiSeverity(body);
-              if (!severity) {
-                return false;
-              }
-
               return severity === 'high' || severity === 'critical';
             });
 
             console.log(`Gemini High/Critical comments: ${geminiComments.length}`);
 
-            // Check for Codex Review comments (any priority, but exclude "no issues" comments)
+            // Check for Codex Review comments (only P0/P1 block/trigger)
             const codexComments = relevantComments.filter(comment => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
-
-              // Check if it's a Codex comment
               const isCodex = userLogin.includes('codex') ||
-                             userLogin === 'chatgpt-codex-connector' ||
-                             body.includes('Codex Review') ||
-                             body.includes('💡 Codex Review');
-
+                              userLogin === 'chatgpt-codex-connector' ||
+                              body.includes('Codex Review') ||
+                              body.includes('💡 Codex Review');
               if (!isCodex) return false;
-
-              // Exclude comments that say "Didn't find any major issues"
+              // Exclude explicit "no issues" summaries
               const isNoIssues = body.includes("Codex Review: Didn't find any major issues.") ||
-                                body.includes("Didn't find any major issues");
-
+                                 body.includes("Didn't find any major issues");
               if (isNoIssues) return false;
-
-              // Exclude summary-only comments (no actual issues found)
-              // Look for indicators that this is just a summary, not review findings
-              const isSummaryOnly = body.includes('## Summary') &&
-                                   !body.includes('## Issues') &&
-                                   !body.includes('suggestion') &&
-                                   !body.includes('issue') &&
-                                   !body.includes('problem') &&
-                                   !body.includes('error') &&
-                                   !body.includes('warning') &&
-                                   !body.match(/P\d\s+Badge/i); // No priority badges
-
-              return !isSummaryOnly;
+              return true;
             });
-
-            console.log(`Codex Review comments (excluding no-issues): ${codexComments.length}`);
 
             const codexHighPriorityComments = codexComments.filter(comment =>
               hasCodexHighPriorityFinding(comment.body || '')
@@ -474,10 +443,9 @@ jobs:
                 return isBotUser || hasMarker;
               };
 
+              // Try to update an existing comment for the same SHA, rather than posting anew
               const existingCommentForSha = issueComments.find(comment => {
-                if (!isCodexBot(comment)) {
-                  return false;
-                }
+                if (!isCodexBot(comment)) return false;
                 return shaMarkerRegex.test(comment.body || '');
               });
 
@@ -510,12 +478,10 @@ jobs:
                 if (!isCodexBot(comment)) {
                   return false;
                 }
-
                 const createdAt = new Date(comment.created_at).getTime();
                 if (createdAt < cutoff) {
                   return false;
                 }
-
                 const body = comment.body || '';
                 return body.includes(`<!-- codex:${purpose} `);
               });
@@ -564,4 +530,3 @@ jobs:
           token: ${{ secrets.PR_AGENT_TOKEN || github.token }}
           pull-request-number: ${{ steps.eval.outputs.pr }}
           merge-method: merge
-
