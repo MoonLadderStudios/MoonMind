@@ -147,6 +147,28 @@ class SpecWorkflowSettings(BaseSettings):
     codex_environment: Optional[str] = Field(None, env="CODEX_ENV")
     codex_model: Optional[str] = Field(None, env="CODEX_MODEL")
     codex_profile: Optional[str] = Field(None, env="CODEX_PROFILE")
+    codex_shards: int = Field(
+        3,
+        env="CODEX_SHARDS",
+        description="Number of Codex worker shards available for routing.",
+        gt=0,
+        le=64,
+    )
+    codex_queue: Optional[str] = Field(
+        None,
+        env="CODEX_QUEUE",
+        description="Explicit Codex queue name assigned to this worker.",
+    )
+    codex_volume_name: Optional[str] = Field(
+        None,
+        env="CODEX_VOLUME_NAME",
+        description="Docker volume providing persistent Codex authentication.",
+    )
+    codex_login_check_image: Optional[str] = Field(
+        None,
+        env="CODEX_LOGIN_CHECK_IMAGE",
+        description="Override container image for Codex login status checks.",
+    )
     github_repository: Optional[str] = Field(
         None, env="SPEC_WORKFLOW_GITHUB_REPOSITORY"
     )
@@ -184,13 +206,23 @@ class SpecWorkflowSettings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    @field_validator("metrics_host", mode="before")
+    @field_validator(
+        "metrics_host",
+        "codex_environment",
+        "codex_model",
+        "codex_profile",
+        "codex_queue",
+        "codex_volume_name",
+        "codex_login_check_image",
+        mode="before",
+    )
     @classmethod
-    def _blank_to_none(cls, value: Optional[str]) -> Optional[str]:
-        """Normalize blank metric host values to ``None``."""
+    def _strip_and_blank_to_none(cls, value: Optional[str]) -> Optional[str]:
+        """Normalize optional string settings by stripping whitespace and treating blanks as ``None``."""
 
-        if isinstance(value, str) and not value.strip():
-            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
         return value
 
     @field_validator("allowed_agent_backends", "agent_runtime_env_keys", mode="before")

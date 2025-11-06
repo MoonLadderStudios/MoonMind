@@ -57,6 +57,10 @@ class SpecWorkflowRepository:
         "branch_name",
         "pr_url",
         "codex_task_id",
+        "codex_queue",
+        "codex_volume",
+        "codex_preflight_status",
+        "codex_preflight_message",
         "codex_logs_path",
         "codex_patch_path",
         "artifacts_path",
@@ -108,6 +112,8 @@ class SpecWorkflowRepository:
                 selectinload(models.SpecWorkflowRun.task_states),
                 selectinload(models.SpecWorkflowRun.artifacts),
                 selectinload(models.SpecWorkflowRun.credential_audit),
+                selectinload(models.SpecWorkflowRun.codex_auth_volume),
+                selectinload(models.SpecWorkflowRun.codex_shard),
             )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
@@ -161,6 +167,8 @@ class SpecWorkflowRepository:
                 selectinload(models.SpecWorkflowRun.task_states),
                 selectinload(models.SpecWorkflowRun.artifacts),
                 selectinload(models.SpecWorkflowRun.credential_audit),
+                selectinload(models.SpecWorkflowRun.codex_auth_volume),
+                selectinload(models.SpecWorkflowRun.codex_shard),
             )
 
         result = await self._session.execute(stmt)
