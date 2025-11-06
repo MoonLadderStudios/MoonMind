@@ -135,9 +135,7 @@ class CodexShardHealthModel(BaseModel):
     volume_status: Optional[models.CodexAuthVolumeStatus] = Field(
         None, alias="volumeStatus"
     )
-    volume_last_verified_at: datetime | None = Field(
-        None, alias="volumeLastVerifiedAt"
-    )
+    volume_last_verified_at: datetime | None = Field(None, alias="volumeLastVerifiedAt")
     volume_worker_affinity: Optional[str] = Field(None, alias="volumeWorkerAffinity")
     volume_notes: Optional[str] = Field(None, alias="volumeNotes")
     latest_run_id: Optional[UUID] = Field(None, alias="latestRunId")

@@ -633,10 +633,7 @@ async def test_list_codex_shard_health_includes_volume_and_preflight():
             assert entry.volume_status == models.CodexAuthVolumeStatus.NEEDS_AUTH
             assert entry.volume_worker_affinity == "celery-codex-5"
             assert entry.latest_run_id == run.id
-            assert (
-                entry.latest_preflight_status
-                == models.CodexPreflightStatus.PASSED
-            )
+            assert entry.latest_preflight_status == models.CodexPreflightStatus.PASSED
             assert entry.latest_preflight_message == "Codex login status check passed"
     finally:
         await engine.dispose()
