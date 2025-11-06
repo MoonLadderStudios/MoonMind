@@ -153,6 +153,42 @@ def _derive_codex_affinity_key(context: Mapping[str, Any]) -> str:
     return "|".join(parts)
 
 
+_PERSISTABLE_QUEUE_KEY = "_persistable_codex_queue"
+
+
+async def _maybe_include_codex_queue(
+    repo: SpecWorkflowRepository, context: Mapping[str, Any], updates: dict[str, Any]
+) -> None:
+    """Attach the Codex queue to ``updates`` when a shard record exists."""
+
+    cache = context.get(_PERSISTABLE_QUEUE_KEY)
+    if cache is not None:
+        if cache:
+            updates.setdefault("codex_queue", cache)
+        return
+
+    queue_value = context.get("codex_queue")
+    queue_name = str(queue_value).strip() if queue_value else ""
+    if not queue_name:
+        if isinstance(context, dict):
+            context[_PERSISTABLE_QUEUE_KEY] = None
+        return
+
+    if await repo.codex_shard_exists(queue_name):
+        updates.setdefault("codex_queue", queue_name)
+        if isinstance(context, dict):
+            context[_PERSISTABLE_QUEUE_KEY] = queue_name
+        return
+
+    if isinstance(context, dict):
+        context[_PERSISTABLE_QUEUE_KEY] = None
+    logger.warning(
+        "Skipping codex_queue persistence for run %s because shard metadata for queue %s is missing",
+        context.get("run_id"),
+        queue_name,
+    )
+
+
 class SpecWorkflowTask(Task):
     """Base Celery task providing shared Spec workflow behavior."""
 
@@ -1196,11 +1232,9 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             if run is None:
                 raise ValueError(f"Workflow run {context['run_id']} not found")
 
-            await repo.update_run(
-                run_uuid,
-                phase=models.SpecWorkflowRunPhase.SUBMIT,
-                codex_queue=context.get("codex_queue"),
-            )
+            updates = {"phase": models.SpecWorkflowRunPhase.SUBMIT}
+            await _maybe_include_codex_queue(repo, context, updates)
+            await repo.update_run(run_uuid, **updates)
             await _ensure_credentials_validated(
                 repo,
                 session=session,
@@ -1279,29 +1313,29 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     finished_at=finished,
                     attempt=attempt,
                 )
-                await repo.update_run(
-                    run_uuid,
-                    status=models.SpecWorkflowRunStatus.FAILED,
-                    codex_preflight_status=preflight.status,
-                    codex_preflight_message=preflight.message,
-                    codex_volume=context.get("codex_volume"),
-                    codex_queue=context.get("codex_queue"),
-                    finished_at=finished,
-                )
+                updates = {
+                    "status": models.SpecWorkflowRunStatus.FAILED,
+                    "codex_preflight_status": preflight.status,
+                    "codex_preflight_message": preflight.message,
+                    "codex_volume": context.get("codex_volume"),
+                    "finished_at": finished,
+                }
+                await _maybe_include_codex_queue(repo, context, updates)
+                await repo.update_run(run_uuid, **updates)
                 await session.commit()
                 raise RuntimeError(failure_message)
 
-            await repo.update_run(
-                run_uuid,
-                codex_preflight_status=preflight.status,
-                codex_preflight_message=preflight.message,
-                codex_volume=(
+            updates = {
+                "codex_preflight_status": preflight.status,
+                "codex_preflight_message": preflight.message,
+                "codex_volume": (
                     preflight.volume
                     or context.get("codex_volume")
                     or settings.spec_workflow.codex_volume_name
                 ),
-                codex_queue=context.get("codex_queue"),
-            )
+            }
+            await _maybe_include_codex_queue(repo, context, updates)
+            await repo.update_run(run_uuid, **updates)
             await session.commit()
 
             client = _build_codex_client()
@@ -1336,12 +1370,12 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-            await repo.update_run(
-                run_uuid,
-                codex_task_id=result.task_id,
-                codex_logs_path=str(result.logs_path),
-                codex_queue=context.get("codex_queue"),
-            )
+            updates = {
+                "codex_task_id": result.task_id,
+                "codex_logs_path": str(result.logs_path),
+            }
+            await _maybe_include_codex_queue(repo, context, updates)
+            await repo.update_run(run_uuid, **updates)
             await repo.add_artifact(
                 workflow_run_id=run_uuid,
                 artifact_type=models.WorkflowArtifactType.CODEX_LOGS,
@@ -1419,11 +1453,9 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             if run is None:
                 raise ValueError(f"Workflow run {context['run_id']} not found")
 
-            await repo.update_run(
-                run_uuid,
-                phase=models.SpecWorkflowRunPhase.APPLY,
-                codex_queue=context.get("codex_queue"),
-            )
+            updates = {"phase": models.SpecWorkflowRunPhase.APPLY}
+            await _maybe_include_codex_queue(repo, context, updates)
+            await repo.update_run(run_uuid, **updates)
             await _ensure_credentials_validated(
                 repo,
                 session=session,
@@ -1467,13 +1499,13 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     finished_at=finished,
                     attempt=attempt,
                 )
-                await repo.update_run(
-                    run_uuid,
-                    status=models.SpecWorkflowRunStatus.SUCCEEDED,
-                    phase=models.SpecWorkflowRunPhase.COMPLETE,
-                    codex_queue=context.get("codex_queue"),
-                    finished_at=finished,
-                )
+                updates = {
+                    "status": models.SpecWorkflowRunStatus.SUCCEEDED,
+                    "phase": models.SpecWorkflowRunPhase.COMPLETE,
+                    "finished_at": finished,
+                }
+                await _maybe_include_codex_queue(repo, context, updates)
+                await repo.update_run(run_uuid, **updates)
                 await session.commit()
                 return context
 
@@ -1495,12 +1527,12 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     path=str(diff.patch_path),
                 )
 
-                await repo.update_run(
-                    run_uuid,
-                    phase=models.SpecWorkflowRunPhase.PUBLISH,
-                    codex_patch_path=str(diff.patch_path),
-                    codex_queue=context.get("codex_queue"),
-                )
+                updates = {
+                    "phase": models.SpecWorkflowRunPhase.PUBLISH,
+                    "codex_patch_path": str(diff.patch_path),
+                }
+                await _maybe_include_codex_queue(repo, context, updates)
+                await repo.update_run(run_uuid, **updates)
 
                 publish: GitHubPublishResult = github_client.publish(
                     feature_key=context["feature_key"],
@@ -1534,16 +1566,16 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     "github_response_path": str(publish.response_path),
                 }
             )
-            await repo.update_run(
-                run_uuid,
-                status=models.SpecWorkflowRunStatus.SUCCEEDED,
-                phase=models.SpecWorkflowRunPhase.COMPLETE,
-                branch_name=publish.branch_name,
-                pr_url=publish.pr_url,
-                codex_patch_path=str(diff.patch_path),
-                codex_queue=context.get("codex_queue"),
-                finished_at=finished,
-            )
+            updates = {
+                "status": models.SpecWorkflowRunStatus.SUCCEEDED,
+                "phase": models.SpecWorkflowRunPhase.COMPLETE,
+                "branch_name": publish.branch_name,
+                "pr_url": publish.pr_url,
+                "codex_patch_path": str(diff.patch_path),
+                "finished_at": finished,
+            }
+            await _maybe_include_codex_queue(repo, context, updates)
+            await repo.update_run(run_uuid, **updates)
             await _update_task_state(
                 repo,
                 workflow_run_id=run_uuid,
