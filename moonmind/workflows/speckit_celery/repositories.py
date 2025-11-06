@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,6 +16,26 @@ from moonmind.workflows.speckit_celery import models
 
 _UNSET: object = object()
 _DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)
+
+
+@dataclass(slots=True)
+class CodexShardHealth:
+    """Aggregate view combining Codex shard and auth volume metadata."""
+
+    queue_name: str
+    shard_status: models.CodexWorkerShardStatus
+    hash_modulo: int
+    worker_hostname: Optional[str]
+    volume_name: Optional[str]
+    volume_status: Optional[models.CodexAuthVolumeStatus]
+    volume_last_verified_at: Optional[datetime]
+    volume_worker_affinity: Optional[str]
+    volume_notes: Optional[str]
+    latest_run_id: Optional[UUID]
+    latest_run_status: Optional[models.SpecWorkflowRunStatus]
+    latest_preflight_status: Optional[models.CodexPreflightStatus]
+    latest_preflight_message: Optional[str]
+    latest_preflight_checked_at: Optional[datetime]
 
 
 def _coerce_phase(
@@ -68,8 +89,20 @@ class SpecWorkflowRepository:
         "finished_at",
     }
 
+    _UPDATABLE_VOLUME_FIELDS = {
+        "status",
+        "last_verified_at",
+        "notes",
+        "worker_affinity",
+    }
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def commit(self) -> None:
+        """Persist pending changes for the current transaction."""
+
+        await self._session.commit()
 
     # ------------------------------------------------------------------
     # Workflow runs
@@ -187,6 +220,139 @@ class SpecWorkflowRepository:
 
         result = await self._session.execute(stmt)
         return result.scalars().all()
+
+    async def list_codex_auth_volumes(self) -> Sequence[models.CodexAuthVolume]:
+        """Return all registered Codex auth volumes ordered by name."""
+
+        stmt: Select[tuple[models.CodexAuthVolume]] = select(
+            models.CodexAuthVolume
+        ).order_by(models.CodexAuthVolume.name.asc())
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    async def list_codex_shard_health(self) -> Sequence[CodexShardHealth]:
+        """Return Codex shard metadata combined with latest run context."""
+
+        shard_stmt: Select[tuple[models.CodexWorkerShard]] = select(
+            models.CodexWorkerShard
+        ).options(selectinload(models.CodexWorkerShard.volume))
+        shard_stmt = shard_stmt.order_by(models.CodexWorkerShard.queue_name.asc())
+        shard_result = await self._session.execute(shard_stmt)
+        shards = shard_result.scalars().all()
+
+        queue_names = [shard.queue_name for shard in shards]
+        latest_by_queue: dict[str, models.SpecWorkflowRun] = {}
+        if queue_names:
+            ranked_runs_sq = (
+                select(
+                    models.SpecWorkflowRun.id.label("run_id"),
+                    func.row_number()
+                    .over(
+                        partition_by=models.SpecWorkflowRun.codex_queue,
+                        order_by=models.SpecWorkflowRun.created_at.desc(),
+                    )
+                    .label("row_number"),
+                )
+                .where(models.SpecWorkflowRun.codex_queue.in_(queue_names))
+                .subquery()
+            )
+
+            latest_run_ids_stmt: Select[tuple[int]] = select(
+                ranked_runs_sq.c.run_id
+            ).where(ranked_runs_sq.c.row_number == 1)
+
+            run_stmt: Select[tuple[models.SpecWorkflowRun]] = select(
+                models.SpecWorkflowRun
+            ).where(models.SpecWorkflowRun.id.in_(latest_run_ids_stmt))
+            run_result = await self._session.execute(run_stmt)
+            for run in run_result.scalars().all():
+                queue = run.codex_queue
+                if queue:
+                    latest_by_queue[queue] = run
+
+        health: list[CodexShardHealth] = []
+        for shard in shards:
+            volume = shard.volume
+            latest_run = latest_by_queue.get(shard.queue_name)
+            health.append(
+                CodexShardHealth(
+                    queue_name=shard.queue_name,
+                    shard_status=shard.status,
+                    hash_modulo=shard.hash_modulo,
+                    worker_hostname=shard.worker_hostname,
+                    volume_name=volume.name if volume else shard.volume_name,
+                    volume_status=volume.status if volume else None,
+                    volume_last_verified_at=(
+                        volume.last_verified_at if volume else None
+                    ),
+                    volume_worker_affinity=(volume.worker_affinity if volume else None),
+                    volume_notes=volume.notes if volume else None,
+                    latest_run_id=latest_run.id if latest_run else None,
+                    latest_run_status=(latest_run.status if latest_run else None),
+                    latest_preflight_status=(
+                        latest_run.codex_preflight_status if latest_run else None
+                    ),
+                    latest_preflight_message=(
+                        latest_run.codex_preflight_message if latest_run else None
+                    ),
+                    latest_preflight_checked_at=(
+                        latest_run.updated_at if latest_run else None
+                    ),
+                )
+            )
+
+        return health
+
+    async def get_codex_shard(
+        self, queue_name: str, *, with_volume: bool = False
+    ) -> Optional[models.CodexWorkerShard]:
+        """Return a Codex worker shard for ``queue_name`` if it exists."""
+
+        if not queue_name:
+            return None
+
+        stmt: Select[tuple[models.CodexWorkerShard]] = select(
+            models.CodexWorkerShard
+        ).where(models.CodexWorkerShard.queue_name == queue_name)
+        if with_volume:
+            stmt = stmt.options(selectinload(models.CodexWorkerShard.volume))
+        stmt = stmt.limit(1)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_codex_auth_volume(
+        self, name: str
+    ) -> Optional[models.CodexAuthVolume]:
+        """Return the Codex auth volume identified by ``name``."""
+
+        if not name:
+            return None
+
+        stmt: Select[tuple[models.CodexAuthVolume]] = select(
+            models.CodexAuthVolume
+        ).where(models.CodexAuthVolume.name == name)
+        stmt = stmt.limit(1)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def update_codex_auth_volume(
+        self, name: str, **changes: object
+    ) -> Optional[models.CodexAuthVolume]:
+        """Apply updates to a Codex auth volume and return the refreshed entity."""
+
+        volume = await self.get_codex_auth_volume(name)
+        if volume is None:
+            return None
+
+        for field, value in changes.items():
+            if field not in self._UPDATABLE_VOLUME_FIELDS:
+                raise AttributeError(
+                    f"CodexAuthVolume field '{field}' cannot be updated or does not exist."
+                )
+            setattr(volume, field, value)
+
+        await self._session.flush()
+        return volume
 
     async def update_run(
         self,

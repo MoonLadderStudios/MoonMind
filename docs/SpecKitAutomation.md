@@ -139,8 +139,27 @@ docker run --rm -it \
    If you must authenticate elsewhere, copy your local ~/.codex into each volume with care (avoid duplicating to many places).
 3. Start Services – `docker compose up -d rabbitmq api celery-codex-0 celery-codex-1 celery-codex-2` (and any non-Codex workers).
 4. Dispatch Runs – unchanged.
-5. Monitor – Celery logs will show which codex-* queue and which codex_auth_* volume were selected.
-6. Cleanup – speckit_workspaces still prunes per TTL; Codex volumes persist and should not be removed unless you intend to re-authenticate.
+5. Monitor – Celery logs will show which codex-* queue and which codex_auth_* volume were selected. Operators can also poll `/api/workflows/speckit/codex/shards` for the current shard inventory:
+
+   ```bash
+   curl -s \
+     -H "Authorization: Bearer ${API_TOKEN}" \
+     https://api.moonmind.local/api/workflows/speckit/codex/shards | jq
+   ```
+
+   The response lists each queue, its mapped volume, the volumeStatus (`ready`, `needs_auth`, or `error`), and the latest pre-flight outcome recorded for that shard.
+6. Remediate – When a shard reports `latestPreflightStatus: "failed"` or `volumeStatus: "needs_auth"`, trigger a targeted refresh for the affected run:
+
+   ```bash
+   curl -s -X POST \
+     -H "Authorization: Bearer ${API_TOKEN}" \
+     -H "Content-Type: application/json" \
+     -d '{"forceRefresh": true}' \
+     https://api.moonmind.local/api/workflows/speckit/runs/<run_id>/codex/preflight | jq
+   ```
+
+   A `status: "passed"` response updates the run and marks the auth volume `ready`. If it returns `failed`, re-run `codex login` for the reported `volumeName` before retrying the workflow.
+7. Cleanup – speckit_workspaces still prunes per TTL; Codex volumes persist and should not be removed unless you intend to re-authenticate.
 
 ⸻
 

@@ -8,8 +8,11 @@ from uuid import uuid4
 
 import celery.app.task as celery_task
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
-from moonmind.workflows.speckit_celery import models, tasks
+from api_service.db.models import Base
+from moonmind.workflows.speckit_celery import models, repositories, tasks
 from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
 from moonmind.workflows.speckit_celery.serializers import (
     serialize_run,
@@ -579,3 +582,58 @@ def test_codex_routing_reuses_existing_queue(monkeypatch):
     routed_context = calls[-1]["args"][0]
     assert routed_context["codex_queue"] == submit_queue
     assert routed_context["codex_shard_index"] == context["codex_shard_index"]
+
+
+@pytest.mark.asyncio
+async def test_list_codex_shard_health_includes_volume_and_preflight():
+    """Repository shard health view should merge volume and latest run metadata."""
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with async_session() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            volume = models.CodexAuthVolume(
+                name="codex_auth_5",
+                worker_affinity="celery-codex-5",
+                status=models.CodexAuthVolumeStatus.NEEDS_AUTH,
+                notes="requires validation",
+            )
+            shard = models.CodexWorkerShard(
+                queue_name="codex-5",
+                volume_name=volume.name,
+                status=models.CodexWorkerShardStatus.ACTIVE,
+                worker_hostname="worker-5",
+            )
+            now = datetime.now(UTC)
+            run = models.SpecWorkflowRun(
+                id=uuid4(),
+                feature_key="003-celery-oauth-volumes",
+                status=models.SpecWorkflowRunStatus.RUNNING,
+                phase=models.SpecWorkflowRunPhase.SUBMIT,
+                codex_queue=shard.queue_name,
+                codex_volume=volume.name,
+                codex_preflight_status=models.CodexPreflightStatus.PASSED,
+                codex_preflight_message="Codex login status check passed",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add_all([volume, shard, run])
+            await session.commit()
+
+            health = await repo.list_codex_shard_health()
+            assert len(health) == 1
+            entry = health[0]
+            assert entry.queue_name == "codex-5"
+            assert entry.volume_name == volume.name
+            assert entry.volume_status == models.CodexAuthVolumeStatus.NEEDS_AUTH
+            assert entry.volume_worker_affinity == "celery-codex-5"
+            assert entry.latest_run_id == run.id
+            assert entry.latest_preflight_status == models.CodexPreflightStatus.PASSED
+            assert entry.latest_preflight_message == "Codex login status check passed"
+    finally:
+        await engine.dispose()

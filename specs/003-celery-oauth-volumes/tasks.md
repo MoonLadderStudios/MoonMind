@@ -83,12 +83,12 @@
 
 ### Implementation for User Story 3
 
-- [ ] T019 [P] [US3] Implement shard and volume query helpers in `moonmind/workflows/speckit_celery/repositories.py`
-- [ ] T020 [US3] Expose `/api/workflows/speckit/codex/shards` endpoint in `api_service/api/routers/workflows.py`
-- [ ] T021 [US3] Expose `/api/workflows/speckit/runs/{run_id}/codex/preflight` endpoint in `api_service/api/routers/workflows.py`
-- [ ] T022 [P] [US3] Update operator documentation and quickstart instructions in `docs/SpecKitAutomation.md` and `specs/001-celery-oauth-volumes/quickstart.md`
-- [ ] T023 [P] [US3] Add contract coverage for shard and pre-flight endpoints in `tests/contract/test_workflow_api.py`
-- [ ] T024 [US3] Add repository/API unit coverage for shard health responses in `tests/unit/workflows/test_tasks.py`
+- [x] T019 [P] [US3] Implement shard and volume query helpers in `moonmind/workflows/speckit_celery/repositories.py`
+- [x] T020 [US3] Expose `/api/workflows/speckit/codex/shards` endpoint in `api_service/api/routers/workflows.py`
+- [x] T021 [US3] Expose `/api/workflows/speckit/runs/{run_id}/codex/preflight` endpoint in `api_service/api/routers/workflows.py`
+- [x] T022 [P] [US3] Update operator documentation and quickstart instructions in `docs/SpecKitAutomation.md` and `specs/001-celery-oauth-volumes/quickstart.md`
+- [x] T023 [P] [US3] Add contract coverage for shard and pre-flight endpoints in `tests/contract/test_workflow_api.py`
+- [x] T024 [US3] Add repository/API unit coverage for shard health responses in `tests/unit/workflows/test_tasks.py`
 
 **Checkpoint**: Operators can inspect shard health, trigger remediation, and follow a documented runbook without shelling into containers.
 

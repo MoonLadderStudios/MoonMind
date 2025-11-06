@@ -47,13 +47,19 @@
    ```
 
 ## 5. Monitor & Remediate
-- If logs report `preflight=failed`, run the pre-flight endpoint:
+- Poll shard health without shelling into containers:
   ```bash
-  curl -X POST https://api.moonmind.local/spec-workflows/runs/<run_id>/codex/preflight \
+  curl -s https://api.moonmind.local/api/workflows/speckit/codex/shards \
+       -H 'Authorization: Bearer <token>' | jq '.shards[] | {queueName, volumeName, volumeStatus, latestPreflightStatus}'
+  ```
+- If logs or the API report `latestPreflightStatus` as `failed`, trigger the pre-flight endpoint for the affected run:
+  ```bash
+  curl -s -X POST https://api.moonmind.local/api/workflows/speckit/runs/<run_id>/codex/preflight \
        -H 'Authorization: Bearer <token>' \
+       -H 'Content-Type: application/json' \
        -d '{}'
   ```
-- When a volume requires reauthentication, repeat Step 2 for the affected shard only.
+- A `status` of `passed` marks the backing volume `ready`; if `failed`, re-run Step 2 to reauthenticate that shard before retrying the workflow.
 
 ## 6. Shutdown
 - To stop Codex workers and preserve volumes:
