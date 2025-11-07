@@ -1,0 +1,99 @@
+openapi: 3.0.3
+info:
+  title: Tooling Health Check API
+  version: 0.1.0
+  description: |
+    Reports Codex CLI, GitHub Spec Kit CLI, and Codex config status for each Celery worker.
+servers:
+  - url: https://moonmind.local/api
+paths:
+  /internal/tooling-status:
+    get:
+      summary: Fetch Codex/Spec Kit tooling status for Celery workers
+      tags:
+        - tooling
+      parameters:
+        - name: worker
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by Celery worker name (e.g., `codex-0`).
+      responses:
+        '200':
+          description: Tooling status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkerToolingStatus'
+        '503':
+          description: One or more workers fail tooling validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolingFailure'
+components:
+  schemas:
+    WorkerToolingStatus:
+      type: object
+      required:
+        - workerName
+        - codexCli
+        - specKitCli
+        - codexConfig
+        - lastCheckedAt
+      properties:
+        workerName:
+          type: string
+        codexCli:
+          $ref: '#/components/schemas/ToolStatus'
+        specKitCli:
+          $ref: '#/components/schemas/ToolStatus'
+        codexConfig:
+          $ref: '#/components/schemas/ConfigStatus'
+        lastCheckedAt:
+          type: string
+          format: date-time
+    ToolStatus:
+      type: object
+      required:
+        - status
+        - version
+      properties:
+        status:
+          type: string
+          enum: [passed, failed]
+        version:
+          type: string
+        message:
+          type: string
+    ConfigStatus:
+      type: object
+      required:
+        - status
+        - approvalPolicy
+      properties:
+        status:
+          type: string
+          enum: [managed, drifted]
+        approvalPolicy:
+          type: string
+        hash:
+          type: string
+    ToolingFailure:
+      type: object
+      required:
+        - error
+        - failingWorkers
+      properties:
+        error:
+          type: string
+        failingWorkers:
+          type: array
+          items:
+            type: string
