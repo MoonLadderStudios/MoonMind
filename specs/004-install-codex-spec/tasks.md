@@ -17,8 +17,8 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 **Purpose**: Ensure the development environment can build and run the shared api_service image.
 
-- [ ] T001 Install Node.js toolchain prerequisites in `api_service/Dockerfile` builder stage per research decisions
-- [ ] T002 Document required environment variables for Codex/Spec Kit installs in `docs/SpecKitAutomationInstructions.md`
+- [x] T001 Install Node.js toolchain prerequisites in `api_service/Dockerfile` builder stage per research decisions
+- [x] T002 Document required environment variables for Codex/Spec Kit installs in `docs/SpecKitAutomationInstructions.md`
 
 ---
 
