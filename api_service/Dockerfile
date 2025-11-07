@@ -1,3 +1,17 @@
+FROM node:20-bookworm AS tooling-builder
+
+# Install build prerequisites required for global npm CLI installs so future
+# stages can compile any optional native extensions.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+# Keep npm non-interactive inside Docker builds to avoid analytics prompts.
+RUN npm config set fund false \
+    && npm config set update-notifier false
+
 FROM python:3.12-slim-bookworm
 
 WORKDIR /app

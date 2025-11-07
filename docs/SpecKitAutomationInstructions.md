@@ -35,6 +35,28 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 
         The token expires based on the Keycloak realm settings (30 minutes by default). Re-run the command whenever the token lapses, or capture the refresh token from the same response if you want to automate renewal.
 
+### Codex & Spec Kit CLI environment variables
+
+To keep Codex and Spec Kit CLI installs deterministic, standardize on two environment variables that will be consumed by the Docker build arguments introduced in this spec. Export them (or pass them inline) before invoking `docker build` so the Node-based tooling builder can resolve the correct packages as the remaining tasks land:
+
+| Variable | Purpose | Recommended default |
+|----------|---------|---------------------|
+| `CODEX_CLI_VERSION` | Selects the npm tag of `@githubnext/codex-cli` installed during the image build. Align with the version validated by your automation tests. | `0.6.0` |
+| `SPEC_KIT_VERSION` | Selects the npm tag of `@githubnext/spec-kit` installed alongside Codex. Keep it in sync with the Spec Kit workflows your team supports. | `0.4.0` |
+
+Set the variables in your shell or CI pipeline and forward them with `--build-arg` once the Dockerfile exposes the matching build arguments:
+
+```bash
+export CODEX_CLI_VERSION=0.6.0
+export SPEC_KIT_VERSION=0.4.0
+docker build -f api_service/Dockerfile \
+  --build-arg CODEX_CLI_VERSION \
+  --build-arg SPEC_KIT_VERSION \
+  -t moonmind/api-service:tooling .
+```
+
+CI systems that wrap Docker builds should propagate the same variables so Celery workers always ship with the expected CLI revisions as the tooling install steps roll out.
+
 ## Step 1 – Start the automation stack
 
 From the repository root, start the supporting services in one terminal so the worker can accept automation jobs:
