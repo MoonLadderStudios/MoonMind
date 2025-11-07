@@ -3,7 +3,10 @@ name: Codex Commenter
 on:
   workflow_run:
     workflows:
+      # This repo uses "Run Pytest Unit Tests" instead of the older
+      # "Build Project and Run Tests" pipeline name.
       - Build Project and Run Tests
+      - Run Pytest Unit Tests
     types: [completed]
   issue_comment:
     types: [created]
