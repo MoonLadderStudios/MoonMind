@@ -54,6 +54,8 @@ RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit
 COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE /usr/share/licenses/codex-cli/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE /usr/share/licenses/spec-kit/LICENSE
 
+# Install system packages required by the Python service along with the
+# Node.js runtime libraries that the bundled Codex and Spec Kit binaries rely on.
 RUN apt-get update && \
     apt-get install -y \
         build-essential \
@@ -63,7 +65,8 @@ RUN apt-get update && \
         tesseract-ocr \
         tesseract-ocr-eng \
         git \
-        curl && \
+        curl \
+        nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install watchfiles
