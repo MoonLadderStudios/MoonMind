@@ -45,11 +45,11 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 ### Implementation
 
-- [ ] T009 [US1] Add builder-layer test step to run `codex --version` during Docker build in `api_service/Dockerfile`
-- [ ] T010 [US1] Ensure runtime layer sets PATH/permissions so `codex` is executable by the `app` user in `api_service/Dockerfile`
-- [ ] T011 [US1] Update `moonmind/workflows/speckit_celery/job_container.py` to assert Codex binary exists before task execution
-- [ ] T012 [US1] Add worker startup log message confirming Codex CLI version in `celery_worker/speckit_worker.py`
-- [ ] T013 [US1] Document Codex CLI verification commands in `docs/SpecKitAutomationInstructions.md#codex`
+- [x] T009 [US1] Add builder-layer test step to run `codex --version` during Docker build in `api_service/Dockerfile`
+- [x] T010 [US1] Ensure runtime layer sets PATH/permissions so `codex` is executable by the `app` user in `api_service/Dockerfile`
+- [x] T011 [US1] Update `moonmind/workflows/speckit_celery/job_container.py` to assert Codex binary exists before task execution
+- [x] T012 [US1] Add worker startup log message confirming Codex CLI version in `celery_worker/speckit_worker.py`
+- [x] T013 [US1] Document Codex CLI verification commands in `docs/SpecKitAutomationInstructions.md#codex`
 
 **Parallel Opportunities**: Tasks T009–T013 can run in parallel except T010 depends on T009’s install step, and T012 depends on worker log message schema shared with other logging updates.
 

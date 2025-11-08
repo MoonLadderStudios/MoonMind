@@ -20,7 +20,7 @@ RUN npm config set fund false \
 
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
-RUN case "${CODEX_CLI_VERSION}" in 
+RUN case "${CODEX_CLI_VERSION}" in
         (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
     esac \
     && case "${SPEC_KIT_VERSION}" in \
@@ -31,13 +31,18 @@ RUN case "${CODEX_CLI_VERSION}" in
         @githubnext/spec-kit@"${SPEC_KIT_VERSION}" \
     && npm cache clean --force
 
+# Fail the build early if the Codex CLI binary is missing or broken. This helps
+# catch upstream npm publish issues before the runtime image is produced.
+RUN codex --version
+
 FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
-    SPEC_KIT_VERSION=${SPEC_KIT_VERSION}
+    SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
+    PATH="/usr/local/bin:${PATH}"
 
 WORKDIR /app
 
@@ -68,6 +73,12 @@ RUN apt-get update && \
         curl \
         nodejs && \
     rm -rf /var/lib/apt/lists/*
+
+# Ensure the non-root ``app`` user exists for Celery workers and the bundled
+# CLIs remain executable from its PATH.
+RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit && \
+    chown -R app:app /home/app
 
 RUN pip install watchfiles
 

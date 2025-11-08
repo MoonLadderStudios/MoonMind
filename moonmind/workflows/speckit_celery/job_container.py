@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Mapping, Optional, Sequence
@@ -324,6 +325,24 @@ class JobContainerManager:
         """Start a detached job container and return its wrapper instance."""
 
         run_ref = str(run_id)
+
+        codex_path = shutil.which("codex")
+        if not codex_path or not os.access(codex_path, os.X_OK):
+            message = (
+                "Codex CLI is not available on PATH; rebuild the automation image "
+                "to include the bundled CLI."
+            )
+            logger.error(
+                "Cannot start job container for run %s because Codex CLI is missing",
+                run_id,
+                extra={"run_id": run_ref, "codex_path": codex_path},
+            )
+            raise JobContainerStartError(message)
+        logger.debug(
+            "Verified Codex CLI binary for job container start",
+            extra={"run_id": run_ref, "codex_path": codex_path},
+        )
+
         container_name = name or SpecWorkspaceManager.job_container_name(run_ref)
         effective_image = image or settings.spec_workflow.job_image
         effective_command = command or _DEFAULT_COMMAND
