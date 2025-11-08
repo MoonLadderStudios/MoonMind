@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 import re
+import subprocess
 
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
