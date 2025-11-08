@@ -57,6 +57,26 @@ docker build -f api_service/Dockerfile \
 
 CI systems that wrap Docker builds should propagate the same variables so Celery workers always ship with the expected CLI revisions as the tooling install steps roll out.
 
+### Codex CLI verification {#codex}
+
+After building a new image, run the following commands to ensure the bundled Codex CLI is discoverable for the non-root `app` user and matches the expected version:
+
+```bash
+docker run --rm moonmind/api-service:tooling \
+  bash -lc 'whoami && which codex && codex --version'
+```
+
+- `which codex` must resolve to `/usr/local/bin/codex`.
+- The `codex --version` output should match `CODEX_CLI_VERSION` passed to the Docker build.
+
+When the Celery worker starts it now logs the detected Codex CLI path and version. Tail the worker logs to confirm the health check succeeds before triggering automation runs:
+
+```bash
+docker compose logs -f celery-worker | grep -i "Codex CLI detected"
+```
+
+If either command fails, rebuild the image to restore the bundled CLI before accepting new jobs.
+
 ## Step 1 – Start the automation stack
 
 From the repository root, start the supporting services in one terminal so the worker can accept automation jobs:

@@ -14,6 +14,10 @@ import docker
 from docker.errors import APIError, DockerException, NotFound
 
 from moonmind.config.settings import settings
+from moonmind.workflows.speckit_celery.utils import (
+    CliVerificationError,
+    verify_cli_is_executable,
+)
 from moonmind.workflows.speckit_celery.workspace import SpecWorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -324,6 +328,21 @@ class JobContainerManager:
         """Start a detached job container and return its wrapper instance."""
 
         run_ref = str(run_id)
+
+        try:
+            codex_path = verify_cli_is_executable("codex")
+        except CliVerificationError as exc:
+            logger.error(
+                "Cannot start job container for run %s because Codex CLI is missing",
+                run_id,
+                extra={"run_id": run_ref, "codex_path": exc.cli_path},
+            )
+            raise JobContainerStartError(str(exc)) from exc
+        logger.debug(
+            "Verified Codex CLI binary for job container start",
+            extra={"run_id": run_ref, "codex_path": codex_path},
+        )
+
         container_name = name or SpecWorkspaceManager.job_container_name(run_ref)
         effective_image = image or settings.spec_workflow.job_image
         effective_command = command or _DEFAULT_COMMAND
