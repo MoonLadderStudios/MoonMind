@@ -316,6 +316,10 @@ def test_job_container_start_injects_runtime_environment(monkeypatch):
     dummy_client = SimpleNamespace(containers=DummyContainers())
     monkeypatch.setattr(settings.spec_workflow, "job_image", "example:latest")
     monkeypatch.setattr(settings.spec_workflow, "workspace_root", "/tmp/workspace")
+    monkeypatch.setattr(
+        "moonmind.workflows.speckit_celery.job_container.verify_cli_is_executable",
+        lambda cli: "/usr/local/bin/codex",
+    )
 
     manager = JobContainerManager(docker_client=dummy_client)
     manager.start(

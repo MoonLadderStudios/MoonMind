@@ -77,8 +77,7 @@ RUN apt-get update && \
 # Ensure the non-root ``app`` user exists for Celery workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit && \
-    chown -R app:app /home/app
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit
 
 RUN pip install watchfiles
 

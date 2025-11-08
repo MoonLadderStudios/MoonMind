@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
-import shutil
 import subprocess
+import re
 
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
+from moonmind.workflows.speckit_celery.utils import (
+    CliVerificationError,
+    verify_cli_is_executable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,18 +18,15 @@ logger = logging.getLogger(__name__)
 def _log_codex_cli_version() -> None:
     """Emit a startup log confirming the bundled Codex CLI version."""
 
-    codex_path = shutil.which("codex")
-    if not codex_path or not os.access(codex_path, os.X_OK):
-        message = (
-            "Codex CLI is not available on PATH; rebuild the automation image to"
-            " include the bundled CLI."
-        )
-        logger.critical(message, extra={"codex_path": codex_path})
-        raise RuntimeError(message)
+    try:
+        codex_path = verify_cli_is_executable("codex")
+    except CliVerificationError as exc:
+        logger.critical(str(exc), extra={"codex_path": exc.cli_path})
+        raise RuntimeError(str(exc)) from exc
 
     try:
         result = subprocess.run(
-            ["codex", "--version"],
+            [codex_path, "--version"],
             check=True,
             capture_output=True,
             text=True,
@@ -40,7 +40,8 @@ def _log_codex_cli_version() -> None:
         raise RuntimeError("Codex CLI health check failed") from exc
 
     raw_output = result.stdout.strip() or result.stderr.strip()
-    version_output = raw_output.splitlines()[0] if raw_output else "unknown"
+    version_match = re.search(r"\d+\.\d+\.\d+", raw_output)
+    version_output = version_match.group(0) if version_match else "unknown"
     logger.info(
         "Codex CLI detected at %s (version: %s)",
         codex_path,

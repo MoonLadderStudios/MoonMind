@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Mapping, Optional, Sequence
@@ -15,6 +14,10 @@ import docker
 from docker.errors import APIError, DockerException, NotFound
 
 from moonmind.config.settings import settings
+from moonmind.workflows.speckit_celery.utils import (
+    CliVerificationError,
+    verify_cli_is_executable,
+)
 from moonmind.workflows.speckit_celery.workspace import SpecWorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -326,18 +329,15 @@ class JobContainerManager:
 
         run_ref = str(run_id)
 
-        codex_path = shutil.which("codex")
-        if not codex_path or not os.access(codex_path, os.X_OK):
-            message = (
-                "Codex CLI is not available on PATH; rebuild the automation image "
-                "to include the bundled CLI."
-            )
+        try:
+            codex_path = verify_cli_is_executable("codex")
+        except CliVerificationError as exc:
             logger.error(
                 "Cannot start job container for run %s because Codex CLI is missing",
                 run_id,
-                extra={"run_id": run_ref, "codex_path": codex_path},
+                extra={"run_id": run_ref, "codex_path": exc.cli_path},
             )
-            raise JobContainerStartError(message)
+            raise JobContainerStartError(str(exc)) from exc
         logger.debug(
             "Verified Codex CLI binary for job container start",
             extra={"run_id": run_ref, "codex_path": codex_path},
