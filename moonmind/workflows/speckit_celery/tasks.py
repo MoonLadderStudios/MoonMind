@@ -1,4 +1,5 @@
 """Celery tasks orchestrating Spec Kit workflows."""
+
 from __future__ import annotations
 
 import asyncio
@@ -59,19 +60,17 @@ T = TypeVar("T")
 
 
 _SPEC_KIT_CLI_LOCK = threading.Lock()
-_SPEC_KIT_CLI_LOGGED = False
+_SPEC_KIT_CLI_LOGGED = threading.Event()
 
 
 def _log_spec_kit_cli_availability() -> None:
     """Log the resolved Spec Kit CLI path and version once per worker."""
 
-    global _SPEC_KIT_CLI_LOGGED
-
-    if _SPEC_KIT_CLI_LOGGED:
+    if _SPEC_KIT_CLI_LOGGED.is_set():
         return
 
     with _SPEC_KIT_CLI_LOCK:
-        if _SPEC_KIT_CLI_LOGGED:
+        if _SPEC_KIT_CLI_LOGGED.is_set():
             return
 
         try:
@@ -92,10 +91,14 @@ def _log_spec_kit_cli_availability() -> None:
                 text=True,
             )
         except (OSError, subprocess.CalledProcessError) as exc:
+            extra = {"speckit_path": speckit_path}
+            if isinstance(exc, subprocess.CalledProcessError):
+                extra["stdout"] = exc.stdout
+                extra["stderr"] = exc.stderr
             logger.critical(
                 "Failed to execute 'speckit --version': %s",
                 exc,
-                extra={"speckit_path": speckit_path},
+                extra=extra,
             )
             raise RuntimeError("Spec Kit CLI health check failed") from exc
 
@@ -110,7 +113,7 @@ def _log_spec_kit_cli_availability() -> None:
             extra={"speckit_path": speckit_path, "speckit_version": version},
         )
 
-        _SPEC_KIT_CLI_LOGGED = True
+        _SPEC_KIT_CLI_LOGGED.set()
 
 
 class CredentialValidationError(RuntimeError):

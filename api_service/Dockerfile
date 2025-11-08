@@ -82,8 +82,7 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
     chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
-RUN runuser -u app -- codex --version \
-    && runuser -u app -- speckit --version
+RUN runuser -u app -- sh -c 'codex --version && speckit --version'
 
 RUN pip install watchfiles
 
