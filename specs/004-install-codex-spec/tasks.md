@@ -63,11 +63,11 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 ### Implementation
 
-- [ ] T014 [P] [US2] Run `speckit --version` verification during Docker build in `api_service/Dockerfile`
-- [ ] T015 [US2] Confirm runtime layer exposes `speckit` on PATH with correct ownership in `api_service/Dockerfile`
-- [ ] T016 [US2] Update `moonmind/workflows/speckit_celery/tasks.py` to log Spec Kit CLI availability before orchestrating phases
-- [ ] T017 [US2] Add quickstart section covering Spec Kit smoke test in `specs/004-install-codex-spec/quickstart.md`
-- [ ] T018 [US2] Expand `docs/SpecKitAutomation.md` with troubleshooting specific to Spec Kit CLI failures
+- [x] T014 [P] [US2] Run `speckit --version` verification during Docker build in `api_service/Dockerfile`
+- [x] T015 [US2] Confirm runtime layer exposes `speckit` on PATH with correct ownership in `api_service/Dockerfile`
+- [x] T016 [US2] Update `moonmind/workflows/speckit_celery/tasks.py` to log Spec Kit CLI availability before orchestrating phases
+- [x] T017 [US2] Add quickstart section covering Spec Kit smoke test in `specs/004-install-codex-spec/quickstart.md`
+- [x] T018 [US2] Expand `docs/SpecKitAutomation.md` with troubleshooting specific to Spec Kit CLI failures
 
 **Parallel Opportunities**: T014 and T015 depend on foundational builder changes but can run parallel to US1 tasks. T017–T018 are documentation-only and parallelizable after verification commands are known.
 

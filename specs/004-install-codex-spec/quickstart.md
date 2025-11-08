@@ -53,6 +53,8 @@ docker compose run --rm celery-worker bash -lc '
 ```
 
 - Confirms the Celery worker (which reuses the api_service image) can access both CLIs and that Codex authentication remains non-interactive.
+- Watch the worker logs for `Spec Kit CLI detected` entries before task output; these come from the new bootstrap check inside `moonmind/workflows/speckit_celery/tasks.py` and confirm the binary is executable for the `app` user.
+- The command should exit with status zero; if the `speckit` invocation fails, rebuild the image and confirm the Dockerfile logs `speckit --version` during the builder stage.
 
 ## 6. Troubleshooting
 
