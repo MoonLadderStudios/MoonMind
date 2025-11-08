@@ -1,7 +1,10 @@
-FROM node:20-bookworm AS tooling-builder
-
 ARG CODEX_CLI_VERSION=0.6.0
 ARG SPEC_KIT_VERSION=0.4.0
+
+FROM node:20-bookworm AS tooling-builder
+
+ARG CODEX_CLI_VERSION
+ARG SPEC_KIT_VERSION
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -17,15 +20,21 @@ RUN npm config set fund false \
 
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
-RUN npm install -g \
+RUN case "${CODEX_CLI_VERSION}" in 
+        (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
+    esac \
+    && case "${SPEC_KIT_VERSION}" in \
+        (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;;
+    esac \
+    && npm install -g \
         @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
         @githubnext/spec-kit@"${SPEC_KIT_VERSION}" \
     && npm cache clean --force
 
 FROM python:3.12-slim-bookworm
 
-ARG CODEX_CLI_VERSION=0.6.0
-ARG SPEC_KIT_VERSION=0.4.0
+ARG CODEX_CLI_VERSION
+ARG SPEC_KIT_VERSION
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     SPEC_KIT_VERSION=${SPEC_KIT_VERSION}
@@ -36,8 +45,6 @@ WORKDIR /app
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
-COPY --from=tooling-builder /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=tooling-builder /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/speckit /usr/local/bin/speckit
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
