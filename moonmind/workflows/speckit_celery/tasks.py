@@ -1,11 +1,11 @@
 """Celery tasks orchestrating Spec Kit workflows."""
-
 from __future__ import annotations
 
 import asyncio
 import os
 import re
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -39,6 +39,10 @@ from moonmind.workflows.speckit_celery.repositories import (
     SpecAutomationRepository,
     SpecWorkflowRepository,
 )
+from moonmind.workflows.speckit_celery.utils import (
+    CliVerificationError,
+    verify_cli_is_executable,
+)
 
 logger = get_task_logger(__name__)
 
@@ -52,6 +56,61 @@ _TASK_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<body>.+)$")
 _TASK_BODY_PATTERN = re.compile(r"^(?P<identifier>\S+)(?P<title>\s+.*)?$")
 
 T = TypeVar("T")
+
+
+_SPEC_KIT_CLI_LOCK = threading.Lock()
+_SPEC_KIT_CLI_LOGGED = False
+
+
+def _log_spec_kit_cli_availability() -> None:
+    """Log the resolved Spec Kit CLI path and version once per worker."""
+
+    global _SPEC_KIT_CLI_LOGGED
+
+    if _SPEC_KIT_CLI_LOGGED:
+        return
+
+    with _SPEC_KIT_CLI_LOCK:
+        if _SPEC_KIT_CLI_LOGGED:
+            return
+
+        try:
+            speckit_path = verify_cli_is_executable("speckit")
+        except CliVerificationError as exc:
+            logger.critical(
+                "Spec Kit CLI is unavailable: %s",
+                exc,
+                extra={"speckit_path": exc.cli_path},
+            )
+            raise RuntimeError(str(exc)) from exc
+
+        try:
+            result = subprocess.run(
+                [speckit_path, "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            logger.critical(
+                "Failed to execute 'speckit --version': %s",
+                exc,
+                extra={"speckit_path": speckit_path},
+            )
+            raise RuntimeError("Spec Kit CLI health check failed") from exc
+
+        raw_output = result.stdout.strip() or result.stderr.strip()
+        version_match = re.search(r"\d+\.\d+\.\d+", raw_output)
+        version = version_match.group(0) if version_match else (raw_output or "unknown")
+
+        logger.info(
+            "Spec Kit CLI detected at %s (version: %s)",
+            speckit_path,
+            version,
+            extra={"speckit_path": speckit_path, "speckit_version": version},
+        )
+
+        _SPEC_KIT_CLI_LOGGED = True
 
 
 class CredentialValidationError(RuntimeError):
@@ -1058,6 +1117,8 @@ def discover_next_phase(
     retry_notes: Optional[str] = None,
 ) -> dict[str, Any]:
     """Locate the next unchecked task in the Spec Kit tasks document."""
+
+    _log_spec_kit_cli_availability()
 
     run_uuid = UUID(run_id)
     observer = TaskObserver(

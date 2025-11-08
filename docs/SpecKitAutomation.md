@@ -127,6 +127,13 @@ Unchanged; add log lines around codex pre-flight and mount selection.
 - Missing binaries or non-zero exit codes must mark the worker unhealthy before it accepts jobs.
 - Log messages should record the detected versions and point to rebuild instructions when versions drift from the pinned Docker build args (`CODEX_CLI_VERSION`, `SPEC_KIT_VERSION`).
 
+#### Troubleshooting Spec Kit CLI Failures
+
+- **`speckit: command not found` during worker startup** – confirm the Docker build log includes both `codex --version` and `speckit --version`. If the latter is missing, rebuild the image without cache so the tooling builder stage re-runs `npm install -g @githubnext/spec-kit@${SPEC_KIT_VERSION}`.
+- **`Spec Kit CLI is unavailable` log from `moonmind.workflows.speckit_celery.tasks`** – the worker could not resolve the binary on PATH. Inspect `/usr/local/bin/` inside the container; if the file exists but is not executable, ensure the Dockerfile sets `chmod 0755 /usr/local/bin/speckit` and re-publish the image.
+- **`Spec Kit CLI health check failed` error** – indicates `speckit --version` returned a non-zero exit code when run as the non-root `app` user. Check the Celery worker logs for the detailed exception and verify the runtime layer copied `/usr/local/lib/node_modules/@githubnext/spec-kit` from the builder stage.
+- When in doubt, run `docker compose run --rm celery-worker bash -lc 'which speckit && speckit --help'` to manually confirm PATH resolution and execution under the worker user profile.
+
 ⸻
 
 8. Operational Runbook

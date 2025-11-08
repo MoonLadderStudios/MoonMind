@@ -31,9 +31,11 @@ RUN case "${CODEX_CLI_VERSION}" in
         @githubnext/spec-kit@"${SPEC_KIT_VERSION}" \
     && npm cache clean --force
 
-# Fail the build early if the Codex CLI binary is missing or broken. This helps
-# catch upstream npm publish issues before the runtime image is produced.
-RUN codex --version
+# Fail the build early if the Codex or Spec Kit CLI binaries are missing or
+# broken. This helps catch upstream npm publish issues before the runtime image
+# is produced.
+RUN codex --version \
+    && speckit --version
 
 FROM python:3.12-slim-bookworm
 
@@ -78,6 +80,10 @@ RUN apt-get update && \
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
     chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit
+
+# Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
+RUN runuser -u app -- codex --version \
+    && runuser -u app -- speckit --version
 
 RUN pip install watchfiles
 
