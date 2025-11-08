@@ -67,6 +67,22 @@ poetry run celery -A celery_worker.speckit_worker worker -Q speckit --loglevel=i
 
 The worker entrypoint in `celery_worker/speckit_worker.py` loads `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment.
 
+### Bundled Codex & Spec Kit CLIs
+
+The shared `api_service` image now includes the Codex CLI and GitHub Spec Kit CLI. Both tools are installed during the Docker build from their npm packages so Celery workers can execute automation workflows without performing runtime downloads.
+
+- Default versions are pinned via build arguments: `CODEX_CLI_VERSION=0.6.0` and `SPEC_KIT_VERSION=0.4.0`.
+- Override the pins by passing new values when building the image:
+
+  ```bash
+  docker build \
+    --build-arg CODEX_CLI_VERSION=0.6.1 \
+    --build-arg SPEC_KIT_VERSION=0.4.1 \
+    -f api_service/Dockerfile .
+  ```
+
+Release notes should record the versions shipped with each published image so operators know when the automation toolchain changed.
+
 ## Development
 MoonMind relies on `pre-commit` to enforce formatting and linting. Install the hooks after cloning:
 

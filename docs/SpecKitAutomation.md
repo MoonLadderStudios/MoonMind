@@ -121,6 +121,12 @@ Note: home/.codex/ is a nested mount backed by a named Docker volume. It survive
 
 Unchanged; add log lines around codex pre-flight and mount selection.
 
+### Health Checks for Bundled CLIs
+
+- Celery worker bootstrap should invoke `codex --version`, `codex login status`, and `speckit --version` once when the process starts.
+- Missing binaries or non-zero exit codes must mark the worker unhealthy before it accepts jobs.
+- Log messages should record the detected versions and point to rebuild instructions when versions drift from the pinned Docker build args (`CODEX_CLI_VERSION`, `SPEC_KIT_VERSION`).
+
 ⸻
 
 8. Operational Runbook
