@@ -3,9 +3,8 @@
 # Set environment variables to suppress git warnings
 export GIT_PYTHON_REFRESH=quiet
 
-python -m api_service.scripts.ensure_codex_config
-status=$?
-if [ $status -ne 0 ]; then
+if ! python -m api_service.scripts.ensure_codex_config; then
+    status=$?
     echo "Codex configuration enforcement failed" >&2
     exit $status
 fi

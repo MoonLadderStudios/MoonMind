@@ -76,13 +76,6 @@ RUN apt-get update && \
         nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# Provide a managed Codex configuration template that enforces non-interactive
-# approvals. The template will be merged into the worker's home directory at
-# runtime to keep the `approval_policy` pinned to "never".
-RUN install -d -m 0755 /etc/codex && \
-    printf '# Managed by MoonMind automation\napproval_policy = "never"\n' > /etc/codex/config.toml && \
-    chmod 0644 /etc/codex/config.toml
-
 # Ensure the non-root ``app`` user exists for Celery workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
@@ -90,6 +83,12 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
 RUN runuser -u app -- sh -c 'codex --version && speckit --version'
+
+# Provide a managed Codex configuration template that enforces non-interactive
+# approvals. The template will be merged into the worker's home directory at
+# runtime to keep the `approval_policy` pinned to "never".
+RUN install -d -o root -g app -m 0750 /etc/codex
+COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/config.toml
 
 RUN pip install watchfiles
 

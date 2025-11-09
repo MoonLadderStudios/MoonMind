@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
 
-import toml
-
+from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
     CliVerificationError,
@@ -28,36 +27,17 @@ except ImportError as exc:  # pragma: no cover - import failure should abort sta
     raise RuntimeError("Codex config enforcement script unavailable") from exc
 
 
-def _enforce_codex_approval_policy() -> Path:
-    """Run the merge script and confirm the policy is locked to ``never``."""
-
-    try:
-        config_path = codex_config.ensure_codex_config()
-    except codex_config.CodexConfigError as exc:
-        logger.critical(
-            "Failed to enforce Codex approval policy: %s",
-            exc,
-        )
-        raise RuntimeError("Codex approval policy enforcement failed") from exc
-
-    try:
-        resolved_config: dict[str, Any] = toml.load(config_path)
-    except toml.TomlDecodeError as exc:
-        logger.critical(
-            "Codex config at %s is not valid TOML: %s",
-            config_path,
-            exc,
-            extra={"codex_config_path": str(config_path)},
-        )
-        raise RuntimeError("Codex config is corrupt") from exc
-
-    approval_policy = resolved_config.get("approval_policy")
+def _assert_policy_locked(
+    result: codex_config.CodexConfigResult, *, context: dict[str, str]
+) -> None:
+    approval_policy = result.config.get("approval_policy")
     if approval_policy != "never":
         logger.critical(
             "Codex approval policy is %r (expected 'never')",
             approval_policy,
             extra={
-                "codex_config_path": str(config_path),
+                **context,
+                "codex_config_path": str(result.path),
                 "approval_policy": approval_policy,
             },
         )
@@ -65,13 +45,69 @@ def _enforce_codex_approval_policy() -> Path:
 
     logger.info(
         "Codex approval policy enforced at %s",
-        config_path,
+        result.path,
         extra={
-            "codex_config_path": str(config_path),
+            **context,
+            "codex_config_path": str(result.path),
             "approval_policy": approval_policy,
         },
     )
-    return config_path
+
+
+def _enforce_codex_approval_policy() -> Path:
+    """Run the merge script and confirm the policy is locked to ``never``."""
+
+    try:
+        home_result = codex_config.ensure_codex_config()
+    except codex_config.CodexConfigError as exc:
+        logger.critical(
+            "Failed to enforce Codex approval policy in worker home: %s",
+            exc,
+        )
+        raise RuntimeError("Codex approval policy enforcement failed") from exc
+
+    _assert_policy_locked(home_result, context={"target": "worker_home"})
+
+    volume_name = settings.spec_workflow.codex_volume_name
+    if volume_name:
+        volume_mount = Path(os.environ.get("CODEX_VOLUME_PATH", "/var/lib/codex-auth"))
+        if not volume_mount.exists():
+            logger.critical(
+                "Codex auth volume %s is not mounted at %s",
+                volume_name,
+                volume_mount,
+                extra={
+                    "codex_volume_name": volume_name,
+                    "codex_volume_mount": str(volume_mount),
+                },
+            )
+            raise RuntimeError("Codex auth volume is unavailable")
+
+        target_path = volume_mount / codex_config.CONFIG_FILENAME
+        try:
+            volume_result = codex_config.ensure_codex_config(target_path=target_path)
+        except codex_config.CodexConfigError as exc:
+            logger.critical(
+                "Failed to enforce Codex approval policy on volume %s: %s",
+                volume_name,
+                exc,
+                extra={
+                    "codex_volume_name": volume_name,
+                    "codex_volume_mount": str(volume_mount),
+                },
+            )
+            raise RuntimeError("Codex approval policy enforcement failed") from exc
+
+        _assert_policy_locked(
+            volume_result,
+            context={
+                "target": "codex_volume",
+                "codex_volume_name": volume_name,
+                "codex_volume_mount": str(volume_mount),
+            },
+        )
+
+    return home_result.path
 
 
 def _log_codex_cli_version() -> None:
