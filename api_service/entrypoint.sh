@@ -3,9 +3,11 @@
 # Set environment variables to suppress git warnings
 export GIT_PYTHON_REFRESH=quiet
 
-if ! python -m api_service.scripts.ensure_codex_config; then
+python -m api_service.scripts.ensure_codex_config
+status=$?
+if [ $status -ne 0 ]; then
     echo "Codex configuration enforcement failed" >&2
-    exit $?
+    exit $status
 fi
 
 echo "Starting Uvicorn server..."
