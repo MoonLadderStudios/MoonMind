@@ -127,6 +127,14 @@ Unchanged; add log lines around codex pre-flight and mount selection.
 - Missing binaries or non-zero exit codes must mark the worker unhealthy before it accepts jobs.
 - Log messages should record the detected versions and point to rebuild instructions when versions drift from the pinned Docker build args (`CODEX_CLI_VERSION`, `SPEC_KIT_VERSION`).
 
+#### Quick Troubleshooting – CLI Install Summary
+
+| CLI | Where it is installed | Verification command(s) | When to rebuild |
+|-----|------------------------|-------------------------|-----------------|
+| Codex (`codex`) | `api_service/Dockerfile` Node builder stage via `npm install -g @githubnext/codex-cli@${CODEX_CLI_VERSION}`; binary copied into `/usr/local/bin/` during runtime stage assembly. | `docker compose run --rm cli-tooling-smoke` or `codex --version` inside the worker container; check Celery bootstrap logs for `Codex CLI version:`. | Version mismatch with pinned `CODEX_CLI_VERSION`, missing binary during smoke check, or CLI upgrade announcement. |
+| Spec Kit (`speckit`) | Same builder stage using `npm install -g @githubnext/spec-kit@${SPEC_KIT_VERSION}`; runtime layer copies binary and Node modules. | `docker compose run --rm cli-tooling-smoke` or `speckit --version`; verify worker startup logs emit `Spec Kit CLI detected`. | PATH resolution fails in health check, CLI emits upgrade warning, or npm audit flags vulnerabilities. |
+| Codex config merge script | `api_service/scripts/ensure_codex_config.py` invoked by runtime entrypoint to enforce `approval_policy = "never"`. | `docker run --rm moonmind/api-service:tooling bash -lc 'cat ~/.codex/config.toml'` (should show enforced policy); worker logs should not report config drift. | Policy deviates from "never", merge script errors during startup, or base image changes HOME layout. |
+
 #### Troubleshooting Spec Kit CLI Failures
 
 - **`speckit: command not found` during worker startup** – confirm the Docker build log includes both `codex --version` and `speckit --version`. If the latter is missing, rebuild the image without cache so the tooling builder stage re-runs `npm install -g @githubnext/spec-kit@${SPEC_KIT_VERSION}`.

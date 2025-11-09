@@ -18,6 +18,18 @@ services:
     networks:
       - local-network
 
+  cli-tooling-smoke:
+    build:
+      context: .
+      dockerfile: api_service/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app:/app/moonmind
+    command: ["bash", "-lc", "codex --version && speckit --version"]
+    networks:
+      - local-network
+
 networks:
   local-network:
     external: true
