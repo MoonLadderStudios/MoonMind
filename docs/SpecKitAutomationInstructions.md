@@ -77,6 +77,48 @@ docker compose logs -f celery-worker | grep -i "Codex CLI detected"
 
 If either command fails, rebuild the image to restore the bundled CLI before accepting new jobs.
 
+### Codex config drift remediation {#codex-config}
+
+The container image now ships a managed Codex configuration template at
+`/etc/codex/config.toml`, and every startup runs
+`python -m api_service.scripts.ensure_codex_config` to merge the template into
+`~/.codex/config.toml`. If a worker reports the config status as `drifted` or
+logs that the approval policy is incorrect, follow these steps:
+
+1. **Inspect the current policy** – Exec into the affected worker and review the
+   merged file:
+
+   ```bash
+   docker compose exec celery-worker bash -lc 'cat ~/.codex/config.toml'
+   ```
+
+   The `approval_policy` value must be `"never"`. Any other value indicates
+   manual edits or an incomplete merge.
+2. **Re-run the merge script** – From the same shell, invoke the enforcement
+   helper manually to regenerate the config and capture diagnostics:
+
+   ```bash
+   python -m api_service.scripts.ensure_codex_config
+   ```
+
+   A successful run prints `[codex-config] approval policy enforced` along with
+   the resolved path. Failures emit actionable errors (missing template,
+   unwritable home directory, or invalid TOML).
+3. **Validate health checks** – Tail the worker logs for `Codex approval policy`
+   messages or call the tooling health-check endpoint to confirm the status has
+   returned to `managed`:
+
+   ```bash
+   curl http://localhost:5000/internal/tooling-status | jq '.workers[] | select(.codexConfig.status != "managed")'
+   ```
+
+   An empty response confirms every worker now reports the enforced policy and
+   exposes the template path plus enforcement metadata.
+4. **Rebuild as needed** – If the template is missing or repeatedly drifts
+   (for example, due to a bind mount that overwrites `~/.codex`), rebuild the
+   image and redeploy the worker to restore the baked template before running
+   additional automation.
+
 ## Step 1 – Start the automation stack
 
 From the repository root, start the supporting services in one terminal so the worker can accept automation jobs:
