@@ -5,6 +5,10 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+from pathlib import Path
+from typing import Any
+
+import toml
 
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
@@ -13,6 +17,61 @@ from moonmind.workflows.speckit_celery.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+try:  # pragma: no branch - import guard required for health enforcement
+    from api_service.scripts import ensure_codex_config as codex_config
+except ImportError as exc:  # pragma: no cover - import failure should abort start
+    logger.critical(
+        "Codex config enforcement script missing from image: %s",
+        exc,
+    )
+    raise RuntimeError("Codex config enforcement script unavailable") from exc
+
+
+def _enforce_codex_approval_policy() -> Path:
+    """Run the merge script and confirm the policy is locked to ``never``."""
+
+    try:
+        config_path = codex_config.ensure_codex_config()
+    except codex_config.CodexConfigError as exc:
+        logger.critical(
+            "Failed to enforce Codex approval policy: %s",
+            exc,
+        )
+        raise RuntimeError("Codex approval policy enforcement failed") from exc
+
+    try:
+        resolved_config: dict[str, Any] = toml.load(config_path)
+    except toml.TomlDecodeError as exc:
+        logger.critical(
+            "Codex config at %s is not valid TOML: %s",
+            config_path,
+            exc,
+            extra={"codex_config_path": str(config_path)},
+        )
+        raise RuntimeError("Codex config is corrupt") from exc
+
+    approval_policy = resolved_config.get("approval_policy")
+    if approval_policy != "never":
+        logger.critical(
+            "Codex approval policy is %r (expected 'never')",
+            approval_policy,
+            extra={
+                "codex_config_path": str(config_path),
+                "approval_policy": approval_policy,
+            },
+        )
+        raise RuntimeError("Codex approval policy is not enforced")
+
+    logger.info(
+        "Codex approval policy enforced at %s",
+        config_path,
+        extra={
+            "codex_config_path": str(config_path),
+            "approval_policy": approval_policy,
+        },
+    )
+    return config_path
 
 
 def _log_codex_cli_version() -> None:
@@ -56,6 +115,7 @@ celery_app = speckit_celery_app
 # when running ``celery -A celery_worker.speckit_worker worker``.
 app = celery_app
 
+_enforce_codex_approval_policy()
 _log_codex_cli_version()
 
 

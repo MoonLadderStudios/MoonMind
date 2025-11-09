@@ -81,11 +81,11 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 ### Implementation
 
-- [ ] T019 [US3] Add `/etc/codex/config.toml` template with `approval_policy = "never"` in `api_service/Dockerfile`
-- [ ] T020 [US3] Implement entrypoint merge script (Python/TOML) at `api_service/scripts/ensure_codex_config.py` and invoke from Dockerfile CMD
-- [ ] T021 [US3] Update `moonmind/workflows/speckit_celery/speckit_worker.py` startup to fail if merge script is missing or config lacks required policy
-- [ ] T022 [US3] Extend health-check API contract (`specs/004-install-codex-spec/contracts/tooling-healthcheck.openapi.yaml`) with `approvalPolicy` enforcement details
-- [ ] T023 [US3] Document remediation steps when config drifts in `docs/SpecKitAutomationInstructions.md#codex-config`
+- [x] T019 [US3] Add `/etc/codex/config.toml` template with `approval_policy = "never"` in `api_service/Dockerfile`
+- [x] T020 [US3] Implement entrypoint merge script (Python/TOML) at `api_service/scripts/ensure_codex_config.py` and invoke from Dockerfile CMD
+- [x] T021 [US3] Update `moonmind/workflows/speckit_celery/speckit_worker.py` startup to fail if merge script is missing or config lacks required policy
+- [x] T022 [US3] Extend health-check API contract (`specs/004-install-codex-spec/contracts/tooling-healthcheck.openapi.yaml`) with `approvalPolicy` enforcement details
+- [x] T023 [US3] Document remediation steps when config drifts in `docs/SpecKitAutomationInstructions.md#codex-config`
 
 **Parallel Opportunities**: T019 and T020 must happen sequentially; T021–T023 can proceed once merge script behavior is defined.
 

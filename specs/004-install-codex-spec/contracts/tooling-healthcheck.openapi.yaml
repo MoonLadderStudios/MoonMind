@@ -77,12 +77,35 @@ components:
       required:
         - status
         - approvalPolicy
+        - enforcement
       properties:
         status:
           type: string
           enum: [managed, drifted]
         approvalPolicy:
           type: string
+          description: Observed Codex approval policy from the worker config.
+        enforcement:
+          type: object
+          description: Metadata describing how the approval policy is enforced.
+          required:
+            - expected
+            - templatePath
+          properties:
+            expected:
+              type: string
+              enum: ["never"]
+              description: Hard-coded policy required for non-interactive Codex runs.
+            templatePath:
+              type: string
+              description: Absolute path to the baked template merged at start-up.
+            lastManagedAt:
+              type: string
+              format: date-time
+              description: Timestamp of the most recent successful merge.
+            driftMessage:
+              type: string
+              description: Optional details describing why enforcement failed.
         hash:
           type: string
     ToolingFailure:
