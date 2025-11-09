@@ -20,7 +20,7 @@ RUN npm config set fund false \
 
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
-RUN case "${CODEX_CLI_VERSION}" in
+RUN case "${CODEX_CLI_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
     esac \
     && case "${SPEC_KIT_VERSION}" in \
