@@ -1295,6 +1295,8 @@ def discover_next_phase(
 def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
     """Submit the discovered task to Codex Cloud and persist metadata."""
 
+    _log_spec_kit_cli_availability()
+
     run_uuid = UUID(context["run_id"])
     attempt = _prepare_retry_context(context)
     observer = TaskObserver(
@@ -1514,6 +1516,8 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
 )
 def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
     """Retrieve the Codex patch and publish the resulting PR."""
+
+    _log_spec_kit_cli_availability()
 
     run_uuid = UUID(context["run_id"])
     attempt = _prepare_retry_context(context)
