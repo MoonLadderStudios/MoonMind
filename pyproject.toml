@@ -1,79 +1,75 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
+[tool.poetry]
 name = "moonmind"
 version = "0.1.0"
 description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
-license = { file = "LICENSE" }
-requires-python = ">=3.10,<3.14"
-dependencies = [
-    "fastapi~=0.115.14",
-    "uvicorn~=0.35.0",
-    "celery~=5.4.0",
-    "pydantic~=2.11.7",
-    "pydantic-settings~=2.10.1",
-    "langchain~=0.3.26",
-    "langchain-community~=0.3.26",
-    "langchain-google-community~=2.0.7",
-    "langchain-googledrive~=0.3.35",
-    "langchain-ollama~=0.3.3",
-    "langchain-qdrant~=0.2.0",
-    "langsmith~=0.4.4",
-    "llama-index~=0.12.44",
-    "llama-index-embeddings-google-genai~=0.2.0",
-    "llama-index-embeddings-ollama~=0.6.0",
-    "llama-index-readers-confluence~=0.3.1",
-    "llama-index-readers-github~=0.6.1",
-    "llama-index-readers-google~=0.6.2",
-    "llama-index-readers-jira~=0.4.1",
-    "llama-index-vector-stores-qdrant~=0.6.1",
-    "qdrant-client~=1.14.3",
-    "PyGithub~=2.6.1",
-    "google-generativeai~=0.8.3",
-    "openai~=1.93.0",
-    "ollama~=0.5.1",
-    "anthropic~=0.55.0",
-    "llama-index-llms-anthropic~=0.7.5",
-    "httpx~=0.28.1",
-    "atlassian-python-api~=3.41.21",
-    "beautifulsoup4~=4.13.4",
-    "html2text~=2024.2.26",
-    "lxml~=6.0.0",
-    "datasets~=3.6.0",
-    "pytest~=8.4.1",
-    "pytest-mock~=3.14.1",
-    "pytesseract~=0.3.13",
-    "requests~=2.32.4",
-    "PyYAML>=6.0.2",
-    "asyncpg~=0.30.0",
-    "SQLAlchemy~=2.0.41",
-    "docker~=7.1.0",
-    "fastapi-keycloak~=1.1.0",
-    "fastapi-users[sqlalchemy]~=13.0.0",
-    "PyJWT[crypto]~=2.8.0",
-    "python-jose[cryptography]~=3.3.0",
-    "pytest-asyncio~=1.0.0",
-    "alembic~=1.16.2",
-    "sqlalchemy-utils~=0.41.2",
-    "cryptography~=45.0.4",
-    "psycopg2-binary~=2.9.0",
-    "jinja2~=3.1.4",
-    "gitpython~=3.1.42",
-    "toml~=0.10.2",
-    "pydantic-extra-types~=2.10.1",
-    "structlog~=24.1.0"
-]
+license = "MIT"
+packages = [{ include = "moonmind" }]
 
-# This tells setuptools where to find packages when building.
-# For an editable install (`pip install -e .`), it helps ensure that
-# Python's import system can find these packages from the project root.
-[tool.setuptools.packages.find]
-where = ["."]  # Search for packages in the current directory (project root)
-include = ["moonmind*"]  # Include 'moonmind' and its sub-packages
-exclude = ["tests*", "tools*"] # Exclude tests and tools from being top-level packages
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+fastapi = "~=0.115.14"
+uvicorn = "~=0.35.0"
+celery = "~=5.4.0"
+pydantic = "~=2.11.7"
+pydantic-settings = "~=2.10.1"
+langchain = "~=0.3.26"
+langchain-community = "~=0.3.26"
+langchain-google-community = "~=2.0.7"
+langchain-googledrive = "~=0.3.35"
+langchain-ollama = "~=0.3.3"
+langchain-qdrant = "~=0.2.0"
+langsmith = "~=0.4.4"
+llama-index = "~=0.12.44"
+llama-index-embeddings-google-genai = "~=0.2.0"
+llama-index-embeddings-ollama = "~=0.6.0"
+llama-index-readers-confluence = "~=0.3.1"
+llama-index-readers-github = "~=0.6.1"
+llama-index-readers-google = "~=0.6.2"
+llama-index-readers-jira = "~=0.4.1"
+llama-index-vector-stores-qdrant = "~=0.6.1"
+qdrant-client = "~=1.14.3"
+PyGithub = "~=2.6.1"
+google-generativeai = "~=0.8.3"
+openai = "~=1.93.0"
+ollama = "~=0.5.1"
+anthropic = "~=0.55.0"
+llama-index-llms-anthropic = "~=0.7.5"
+httpx = "~=0.28.1"
+atlassian-python-api = "~=3.41.21"
+beautifulsoup4 = "~=4.13.4"
+html2text = "~=2024.2.26"
+lxml = "~=6.0.0"
+datasets = "~=3.6.0"
+pytesseract = "~=0.3.13"
+requests = "~=2.32.4"
+PyYAML = ">=6.0.2"
+asyncpg = "~=0.30.0"
+SQLAlchemy = "~=2.0.41"
+docker = "~=7.1.0"
+fastapi-keycloak = "~=1.1.0"
+"fastapi-users" = { version = "~=13.0.0", extras = ["sqlalchemy"] }
+"PyJWT" = { version = "~=2.8.0", extras = ["crypto"] }
+"python-jose" = { version = "~=3.3.0", extras = ["cryptography"] }
+alembic = "~=1.16.2"
+sqlalchemy-utils = "~=0.41.2"
+cryptography = "~=45.0.4"
+psycopg2-binary = "~=2.9.0"
+jinja2 = "~=3.1.4"
+gitpython = "~=3.1.42"
+toml = "~=0.10.2"
+pydantic-extra-types = "~=2.10.1"
+structlog = "~=24.1.0"
+pytest = { version = "~=8.4.1", optional = true }
+pytest-mock = { version = "~=3.14.1", optional = true }
+pytest-asyncio = { version = "^0.23.7", optional = true }
+
+[tool.poetry.extras]
+tests = ["pytest", "pytest-mock", "pytest-asyncio"]
 
 [tool.black]
 line-length = 88
