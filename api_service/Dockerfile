@@ -21,12 +21,12 @@ RUN npm config set fund false \
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 RUN case "${CODEX_CLI_VERSION}" in \
-        (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
-    esac \
-    && case "${SPEC_KIT_VERSION}" in \
-        (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;;
-    esac \
-    && npm install -g \
+        (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;; \
+    esac && \
+    case "${SPEC_KIT_VERSION}" in \
+        (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;; \
+    esac && \
+    npm install -g \
         @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
         @githubnext/spec-kit@"${SPEC_KIT_VERSION}" \
     && npm cache clean --force
