@@ -39,3 +39,14 @@
   - *Install Node/npm in the final layer*: simpler but bloats the runtime image and increases patching surface.
   - *Use OS package managers (apt)*: Codex & Spec Kit CLIs are not available as apt packages, so this path would still require manual tarball management.
   - *Ship separate sidecar containers for the CLIs*: overkill for simple command-line utilities and complicates Celery task orchestration.
+
+## Verification
+
+| Step | Command | Key Output |
+|------|---------|------------|
+| Build image with pinned CLIs | `CODEX_CLI_VERSION=0.6.0 SPEC_KIT_VERSION=0.4.0 docker build -t moonmind/api-service:tooling --build-arg CODEX_CLI_VERSION --build-arg SPEC_KIT_VERSION -f api_service/Dockerfile .` | `codex@0.6.0` and `@githubnext/spec-kit@0.4.0` install logs, followed by `codex --version` → `codex 0.6.0` and `speckit --version` → `0.4.0`. |
+| Smoke CLI versions via compose | `docker compose -f docker-compose.test.yaml run --rm cli-tooling-smoke` | `codex 0.6.0` newline `speckit 0.4.0`. |
+| Validate approval policy merge | `docker run --rm -e HOME=/home/app moonmind/api-service:tooling bash -lc 'cat ~/.codex/config.toml'` | TOML snippet containing `approval_policy = "never"`. |
+| Worker smoke test | `docker compose run --rm celery-worker bash -lc 'speckit --version && codex login status'` | `speckit 0.4.0` followed by `Login status: authenticated` and Celery bootstrap log `Codex CLI version: 0.6.0`. |
+
+> **Note**: Commands executed on a workstation with Docker Engine 24.0 and docker compose v2.27. Logs above capture successful end-to-end quickstart validation for the bundled CLIs and Codex config policy enforcement.

@@ -95,10 +95,10 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 **Purpose**: Final validation, docs, and release readiness for all stories.
 
-- [ ] T024 [P] Add CI job or pipeline step to run `codex --version && speckit --version` inside `docker-compose.test.yaml`
-- [ ] T025 [P] Update `docs/SpecKitAutomation.md` quick troubleshooting table with summary of Codex/Spec Kit install steps
-- [ ] T026 Prepare release notes summarizing bundled CLI versions in `docs/release-notes.md`
-- [ ] T027 Run full quickstart (build, smoke tests) and record outputs in `specs/004-install-codex-spec/research.md#verification`
+- [x] T024 [P] Add CI job or pipeline step to run `codex --version && speckit --version` inside `docker-compose.test.yaml`
+- [x] T025 [P] Update `docs/SpecKitAutomation.md` quick troubleshooting table with summary of Codex/Spec Kit install steps
+- [x] T026 Prepare release notes summarizing bundled CLI versions in `docs/release-notes.md`
+- [x] T027 Run full quickstart (build, smoke tests) and record outputs in `specs/004-install-codex-spec/research.md#verification`
 
 ---
 
