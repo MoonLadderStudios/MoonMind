@@ -208,75 +208,55 @@ components:
           nullable: true
     SpecWorkflowRun:
       type: object
-      required: [id, repository, status, createdAt]
       properties:
         id:
           type: string
           format: uuid
-        repository:
-          type: string
         featureKey:
           type: string
-          nullable: true
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, cancelled]
+        phase:
+          type: string
+          enum: [discover, submit, apply, publish, complete]
         branchName:
           type: string
           nullable: true
-        pullRequestUrl:
+        prUrl:
           type: string
           format: uri
           nullable: true
-        status:
-          type: string
-          enum: [pending, running, succeeded, failed, no_work, retrying]
-        currentTaskName:
+        codexTaskId:
           type: string
           nullable: true
-        celeryChainId:
+        codexQueue:
           type: string
-        codexTaskId:
+          nullable: true
+        codexVolume:
+          type: string
+          nullable: true
+        codexPreflightStatus:
+          type: string
+          enum: [passed, failed, skipped]
+          nullable: true
+        codexPreflightMessage:
           type: string
           nullable: true
         codexLogsPath:
           type: string
           nullable: true
-        artifacts:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkflowArtifact'
-        tasks:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkflowTaskState'
-        credentialAudit:
-          $ref: '#/components/schemas/WorkflowCredentialAudit'
+        codexPatchPath:
+          type: string
           nullable: true
-        createdAt:
+        celeryChainId:
           type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-        completedAt:
-          type: string
-          format: date-time
+          description: Celery root task identifier for the workflow chain
           nullable: true
-    WorkflowTaskState:
-      type: object
-      required: [taskName, state]
-      properties:
-        taskName:
+        createdBy:
           type: string
-          enum: [discover, submit, apply, publish, finalize, retry]
-        state:
-          type: string
-          enum: [waiting, received, started, succeeded, failed, retrying]
-        message:
-          type: object
-          additionalProperties: true
-        artifactPaths:
-          type: array
-          items:
-            type: string
+          format: uuid
+          nullable: true
         startedAt:
           type: string
           format: date-time
@@ -285,56 +265,124 @@ components:
           type: string
           format: date-time
           nullable: true
-        retryCount:
-          type: integer
-          minimum: 0
-    WorkflowArtifact:
-      type: object
-      required: [artifactType, path]
-      properties:
-        artifactType:
-          type: string
-          enum: [codex_logs, codex_patch, apply_output, pr_payload, retry_context]
-        path:
-          type: string
-        contentType:
-          type: string
-        sizeBytes:
-          type: integer
-          minimum: 0
-          nullable: true
-        digest:
+        artifactsPath:
           type: string
           nullable: true
         createdAt:
           type: string
           format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowTaskState'
+        taskSummary:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowTaskSummary'
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowArtifact'
+        credentialAudit:
+          $ref: '#/components/schemas/WorkflowCredentialAudit'
+          nullable: true
+      required: [id, featureKey, status, phase]
+    WorkflowTaskState:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        taskName:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, skipped]
+        attempt:
+          type: integer
+          minimum: 1
+        payload:
+          type: object
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [taskName, status, attempt]
+
+    WorkflowTaskSummary:
+      type: object
+      properties:
+        taskName:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, skipped]
+        attempt:
+          type: integer
+          minimum: 1
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [taskName, status, attempt]
+    WorkflowArtifact:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        artifactType:
+          type: string
+          enum: [codex_logs, codex_patch, gh_push_log, gh_pr_response]
+        path:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [artifactType, path]
+
     WorkflowCredentialAudit:
       type: object
       properties:
         codexStatus:
           type: string
-          enum: [passed, failed, skipped]
-        codexCheckedAt:
-          type: string
-          format: date-time
-          nullable: true
-        codexMessage:
-          type: string
-          nullable: true
+          enum: [valid, invalid, expires_soon]
         githubStatus:
           type: string
-          enum: [passed, failed, skipped]
-        githubCheckedAt:
+          enum: [valid, invalid, scope_missing]
+        checkedAt:
           type: string
           format: date-time
           nullable: true
-        githubMessage:
+        notes:
           type: string
           nullable: true
-        environmentSnapshot:
-          type: object
-          additionalProperties: true
     ErrorResponse:
       type: object
       required: [code, message]
