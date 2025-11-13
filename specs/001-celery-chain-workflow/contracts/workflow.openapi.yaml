@@ -1,184 +1,243 @@
 openapi: 3.1.0
 info:
-  title: MoonMind Spec Kit Workflow API
-  version: '0.1.0'
+  title: MoonMind Spec Workflow API
+  version: 0.1.0
+  description: |
+    Contracts for triggering, monitoring, and retrying Spec Kit Celery chains.
+servers:
+  - url: https://api.moonmind.local
 paths:
   /api/workflows/speckit/runs:
     post:
-      summary: Trigger the next Spec Kit phase via Celery chain
+      summary: Trigger the next Spec Kit phase via the Celery chain.
       operationId: createSpecWorkflowRun
-      tags: [speckit-workflows]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                featureKey:
-                  type: string
-                  description: Override the auto-discovered feature identifier (optional)
-                forcePhase:
-                  type: string
-                  enum: [discover, submit, apply, publish]
-                  description: Resume the chain from a specific phase for reruns
-              additionalProperties: false
+              $ref: '#/components/schemas/CreateWorkflowRunRequest'
       responses:
         '202':
-          description: Workflow accepted for asynchronous execution
+          description: Run accepted and Celery chain enqueued.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpecWorkflowRun'
         '409':
-          description: Workflow already running for requested feature
+          description: Run already in progress for the same feature key.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorResponse'
     get:
-      summary: List workflow runs filtered by status or feature key
+      summary: List workflow runs with optional status filtering.
       operationId: listSpecWorkflowRuns
-      tags: [speckit-workflows]
       parameters:
         - in: query
           name: status
           schema:
             type: string
-            enum: [pending, running, succeeded, failed, cancelled]
-        - in: query
-          name: featureKey
-          schema:
-            type: string
-        - in: query
-          name: createdBy
-          schema:
-            type: string
-            format: uuid
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 25
+            enum: [pending, running, succeeded, failed, no_work, retrying]
+          description: Optional lifecycle filter.
         - in: query
           name: cursor
           schema:
             type: string
-            description: Cursor returned from a previous request for pagination
+          description: Opaque pagination cursor from the previous page.
       responses:
         '200':
-          description: Collection of workflow runs
+          description: Paginated run collection.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/SpecWorkflowRun'
-                  nextCursor:
-                    type: string
-                    nullable: true
+                $ref: '#/components/schemas/WorkflowRunCollection'
   /api/workflows/speckit/runs/{runId}:
     get:
-      summary: Retrieve a single workflow run with task states and artifacts
+      summary: Retrieve a workflow run with task states and artifacts.
       operationId: getSpecWorkflowRun
-      tags: [speckit-workflows]
       parameters:
         - $ref: '#/components/parameters/RunId'
+        - in: query
+          name: includeTasks
+          schema:
+            type: boolean
+            default: true
+        - in: query
+          name: includeArtifacts
+          schema:
+            type: boolean
+            default: true
       responses:
         '200':
-          description: Workflow details
+          description: Run found.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpecWorkflowRun'
         '404':
-          description: Run not found
+          description: Run not found.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/workflows/speckit/runs/{runId}/tasks:
+    get:
+      summary: Return task-level telemetry for the run.
+      operationId: listSpecWorkflowRunTasks
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Ordered task states.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:
+                    type: string
+                    format: uuid
+                  tasks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkflowTaskState'
+        '404':
+          description: Run not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/workflows/speckit/runs/{runId}/retry:
     post:
-      summary: Retry a failed workflow run starting at its failing phase
+      summary: Retry or resume a failed Celery chain from the failing task.
       operationId: retrySpecWorkflowRun
-      tags: [speckit-workflows]
       parameters:
         - $ref: '#/components/parameters/RunId'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                notes:
-                  type: string
-                  description: Operator justification for the retry action
+              $ref: '#/components/schemas/RetryWorkflowRunRequest'
       responses:
         '202':
-          description: Retry accepted
+          description: Retry accepted; new Celery chain enqueued.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpecWorkflowRun'
         '409':
-          description: Retry not allowed because run is not in failed state
+          description: Run not eligible for retry or credentials missing.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/workflows/speckit/runs/{runId}/artifacts:
+    get:
+      summary: List artifact metadata for download links.
+      operationId: listSpecWorkflowArtifacts
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Artifact listing returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:
+                    type: string
+                    format: uuid
+                  artifacts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkflowArtifact'
+        '404':
+          description: Run not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   parameters:
     RunId:
-      in: path
       name: runId
+      in: path
       required: true
       schema:
         type: string
         format: uuid
   schemas:
+    CreateWorkflowRunRequest:
+      type: object
+      required: [repository]
+      properties:
+        repository:
+          type: string
+          pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+        featureKey:
+          type: string
+          maxLength: 120
+        forcePhase:
+          type: string
+          enum: [discover, submit, apply, publish]
+        notes:
+          type: string
+          maxLength: 1024
+    RetryWorkflowRunRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [resume_failed_task, restart_from_discovery]
+          default: resume_failed_task
+        notes:
+          type: string
+          maxLength: 1024
+    WorkflowRunCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpecWorkflowRun'
+        nextCursor:
+          type: string
+          nullable: true
     SpecWorkflowRun:
       type: object
+      required: [id, repository, status, createdAt]
       properties:
         id:
           type: string
           format: uuid
+        repository:
+          type: string
         featureKey:
           type: string
-        status:
-          type: string
-          enum: [pending, running, succeeded, failed, cancelled]
-        phase:
-          type: string
-          enum: [discover, submit, apply, publish, complete]
+          nullable: true
         branchName:
           type: string
           nullable: true
-        prUrl:
+        pullRequestUrl:
           type: string
           format: uri
           nullable: true
-        codexTaskId:
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, no_work, retrying]
+        currentTaskName:
           type: string
           nullable: true
         celeryChainId:
           type: string
-          description: Celery root task identifier for the workflow chain
-        createdBy:
+        codexTaskId:
           type: string
-          format: uuid
-        startedAt:
-          type: string
-          format: date-time
           nullable: true
-        finishedAt:
+        codexLogsPath:
           type: string
-          format: date-time
           nullable: true
         artifacts:
           type: array
@@ -188,20 +247,36 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorkflowTaskState'
-      required: [id, featureKey, status, phase]
+        credentialAudit:
+          $ref: '#/components/schemas/WorkflowCredentialAudit'
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
     WorkflowTaskState:
       type: object
+      required: [taskName, state]
       properties:
         taskName:
           type: string
-        status:
+          enum: [discover, submit, apply, publish, finalize, retry]
+        state:
           type: string
-          enum: [queued, running, succeeded, failed, skipped]
-        attempt:
-          type: integer
-          minimum: 1
-        payload:
+          enum: [waiting, received, started, succeeded, failed, retrying]
+        message:
           type: object
+          additionalProperties: true
+        artifactPaths:
+          type: array
+          items:
+            type: string
         startedAt:
           type: string
           format: date-time
@@ -210,27 +285,61 @@ components:
           type: string
           format: date-time
           nullable: true
-      required: [taskName, status, attempt]
+        retryCount:
+          type: integer
+          minimum: 0
     WorkflowArtifact:
       type: object
+      required: [artifactType, path]
       properties:
         artifactType:
           type: string
-          enum: [codex_logs, codex_patch, gh_push_log, gh_pr_response]
+          enum: [codex_logs, codex_patch, apply_output, pr_payload, retry_context]
         path:
           type: string
+        contentType:
+          type: string
+        sizeBytes:
+          type: integer
+          minimum: 0
+          nullable: true
+        digest:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time
-      required: [artifactType, path]
-    Error:
+    WorkflowCredentialAudit:
       type: object
+      properties:
+        codexStatus:
+          type: string
+          enum: [passed, failed, skipped]
+        codexCheckedAt:
+          type: string
+          format: date-time
+          nullable: true
+        codexMessage:
+          type: string
+          nullable: true
+        githubStatus:
+          type: string
+          enum: [passed, failed, skipped]
+        githubCheckedAt:
+          type: string
+          format: date-time
+          nullable: true
+        githubMessage:
+          type: string
+          nullable: true
+        environmentSnapshot:
+          type: object
+          additionalProperties: true
+    ErrorResponse:
+      type: object
+      required: [code, message]
       properties:
         code:
           type: string
         message:
           type: string
-        details:
-          type: object
-          additionalProperties: true
-      required: [code, message]

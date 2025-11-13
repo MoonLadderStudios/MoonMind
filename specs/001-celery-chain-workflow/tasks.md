@@ -1,103 +1,133 @@
 # Tasks: Celery Chain Workflow Integration
 
-## Feature Overview
-- **Branch**: `001-celery-chain-workflow`
-- **Spec**: specs/001-celery-chain-workflow/spec.md
-- **Plan**: specs/001-celery-chain-workflow/plan.md
+**Input**: Design documents from `/specs/001-celery-chain-workflow/`
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-## Dependencies & Flow
-1. Phase 1 (Setup) → Phase 2 (Foundational) → Phase 3 (US1) → Phase 4 (US2) → Phase 5 (US3) → Phase 6 (Polish)
-2. User Story dependency order: **US1 → US2 → US3**
-3. Parallelizable tasks marked with `[P]`
+**Tests**: Automated tests are scoped where they directly verify Celery orchestration and API contracts referenced in the spec.
+
+**Organization**: Tasks are grouped by user story so each increment is independently testable.
+
+## Format: `[ID] [P?] [Story] Description`
+- `[P]` indicates the task can run in parallel with others in the same phase.
+- `[US#]` labels tasks that belong to a specific user story.
+- All tasks cite concrete file paths derived from the implementation plan.
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+**Purpose**: Ensure configuration scaffolding exists before touching schema or workflow code.
+
+- [ ] T001 [P] Add Spec workflow queue + artifact defaults to `.env-template`, `.env.vllm-template`, and `config.toml` so operators can set `SPEC_WORKFLOW_CODEX_QUEUE`, `SPEC_WORKFLOW_ARTIFACT_ROOT`, and Celery broker URLs.
+- [ ] T002 Wire the new settings into `moonmind/config/settings.py` and `api_service/config.template.toml` so API services and workers can read queue + artifact paths.
+- [ ] T003 [P] Update `docker-compose.yaml` and `docker-compose.job.yaml` Celery worker definitions to bind the `codex` queue and mount `var/artifacts/spec_workflows` for Codex log persistence.
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+**Purpose**: Create database entities, repositories, and Celery configuration required by every story. ⚠️ Do not start story work until these tasks finish.
+
+- [ ] T004 Create Alembic migration `api_service/migrations/versions/<timestamp>_spec_workflow_chain.py` adding `spec_workflow_runs`, `spec_workflow_task_states`, `workflow_credential_audits`, and `workflow_artifacts` per `data-model.md`.
+- [ ] T005 Update ORM models in `api_service/db/models.py` so SQLAlchemy knows about the new tables, FKs, and relationships.
+- [ ] T006 Implement persistence helpers in `moonmind/workflows/speckit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
+- [ ] T007 Expand Pydantic schemas in `moonmind/schemas/workflow_models.py` and serializers in `moonmind/workflows/speckit_celery/serializers.py` to match the contract outputs.
+- [ ] T008 Add artifact storage utilities in `moonmind/workflows/speckit_celery/storage.py` (new file) that normalize `var/artifacts/spec_workflows/<run_id>` paths, file metadata, and digests.
+- [ ] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/speckit_celery/celeryconfig.py` and ensure `celery_worker/speckit_worker.py` consumes those settings on startup.
+
+**Checkpoint**: Database + serialization + Celery plumbing ready for user stories.
+
+---
+
+## Phase 3: User Story 1 – Trigger Next Spec Phase (Priority: P1) 🎯 MVP
+**Goal**: Operators run “next Spec Kit phase” and a Celery chain executes discovery → submit → apply → publish while persisting artifacts and Codex context.
+**Independent Test**: POST `/api/workflows/speckit/runs` against a staging repo and verify a branch/PR plus Codex logs are created without manual steps.
+
+### Tests (write before implementation)
+- [ ] T010 [P] [US1] Add Celery-chain happy-path coverage to `tests/unit/workflows/test_tasks.py`, asserting discovery/submit/apply/publish states populate the DB.
+- [ ] T011 [P] [US1] Add contract coverage for `POST /api/workflows/speckit/runs` in `tests/contract/test_workflow_api.py`, checking 202 payload shape and idempotent branch names.
+
+### Implementation
+- [ ] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/speckit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `SpecWorkflowRun`.
+- [ ] T013 [US1] Implement discovery, submit, apply/poll, publish, and finalize tasks with artifact writes inside `moonmind/workflows/speckit_celery/tasks.py`.
+- [ ] T014 [US1] Create Codex/GitHub helper functions in `moonmind/workflows/speckit_celery/services.py` to enforce idempotent branch naming, push commits, and capture JSONL log paths.
+- [ ] T015 [US1] Wire `POST /api/workflows/speckit/runs` inside `api_service/api/routers/workflows.py` to validate input, create `SpecWorkflowRun`, and enqueue the chain.
+- [ ] T016 [US1] Update worker bootstrap scripts (`celery_worker/speckit_worker.py` and `celery_worker/scripts/codex_login_proxy.py`) to run Codex preflight checks and mount the configured auth volume before tasks start.
+
+**Checkpoint**: Triggering a run now creates branches/PRs and stores Codex artifacts automatically.
+
+---
+
+## Phase 4: User Story 2 – Monitor Workflow Progress (Priority: P2)
+**Goal**: Operators view real-time run status, task-by-task state, and artifact metadata via API responses.
+**Independent Test**: While a run executes, poll `GET /api/workflows/speckit/runs/{id}` and `/runs/{id}/tasks` to confirm timestamps, payloads, and artifacts update; induce a failure to verify actionable messages.
+
+### Tests
+- [ ] T017 [P] [US2] Extend `tests/unit/workflows/test_tasks.py` to confirm each Celery state change writes `SpecWorkflowTaskState` with timestamps + artifact references.
+- [ ] T018 [P] [US2] Add contract tests for `GET /api/workflows/speckit/runs`, `/runs/{id}`, `/runs/{id}/tasks`, and `/runs/{id}/artifacts` in `tests/contract/test_workflow_api.py`.
+
+### Implementation
+- [ ] T019 [US2] Implement run listing/filtering + task-state fetchers in `moonmind/workflows/speckit_celery/repositories.py`, including cursor pagination and error handling.
+- [ ] T020 [US2] Enhance `moonmind/workflows/speckit_celery/serializers.py` to embed task states, credential audit info, and artifacts per the OpenAPI schema.
+- [ ] T021 [US2] Add GET handlers for runs, run detail, task states, and artifacts inside `api_service/api/routers/workflows.py`, enforcing auth + query validation.
+- [ ] T022 [US2] Update `moonmind/workflows/speckit_celery/tasks.py` to emit structured status snapshots (state, timestamps, payload refs) into `SpecWorkflowTaskState`.
+- [ ] T023 [US2] Document monitoring workflows (API polling + expected logs) in `specs/001-celery-chain-workflow/quickstart.md` and `docs/SpecKitAutomation.md`.
+
+**Checkpoint**: Operators can rely on the API to observe progress and download artifacts.
+
+---
+
+## Phase 5: User Story 3 – Retry or Resume Failed Chains (Priority: P3)
+**Goal**: Resume failed chains from the blocking task (when safe) or restart cleanly after fixing credentials, preserving artifacts.
+**Independent Test**: Force a failure at publish, POST `/api/workflows/speckit/runs/{id}/retry`, and confirm the chain resumes using stored diff context; retry again without fixing credentials to ensure fast failure with guidance.
+
+### Tests
+- [ ] T024 [P] [US3] Add retry-state coverage in `tests/unit/workflows/test_tasks.py`, asserting transitions `failed → retrying → {running|failed|succeeded}` and artifact reuse.
+- [ ] T025 [P] [US3] Add contract tests for `POST /api/workflows/speckit/runs/{id}/retry` in `tests/contract/test_workflow_api.py`, covering successful resumes and credential errors.
+
+### Implementation
+- [ ] T026 [US3] Implement retry orchestration helpers (`retry_spec_workflow_run`, guard rails) in `moonmind/workflows/__init__.py` to locate failing task outputs and enqueue resumes.
+- [ ] T027 [US3] Update `moonmind/workflows/speckit_celery/tasks.py` to accept resume tokens, skip completed tasks, and reload artifacts/logs as inputs.
+- [ ] T028 [US3] Add the retry endpoint + validation to `api_service/api/routers/workflows.py`, surfacing guidance when retries are unsafe.
+- [ ] T029 [US3] Persist retry metadata (attempt counters, operator notes, extra artifacts) in `moonmind/workflows/speckit_celery/repositories.py` and `moonmind/workflows/speckit_celery/storage.py`.
+
+**Checkpoint**: Failed runs can be resumed safely with complete audit trails.
+
+---
+
+## Phase 6: Polish & Cross-Cutting Concerns
+**Purpose**: Hardening, documentation, and observability after core stories ship.
+
+- [ ] T030 [P] Refresh operator runbooks in `docs/ops-runbook.md` and `docs/SpecKitAutomationInstructions.md` with queue setup, retry procedures, and artifact locations.
+- [ ] T031 Add structured logging + StatsD hooks for each Celery phase in `moonmind/config/logging.py` and `moonmind/workflows/speckit_celery/tasks.py`.
+- [ ] T032 Validate the end-to-end flow via `specs/001-celery-chain-workflow/quickstart.md`, capturing sample run IDs/artifacts for documentation.
+
+---
+
+## Dependencies & Execution Order
+- Setup (Phase 1) → Foundational (Phase 2) → User Stories (Phases 3–5) → Polish (Phase 6).
+- US1 is the MVP and must complete before US2/US3 finalize; US2 depends on US1 data emissions, while US3 depends on US1 artifacts and US2 repository helpers.
+- Tasks marked `[P]` can run concurrently; all others require prior tasks in the same phase to finish.
 
 ## Parallel Execution Examples
-- **US1**: Run Celery task implementation (`tasks.py`) in parallel with Codex/GitHub adapter creation (`adapters/*`).
-- **US2**: UI router endpoint (`api/routers/workflows.py`) can proceed alongside repository query functions once database layer is ready.
-- **US3**: Retry orchestration logic can progress while writing integration tests in `tests/integration/workflows/test_workflow_chain.py`.
+- **US1**: T010 and T011 can run while T012 starts; once T012 completes, T013–T015 proceed sequentially and T016 can run after T015 stabilizes.
+- **US2**: T017/T018 execute in parallel; T019 + T022 can proceed simultaneously with T020 + T021 once repository schema is stable; T023 trails after endpoints stabilize.
+- **US3**: T024/T025 can run together, T026/T027 handle orchestration while T028/T029 address API + storage updates.
+- **Setup/Foundation**: T001 and T003 are independent; T004 (migration) and T009 (Celery config) can overlap once settings from T002 are in place.
 
-## Implementation Strategy
-Deliver MVP with US1 only (automated phase trigger through PR). US2 adds observability UI/API depth. US3 introduces retry/resume robustness and completes full operator experience.
+## Independent Test Criteria
+- **US1**: POST `/api/workflows/speckit/runs` with a staged Spec repo; verify Celery completes discovery→publish, emits Codex task IDs, and stores JSONL logs + PR URL.
+- **US2**: Trigger a run, poll `GET /api/workflows/speckit/runs` and `/runs/{id}/tasks` to confirm timestamps/messages update; fetch `/runs/{id}/artifacts` to download logs.
+- **US3**: Force a publish failure, call `/api/workflows/speckit/runs/{id}/retry`, ensure the chain resumes from publish using stored artifacts; retry again without fixing credentials to confirm fast failure + guidance.
 
----
+## Implementation Strategy (MVP First)
+1. Deliver US1 (Phase 3) for MVP—operators get one-click Codex workflow to PR.
+2. Layer US2 observability so operators trust automation and can self-serve debugging.
+3. Add US3 retry/resume to reduce operational toil and satisfy FR-009.
+4. Polish with documentation, logging, and quickstart validation.
 
-## Phase 1 – Setup
-- [x] T001 Establish Celery worker entrypoint in `celery_worker/speckit_worker.py`
-- [x] T002 Add RabbitMQ broker and PostgreSQL Celery result backend defaults in `config/settings.py`
-- [x] T003 Document environment variables in ./README.md and ./.env-template
-
-## Phase 2 – Foundational Infrastructure
-- [x] T004 Create database migration `api_service/migrations/versions/add_spec_workflow_tables.py` with new tables
-- [x] T005 Update SQLAlchemy models in `moonmind/workflows/speckit_celery/models.py`
-- [x] T006 Implement repositories in `moonmind/workflows/speckit_celery/repositories.py`
-- [x] T007 [P] Define shared serializers in `moonmind/workflows/speckit_celery/serializers.py`
-- [x] T008 Integrate Celery app setup in `moonmind/workflows/speckit_celery/__init__.py`
-- [x] T009 Add configuration wiring in `moonmind/workflows/__init__.py`
-
-## Phase 3 – User Story 1: Trigger Next Spec Phase (Priority P1)
-### Story Goal
-Automate discovery, submission, diff application, and PR publication through a Celery Chain invoked via MoonMind.
-
-### Independent Test Criteria
-Execute the POST `/api/workflows/speckit/runs` endpoint with valid secrets and verify a branch and PR are created for the next phase.
-
-### Tasks
-- [x] T010 [US1] Implement discovery task in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T011 [US1] Implement Codex submission task in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T012 [US1] Implement apply/PR task in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T013 [US1] Build orchestrator chain in `moonmind/workflows/speckit_celery/orchestrator.py`
-- [x] T014 [US1] Add Codex client adapter in `moonmind/workflows/adapters/codex_client.py`
-- [x] T015 [US1] Add GitHub client adapter in `moonmind/workflows/adapters/github_client.py`
-- [x] T016 [US1] Expose workflow trigger endpoint in `moonmind/api/routers/workflows.py`
-- [x] T017 [US1] Register Pydantic schemas in `moonmind/schemas/workflow_models.py`
-- [x] T018 [US1] Write integration test `tests/integration/workflows/test_workflow_chain.py`
-- [x] T019 [US1] Add contract test `tests/contract/test_workflow_api.py`
-- [x] T020 [US1] Document operator workflow in `specs/001-celery-chain-workflow/quickstart.md`
-
-## Phase 4 – User Story 2: Monitor Workflow Progress (Priority P2)
-### Story Goal
-Provide real-time visibility into each Celery task state and related artifacts.
-
-### Independent Test Criteria
-Trigger a workflow run, poll GET `/api/workflows/speckit/runs/{id}`, and confirm task states, timestamps, and artifact references update as tasks progress.
-
-### Tasks
-- [x] T021 [US2] Extend repositories for task state queries in `moonmind/workflows/speckit_celery/repositories.py`
-- [x] T022 [US2] Emit structured status updates in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T023 [US2] Enhance serializer outputs in `moonmind/workflows/speckit_celery/serializers.py`
-- [x] T024 [US2] Add GET list endpoint in `moonmind/api/routers/workflows.py`
-- [x] T025 [US2] Add GET detail endpoint in `moonmind/api/routers/workflows.py`
-- [x] T026 [US2] Update schemas for task state responses in `moonmind/schemas/workflow_models.py`
-- [x] T027 [US2] Persist JSONL/patch paths in `moonmind/workflows/speckit_celery/models.py`
-- [x] T028 [US2] Write unit tests for serializers in `tests/unit/workflows/test_tasks.py`
-
-## Phase 5 – User Story 3: Retry or Resume Failed Chains (Priority P3)
-### Story Goal
-Allow operators to resume failed workflows from the point of failure with validation of credentials and artifacts.
-
-### Independent Test Criteria
-Force a failure after Codex apply, invoke `/api/workflows/speckit/runs/{id}/retry`, and ensure the chain resumes at the publish phase using stored artifacts.
-
-### Tasks
-- [x] T029 [US3] Add retry orchestration in `moonmind/workflows/speckit_celery/orchestrator.py`
-- [x] T030 [US3] Implement credential audit persistence in `moonmind/workflows/speckit_celery/models.py`
-- [x] T031 [US3] Validate secrets pre-flight in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T032 [US3] Expose retry endpoint in `moonmind/api/routers/workflows.py`
-- [x] T033 [US3] Update schemas for retry responses in `moonmind/schemas/workflow_models.py`
-- [x] T034 [US3] Extend contract tests for retry flow in `tests/contract/test_workflow_api.py`
-- [x] T035 [US3] Add integration retry scenario in `tests/integration/workflows/test_workflow_chain.py`
-
-## Phase 6 – Polish & Cross-Cutting
-- [x] T036 Add observability hooks (logging/metrics) in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T037 Update deployment manifests in ./docker-compose.yaml and ./docker-compose.job.yaml for Celery worker queue
-- [x] T038 Refresh Codex agent context in ./AGENTS.md with final verification steps
-- [x] T039 Add runbook section to `docs/ops-runbook.md`
-
----
-
-## Task Validation
-- Total tasks: **39**
-- User Story task counts: US1 = 11, US2 = 8, US3 = 7
-- Parallel tasks identified: T007
-- Independent test criteria documented for every user story
-- MVP Scope: Complete Phase 3 (US1) to deliver automated Spec Kit phase execution
-- Checklist compliance: All tasks include checkbox, sequential ID, optional [P], [US#] where required, and precise file paths
+## Task Summary & Validation
+- Total tasks: **32**
+- Per-story counts: **US1 – 7**, **US2 – 7**, **US3 – 6** (remaining tasks cover setup, foundational, and polish work)
+- Parallel opportunities: Highlighted above (e.g., T001/T003, T010/T011, T017/T018, T024/T025)
+- Independent test criteria: Listed per story and mirror spec expectations
+- Suggested MVP scope: Complete through Phase 3 (US1)
+- Checklist compliance: Every task uses `- [ ] T### [P?] [US?] Description with file path`

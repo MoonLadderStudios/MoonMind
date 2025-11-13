@@ -22,18 +22,18 @@ Spec Kit operators need Codex automation runs to reuse a persistent sign-in so C
 
 ---
 
-### User Story 2 - Sharded Worker Routing (Priority: P2)
+### User Story 2 - Dedicated Codex Queue (Priority: P2)
 
-Platform reliability engineers want Codex-heavy workloads to distribute predictably across a limited pool of prepared workers.
+Platform reliability engineers need Codex-heavy workloads isolated onto a single named queue so Codex credentials and runtime dependencies stay decoupled from other Celery traffic.
 
-**Why this priority**: Deterministic sharding prevents multiple workers from racing on the same credentials and keeps the login volumes healthy.
+**Why this priority**: A dedicated queue makes the worker topology simple (one queue, one worker by default) while still guaranteeing Codex tasks never starve general-purpose workers or vice versa.
 
-**Independent Test**: Dispatch Codex tasks with different affinity keys and verify that each routes to a consistent queue/worker pairing while non-Codex tasks continue on default queues.
+**Independent Test**: Dispatch Codex and non-Codex tasks and verify that Codex phases land on the `codex` queue while everything else remains on the default queue.
 
 **Acceptance Scenarios**:
 
-1. **Given** two Spec runs with different repositories, **When** Codex tasks are enqueued, **Then** each run is routed to a stable `codex-{n}` queue derived from its shard key so the same worker volume serves all Codex steps for that run.
-2. **Given** a non-Codex task submitted to Celery, **When** it is scheduled, **Then** it continues to use the default queue so Codex-specific routing never delays other workloads.
+1. **Given** two Spec runs with different repositories, **When** Codex tasks are enqueued, **Then** both runs target the shared `codex` queue and can execute sequentially on the Codex worker without manual routing rules.
+2. **Given** a non-Codex task submitted to Celery, **When** it is scheduled, **Then** it continues to use the default queue so Codex-specific processing never delays other workloads.
 
 ---
 
@@ -57,29 +57,29 @@ Operations staff need a lightweight process to provision, audit, and recover Cod
 - Codex worker starts without its configured auth volume; the run should fail fast with guidance rather than silently defaulting to ephemeral storage.
 - Pre-flight login check times out or the Codex service is unreachable; the system must log the failure and avoid starting the Codex phase until connectivity is restored.
 - A Codex volume is accidentally shared between workers; the platform should detect duplicate assignments during startup to prevent token clobbering.
-- The number of active Codex workers changes; routing logic must adjust shard mappings or provide clear steps for extending the shard count.
+- The number of active Codex workers changes; operators must be able to scale the shared Codex queue up or down without reconfiguring task routing.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The automation platform MUST route all Codex phases through dedicated `codex-{n}` queues so each run consistently reaches its assigned worker shard.
+- **FR-001**: The automation platform MUST route all Codex phases through the dedicated `codex` queue so Codex-specific dependencies stay isolated from default Celery workloads.
 - **FR-002**: Each Codex worker MUST map exactly one named persistent Codex auth volume and mount it into every job container’s Codex configuration path.
 - **FR-003**: Before any Codex phase executes, the platform MUST perform an automated login status check using the worker’s assigned volume and block execution on failure.
-- **FR-004**: When a login check fails, the system MUST surface an actionable message identifying the affected shard and offering remediation steps to refresh the volume’s credentials.
-- **FR-005**: Deployment tooling MUST provide service definitions for the three Codex-focused workers and the three associated volumes so operators can start them with standard compose commands.
-- **FR-006**: Runtime logging MUST record the Codex queue, shard identifier, and volume name attached to each run to support auditing and troubleshooting.
+- **FR-004**: When a login check fails, the system MUST surface an actionable message identifying the affected Codex worker and offering remediation steps to refresh the volume’s credentials.
+- **FR-005**: Deployment tooling MUST provide a service definition for the Codex-focused worker and its associated volume so operators can start it with standard compose commands.
+- **FR-006**: Runtime logging MUST record the Codex queue and volume name attached to each run to support auditing and troubleshooting.
 - **FR-007**: Operator documentation MUST include a runbook for authenticating each Codex volume once and for confirming status without entering containers manually.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Codex Auth Volume**: Persistent storage that holds ChatGPT OAuth artifacts for a single Codex worker; uniquely named and reused across runs.
-- **Codex Worker Shard**: A Celery worker instance bound to one Codex queue and its corresponding auth volume; responsible for executing Codex phases of Spec runs routed to its shard.
-- **Spec Automation Run**: A recorded automation execution that now references the Codex shard and volume used for its submission phase to support traceability.
+- **Codex Worker**: A Celery worker instance bound to the Codex queue and its corresponding auth volume; responsible for executing Codex phases of Spec runs.
+- **Spec Automation Run**: A recorded automation execution that now references the Codex queue and volume used for its submission phase to support traceability.
 
 ## Assumptions
 
-- Three Codex worker shards provide sufficient capacity for initial rollout; additional shards can be added later using the same pattern.
+- A single Codex worker queue provides sufficient capacity for initial rollout; additional workers can be added to the same queue later if needed.
 - Job containers continue to run as the non-root user expected by the Codex CLI so mounted credentials remain readable.
 - Operators have existing access to Docker tooling and the ChatGPT sign-in flow needed to authenticate volumes.
 
@@ -90,4 +90,4 @@ Operations staff need a lightweight process to provision, audit, and recover Cod
 - **SC-001**: At least 95% of Codex automation runs during the first month complete without prompting for manual reauthentication.
 - **SC-002**: Authentication failures detected during the pre-flight check are resolved within one business hour in 90% of cases by following the provided runbook.
 - **SC-003**: Provisioning a new Codex worker from scratch, including initial volume authentication, takes under 15 minutes when executed by an on-call operator.
-- **SC-004**: Operations reports confirm that 100% of Codex runs emit logs identifying their queue and volume, enabling complete traceability during audits.
+- **SC-004**: Operations reports confirm that 100% of Codex runs emit logs identifying the Codex queue and volume, enabling complete traceability during audits.

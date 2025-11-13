@@ -1,91 +1,78 @@
 # Implementation Plan: Celery Chain Workflow Integration
 
-**Branch**: `001-celery-chain-workflow` | **Date**: 2025-11-02 | **Spec**: specs/001-celery-chain-workflow/spec.md
+**Branch**: `001-codex-single-queue` | **Date**: 2025-11-12 | **Spec**: `specs/001-celery-chain-workflow/spec.md`
 **Input**: Feature specification from `/specs/001-celery-chain-workflow/spec.md`
+
+**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
-Introduce a Spec Kit provider backed by a Celery Chain so MoonMind can discover the next phase, delegate work to Codex Cloud, apply the resulting diff, and publish a GitHub pull request in a single automated run. The change set adds a Celery worker package, persistence for workflow runs, and orchestration tasks that surface structured status to the existing MoonMind UI while reusing Codex CLI and gh automation scripts.
+Implement a Celery chain that drives Spec Kit phases end-to-end: discover the next actionable task, submit it to Codex Cloud, poll for diffs, and publish GitHub branches/PRs while persisting artifacts and emitting structured status for MoonMind’s UI. The workflow must support retries/resumes, enforce credential checks ahead of Codex/GitHub calls, and log every step so operators can observe and remediate failures quickly.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 (matches existing MoonMind services and supported pyproject range)  
-**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x (broker), PostgreSQL (result backend & existing MoonMind DB for run persistence), Codex CLI, GitHub CLI
-**Storage**: PostgreSQL `spec_workflow_runs` + `spec_workflow_task_states` (Celery result backend and workflow history); RabbitMQ broker for task dispatch and callbacks; object storage optional for large artifacts (initially local filesystem under `var/artifacts/spec_workflows/<run_id>`)
-**Broker Topology**: Single-node RabbitMQ using default classic queues (no quorum/HA policies) with optional future DLX/TTL tuning.
-**Testing**: pytest with celery worker fixtures, contract snapshot tests for API responses  
-**Target Platform**: Linux containers (MoonMind API + Celery worker deployed via docker-compose/k8s)  
-**Project Type**: API backend with background worker  
-**Performance Goals**: Complete 95% of runs within 15 minutes; task status updates available within 5 seconds of state change  
-**Constraints**: Must operate within existing MoonMind auth/secret management; use workspace-write sandbox for Codex CLI; avoid introducing new external network paths beyond Codex/GitHub  
-**Scale/Scope**: Support 10 concurrent workflow runs with linear scaling via additional Celery workers
+**Language/Version**: Python 3.11 (per AGENTS.md instructions and repo toolchain)  
+**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x broker, PostgreSQL (Celery result backend + MoonMind DB), Codex CLI/Cloud, GitHub API, FastAPI service layer  
+**Storage**: PostgreSQL schemas `spec_workflow_runs` & `spec_workflow_task_states`, object storage (local `var/artifacts/spec_workflows/<run_id>` as interim)  
+**Testing**: pytest (unit + contract suites already referenced in specs)  
+**Target Platform**: Linux containers via docker compose (api, celery-worker, rabbitmq)  
+**Project Type**: Backend services (FastAPI API + Celery workers)  
+**Performance Goals**: Meet SC-001 (95% workflows reach PR in ≤15 min) & SC-002 (100% task state emission)  
+**Constraints**: Deterministic idempotent branch naming (FR-008), structured logging per FR-006, credential validation before execution (FR-010)  
+**Scale/Scope**: Up to ~5 concurrent Spec workflow runs per deployment (single RabbitMQ node, default classic queues)
 
 ## Constitution Check
 
-Current constitution file contains placeholders only; no ratified principles or gates exist. Proceeding under temporary governance with a note to update once the constitution is finalized. No violations recorded.
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-**Post-Design Revalidation**: Phase 1 outputs introduce Celery modules and database tables without conflicting with any stated (or pending) governance rules. Gate remains clear.
+- **Core Principles**: NEEDS CLARIFICATION — `.specify/memory/constitution.md` only lists placeholder headings (`[PRINCIPLE_1_NAME]`, etc.) with no enforceable guidance; in absence of ratified rules, no violations can be evaluated.
+- **Additional Constraints / Workflow Rules**: NEEDS CLARIFICATION — sections `[SECTION_2_NAME]` and `[SECTION_3_NAME]` are empty, so there are no extra gates to enforce.
+
+**Gate Status**: PASS WITH NOTE — Constitution file lacks concrete directives; proceeding under assumption that no additional constraints apply until governance is provided.
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/001-celery-chain-workflow/
-├── plan.md
-├── research.md
-├── data-model.md
-├── quickstart.md
-└── contracts/
-    └── workflow.openapi.yaml
+specs/[###-feature]/
+├── plan.md              # This file (/speckit.plan command output)
+├── research.md          # Phase 0 output (/speckit.plan command)
+├── data-model.md        # Phase 1 output (/speckit.plan command)
+├── quickstart.md        # Phase 1 output (/speckit.plan command)
+├── contracts/           # Phase 1 output (/speckit.plan command)
+└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
 ```
 
 ### Source Code (repository root)
-
 ```text
-moonmind/
-├── workflows/
-│   ├── __init__.py
-│   ├── speckit_celery/
-│   │   ├── __init__.py
-│   │   ├── tasks.py
-│   │   ├── orchestrator.py
-│   │   ├── models.py
-│   │   ├── repositories.py
-│   │   └── serializers.py
-│   └── adapters/
-│       ├── codex_client.py
-│       └── github_client.py
-├── api/
-│   └── routers/
-│       └── workflows.py
-└── schemas/
-    └── workflow_models.py
-
 api_service/
-├── migrations/
-│   └── versions/
-│       └── add_spec_workflow_tables.py
-└── tests/
+├── api/routers/workflows.py        # HTTP entrypoints for Spec workflows
+├── core/, services/, schemas/      # orchestration + persistence logic
+└── scripts/ensure_codex_config.py  # credential enforcement utilities
 
 celery_worker/
-└── speckit_worker.py (entrypoint for dedicated worker queue)
+├── speckit_worker.py               # Celery worker bootstrap + Codex helpers
+└── scripts/codex_login_proxy.py    # Codex CLI auth proxy in worker pods
+
+moonmind/
+├── workflows/speckit_celery/       # workflow orchestration + repositories
+├── config/settings.py              # runtime configuration for queues/backends
+└── schemas/workflow_models.py      # serialization of workflow entities
+
+specs/001-celery-chain-workflow/    # Feature docs (spec, plan, research, etc.)
 
 tests/
-├── integration/
-│   └── workflows/
-│       └── test_workflow_chain.py
-├── contract/
-│   └── test_workflow_api.py
-└── unit/
-    └── workflows/
-        └── test_tasks.py
+├── unit/workflows/test_tasks.py    # unit tests for Celery routing + logic
+└── contract/test_workflow_api.py   # API contract coverage for workflow endpoints
 ```
 
-**Structure Decision**: Extend existing MoonMind backend with a new `moonmind.workflows.speckit_celery` module, expose endpoints under `moonmind.api.routers.workflows`, and provision a dedicated Celery worker entrypoint plus database migration for run persistence. Testing follows existing `tests/` layout with unit, contract, and integration coverage.
+**Structure Decision**: This feature spans the existing backend/API + Celery worker stack. Implementation touches `api_service`, `celery_worker`, `moonmind/workflows/...`, and supporting tests; documentation continues under `specs/001-celery-chain-workflow/`.
 
 ## Complexity Tracking
 
+> **Fill ONLY if Constitution Check has violations that must be justified**
+
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| _None_ | – | – |
+| _None_ | — | — |
