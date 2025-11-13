@@ -2,7 +2,10 @@
 approval_policy = "never"
 
 [spec_workflow]
-celery_broker_url = "amqp://guest:guest@rabbitmq:5672//"
-celery_result_backend = "db+postgresql://postgres:password@api-db:5432/moonmind"
+# Provide explicit connection overrides when the Spec workflow should use
+# dedicated Celery infrastructure. Leave blank to inherit global Celery
+# settings.
+celery_broker_url = ""
+celery_result_backend = ""
 codex_queue = "codex"
 artifact_root = "var/artifacts/spec_workflows"

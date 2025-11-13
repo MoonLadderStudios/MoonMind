@@ -84,7 +84,6 @@ services:
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - SPEC_WORKFLOW_CODEX_QUEUE=codex-0
-      - CODEX_QUEUE=codex-0
       - CODEX_VOLUME_NAME=codex_auth_0
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
     env_file:
@@ -121,7 +120,6 @@ services:
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - SPEC_WORKFLOW_CODEX_QUEUE=codex-1
-      - CODEX_QUEUE=codex-1
       - CODEX_VOLUME_NAME=codex_auth_1
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
     env_file:
@@ -158,7 +156,6 @@ services:
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - SPEC_WORKFLOW_CODEX_QUEUE=codex-2
-      - CODEX_QUEUE=codex-2
       - CODEX_VOLUME_NAME=codex_auth_2
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
     env_file:

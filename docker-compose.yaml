@@ -180,7 +180,7 @@ services:
     command: >-
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
-      --queues=${SPEC_WORKFLOW_CODEX_QUEUE:-codex}
+      --queues=${SPEC_WORKFLOW_CODEX_QUEUE:-codex},${CELERY_DEFAULT_QUEUE:-speckit}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -248,7 +248,6 @@ services:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
       - SPEC_WORKFLOW_CODEX_QUEUE=codex-0
-      - CODEX_QUEUE=codex-0
       - CODEX_VOLUME_NAME=codex_auth_0
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
       - CODEX_LOGIN_PROXY_LISTEN_PORT=${CODEX_LOGIN_PROXY_LISTEN_PORT:-51455}

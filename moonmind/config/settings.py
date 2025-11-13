@@ -1,5 +1,4 @@
 import os
-import os
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -126,12 +125,12 @@ class SpecWorkflowSettings(BaseSettings):
     )
     celery_broker_url: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_CELERY_BROKER_URL",
+        env=("SPEC_WORKFLOW_CELERY_BROKER_URL", "CELERY_BROKER_URL"),
         description="Override Celery broker URL dedicated to Spec workflow chains.",
     )
     celery_result_backend: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_CELERY_RESULT_BACKEND",
+        env=("SPEC_WORKFLOW_CELERY_RESULT_BACKEND", "CELERY_RESULT_BACKEND"),
         description="Override Celery result backend for Spec workflow chains.",
     )
     metrics_enabled: bool = Field(
@@ -169,7 +168,7 @@ class SpecWorkflowSettings(BaseSettings):
     )
     codex_queue: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_CODEX_QUEUE",
+        env=("SPEC_WORKFLOW_CODEX_QUEUE", "CODEX_QUEUE"),
         description="Explicit Codex queue name assigned to this worker.",
     )
     codex_volume_name: Optional[str] = Field(
@@ -281,23 +280,8 @@ class SpecWorkflowSettings(BaseSettings):
                 f"Allowed values: {allowed_display or '<none>'}"
             )
 
-        if not self.celery_broker_url:
-            broker = os.getenv("CELERY_BROKER_URL")
-            if broker:
-                self.celery_broker_url = broker.strip() or None
-        if not self.celery_result_backend:
-            backend = os.getenv("CELERY_RESULT_BACKEND")
-            if backend:
-                self.celery_result_backend = backend.strip() or None
-
-        if not self.codex_queue:
-            codex_queue = os.getenv("CODEX_QUEUE")
-            if codex_queue:
-                stripped_queue = codex_queue.strip()
-                if stripped_queue:
-                    self.codex_queue = stripped_queue
-        if not self.codex_queue:
-            self.codex_queue = "codex"
+        # Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
+        # ``AppSettings.model_post_init`` to populate sensible defaults.
 
 
 class SecuritySettings(BaseSettings):
