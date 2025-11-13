@@ -17,9 +17,9 @@
 ## Phase 1: Setup (Shared Infrastructure)
 **Purpose**: Ensure configuration scaffolding exists before touching schema or workflow code.
 
-- [ ] T001 [P] Add Spec workflow queue + artifact defaults to `.env-template`, `.env.vllm-template`, and `config.toml` so operators can set `SPEC_WORKFLOW_CODEX_QUEUE`, `SPEC_WORKFLOW_ARTIFACT_ROOT`, and Celery broker URLs.
-- [ ] T002 Wire the new settings into `moonmind/config/settings.py` and `api_service/config.template.toml` so API services and workers can read queue + artifact paths.
-- [ ] T003 [P] Update `docker-compose.yaml` and `docker-compose.job.yaml` Celery worker definitions to bind the `codex` queue and mount `var/artifacts/spec_workflows` for Codex log persistence.
+- [x] T001 [P] Add Spec workflow queue + artifact defaults to `.env-template`, `.env.vllm-template`, and `config.toml` so operators can set `SPEC_WORKFLOW_CODEX_QUEUE`, `SPEC_WORKFLOW_ARTIFACT_ROOT`, and Celery broker URLs.
+- [x] T002 Wire the new settings into `moonmind/config/settings.py` and `api_service/config.template.toml` so API services and workers can read queue + artifact paths.
+- [x] T003 [P] Update `docker-compose.yaml` and `docker-compose.job.yaml` Celery worker definitions to bind the `codex` queue and mount `var/artifacts/spec_workflows` for Codex log persistence.
 
 ---
 

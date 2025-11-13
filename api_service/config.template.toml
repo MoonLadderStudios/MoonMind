@@ -1,2 +1,8 @@
 # Managed by MoonMind automation
 approval_policy = "never"
+
+[spec_workflow]
+celery_broker_url = "amqp://guest:guest@rabbitmq:5672//"
+celery_result_backend = "db+postgresql://postgres:password@api-db:5432/moonmind"
+codex_queue = "codex"
+artifact_root = "var/artifacts/spec_workflows"
