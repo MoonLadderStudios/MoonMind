@@ -1,2 +1,11 @@
 # Managed by MoonMind automation
 approval_policy = "never"
+
+[spec_workflow]
+# Provide explicit connection overrides when the Spec workflow should use
+# dedicated Celery infrastructure. Leave blank to inherit global Celery
+# settings.
+celery_broker_url = ""
+celery_result_backend = ""
+codex_queue = "codex"
+artifact_root = "var/artifacts/spec_workflows"

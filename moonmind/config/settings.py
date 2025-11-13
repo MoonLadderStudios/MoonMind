@@ -109,7 +109,9 @@ class SpecWorkflowSettings(BaseSettings):
     repo_root: str = Field(".", env="SPEC_WORKFLOW_REPO_ROOT")
     tasks_root: str = Field("specs", env="SPEC_WORKFLOW_TASKS_ROOT")
     artifacts_root: str = Field(
-        "var/artifacts/spec_workflows", env="SPEC_WORKFLOW_ARTIFACTS_ROOT"
+        "var/artifacts/spec_workflows",
+        env=("SPEC_WORKFLOW_ARTIFACT_ROOT", "SPEC_WORKFLOW_ARTIFACTS_ROOT"),
+        description="Filesystem location where Spec workflow artifacts are persisted.",
     )
     job_image: str = Field(
         "moonmind/spec-automation-job:latest",
@@ -120,6 +122,16 @@ class SpecWorkflowSettings(BaseSettings):
         "/work",
         env="SPEC_AUTOMATION_WORKSPACE_ROOT",
         description="Host-mounted root directory for Spec Automation workspaces.",
+    )
+    celery_broker_url: Optional[str] = Field(
+        None,
+        env=("SPEC_WORKFLOW_CELERY_BROKER_URL", "CELERY_BROKER_URL"),
+        description="Override Celery broker URL dedicated to Spec workflow chains.",
+    )
+    celery_result_backend: Optional[str] = Field(
+        None,
+        env=("SPEC_WORKFLOW_CELERY_RESULT_BACKEND", "CELERY_RESULT_BACKEND"),
+        description="Override Celery result backend for Spec workflow chains.",
     )
     metrics_enabled: bool = Field(
         False,
@@ -156,7 +168,7 @@ class SpecWorkflowSettings(BaseSettings):
     )
     codex_queue: Optional[str] = Field(
         None,
-        env="CODEX_QUEUE",
+        env=("SPEC_WORKFLOW_CODEX_QUEUE", "CODEX_QUEUE"),
         description="Explicit Codex queue name assigned to this worker.",
     )
     codex_volume_name: Optional[str] = Field(
@@ -208,6 +220,8 @@ class SpecWorkflowSettings(BaseSettings):
 
     @field_validator(
         "metrics_host",
+        "celery_broker_url",
+        "celery_result_backend",
         "codex_environment",
         "codex_model",
         "codex_profile",
@@ -265,6 +279,9 @@ class SpecWorkflowSettings(BaseSettings):
                 f"Agent backend '{self.agent_backend}' is not permitted. "
                 f"Allowed values: {allowed_display or '<none>'}"
             )
+
+        # Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
+        # ``AppSettings.model_post_init`` to populate sensible defaults.
 
 
 class SecuritySettings(BaseSettings):
@@ -616,6 +633,13 @@ class AppSettings(BaseSettings):
                 db.POSTGRES_PORT,
                 db.POSTGRES_DB,
             )
+
+        if not self.spec_workflow.celery_broker_url:
+            self.spec_workflow.celery_broker_url = self.celery.broker_url
+        if not self.spec_workflow.celery_result_backend:
+            self.spec_workflow.celery_result_backend = self.celery.result_backend
+        if not self.spec_workflow.codex_queue:
+            self.spec_workflow.codex_queue = self.celery.default_queue
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
