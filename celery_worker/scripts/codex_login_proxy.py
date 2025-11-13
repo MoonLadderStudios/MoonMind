@@ -104,7 +104,9 @@ async def _handle_client(
         )
     except OSError as exc:  # pragma: no cover - best effort logging
         logging.error(
-            "codex-login-proxy: failed to reach target %s:%s", config.target_host, config.target_port
+            "codex-login-proxy: failed to reach target %s:%s",
+            config.target_host,
+            config.target_port,
         )
         logging.debug("Target connection failure detail: %s", exc)
         await _close_writer(writer)
@@ -152,9 +154,7 @@ async def _run_server(config: ProxyConfig) -> None:
 
 def main() -> None:
     try:
-        log_level = _parse_log_level(
-            os.getenv("CODEX_LOGIN_PROXY_LOG_LEVEL", "INFO")
-        )
+        log_level = _parse_log_level(os.getenv("CODEX_LOGIN_PROXY_LOG_LEVEL", "INFO"))
     except ValueError as exc:
         print(f"Invalid log level configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -169,7 +169,9 @@ def main() -> None:
     try:
         asyncio.run(_run_server(config))
     except Exception as exc:  # pragma: no cover - startup failures printed to stderr
-        logging.exception("codex-login-proxy terminated due to unexpected error: %s", exc)
+        logging.exception(
+            "codex-login-proxy terminated due to unexpected error: %s", exc
+        )
         raise
 
 
