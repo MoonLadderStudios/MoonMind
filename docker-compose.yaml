@@ -212,12 +212,33 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     command: |-
-      bash -lc '
-        set -e
+      bash -c '
+        set -euo pipefail
         python /app/celery_worker/scripts/codex_login_proxy.py &
-        exec celery -A celery_worker.speckit_worker worker \
+        proxy_pid=$!
+
+        shutdown() {
+          if kill -0 "$proxy_pid" 2>/dev/null; then
+            kill "$proxy_pid" 2>/dev/null || true
+            wait "$proxy_pid" 2>/dev/null || true
+          fi
+          if [ -n "${worker_pid:-}" ] && kill -0 "$worker_pid" 2>/dev/null; then
+            kill "$worker_pid" 2>/dev/null || true
+            wait "$worker_pid" 2>/dev/null || true
+          fi
+        }
+
+        trap shutdown INT TERM EXIT
+
+        celery -A celery_worker.speckit_worker worker \
           --loglevel=${CELERY_LOG_LEVEL:-info} \
-          --queues=codex-0
+          --queues=codex-0 &
+        worker_pid=$!
+
+        wait -n "$proxy_pid" "$worker_pid"
+        exit_code=$?
+        shutdown
+        exit "$exit_code"
       '
     environment:
       - PYTHONPATH=/app
@@ -241,7 +262,7 @@ services:
       - speckit_workspaces:/work/runs
       - codex_auth_0:/var/lib/codex-auth
     ports:
-      - "1455:${CODEX_LOGIN_PROXY_LISTEN_PORT:-51455}"
+      - "${CODEX_LOGIN_PROXY_LISTEN_PORT:-51455}:${CODEX_LOGIN_PROXY_LISTEN_PORT:-51455}"
     depends_on:
       rabbitmq:
         condition: service_started
@@ -251,81 +272,81 @@ services:
       - local-network
     restart: unless-stopped
 
-#  celery-codex-1:
-#    build:
-#      context: .
-#      dockerfile: ./api_service/Dockerfile
-#    image: ghcr.io/moonladderstudios/moonmind:latest
-#    command: >-
-#      celery -A celery_worker.speckit_worker worker
-#      --loglevel=${CELERY_LOG_LEVEL:-info}
-#      --queues=codex-1
-#    environment:
-#      - PYTHONPATH=/app
-#      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-#      - PYTHONUNBUFFERED=1
-#      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
-#      - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
-#      - CODEX_QUEUE=codex-1
-#      - CODEX_VOLUME_NAME=codex_auth_1
-#      - CODEX_SHARDS=${CODEX_SHARDS:-3}
-#    env_file:
-#      - .env
-#    volumes:
-#      - /var/run/docker.sock:/var/run/docker.sock
-#      - ./moonmind:/app/moonmind:ro
-#      - ./api_service:/app/api_service:ro
-#      - ./celery_worker:/app/celery_worker:ro
-#      - ./specs:/app/specs:ro
-#      - ./model_data:/app/model_data
-#      - speckit_workspaces:/work/runs
-#      - codex_auth_1:/var/lib/codex-auth
-#    depends_on:
-#      rabbitmq:
-#        condition: service_started
-#      api-db:
-#        condition: service_started
-#    networks:
-#      - local-network
-#    restart: unless-stopped
+  celery-codex-1:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    command: >-
+      celery -A celery_worker.speckit_worker worker
+      --loglevel=${CELERY_LOG_LEVEL:-info}
+      --queues=codex-1
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
+      - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
+      - CODEX_QUEUE=codex-1
+      - CODEX_VOLUME_NAME=codex_auth_1
+      - CODEX_SHARDS=${CODEX_SHARDS:-3}
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./celery_worker:/app/celery_worker:ro
+      - ./specs:/app/specs:ro
+      - ./model_data:/app/model_data
+      - speckit_workspaces:/work/runs
+      - codex_auth_1:/var/lib/codex-auth
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      api-db:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
 
-#  celery-codex-2:
-#    build:
-#      context: .
-#      dockerfile: ./api_service/Dockerfile
-#    image: ghcr.io/moonladderstudios/moonmind:latest
-#    command: >-
-#      celery -A celery_worker.speckit_worker worker
-#      --loglevel=${CELERY_LOG_LEVEL:-info}
-#      --queues=codex-2
-#    environment:
-#      - PYTHONPATH=/app
-#      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-#      - PYTHONUNBUFFERED=1
-#      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
-#      - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
-#      - CODEX_QUEUE=codex-2
-#      - CODEX_VOLUME_NAME=codex_auth_2
-#      - CODEX_SHARDS=${CODEX_SHARDS:-3}
-#    env_file:
-#      - .env
-#    volumes:
-#      - /var/run/docker.sock:/var/run/docker.sock
-#      - ./moonmind:/app/moonmind:ro
-#      - ./api_service:/app/api_service:ro
-#      - ./celery_worker:/app/celery_worker:ro
-#      - ./specs:/app/specs:ro
-#      - ./model_data:/app/model_data
-#      - speckit_workspaces:/work/runs
-#      - codex_auth_2:/var/lib/codex-auth
-#    depends_on:
-#      rabbitmq:
-#        condition: service_started
-#      api-db:
-#        condition: service_started
-#    networks:
-#      - local-network
-#    restart: unless-stopped
+  celery-codex-2:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    command: >-
+      celery -A celery_worker.speckit_worker worker
+      --loglevel=${CELERY_LOG_LEVEL:-info}
+      --queues=codex-2
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
+      - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
+      - CODEX_QUEUE=codex-2
+      - CODEX_VOLUME_NAME=codex_auth_2
+      - CODEX_SHARDS=${CODEX_SHARDS:-3}
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./celery_worker:/app/celery_worker:ro
+      - ./specs:/app/specs:ro
+      - ./model_data:/app/model_data
+      - speckit_workspaces:/work/runs
+      - codex_auth_2:/var/lib/codex-auth
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      api-db:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
 
   ollama:
     profiles: ["ollama"]
