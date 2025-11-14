@@ -162,3 +162,55 @@ def test_patch_step_rejects_untracked_outside_allowlist(tmp_path: Path) -> None:
         runner.patch(plan.steps[1].parameters)
 
     assert "scripts/exploit.sh" in str(excinfo.value)
+
+
+@pytest.mark.integration
+def test_patch_step_honors_plan_allowlist_override(tmp_path: Path) -> None:
+    """Patch step must respect allowlist overrides captured in the plan."""
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, stdout=subprocess.PIPE)
+    subprocess.run(
+        ["git", "config", "user.email", "ci@example.com"], cwd=repo_path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "MoonMind CI"], cwd=repo_path, check=True
+    )
+
+    requirements = repo_path / "requirements.txt"
+    requirements.write_text("flask==1.0\n", encoding="utf-8")
+    app_py = repo_path / "src" / "app.py"
+    app_py.parent.mkdir()
+    app_py.write_text("print('hello')\n", encoding="utf-8")
+
+    subprocess.run(["git", "add", "requirements.txt", "src/app.py"], cwd=repo_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=repo_path,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+
+    profile = ServiceProfile(
+        key="api",
+        compose_service="api",
+        workspace_path=repo_path,
+        allowlist_globs=("requirements.txt", "src/*.py"),
+        healthcheck=None,
+    )
+    plan = generate_action_plan("Update dependency", profile)
+    storage = ArtifactStorage(tmp_path / "artifacts")
+    runner = CommandRunner(run_id=uuid4(), profile=profile, artifact_storage=storage)
+
+    # Modify app.py which is normally allowed by the service profile but will be
+    # rejected when the plan narrows the allow list to requirements.txt only.
+    app_py.write_text("print('updated')\n", encoding="utf-8")
+
+    patch_parameters = dict(plan.steps[1].parameters)
+    patch_parameters["allowlist"] = ["requirements.txt"]
+
+    with pytest.raises(AllowListViolation) as excinfo:
+        runner.patch(patch_parameters)
+
+    assert "src/app.py" in str(excinfo.value)

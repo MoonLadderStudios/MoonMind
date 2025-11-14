@@ -32,8 +32,23 @@ class ServiceProfile:
     restart_timeout_seconds: int = 60
     compose_project: str = "moonmind"
 
-    def validate_path(self, candidate: str | Path) -> bool:
-        """Return ``True`` when ``candidate`` matches the allow-list."""
+    def validate_path(
+        self,
+        candidate: str | Path,
+        *,
+        allowlist: Iterable[str] | None = None,
+    ) -> bool:
+        """Return ``True`` when ``candidate`` matches the allow-list.
+
+        Parameters
+        ----------
+        candidate:
+            The path being validated, either absolute or relative to the
+            workspace root.
+        allowlist:
+            Optional override for the allow-list patterns. When ``None`` the
+            profile's configured ``allowlist_globs`` are used.
+        """
 
         from fnmatch import fnmatch
 
@@ -46,7 +61,8 @@ class ServiceProfile:
             return False
 
         relative_str = str(relative)
-        for pattern in self.allowlist_globs:
+        patterns = tuple(str(pattern) for pattern in (allowlist or self.allowlist_globs))
+        for pattern in patterns:
             normalized_pattern = pattern.lstrip("./")
             if fnmatch(relative_str, pattern) or fnmatch(
                 relative_str, normalized_pattern

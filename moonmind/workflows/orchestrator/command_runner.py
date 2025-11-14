@@ -109,7 +109,12 @@ class CommandRunner:
             if path not in validated_files:
                 validated_files.append(path)
 
-        self._enforce_allowlist(validated_files)
+        allowlist_override = parameters.get("allowlist")
+        normalized_allowlist = None
+        if allowlist_override:
+            normalized_allowlist = [str(pattern) for pattern in allowlist_override]
+
+        self._enforce_allowlist(validated_files, allowlist_override=normalized_allowlist)
 
         patch_log_artifact = self._storage.write_text(
             self._run_id, "patch.log", "\n".join(command_logs)
@@ -245,9 +250,16 @@ class CommandRunner:
             path = (self._workspace_root / path).resolve()
         return path
 
-    def _enforce_allowlist(self, changed_files: Iterable[str]) -> None:
+    def _enforce_allowlist(
+        self,
+        changed_files: Iterable[str],
+        *,
+        allowlist_override: Iterable[str] | None = None,
+    ) -> None:
         violations = [
-            path for path in changed_files if not self._profile.validate_path(path)
+            path
+            for path in changed_files
+            if not self._profile.validate_path(path, allowlist=allowlist_override)
         ]
         if violations:
             raise AllowListViolation(
