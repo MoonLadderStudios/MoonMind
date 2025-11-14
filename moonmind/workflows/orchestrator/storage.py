@@ -61,17 +61,13 @@ class ArtifactStorage:
         try:
             candidate.relative_to(run_root)
         except ValueError as exc:
-            raise ArtifactPathError(
-                "Artifact path escapes the run directory"
-            ) from exc
+            raise ArtifactPathError("Artifact path escapes the run directory") from exc
 
         for ancestor in candidate.parents:
             if ancestor == run_root:
                 break
             if ancestor.is_symlink():
-                raise ArtifactPathError(
-                    "Artifact path traverses a symbolic link"
-                )
+                raise ArtifactPathError("Artifact path traverses a symbolic link")
         candidate.parent.mkdir(parents=True, exist_ok=True)
         return candidate
 
@@ -139,7 +135,9 @@ class ArtifactStorage:
         checksum = self._compute_checksum(path)
         size_bytes = path.stat().st_size
         relative = path.relative_to(self.ensure_run_directory(run_id))
-        return ArtifactWriteResult(path=str(relative), size_bytes=size_bytes, checksum=checksum)
+        return ArtifactWriteResult(
+            path=str(relative), size_bytes=size_bytes, checksum=checksum
+        )
 
     @staticmethod
     def _compute_checksum(path: Path, *, algorithm: str = "sha256") -> str:
@@ -150,4 +148,9 @@ class ArtifactStorage:
         return hasher.hexdigest()
 
 
-__all__ = ["ArtifactStorage", "ArtifactStorageError", "ArtifactPathError", "ArtifactWriteResult"]
+__all__ = [
+    "ArtifactStorage",
+    "ArtifactStorageError",
+    "ArtifactPathError",
+    "ArtifactWriteResult",
+]

@@ -253,15 +253,11 @@ class OrchestratorPlanStepStateModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: OrchestratorPlanStep = Field(..., alias="name")
-    status: OrchestratorPlanStepStatus | None = Field(
-        None, alias="status"
-    )
+    status: OrchestratorPlanStepStatus | None = Field(None, alias="status")
     started_at: datetime | None = Field(None, alias="startedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
     celery_task_id: Optional[str] = Field(None, alias="celeryTaskId")
-    celery_state: Optional[OrchestratorTaskState] = Field(
-        None, alias="celeryState"
-    )
+    celery_state: Optional[OrchestratorTaskState] = Field(None, alias="celeryState")
     message: Optional[str] = Field(None, alias="message")
     artifact_refs: list[UUID] = Field(default_factory=list, alias="artifactRefs")
 
@@ -290,18 +286,14 @@ class OrchestratorRunSummaryModel(BaseModel):
 class OrchestratorRunDetailModel(OrchestratorRunSummaryModel):
     """Full orchestrator run payload including plan and artifacts."""
 
-    action_plan: Optional[OrchestratorActionPlanModel] = Field(
-        None, alias="actionPlan"
-    )
+    action_plan: Optional[OrchestratorActionPlanModel] = Field(None, alias="actionPlan")
     steps: list[OrchestratorPlanStepStateModel] = Field(
         default_factory=list, alias="steps"
     )
     artifacts: list[OrchestratorRunArtifactModel] = Field(
         default_factory=list, alias="artifacts"
     )
-    metrics_snapshot: dict[str, Any] | None = Field(
-        None, alias="metricsSnapshot"
-    )
+    metrics_snapshot: dict[str, Any] | None = Field(None, alias="metricsSnapshot")
 
 
 class OrchestratorRunListResponse(BaseModel):
@@ -369,9 +361,7 @@ class OrchestratorRetryRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    resume_from_step: OrchestratorRetryStep | None = Field(
-        None, alias="resumeFromStep"
-    )
+    resume_from_step: OrchestratorRetryStep | None = Field(None, alias="resumeFromStep")
     reason: Optional[str] = Field(None, alias="reason")
 
 

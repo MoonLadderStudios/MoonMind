@@ -111,9 +111,9 @@ class OrchestratorRepository:
     ) -> Optional[db_models.OrchestratorRun]:
         """Fetch a run optionally including plan, artifacts, and task state."""
 
-        stmt: Select[tuple[db_models.OrchestratorRun]] = select(db_models.OrchestratorRun).where(
-            db_models.OrchestratorRun.id == run_id
-        )
+        stmt: Select[tuple[db_models.OrchestratorRun]] = select(
+            db_models.OrchestratorRun
+        ).where(db_models.OrchestratorRun.id == run_id)
         if with_relations:
             stmt = stmt.options(
                 selectinload(db_models.OrchestratorRun.action_plan),
@@ -228,7 +228,9 @@ class OrchestratorRepository:
         update_values: dict[str, Any] = {}
 
         if plan_step_status is not None:
-            plan_status = _to_enum(plan_step_status, db_models.OrchestratorPlanStepStatus)
+            plan_status = _to_enum(
+                plan_step_status, db_models.OrchestratorPlanStepStatus
+            )
             insert_values["plan_step_status"] = plan_status
             update_values["plan_step_status"] = plan_status
             mapped_status = _PLAN_STATUS_TO_WORKFLOW_STATUS.get(plan_status)
@@ -274,7 +276,9 @@ class OrchestratorRepository:
                 set_=update_values,
             )
         else:
-            insert_stmt = insert_stmt.on_conflict_do_nothing(index_elements=conflict_cols)
+            insert_stmt = insert_stmt.on_conflict_do_nothing(
+                index_elements=conflict_cols
+            )
 
         await self._session.execute(insert_stmt)
         await self._session.flush()
@@ -305,7 +309,9 @@ class OrchestratorRepository:
         artifact = db_models.OrchestratorRunArtifact(
             id=uuid4(),
             run_id=run_id,
-            artifact_type=_to_enum(artifact_type, db_models.OrchestratorRunArtifactType),
+            artifact_type=_to_enum(
+                artifact_type, db_models.OrchestratorRunArtifactType
+            ),
             path=path,
             checksum=checksum,
             size_bytes=size_bytes,

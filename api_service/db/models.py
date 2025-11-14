@@ -12,15 +12,15 @@ if TYPE_CHECKING:
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
+    JSON,
     BigInteger,
     CheckConstraint,
     Column,
     DateTime,
     Enum,
     ForeignKey,
-    Integer,
     Index,
-    JSON,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -29,7 +29,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+    validates,
+)
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy_utils import EncryptedType
 

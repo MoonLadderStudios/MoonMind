@@ -15,9 +15,7 @@ _DEFAULT_QUEUE: Final[str] = app.conf.get(
 )
 app.conf.update(
     task_default_queue=_DEFAULT_QUEUE,
-    task_default_routing_key=app.conf.get(
-        "task_default_routing_key", _DEFAULT_QUEUE
-    ),
+    task_default_routing_key=app.conf.get("task_default_routing_key", _DEFAULT_QUEUE),
 )
 
 

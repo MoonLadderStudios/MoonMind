@@ -24,8 +24,12 @@ class MetricsClient:
         port: int | None = None,
         prefix: str | None = None,
     ) -> None:
-        env_host = host or os.getenv("ORCHESTRATOR_STATSD_HOST") or os.getenv("STATSD_HOST")
-        env_port = port or os.getenv("ORCHESTRATOR_STATSD_PORT") or os.getenv("STATSD_PORT")
+        env_host = (
+            host or os.getenv("ORCHESTRATOR_STATSD_HOST") or os.getenv("STATSD_HOST")
+        )
+        env_port = (
+            port or os.getenv("ORCHESTRATOR_STATSD_PORT") or os.getenv("STATSD_PORT")
+        )
         env_prefix = prefix or os.getenv(
             "ORCHESTRATOR_METRICS_PREFIX", "moonmind.orchestrator"
         )
@@ -52,7 +56,10 @@ class MetricsClient:
 
         if self._address is None:
             return False
-        if self._disabled_until is not None and time.monotonic() >= self._disabled_until:
+        if (
+            self._disabled_until is not None
+            and time.monotonic() >= self._disabled_until
+        ):
             self._disabled_until = None
             self._initialize_socket()
         return self._enabled and self._socket is not None

@@ -6,7 +6,6 @@ import pytest
 from api_service.auth import _DEFAULT_USER_ID
 from moonmind.config.settings import settings
 
-
 settings.spec_workflow.test_mode = True
 
 
@@ -32,7 +31,8 @@ def keycloak_mode(monkeypatch):
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
-        "markers", "asyncio: mark a test as requiring an asyncio event loop",
+        "markers",
+        "asyncio: mark a test as requiring an asyncio event loop",
     )
 
 
