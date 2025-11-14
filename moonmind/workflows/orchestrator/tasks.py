@@ -7,12 +7,17 @@ from typing import Final
 
 from celery import Celery
 
-_DEFAULT_QUEUE: Final[str] = os.getenv("ORCHESTRATOR_CELERY_QUEUE", "orchestrator.run")
-
 app = Celery("moonmind.workflows.orchestrator")
+app.config_from_object("moonmind.workflows.orchestrator.celeryconfig")
+
+_DEFAULT_QUEUE: Final[str] = app.conf.get(
+    "task_default_queue", os.getenv("ORCHESTRATOR_CELERY_QUEUE", "orchestrator.run")
+)
 app.conf.update(
     task_default_queue=_DEFAULT_QUEUE,
-    task_default_routing_key=_DEFAULT_QUEUE,
+    task_default_routing_key=app.conf.get(
+        "task_default_routing_key", _DEFAULT_QUEUE
+    ),
 )
 
 

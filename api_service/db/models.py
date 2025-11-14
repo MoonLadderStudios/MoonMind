@@ -1,16 +1,31 @@
+"""Database models used by the MoonMind API service."""
+
+from __future__ import annotations
+
+import enum
+from datetime import datetime
+from typing import Any, Optional
+from uuid import UUID, uuid4
+
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
-from sqlalchemy import (  # Added Uuid, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     Column,
     DateTime,
+    Enum,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    func,
 )
-from sqlalchemy.orm import DeclarativeBase, relationship
-from sqlalchemy_utils import EncryptedType  # Added EncryptedType
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy_utils import EncryptedType
 
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
@@ -84,4 +99,330 @@ __all__ = [
     "User",
     "UserProfile",
     "ManifestRecord",
+    "ApprovalGate",
+    "OrchestratorActionPlan",
+    "OrchestratorRun",
+    "OrchestratorRunArtifact",
+    "OrchestratorRunStatus",
+    "OrchestratorRunPriority",
+    "OrchestratorPlanStep",
+    "OrchestratorPlanStepStatus",
+    "OrchestratorPlanOrigin",
+    "OrchestratorApprovalRequirement",
+    "OrchestratorRunArtifactType",
+    "OrchestratorTaskState",
 ]
+
+
+class OrchestratorRunStatus(str, enum.Enum):
+    """Lifecycle states tracked for orchestrator runs."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    AWAITING_APPROVAL = "awaiting_approval"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    ROLLED_BACK = "rolled_back"
+
+
+class OrchestratorRunPriority(str, enum.Enum):
+    """Execution priority for orchestrator runs."""
+
+    NORMAL = "normal"
+    HIGH = "high"
+
+
+class OrchestratorPlanStep(str, enum.Enum):
+    """Supported steps inside an orchestrator ActionPlan."""
+
+    ANALYZE = "analyze"
+    PATCH = "patch"
+    BUILD = "build"
+    RESTART = "restart"
+    VERIFY = "verify"
+    ROLLBACK = "rollback"
+
+
+class OrchestratorPlanStepStatus(str, enum.Enum):
+    """Statuses describing plan step execution progress."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class OrchestratorPlanOrigin(str, enum.Enum):
+    """Source responsible for generating an ActionPlan."""
+
+    OPERATOR = "operator"
+    LLM = "llm"
+    SYSTEM = "system"
+
+
+class OrchestratorApprovalRequirement(str, enum.Enum):
+    """Approval enforcement options for protected services."""
+
+    NONE = "none"
+    PRE_RUN = "pre-run"
+    PRE_VERIFY = "pre-verify"
+
+
+class OrchestratorRunArtifactType(str, enum.Enum):
+    """Classifications for artifacts stored per orchestrator run."""
+
+    PATCH_DIFF = "patch_diff"
+    BUILD_LOG = "build_log"
+    VERIFY_LOG = "verify_log"
+    ROLLBACK_LOG = "rollback_log"
+    METRICS = "metrics"
+    PLAN_SNAPSHOT = "plan_snapshot"
+
+
+class OrchestratorTaskState(str, enum.Enum):
+    """Celery state transitions recorded for orchestrator steps."""
+
+    PENDING = "PENDING"
+    STARTED = "STARTED"
+    RETRY = "RETRY"
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+
+
+class ApprovalGate(Base):
+    """Approval policies applied to orchestrator runs."""
+
+    __tablename__ = "approval_gates"
+    __table_args__ = (
+        UniqueConstraint("service_name", name="uq_approval_gates_service_name"),
+        CheckConstraint(
+            "valid_for_minutes >= 5", name="ck_approval_gates_min_duration"
+        ),
+        CheckConstraint(
+            "requirement = 'none' OR array_length(approver_roles, 1) > 0",
+            name="ck_approval_gates_roles_present",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    service_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    requirement: Mapped[OrchestratorApprovalRequirement] = mapped_column(
+        Enum(
+            OrchestratorApprovalRequirement,
+            name="orchestratorapprovalrequirement",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=OrchestratorApprovalRequirement.NONE,
+        server_default=OrchestratorApprovalRequirement.NONE.value,
+    )
+    approver_roles: Mapped[list[str]] = mapped_column(
+        ARRAY(String(128)),
+        nullable=False,
+        default=list,
+        server_default="{}",
+    )
+    valid_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    runs: Mapped[list["OrchestratorRun"]] = relationship(
+        "OrchestratorRun",
+        back_populates="approval_gate",
+    )
+
+
+class OrchestratorActionPlan(Base):
+    """Serialized representation of an orchestrator ActionPlan."""
+
+    __tablename__ = "orchestrator_action_plans"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False
+    )
+    service_context: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    generated_by: Mapped[OrchestratorPlanOrigin] = mapped_column(
+        Enum(
+            OrchestratorPlanOrigin,
+            name="orchestratorplanorigin",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=OrchestratorPlanOrigin.SYSTEM,
+        server_default=OrchestratorPlanOrigin.SYSTEM.value,
+    )
+
+    runs: Mapped[list["OrchestratorRun"]] = relationship(
+        "OrchestratorRun",
+        back_populates="action_plan",
+    )
+
+
+class OrchestratorRun(Base):
+    """Top-level record describing a single orchestrator execution."""
+
+    __tablename__ = "orchestrator_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
+            name="ck_orchestrator_runs_timestamps",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    instruction: Mapped[str] = mapped_column(Text, nullable=False)
+    target_service: Mapped[str] = mapped_column(String(255), nullable=False)
+    priority: Mapped[OrchestratorRunPriority] = mapped_column(
+        Enum(
+            OrchestratorRunPriority,
+            name="orchestratorrunpriority",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=OrchestratorRunPriority.NORMAL,
+        server_default=OrchestratorRunPriority.NORMAL.value,
+    )
+    status: Mapped[OrchestratorRunStatus] = mapped_column(
+        Enum(
+            OrchestratorRunStatus,
+            name="orchestratorrunstatus",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=OrchestratorRunStatus.PENDING,
+        server_default=OrchestratorRunStatus.PENDING.value,
+    )
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    approval_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metrics_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=True
+    )
+    artifact_root: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    action_plan_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("orchestrator_action_plans.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    approval_gate_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("approval_gates.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    action_plan: Mapped[OrchestratorActionPlan] = relationship(
+        "OrchestratorActionPlan",
+        back_populates="runs",
+    )
+    approval_gate: Mapped[Optional[ApprovalGate]] = relationship(
+        "ApprovalGate",
+        back_populates="runs",
+    )
+    artifacts: Mapped[list["OrchestratorRunArtifact"]] = relationship(
+        "OrchestratorRunArtifact",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="OrchestratorRunArtifact.created_at",
+    )
+    task_states: Mapped[list["SpecWorkflowTaskState"]] = relationship(
+        "SpecWorkflowTaskState",
+        back_populates="orchestrator_run",
+        cascade="all, delete-orphan",
+        order_by="SpecWorkflowTaskState.created_at",
+    )
+
+
+class OrchestratorRunArtifact(Base):
+    """Metadata describing files captured during orchestrator runs."""
+
+    __tablename__ = "orchestrator_run_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "artifact_type", "path", name="uq_orchestrator_artifact_path"
+        ),
+        CheckConstraint(
+            "size_bytes IS NULL OR size_bytes >= 0",
+            name="ck_orchestrator_artifacts_size_non_negative",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("orchestrator_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    artifact_type: Mapped[OrchestratorRunArtifactType] = mapped_column(
+        Enum(
+            OrchestratorRunArtifactType,
+            name="orchestratorrunartifacttype",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+    )
+    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    checksum: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    run: Mapped[OrchestratorRun] = relationship(
+        "OrchestratorRun",
+        back_populates="artifacts",
+    )
+
+
+Index("ix_orchestrator_runs_status", OrchestratorRun.status)
+Index("ix_orchestrator_runs_target_service", OrchestratorRun.target_service)
+Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)

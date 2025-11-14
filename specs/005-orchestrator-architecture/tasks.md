@@ -26,11 +26,11 @@
 ## Phase 2: Foundational (Blocking Prerequisites)
 **Purpose**: Provide database schema, serialization, persistence utilities, and Celery configuration that all user stories rely on. ⚠️ Do not start story work until these tasks finish.
 
-- [ ] T004 Create an Alembic migration `api_service/migrations/versions/<timestamp>_add_orchestrator_tables.py` that adds `orchestrator_runs`, `orchestrator_action_plans`, `orchestrator_run_artifacts`, `approval_gates`, and links into `spec_workflow_task_states` per `data-model.md`.
-- [ ] T005 Extend SQLAlchemy models and enums in `api_service/db/models.py` (and related `moonmind/workflows/speckit_celery/models.py` if reused) to represent OrchestratorRun, ActionPlan, RunArtifact, ApprovalGate, and approval/status fields consumed by Celery state tracking.
-- [ ] T006 Add orchestrator request/response schemas in `moonmind/schemas/workflow_models.py` plus API response plumbing in `api_service/api/schemas.py` so routers and workers share typed payloads.
-- [ ] T007 Implement persistence helpers and artifact storage utilities in `moonmind/workflows/orchestrator/repositories.py` and `moonmind/workflows/orchestrator/storage.py` to create runs, snapshot plan steps, and manage `var/artifacts/spec_workflows/<run_id>/`.
-- [ ] T008 Configure the Celery app + instrumentation baseline by adding `moonmind/workflows/orchestrator/celeryconfig.py` and `moonmind/workflows/orchestrator/metrics.py`, then updating `services/orchestrator/entrypoint.sh` to load the config and StatsD hooks.
+- [x] T004 Create an Alembic migration `api_service/migrations/versions/<timestamp>_add_orchestrator_tables.py` that adds `orchestrator_runs`, `orchestrator_action_plans`, `orchestrator_run_artifacts`, `approval_gates`, and links into `spec_workflow_task_states` per `data-model.md`.
+- [x] T005 Extend SQLAlchemy models and enums in `api_service/db/models.py` (and related `moonmind/workflows/speckit_celery/models.py` if reused) to represent OrchestratorRun, ActionPlan, RunArtifact, ApprovalGate, and approval/status fields consumed by Celery state tracking.
+- [x] T006 Add orchestrator request/response schemas in `moonmind/schemas/workflow_models.py` plus API response plumbing in `api_service/api/schemas.py` so routers and workers share typed payloads.
+- [x] T007 Implement persistence helpers and artifact storage utilities in `moonmind/workflows/orchestrator/repositories.py` and `moonmind/workflows/orchestrator/storage.py` to create runs, snapshot plan steps, and manage `var/artifacts/spec_workflows/<run_id>/`.
+- [x] T008 Configure the Celery app + instrumentation baseline by adding `moonmind/workflows/orchestrator/celeryconfig.py` and `moonmind/workflows/orchestrator/metrics.py`, then updating `services/orchestrator/entrypoint.sh` to load the config and StatsD hooks.
 
 **Checkpoint**: Database, schemas, repositories, and worker scaffolding are ready for user stories.
 
