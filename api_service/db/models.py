@@ -20,6 +20,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Index,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -27,7 +28,9 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy_utils import EncryptedType
 
 from api_service.core.encryption import (  # Added import for get_encryption_key
@@ -117,6 +120,40 @@ __all__ = [
 ]
 
 
+class ApproverRoleListType(TypeDecorator):
+    """Persist approver roles as a PostgreSQL ARRAY or JSON elsewhere."""
+
+    impl = ARRAY(String(128))
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):  # type: ignore[override]
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(ARRAY(String(128)))
+        return dialect.type_descriptor(JSON())
+
+    def process_bind_param(self, value, dialect):  # type: ignore[override]
+        if value is None:
+            return []
+        return list(value)
+
+    def process_result_value(self, value, dialect):  # type: ignore[override]
+        if value is None:
+            return []
+        return list(value)
+
+
+def _json_variant() -> JSON:
+    return JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
+
+
+def mutable_json_list() -> JSON:
+    return MutableList.as_mutable(_json_variant())
+
+
+def mutable_json_dict() -> JSON:
+    return MutableDict.as_mutable(_json_variant())
+
+
 class OrchestratorRunStatus(str, enum.Enum):
     """Lifecycle states tracked for orchestrator runs."""
 
@@ -202,10 +239,6 @@ class ApprovalGate(Base):
         CheckConstraint(
             "valid_for_minutes >= 5", name="ck_approval_gates_min_duration"
         ),
-        CheckConstraint(
-            "requirement = 'none' OR array_length(approver_roles, 1) > 0",
-            name="ck_approval_gates_roles_present",
-        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -222,10 +255,9 @@ class ApprovalGate(Base):
         server_default=OrchestratorApprovalRequirement.NONE.value,
     )
     approver_roles: Mapped[list[str]] = mapped_column(
-        ARRAY(String(128)),
+        MutableList.as_mutable(ApproverRoleListType()),
         nullable=False,
         default=list,
-        server_default="{}",
     )
     valid_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     last_updated_at: Mapped[datetime] = mapped_column(
@@ -258,10 +290,10 @@ class OrchestratorActionPlan(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     steps: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False
+        mutable_json_list(), nullable=False
     )
     service_context: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False
+        mutable_json_dict(), nullable=False
     )
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -337,7 +369,7 @@ class OrchestratorRun(Base):
     )
     approval_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     metrics_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=True
+        mutable_json_dict(), nullable=True
     )
     artifact_root: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     action_plan_id: Mapped[UUID] = mapped_column(

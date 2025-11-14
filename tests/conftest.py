@@ -47,5 +47,12 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
     if not inspect.iscoroutinefunction(test_function):
         return None
 
-    asyncio.run(test_function(**pyfuncitem.funcargs))
+    signature = inspect.signature(test_function)
+    bound_args = {
+        name: pyfuncitem.funcargs[name]
+        for name in signature.parameters
+        if name in pyfuncitem.funcargs
+    }
+
+    asyncio.run(test_function(**bound_args))
     return True

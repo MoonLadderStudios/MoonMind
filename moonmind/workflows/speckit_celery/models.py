@@ -21,8 +21,8 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api_service.db.models import (
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from api_service.db.models import OrchestratorRun
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
+_MUTABLE_JSON_LIST = MutableList.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 _TASK_PAYLOAD_TYPE = _MUTABLE_JSON
 
 
@@ -322,7 +323,7 @@ class SpecWorkflowTaskState(Base):
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     artifact_refs: Mapped[Optional[list[UUID]]] = mapped_column(
-        ARRAY(Uuid), nullable=True
+        _MUTABLE_JSON_LIST, nullable=True
     )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
