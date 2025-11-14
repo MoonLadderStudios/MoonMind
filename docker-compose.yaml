@@ -288,15 +288,30 @@ services:
       - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
+      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
     volumes:
       - .:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /workspace
     depends_on:
       rabbitmq:
         condition: service_started
       api:
         condition: service_started
+      docker-proxy:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.1.1
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - local-network
     restart: unless-stopped

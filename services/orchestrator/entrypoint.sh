@@ -2,6 +2,12 @@
 set -euo pipefail
 
 WORKSPACE_ROOT=${WORKSPACE_ROOT:-/workspace}
+
+if [[ ! -d "${WORKSPACE_ROOT}" ]]; then
+  echo "[orchestrator] Workspace root '${WORKSPACE_ROOT}' does not exist" >&2
+  exit 1
+fi
+
 cd "${WORKSPACE_ROOT}"
 
 export PYTHONPATH="${PYTHONPATH:-${WORKSPACE_ROOT}}"
@@ -12,15 +18,16 @@ if [[ -n "${ORCHESTRATOR_STATSD_HOST:-}" ]]; then
 fi
 
 if [[ "${ORCHESTRATOR_AUTO_INSTALL:-1}" == "1" && -f "${WORKSPACE_ROOT}/pyproject.toml" ]]; then
-  if ! python - <<'PY' >/dev/null 2>&1
-import importlib
+  if ! python - <<'PY'
+import importlib.util
 import sys
+
 sys.exit(0 if importlib.util.find_spec("moonmind") else 1)
 PY
   then
     echo "[orchestrator] Installing MoonMind package into worker environment" >&2
-    python -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
-    python -m pip install -e "${WORKSPACE_ROOT}" >/dev/null 2>&1
+    python -m pip install --upgrade pip setuptools wheel
+    python -m pip install -e "${WORKSPACE_ROOT}"
   fi
 fi
 

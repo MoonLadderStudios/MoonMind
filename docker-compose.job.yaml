@@ -186,20 +186,33 @@ services:
       - .env
     environment:
       - CELERY_BROKER_URL=${SPEC_WORKFLOW_CELERY_BROKER_URL:-amqp://${RABBITMQ_USER:-moonmind}:${RABBITMQ_PASSWORD:-password}@rabbitmq:5672//}
-      - CELERY_RESULT_BACKEND=${SPEC_WORKFLOW_CELERY_RESULT_BACKEND:-db+postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@api-db:5432/${POSTGRES_DB:-moonmind}}
+      - CELERY_RESULT_BACKEND=${SPEC_WORKFLOW_CELERY_RESULT_BACKEND:-rpc://}
       - ORCHESTRATOR_CELERY_QUEUE=${ORCHESTRATOR_CELERY_QUEUE:-orchestrator.run}
       - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
+      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
     volumes:
       - .:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /workspace
     depends_on:
       rabbitmq:
         condition: service_started
-      api:
+      docker-proxy:
         condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.1.1
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - local-network
     restart: unless-stopped
