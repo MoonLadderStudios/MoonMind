@@ -53,13 +53,25 @@ class ArtifactStorage:
             raise ArtifactPathError("Artifact paths must be relative")
 
         run_path = self.ensure_run_directory(run_id)
+        if run_path.is_symlink():
+            raise ArtifactPathError("Artifact run directory cannot be a symlink")
+
+        run_root = run_path.resolve()
         candidate = (run_path / relative_path).resolve()
         try:
-            candidate.relative_to(run_path.resolve())
+            candidate.relative_to(run_root)
         except ValueError as exc:
             raise ArtifactPathError(
                 "Artifact path escapes the run directory"
             ) from exc
+
+        for ancestor in candidate.parents:
+            if ancestor == run_root:
+                break
+            if ancestor.is_symlink():
+                raise ArtifactPathError(
+                    "Artifact path traverses a symbolic link"
+                )
         candidate.parent.mkdir(parents=True, exist_ok=True)
         return candidate
 

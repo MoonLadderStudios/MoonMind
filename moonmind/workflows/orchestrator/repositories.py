@@ -8,6 +8,7 @@ from typing import Any, Iterable, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -215,49 +216,77 @@ class OrchestratorRepository:
         step_enum = self._coerce_plan_step(plan_step)
         attempt = max(attempt, 1)
 
-        stmt = select(workflow_models.SpecWorkflowTaskState).where(
-            workflow_models.SpecWorkflowTaskState.orchestrator_run_id == run_id,
-            workflow_models.SpecWorkflowTaskState.plan_step == step_enum,
-            workflow_models.SpecWorkflowTaskState.attempt == attempt,
-        )
-        result = await self._session.execute(stmt)
-        state = result.scalar_one_or_none()
-
-        if state is None:
-            state = workflow_models.SpecWorkflowTaskState(
-                id=uuid4(),
-                workflow_run_id=None,
-                orchestrator_run_id=run_id,
-                task_name=step_enum.value,
-                status=workflow_models.SpecWorkflowTaskStatus.QUEUED,
-                attempt=attempt,
-                plan_step=step_enum,
-            )
-            self._session.add(state)
+        insert_values: dict[str, Any] = {
+            "id": uuid4(),
+            "workflow_run_id": None,
+            "orchestrator_run_id": run_id,
+            "task_name": step_enum.value,
+            "status": workflow_models.SpecWorkflowTaskStatus.QUEUED,
+            "attempt": attempt,
+            "plan_step": step_enum,
+        }
+        update_values: dict[str, Any] = {}
 
         if plan_step_status is not None:
             plan_status = _to_enum(plan_step_status, db_models.OrchestratorPlanStepStatus)
-            state.plan_step_status = plan_status
+            insert_values["plan_step_status"] = plan_status
+            update_values["plan_step_status"] = plan_status
             mapped_status = _PLAN_STATUS_TO_WORKFLOW_STATUS.get(plan_status)
             if mapped_status is not None:
-                state.status = mapped_status
+                insert_values["status"] = mapped_status
+                update_values["status"] = mapped_status
         if celery_state is not None:
-            state.celery_state = _to_enum(celery_state, db_models.OrchestratorTaskState)
+            celery_status = _to_enum(celery_state, db_models.OrchestratorTaskState)
+            insert_values["celery_state"] = celery_status
+            update_values["celery_state"] = celery_status
         if celery_task_id is not None:
-            state.celery_task_id = celery_task_id
+            insert_values["celery_task_id"] = celery_task_id
+            update_values["celery_task_id"] = celery_task_id
         if message is not None:
-            state.message = message
+            insert_values["message"] = message
+            update_values["message"] = message
         if artifact_refs is not None:
-            state.artifact_refs = list(artifact_refs)
+            refs = list(artifact_refs)
+            insert_values["artifact_refs"] = refs
+            update_values["artifact_refs"] = refs
         if payload is not None:
-            state.payload = dict(payload)
+            serialized_payload = dict(payload)
+            insert_values["payload"] = serialized_payload
+            update_values["payload"] = serialized_payload
         if started_at is not None:
-            state.started_at = started_at
+            insert_values["started_at"] = started_at
+            update_values["started_at"] = started_at
         if finished_at is not None:
-            state.finished_at = finished_at
+            insert_values["finished_at"] = finished_at
+            update_values["finished_at"] = finished_at
 
+        insert_stmt = pg_insert(workflow_models.SpecWorkflowTaskState).values(
+            insert_values
+        )
+        conflict_cols = (
+            workflow_models.SpecWorkflowTaskState.orchestrator_run_id,
+            workflow_models.SpecWorkflowTaskState.plan_step,
+            workflow_models.SpecWorkflowTaskState.attempt,
+        )
+        if update_values:
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=conflict_cols,
+                set_=update_values,
+            )
+        else:
+            insert_stmt = insert_stmt.on_conflict_do_nothing(index_elements=conflict_cols)
+
+        await self._session.execute(insert_stmt)
         await self._session.flush()
-        return state
+
+        state_result = await self._session.execute(
+            select(workflow_models.SpecWorkflowTaskState).where(
+                workflow_models.SpecWorkflowTaskState.orchestrator_run_id == run_id,
+                workflow_models.SpecWorkflowTaskState.plan_step == step_enum,
+                workflow_models.SpecWorkflowTaskState.attempt == attempt,
+            )
+        )
+        return state_result.scalar_one()
 
     # ------------------------------------------------------------------
     # Artifact helpers

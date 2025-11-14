@@ -29,7 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy_utils import EncryptedType
 
@@ -260,11 +260,6 @@ class ApprovalGate(Base):
         default=list,
     )
     valid_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    last_updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -281,6 +276,31 @@ class ApprovalGate(Base):
         "OrchestratorRun",
         back_populates="approval_gate",
     )
+
+    @validates("approver_roles", "requirement")
+    def _validate_roles(
+        self,
+        key: str,
+        value: Any,
+    ) -> Any:
+        roles: list[str]
+        requirement = self.requirement
+        if key == "approver_roles":
+            roles = list(value or [])
+        else:
+            roles = list(self.approver_roles or [])
+        if key == "requirement":
+            requirement = value
+
+        if (
+            requirement is not None
+            and requirement != OrchestratorApprovalRequirement.NONE
+            and len(roles) == 0
+        ):
+            raise ValueError(
+                "approver_roles must be provided when approvals are required"
+            )
+        return value
 
 
 class OrchestratorActionPlan(Base):
@@ -324,7 +344,7 @@ class OrchestratorRun(Base):
     __tablename__ = "orchestrator_runs"
     __table_args__ = (
         CheckConstraint(
-            "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
+            "completed_at IS NULL OR (started_at IS NOT NULL AND completed_at >= started_at)",
             name="ck_orchestrator_runs_timestamps",
         ),
     )
@@ -367,7 +387,9 @@ class OrchestratorRun(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    approval_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    approval_token: Mapped[Optional[str]] = mapped_column(
+        EncryptedType(Text, get_encryption_key), nullable=True
+    )
     metrics_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )

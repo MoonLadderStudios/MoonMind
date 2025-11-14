@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -91,8 +92,17 @@ ORCHESTRATOR_TASK_STATE = postgresql.ENUM(
 )
 
 
+_SAFE_ENUM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
     """Create a PostgreSQL enum type only if it does not already exist."""
+
+    if not _SAFE_ENUM_NAME.match(enum_type.name or ""):
+        raise ValueError(f"Unsafe enum name: {enum_type.name}")
+    for value in enum_type.enums:
+        if not _SAFE_ENUM_NAME.match(value):
+            raise ValueError(f"Unsafe enum literal: {value}")
 
     literal_values = ", ".join(
         f"'{value.replace("'", "''")}'" for value in enum_type.enums
@@ -144,12 +154,6 @@ def upgrade() -> None:  # noqa: D401
         ),
         sa.Column("valid_for_minutes", sa.Integer(), nullable=False),
         sa.Column(
-            "last_updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
             nullable=False,
@@ -160,7 +164,6 @@ def upgrade() -> None:  # noqa: D401
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.func.now(),
-            server_onupdate=sa.func.now(),
         ),
         sa.UniqueConstraint(
             "service_name",
@@ -171,7 +174,7 @@ def upgrade() -> None:  # noqa: D401
             name="ck_approval_gates_min_duration",
         ),
         sa.CheckConstraint(
-            "requirement = 'none' OR array_length(approver_roles, 1) > 0",
+            "requirement = 'none' OR COALESCE(array_length(approver_roles, 1), 0) > 0",
             name="ck_approval_gates_roles_present",
         ),
     )
@@ -228,7 +231,7 @@ def upgrade() -> None:  # noqa: D401
         ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("approval_token", sa.Text(), nullable=True),
+        sa.Column("approval_token", sa.LargeBinary(), nullable=True),
         sa.Column(
             "metrics_snapshot",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -248,7 +251,6 @@ def upgrade() -> None:  # noqa: D401
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.func.now(),
-            server_onupdate=sa.func.now(),
         ),
         sa.ForeignKeyConstraint(
             ["action_plan_id"],
@@ -261,7 +263,7 @@ def upgrade() -> None:  # noqa: D401
             ondelete="SET NULL",
         ),
         sa.CheckConstraint(
-            "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
+            "completed_at IS NULL OR (started_at IS NOT NULL AND completed_at >= started_at)",
             name="ck_orchestrator_runs_timestamps",
         ),
     )
@@ -364,7 +366,7 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_task_states",
         sa.Column(
             "artifact_refs",
-            postgresql.ARRAY(postgresql.UUID()),
+            postgresql.JSONB(astext_type=sa.Text()),
             nullable=True,
         ),
     )
