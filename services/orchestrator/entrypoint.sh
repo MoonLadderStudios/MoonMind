@@ -47,7 +47,7 @@ CELERY_APP=${ORCHESTRATOR_CELERY_APP:-moonmind.workflows.orchestrator.tasks}
 CELERY_QUEUE=${ORCHESTRATOR_CELERY_QUEUE:-orchestrator.run}
 CELERY_LOG_LEVEL=${ORCHESTRATOR_LOG_LEVEL:-info}
 CELERY_CONCURRENCY=${ORCHESTRATOR_CONCURRENCY:-1}
-CELERY_CONFIG=${ORCHESTRATOR_CELERY_CONFIG:-}
+CELERY_CONFIG=${ORCHESTRATOR_CELERY_CONFIG:-moonmind.workflows.orchestrator.celeryconfig}
 CELERY_HOSTNAME=${ORCHESTRATOR_HOSTNAME:-orchestrator@%h}
 
 cmd=(
@@ -63,5 +63,8 @@ cmd=(
 if [[ -n "${CELERY_CONFIG}" ]]; then
   cmd+=("--config=${CELERY_CONFIG}")
 fi
+
+# Surface orchestrator metrics configuration for downstream processes.
+export ORCHESTRATOR_METRICS_PREFIX="${ORCHESTRATOR_METRICS_PREFIX:-moonmind.orchestrator}"
 
 exec "${cmd[@]}"

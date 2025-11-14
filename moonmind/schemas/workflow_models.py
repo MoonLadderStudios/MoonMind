@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import enum
 from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api_service.db.models import (
+    OrchestratorPlanOrigin,
+    OrchestratorPlanStep,
+    OrchestratorPlanStepStatus,
+    OrchestratorRunArtifactType,
+    OrchestratorRunPriority,
+    OrchestratorRunStatus,
+    OrchestratorTaskState,
+)
 from moonmind.workflows.speckit_celery import models
 
 
@@ -191,6 +201,170 @@ class RetryWorkflowRunRequest(BaseModel):
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
 
 
+class OrchestratorApprovalStatus(str, enum.Enum):
+    """High-level approval state surfaced in API responses."""
+
+    NOT_REQUIRED = "not_required"
+    AWAITING = "awaiting"
+    GRANTED = "granted"
+    EXPIRED = "expired"
+
+
+class OrchestratorPlanStepDefinition(BaseModel):
+    """Plan step definition shared with clients."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: OrchestratorPlanStep = Field(..., alias="name")
+    parameters: dict[str, Any] | None = Field(default=None, alias="parameters")
+
+
+class OrchestratorActionPlanModel(BaseModel):
+    """Serialized action plan returned via the API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    plan_id: UUID = Field(..., alias="planId")
+    generated_at: datetime | None = Field(None, alias="generatedAt")
+    generated_by: OrchestratorPlanOrigin = Field(
+        OrchestratorPlanOrigin.SYSTEM, alias="generatedBy"
+    )
+    steps: list[OrchestratorPlanStepDefinition] = Field(
+        default_factory=list, alias="steps"
+    )
+
+
+class OrchestratorRunArtifactModel(BaseModel):
+    """Artifact metadata surfaced to orchestrator clients."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_id: UUID = Field(..., alias="artifactId")
+    type: OrchestratorRunArtifactType = Field(..., alias="type")
+    path: str = Field(..., alias="path")
+    checksum: Optional[str] = Field(None, alias="checksum")
+    size_bytes: Optional[int] = Field(None, alias="sizeBytes")
+    created_at: datetime | None = Field(None, alias="createdAt")
+
+
+class OrchestratorPlanStepStateModel(BaseModel):
+    """Execution status for a concrete plan step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: OrchestratorPlanStep = Field(..., alias="name")
+    status: OrchestratorPlanStepStatus | None = Field(None, alias="status")
+    started_at: datetime | None = Field(None, alias="startedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    celery_task_id: Optional[str] = Field(None, alias="celeryTaskId")
+    celery_state: Optional[OrchestratorTaskState] = Field(None, alias="celeryState")
+    message: Optional[str] = Field(None, alias="message")
+    artifact_refs: list[UUID] = Field(default_factory=list, alias="artifactRefs")
+
+
+class OrchestratorRunSummaryModel(BaseModel):
+    """Compact representation of an orchestrator run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: UUID = Field(..., alias="runId")
+    status: OrchestratorRunStatus = Field(..., alias="status")
+    priority: OrchestratorRunPriority = Field(
+        OrchestratorRunPriority.NORMAL, alias="priority"
+    )
+    target_service: str = Field(..., alias="targetService")
+    instruction: str = Field(..., alias="instruction")
+    queued_at: datetime | None = Field(None, alias="queuedAt")
+    started_at: datetime | None = Field(None, alias="startedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    approval_required: bool = Field(False, alias="approvalRequired")
+    approval_status: OrchestratorApprovalStatus = Field(
+        OrchestratorApprovalStatus.NOT_REQUIRED, alias="approvalStatus"
+    )
+
+
+class OrchestratorRunDetailModel(OrchestratorRunSummaryModel):
+    """Full orchestrator run payload including plan and artifacts."""
+
+    action_plan: Optional[OrchestratorActionPlanModel] = Field(None, alias="actionPlan")
+    steps: list[OrchestratorPlanStepStateModel] = Field(
+        default_factory=list, alias="steps"
+    )
+    artifacts: list[OrchestratorRunArtifactModel] = Field(
+        default_factory=list, alias="artifacts"
+    )
+    metrics_snapshot: dict[str, Any] | None = Field(None, alias="metricsSnapshot")
+
+
+class OrchestratorRunListResponse(BaseModel):
+    """Response wrapper for run listings."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    runs: list[OrchestratorRunSummaryModel] = Field(default_factory=list, alias="runs")
+
+
+class OrchestratorArtifactListResponse(BaseModel):
+    """Response wrapper for artifact listings."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifacts: list[OrchestratorRunArtifactModel] = Field(
+        default_factory=list, alias="artifacts"
+    )
+
+
+class OrchestratorCreateRunRequest(BaseModel):
+    """Request payload for queueing orchestrator runs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    instruction: str = Field(..., alias="instruction")
+    target_service: str = Field(..., alias="targetService")
+    approval_token: Optional[str] = Field(None, alias="approvalToken")
+    priority: OrchestratorRunPriority = Field(
+        OrchestratorRunPriority.NORMAL, alias="priority"
+    )
+
+
+class OrchestratorApprovalActorModel(BaseModel):
+    """Identity payload embedded inside approval requests."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(..., alias="id")
+    role: str = Field(..., alias="role")
+
+
+class OrchestratorApprovalRequest(BaseModel):
+    """Body accepted by the approval endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    approver: OrchestratorApprovalActorModel = Field(..., alias="approver")
+    token: str = Field(..., alias="token")
+    expires_at: datetime | None = Field(None, alias="expiresAt")
+
+
+class OrchestratorRetryStep(str, enum.Enum):
+    """Valid resume points for orchestrator retries."""
+
+    PATCH = "patch"
+    BUILD = "build"
+    RESTART = "restart"
+    VERIFY = "verify"
+    ROLLBACK = "rollback"
+
+
+class OrchestratorRetryRequest(BaseModel):
+    """Request payload for orchestrator retries."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    resume_from_step: OrchestratorRetryStep | None = Field(None, alias="resumeFromStep")
+    reason: Optional[str] = Field(None, alias="reason")
+
+
 class SpecAutomationPhaseState(BaseModel):
     """Schema describing a single Spec Automation phase execution."""
 
@@ -266,6 +440,20 @@ __all__ = [
     "CodexPreflightRequest",
     "CodexPreflightResultModel",
     "RetryWorkflowRunRequest",
+    "OrchestratorApprovalStatus",
+    "OrchestratorPlanStepDefinition",
+    "OrchestratorActionPlanModel",
+    "OrchestratorRunArtifactModel",
+    "OrchestratorPlanStepStateModel",
+    "OrchestratorRunSummaryModel",
+    "OrchestratorRunDetailModel",
+    "OrchestratorRunListResponse",
+    "OrchestratorArtifactListResponse",
+    "OrchestratorCreateRunRequest",
+    "OrchestratorApprovalActorModel",
+    "OrchestratorApprovalRequest",
+    "OrchestratorRetryStep",
+    "OrchestratorRetryRequest",
     "SpecAutomationPhaseState",
     "SpecAutomationArtifactSummary",
     "SpecAutomationArtifactDetail",

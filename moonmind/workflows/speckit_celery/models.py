@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
@@ -22,12 +22,21 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api_service.db.models import Base
+from api_service.db.models import (
+    Base,
+    OrchestratorPlanStep,
+    OrchestratorPlanStepStatus,
+    OrchestratorTaskState,
+)
+
+if TYPE_CHECKING:
+    from api_service.db.models import OrchestratorRun
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
+_MUTABLE_JSON_LIST = MutableList.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 _TASK_PAYLOAD_TYPE = _MUTABLE_JSON
 
 
@@ -247,11 +256,28 @@ class SpecWorkflowTaskState(Base):
             "workflow_run_id",
             postgresql_where=text("status = 'failed'"),
         ),
+        UniqueConstraint(
+            "orchestrator_run_id",
+            "plan_step",
+            "attempt",
+            name="uq_orchestrator_task_state_attempt",
+        ),
+        Index(
+            "ix_spec_workflow_task_states_orchestrator_run_id",
+            "orchestrator_run_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    workflow_run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"), nullable=False
+    workflow_run_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    orchestrator_run_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
+        nullable=True,
     )
     task_name: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[SpecWorkflowTaskStatus] = mapped_column(
@@ -266,6 +292,38 @@ class SpecWorkflowTaskState(Base):
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload: Mapped[Optional[dict[str, Any]]] = mapped_column(
         _TASK_PAYLOAD_TYPE, nullable=True
+    )
+    plan_step: Mapped[Optional[OrchestratorPlanStep]] = mapped_column(
+        Enum(
+            OrchestratorPlanStep,
+            name="orchestratorplanstep",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=True,
+    )
+    plan_step_status: Mapped[Optional[OrchestratorPlanStepStatus]] = mapped_column(
+        Enum(
+            OrchestratorPlanStepStatus,
+            name="orchestratorplanstepstatus",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=True,
+    )
+    celery_state: Mapped[Optional[OrchestratorTaskState]] = mapped_column(
+        Enum(
+            OrchestratorTaskState,
+            name="orchestratortaskstate",
+            native_enum=True,
+            validate_strings=True,
+        ),
+        nullable=True,
+    )
+    celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    artifact_refs: Mapped[Optional[list[UUID]]] = mapped_column(
+        _MUTABLE_JSON_LIST, nullable=True
     )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -283,6 +341,10 @@ class SpecWorkflowTaskState(Base):
 
     workflow_run: Mapped[SpecWorkflowRun] = relationship(
         "SpecWorkflowRun", back_populates="task_states"
+    )
+    orchestrator_run: Mapped[Optional["OrchestratorRun"]] = relationship(
+        "OrchestratorRun",
+        back_populates="task_states",
     )
 
 

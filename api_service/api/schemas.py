@@ -3,6 +3,23 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from moonmind.schemas.workflow_models import (
+    OrchestratorActionPlanModel,
+    OrchestratorApprovalActorModel,
+    OrchestratorApprovalRequest,
+    OrchestratorApprovalStatus,
+    OrchestratorArtifactListResponse,
+    OrchestratorCreateRunRequest,
+    OrchestratorPlanStepDefinition,
+    OrchestratorPlanStepStateModel,
+    OrchestratorRetryRequest,
+    OrchestratorRetryStep,
+    OrchestratorRunArtifactModel,
+    OrchestratorRunDetailModel,
+    OrchestratorRunListResponse,
+    OrchestratorRunSummaryModel,
+)
+
 
 class UserProfileBaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -59,3 +76,27 @@ class ApiKeyStatus(BaseModel):
     openai_api_key_set: bool = False
     # anthropic_api_key_set: bool = False # Example for other keys
     # Add other keys as needed
+
+
+__all__ = [
+    "UserProfileBaseSchema",
+    "UserProfileRead",
+    "UserProfileReadSanitized",
+    "UserProfileUpdate",
+    "UserProfileCreateSchema",
+    "ApiKeyStatus",
+    "OrchestratorActionPlanModel",
+    "OrchestratorApprovalActorModel",
+    "OrchestratorApprovalRequest",
+    "OrchestratorApprovalStatus",
+    "OrchestratorArtifactListResponse",
+    "OrchestratorCreateRunRequest",
+    "OrchestratorPlanStepDefinition",
+    "OrchestratorPlanStepStateModel",
+    "OrchestratorRunArtifactModel",
+    "OrchestratorRunDetailModel",
+    "OrchestratorRunListResponse",
+    "OrchestratorRunSummaryModel",
+    "OrchestratorRetryRequest",
+    "OrchestratorRetryStep",
+]
