@@ -248,7 +248,7 @@ class OrchestratorRepository:
             insert_values["message"] = message
             update_values["message"] = message
         if artifact_refs is not None:
-            refs = list(artifact_refs)
+            refs = [str(ref) for ref in artifact_refs]
             insert_values["artifact_refs"] = refs
             update_values["artifact_refs"] = refs
         if payload is not None:

@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202402150001"
-down_revision: Union[str, None] = "f6f3b3cdf5e2"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = "202402150001"  # noqa: F841
+down_revision = "f6f3b3cdf5e2"  # noqa: F841
 
 
 ORCHESTRATOR_RUN_STATUS = postgresql.ENUM(
