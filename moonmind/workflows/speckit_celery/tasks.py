@@ -69,6 +69,18 @@ def _log_spec_kit_cli_availability() -> None:
     if _SPEC_KIT_CLI_LOGGED.is_set():
         return
 
+    if getattr(settings.spec_workflow, "test_mode", False):
+        with _SPEC_KIT_CLI_LOCK:
+            if _SPEC_KIT_CLI_LOGGED.is_set():
+                return
+
+            logger.debug(
+                "Skipping Spec Kit CLI verification in test mode",
+                extra={"speckit_path": None},
+            )
+            _SPEC_KIT_CLI_LOGGED.set()
+        return
+
     if bool(getattr(celery_app.conf, "task_always_eager", False)):
         with _SPEC_KIT_CLI_LOCK:
             if _SPEC_KIT_CLI_LOGGED.is_set():

@@ -1,7 +1,13 @@
+import asyncio
+import inspect
+
 import pytest
 
 from api_service.auth import _DEFAULT_USER_ID
 from moonmind.config.settings import settings
+
+
+settings.spec_workflow.test_mode = True
 
 
 @pytest.fixture
@@ -22,3 +28,24 @@ def disabled_env_keys(monkeypatch):
 def keycloak_mode(monkeypatch):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     yield
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "asyncio: mark a test as requiring an asyncio event loop",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
+    """Execute `@pytest.mark.asyncio` tests without requiring pytest-asyncio."""
+
+    if "asyncio" not in pyfuncitem.keywords:
+        return None
+
+    test_function = pyfuncitem.obj
+    if not inspect.iscoroutinefunction(test_function):
+        return None
+
+    asyncio.run(test_function(**pyfuncitem.funcargs))
+    return True
