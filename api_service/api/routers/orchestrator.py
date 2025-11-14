@@ -20,17 +20,30 @@ from moonmind.schemas.workflow_models import (
 from moonmind.workflows.orchestrator.action_plan import generate_action_plan
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
 from moonmind.workflows.orchestrator.service_profiles import get_service_profile
-from moonmind.workflows.orchestrator.storage import ArtifactStorage
+from moonmind.workflows.orchestrator.services import OrchestratorService
+from moonmind.workflows.orchestrator.storage import (
+    ArtifactStorage,
+    ArtifactStorageError,
+    resolve_artifact_root,
+)
 from moonmind.workflows.orchestrator.tasks import enqueue_action_plan
 
 router = APIRouter(prefix="/orchestrator", tags=["Orchestrator"])
 
 
 def _artifact_root() -> Path:
+    default_root = Path(settings.spec_workflow.artifacts_root)
     configured = os.getenv("ORCHESTRATOR_ARTIFACT_ROOT")
-    if configured:
-        return Path(configured)
-    return Path(settings.spec_workflow.artifacts_root)
+    try:
+        return resolve_artifact_root(default_root, configured)
+    except ArtifactStorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "invalid_artifact_root",
+                "message": "Artifact storage root misconfigured.",
+            },
+        ) from exc
 
 
 def _resolve_approval_state(
@@ -79,7 +92,7 @@ async def create_orchestrator_run(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "unknown_service",
-                "message": f"Service '{payload.target_service}' is not managed by the orchestrator.",
+                "message": "Requested service is not managed by the orchestrator.",
             },
         ) from exc
 
@@ -91,27 +104,19 @@ async def create_orchestrator_run(
             detail={"code": "invalid_instruction", "message": str(exc)},
         ) from exc
 
+    artifact_root = _artifact_root()
     repo = OrchestratorRepository(session)
-    action_plan = await repo.create_action_plan(
-        steps=plan.steps_as_dict(),
-        service_context=plan.service_context,
+    service = OrchestratorService(
+        repository=repo,
+        artifact_storage=ArtifactStorage(artifact_root),
     )
-    run = await repo.create_run(
-        instruction=plan.instruction,
-        target_service=profile.compose_service,
-        action_plan=action_plan,
+    run = await service.create_run(
+        plan,
         approval_token=payload.approval_token,
         priority=payload.priority,
     )
 
-    storage = ArtifactStorage(_artifact_root())
-    artifact_directory = storage.ensure_run_directory(run.id)
-    run.artifact_root = str(artifact_directory)
-
-    await repo.initialize_plan_states(run, plan.steps_as_dict())
-    await repo.commit()
-
     step_sequence = [step.name for step in plan.steps]
-    enqueue_action_plan(run.id, step_sequence)
+    enqueue_action_plan(run.id, step_sequence, include_rollback=True)
 
     return _serialize_run_summary(run)

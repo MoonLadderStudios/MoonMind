@@ -56,8 +56,10 @@ class CommandRunner:
     # ------------------------------------------------------------------
     def analyze(self, parameters: Mapping[str, Any]) -> StepResult:
         log_name = str(parameters.get("logArtifact", "analyze.log"))
+        instruction = str(parameters.get("instruction", ""))
+        sanitized_instruction = instruction.replace("\r", " ").replace("\n", " ")
         lines = [
-            f"Instruction: {parameters.get('instruction', '').strip()}",
+            f"Instruction: {sanitized_instruction.strip()}",
             f"Target service: {self._profile.compose_service}",
             parameters.get("notes", ""),
         ]
@@ -75,16 +77,14 @@ class CommandRunner:
         commands = parameters.get("commands") or []
         command_logs: list[str] = []
         for command in commands:
-            completed = self._execute_command(command, cwd=workspace)
+            completed = self._execute_command(_ensure_sequence(command), cwd=workspace)
             command_logs.append(self._format_command(command))
             if completed.stdout:
                 command_logs.append(completed.stdout.strip())
             if completed.stderr:
                 command_logs.append(completed.stderr.strip())
 
-        diff_output = self._execute_command(
-            ["git", "diff"], cwd=workspace
-        ).stdout
+        diff_output = self._execute_command(["git", "diff"], cwd=workspace).stdout
         diff_artifact_name = str(parameters.get("diffArtifact", "patch.diff"))
         diff_artifact = self._storage.write_text(
             self._run_id, diff_artifact_name, diff_output or "# No changes generated"
@@ -118,7 +118,7 @@ class CommandRunner:
             "build",
             self._profile.compose_service,
         ]
-        result = self._execute_command(command, cwd=workspace)
+        result = self._execute_command(_ensure_sequence(command), cwd=workspace)
         artifact = self._storage.write_text(
             self._run_id,
             str(parameters.get("logArtifact", "build.log")),
@@ -141,7 +141,7 @@ class CommandRunner:
             "--no-deps",
             self._profile.compose_service,
         ]
-        result = self._execute_command(command, cwd=workspace)
+        result = self._execute_command(_ensure_sequence(command), cwd=workspace)
         artifact = self._storage.write_text(
             self._run_id,
             str(parameters.get("logArtifact", "restart.log")),
@@ -200,7 +200,7 @@ class CommandRunner:
             strategy_type = strategy.get("type", "unknown")
             log_lines.append(f"Executing rollback strategy: {strategy_type}")
             for command in strategy.get("commands", []):
-                result = self._execute_command(command, cwd=workspace)
+                result = self._execute_command(_ensure_sequence(command), cwd=workspace)
                 log_lines.append(self._format_command(command))
                 combined = self._combine_streams(result)
                 if combined:
@@ -236,14 +236,13 @@ class CommandRunner:
 
     def _execute_command(
         self,
-        command: Sequence[str] | str,
+        command: Sequence[str],
         *,
         cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        if isinstance(command, str):
-            cmd_sequence = ["/bin/sh", "-lc", command]
-        else:
-            cmd_sequence = list(command)
+        cmd_sequence = list(command)
+        if not cmd_sequence:
+            raise CommandExecutionError("Command sequence must not be empty")
         try:
             result = subprocess.run(
                 cmd_sequence,
@@ -253,7 +252,9 @@ class CommandRunner:
                 check=True,
             )
         except FileNotFoundError as exc:  # pragma: no cover - environment dependent
-            raise CommandExecutionError(f"Command not found: {cmd_sequence[0]}") from exc
+            raise CommandExecutionError(
+                f"Command not found: {cmd_sequence[0]}"
+            ) from exc
         except subprocess.CalledProcessError as exc:
             combined = self._combine_streams(exc)
             raise CommandExecutionError(
@@ -272,6 +273,19 @@ class CommandRunner:
         if isinstance(command, str):
             return command
         return " ".join(command)
+
+
+def _ensure_sequence(command: Any) -> Sequence[str]:
+    if isinstance(command, str):
+        raise CommandExecutionError(
+            "Command strings are not supported; provide a sequence of arguments"
+        )
+    if not isinstance(command, Sequence):
+        raise CommandExecutionError("Command must be a sequence of strings")
+    sequence = list(command)
+    if not all(isinstance(item, str) for item in sequence):
+        raise CommandExecutionError("Command sequences must contain only strings")
+    return sequence
 
 
 __all__ = [

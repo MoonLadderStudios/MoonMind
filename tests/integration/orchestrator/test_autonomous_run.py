@@ -22,12 +22,21 @@ def test_autonomous_run_generates_artifacts(tmp_path: Path) -> None:
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     subprocess.run(["git", "init"], cwd=repo_path, check=True, stdout=subprocess.PIPE)
-    subprocess.run(["git", "config", "user.email", "ci@example.com"], cwd=repo_path, check=True)
-    subprocess.run(["git", "config", "user.name", "MoonMind CI"], cwd=repo_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "ci@example.com"], cwd=repo_path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "MoonMind CI"], cwd=repo_path, check=True
+    )
     requirements = repo_path / "requirements.txt"
     requirements.write_text("flask==1.0\n", encoding="utf-8")
     subprocess.run(["git", "add", "requirements.txt"], cwd=repo_path, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_path, check=True, stdout=subprocess.PIPE)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=repo_path,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
 
     profile = ServiceProfile(
         key="api",
@@ -38,13 +47,20 @@ def test_autonomous_run_generates_artifacts(tmp_path: Path) -> None:
     )
     plan = generate_action_plan("Update dependency", profile)
 
+    build_params: dict[str, object] | None = None
+    restart_params: dict[str, object] | None = None
+    verify_params: dict[str, object] | None = None
     for step in plan.steps:
+        parameters = dict(step.parameters)
         if step.name == db_models.OrchestratorPlanStep.BUILD:
-            step.parameters["command"] = ["echo", "build"]
+            parameters["command"] = ["echo", "build"]
+            build_params = parameters
         elif step.name == db_models.OrchestratorPlanStep.RESTART:
-            step.parameters["command"] = ["echo", "restart"]
+            parameters["command"] = ["echo", "restart"]
+            restart_params = parameters
         elif step.name == db_models.OrchestratorPlanStep.VERIFY:
-            step.parameters.pop("healthcheck", None)
+            parameters.pop("healthcheck", None)
+            verify_params = parameters
 
     storage = ArtifactStorage(tmp_path / "artifacts")
     run_id = uuid4()
@@ -66,10 +82,12 @@ def test_autonomous_run_generates_artifacts(tmp_path: Path) -> None:
 
     # Build, restart, and verify steps run mocked commands.
     for step in plan.steps[2:5]:
-        if step.name == db_models.OrchestratorPlanStep.BUILD:
-            step_result = runner.build(step.parameters)
-        elif step.name == db_models.OrchestratorPlanStep.RESTART:
-            step_result = runner.restart(step.parameters)
+        if step.name == db_models.OrchestratorPlanStep.BUILD and build_params:
+            step_result = runner.build(build_params)
+        elif step.name == db_models.OrchestratorPlanStep.RESTART and restart_params:
+            step_result = runner.restart(restart_params)
+        elif step.name == db_models.OrchestratorPlanStep.VERIFY and verify_params:
+            step_result = runner.verify(verify_params)
         else:
             step_result = runner.verify(step.parameters)
         messages.append(step_result.message)

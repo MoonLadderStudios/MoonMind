@@ -39,18 +39,17 @@ class ServiceProfile:
 
         path = Path(candidate)
         try:
-            relative = (
-                path if path.is_absolute() else (self.workspace_path / path).resolve()
-            )
             root = self.workspace_path.resolve()
-            relative.relative_to(root)
-        except Exception:
+            resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+            relative = resolved.relative_to(root)
+        except ValueError:
             return False
 
-        relative_str = str(relative.relative_to(root))
+        relative_str = str(relative)
         for pattern in self.allowlist_globs:
+            normalized_pattern = pattern.lstrip("./")
             if fnmatch(relative_str, pattern) or fnmatch(
-                relative_str, pattern.lstrip("./")
+                relative_str, normalized_pattern
             ):
                 return True
         return False

@@ -19,7 +19,7 @@ from moonmind.config.settings import settings
 from .command_runner import AllowListViolation, CommandRunner, CommandRunnerError
 from .repositories import OrchestratorRepository
 from .service_profiles import get_service_profile
-from .storage import ArtifactStorage
+from .storage import ArtifactStorage, ArtifactStorageError, resolve_artifact_root
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +50,9 @@ def _utcnow() -> datetime:
 
 
 def _artifact_root() -> Path:
+    default_root = Path(settings.spec_workflow.artifacts_root)
     configured = os.getenv("ORCHESTRATOR_ARTIFACT_ROOT")
-    if configured:
-        return Path(configured)
-    return Path(settings.spec_workflow.artifacts_root)
+    return resolve_artifact_root(default_root, configured)
 
 
 def _classify_artifact(
@@ -81,9 +80,31 @@ def _locate_step_definition(
     raise ValueError(f"Action plan missing step '{step.value}'")
 
 
-async def _execute_plan_step_async(
-    run_id: UUID, step_name: str
-) -> dict[str, object]:
+async def _record_plan_failure(
+    repo: OrchestratorRepository,
+    run: db_models.OrchestratorRun,
+    step: db_models.OrchestratorPlanStep,
+    exc: Exception,
+) -> None:
+    finished = _utcnow()
+    await repo.upsert_plan_step_state(
+        run_id=run.id,
+        plan_step=step,
+        plan_step_status=db_models.OrchestratorPlanStepStatus.FAILED,
+        celery_state=db_models.OrchestratorTaskState.FAILURE,
+        message=str(exc),
+        finished_at=finished,
+    )
+    await repo.update_run(
+        run,
+        status=db_models.OrchestratorRunStatus.FAILED,
+        completed_at=finished,
+    )
+    await repo.commit()
+    logger.error("Plan step %s failed for run %s: %s", step.value, run.id, exc)
+
+
+async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, object]:
     step = db_models.OrchestratorPlanStep(step_name)
     async with get_async_session_context() as session:
         repo = OrchestratorRepository(session)
@@ -92,14 +113,6 @@ async def _execute_plan_step_async(
             raise ValueError(f"Run {run_id} not found")
         if run.action_plan is None:
             raise ValueError(f"Run {run_id} missing action plan")
-
-        plan_steps = run.action_plan.steps or []
-        step_def = _locate_step_definition(plan_steps, step)
-        parameters = step_def.get("parameters") if isinstance(step_def, dict) else None
-        if parameters is None:
-            parameters = {}
-        elif not isinstance(parameters, dict):
-            raise TypeError("Plan step parameters must be a mapping")
 
         task_id = getattr(getattr(current_task, "request", None), "id", None)
         started_at = _utcnow()
@@ -118,37 +131,33 @@ async def _execute_plan_step_async(
                 started_at=started_at,
             )
 
-        storage = ArtifactStorage(_artifact_root())
-        storage.ensure_run_directory(run.id)
+        try:
+            plan_steps = run.action_plan.steps or []
+            step_def = _locate_step_definition(plan_steps, step)
+            parameters = (
+                step_def.get("parameters") if isinstance(step_def, dict) else None
+            )
+            if parameters is None:
+                parameters = {}
+            elif not isinstance(parameters, dict):
+                raise TypeError("Plan step parameters must be a mapping")
 
-        profile = get_service_profile(run.target_service)
-        runner = CommandRunner(
-            run_id=run.id, profile=profile, artifact_storage=storage
-        )
-        handler_name = _STEP_HANDLER[step]
-        handler = getattr(runner, handler_name)
+            storage = ArtifactStorage(_artifact_root())
+            storage.ensure_run_directory(run.id)
+            profile = get_service_profile(run.target_service)
+            runner = CommandRunner(
+                run_id=run.id, profile=profile, artifact_storage=storage
+            )
+            handler_name = _STEP_HANDLER[step]
+            handler = getattr(runner, handler_name)
+        except (ArtifactStorageError, KeyError, ValueError, TypeError) as exc:
+            await _record_plan_failure(repo, run, step, exc)
+            raise
 
         try:
             result = handler(parameters)
         except (AllowListViolation, CommandRunnerError) as exc:
-            finished = _utcnow()
-            await repo.upsert_plan_step_state(
-                run_id=run.id,
-                plan_step=step,
-                plan_step_status=db_models.OrchestratorPlanStepStatus.FAILED,
-                celery_state=db_models.OrchestratorTaskState.FAILURE,
-                message=str(exc),
-                finished_at=finished,
-            )
-            await repo.update_run(
-                run,
-                status=db_models.OrchestratorRunStatus.FAILED,
-                completed_at=finished,
-            )
-            await repo.commit()
-            logger.error(
-                "Plan step %s failed for run %s: %s", step.value, run.id, exc
-            )
+            await _record_plan_failure(repo, run, step, exc)
             raise
         else:
             finished = _utcnow()
@@ -180,6 +189,19 @@ async def _execute_plan_step_async(
                     status=db_models.OrchestratorRunStatus.SUCCEEDED,
                     completed_at=finished,
                 )
+                if any(
+                    entry.get("name") == db_models.OrchestratorPlanStep.ROLLBACK.value
+                    for entry in (run.action_plan.steps or [])
+                    if isinstance(entry, dict)
+                ):
+                    await repo.upsert_plan_step_state(
+                        run_id=run.id,
+                        plan_step=db_models.OrchestratorPlanStep.ROLLBACK,
+                        plan_step_status=db_models.OrchestratorPlanStepStatus.SKIPPED,
+                        celery_state=db_models.OrchestratorTaskState.SUCCESS,
+                        message="Rollback not required",
+                        finished_at=finished,
+                    )
             elif step == db_models.OrchestratorPlanStep.ROLLBACK:
                 await repo.update_run(
                     run,
@@ -188,9 +210,7 @@ async def _execute_plan_step_async(
                 )
 
             await repo.commit()
-            logger.info(
-                "Plan step %s completed for run %s", step.value, run.id
-            )
+            logger.info("Plan step %s completed for run %s", step.value, run.id)
             return {
                 "message": result.message,
                 "artifacts": [artifact.path for artifact in result.artifacts],
@@ -209,9 +229,7 @@ def execute_plan_step(self, run_id: str, step_name: str) -> dict[str, object]:
         getattr(self.request, "id", None),
     )
     result = asyncio.run(_execute_plan_step_async(UUID(run_id), step_name))
-    logger.info(
-        "Completed plan step %s for run %s", step_name, run_id
-    )
+    logger.info("Completed plan step %s for run %s", step_name, run_id)
     return result
 
 
@@ -224,23 +242,33 @@ def enqueue_action_plan(
     """Queue the orchestrator plan steps for execution."""
 
     normalized: list[str] = []
+    rollback_present = False
     for raw in steps:
         step = (
             raw
             if isinstance(raw, db_models.OrchestratorPlanStep)
             else db_models.OrchestratorPlanStep(str(raw))
         )
-        if not include_rollback and step == db_models.OrchestratorPlanStep.ROLLBACK:
+        if step == db_models.OrchestratorPlanStep.ROLLBACK:
+            rollback_present = True
             continue
         normalized.append(step.value)
 
     if not normalized:
         raise ValueError("Action plan does not contain executable steps")
 
-    workflow = chain(
-        *(execute_plan_step.si(str(run_id), step_name) for step_name in normalized)
-    )
+    step_signatures = [
+        execute_plan_step.si(str(run_id), step_name) for step_name in normalized
+    ]
+    workflow = chain(*step_signatures)
     logger.info("Queueing orchestrator run %s with steps=%s", run_id, normalized)
+
+    if include_rollback and rollback_present:
+        rollback_sig = execute_plan_step.si(
+            str(run_id), db_models.OrchestratorPlanStep.ROLLBACK.value
+        )
+        return workflow.apply_async(queue=_DEFAULT_QUEUE, link_error=[rollback_sig])
+
     return workflow.apply_async(queue=_DEFAULT_QUEUE)
 
 
