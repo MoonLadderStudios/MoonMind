@@ -96,16 +96,36 @@ class CommandRunner:
         changed_files = [
             line.strip() for line in changed_files_output.splitlines() if line.strip()
         ]
-        self._enforce_allowlist(changed_files)
+
+        untracked_output = self._execute_command(
+            ["git", "ls-files", "--others", "--exclude-standard"], cwd=workspace
+        ).stdout
+        untracked_files = [
+            line.strip() for line in untracked_output.splitlines() if line.strip()
+        ]
+
+        validated_files: list[str] = []
+        for path in changed_files + untracked_files:
+            if path not in validated_files:
+                validated_files.append(path)
+
+        self._enforce_allowlist(validated_files)
 
         patch_log_artifact = self._storage.write_text(
             self._run_id, "patch.log", "\n".join(command_logs)
         )
 
         return StepResult(
-            message=f"Patched files: {', '.join(changed_files) if changed_files else 'none'}",
+            message=(
+                "Patched files: "
+                + (", ".join(validated_files) if validated_files else "none")
+            ),
             artifacts=[diff_artifact, patch_log_artifact],
-            metadata={"changedFiles": changed_files},
+            metadata={
+                "changedFiles": changed_files,
+                "untrackedFiles": untracked_files,
+                "validatedFiles": validated_files,
+            },
         )
 
     def build(self, parameters: Mapping[str, Any]) -> StepResult:
