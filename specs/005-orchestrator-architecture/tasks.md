@@ -17,9 +17,9 @@
 ## Phase 1: Setup (Shared Infrastructure)
 **Purpose**: Establish configuration scaffolding and container build context for the orchestrator service before wiring application code.
 
-- [ ] T001 Add mm-orchestrator environment defaults (queue names, StatsD host/port, artifact root) to `.env-template`, `.env.vllm-template`, and `config.toml` so services share the same knobs.
-- [ ] T002 Update `docker-compose.yaml` and `docker-compose.job.yaml` to define the `orchestrator` service with `/workspace` and `/var/run/docker.sock` mounts, broker/result backend env vars, and dependency ordering with rabbitmq/api.
-- [ ] T003 Create the container context in `services/orchestrator/Dockerfile`, `services/orchestrator/requirements.txt`, and `services/orchestrator/entrypoint.sh` to install Python 3.11, Celery 5.4, compose CLI, and bootstrap the dedicated worker process.
+- [x] T001 Add mm-orchestrator environment defaults (queue names, StatsD host/port, artifact root) to `.env-template`, `.env.vllm-template`, and `config.toml` so services share the same knobs.
+- [x] T002 Update `docker-compose.yaml` and `docker-compose.job.yaml` to define the `orchestrator` service with `/workspace` and `/var/run/docker.sock` mounts, broker/result backend env vars, and dependency ordering with rabbitmq/api.
+- [x] T003 Create the container context in `services/orchestrator/Dockerfile`, `services/orchestrator/requirements.txt`, and `services/orchestrator/entrypoint.sh` to install Python 3.11, Celery 5.4, compose CLI, and bootstrap the dedicated worker process.
 
 ---
 

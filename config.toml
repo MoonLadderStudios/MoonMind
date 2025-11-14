@@ -32,6 +32,12 @@ metrics_namespace = "spec_automation"
 metrics_host = ""
 metrics_port = 8125
 
+[orchestrator]
+celery_queue = "orchestrator.run"
+artifact_root = "var/artifacts/spec_workflows"
+statsd_host = ""
+statsd_port = 8125
+
 # [jira]
 # jira_enabled = false
 # jira_url = "your-domain.atlassian.net"
