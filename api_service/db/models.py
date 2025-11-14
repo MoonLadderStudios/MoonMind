@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from moonmind.workflows.speckit_celery.models import SpecWorkflowTaskState
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
@@ -294,7 +297,7 @@ class OrchestratorRun(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     instruction: Mapped[str] = mapped_column(Text, nullable=False)
     target_service: Mapped[str] = mapped_column(String(255), nullable=False)
     priority: Mapped[OrchestratorRunPriority] = mapped_column(

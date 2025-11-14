@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
@@ -31,6 +31,9 @@ from api_service.db.models import (
     OrchestratorPlanStepStatus,
     OrchestratorTaskState,
 )
+
+if TYPE_CHECKING:
+    from api_service.db.models import OrchestratorRun
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 _TASK_PAYLOAD_TYPE = _MUTABLE_JSON
