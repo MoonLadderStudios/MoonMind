@@ -177,6 +177,33 @@ services:
       - local-network
     restart: unless-stopped
 
+  orchestrator:
+    build:
+      context: ./services/orchestrator
+      dockerfile: Dockerfile
+    image: moonmind/orchestrator:latest
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=${SPEC_WORKFLOW_CELERY_BROKER_URL:-amqp://${RABBITMQ_USER:-moonmind}:${RABBITMQ_PASSWORD:-password}@rabbitmq:5672//}
+      - CELERY_RESULT_BACKEND=${SPEC_WORKFLOW_CELERY_RESULT_BACKEND:-db+postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@api-db:5432/${POSTGRES_DB:-moonmind}}
+      - ORCHESTRATOR_CELERY_QUEUE=${ORCHESTRATOR_CELERY_QUEUE:-orchestrator.run}
+      - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
+      - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
+      - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      api:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
 networks:
   local-network:
     external: true
