@@ -55,6 +55,27 @@ def _artifact_root() -> Path:
     return resolve_artifact_root(default_root, configured)
 
 
+def _build_storage_for_run(run: db_models.OrchestratorRun) -> ArtifactStorage:
+    """Return an ``ArtifactStorage`` aligned with the run's configured root."""
+
+    stored_root = run.artifact_root
+    if stored_root:
+        run_path = Path(stored_root)
+        if not run_path.is_absolute():
+            run_path = run_path.resolve()
+
+        # ``artifact_root`` may point at the specific run directory or the base root.
+        base_path = run_path.parent if run_path.name == str(run.id) else run_path
+        storage = ArtifactStorage(base_path)
+    else:
+        storage = ArtifactStorage(_artifact_root())
+
+    resolved = storage.ensure_run_directory(run.id)
+    # Persist the fully qualified run directory for future task executions.
+    run.artifact_root = str(resolved)
+    return storage
+
+
 def _classify_artifact(
     step: db_models.OrchestratorPlanStep, artifact_path: str
 ) -> db_models.OrchestratorRunArtifactType:
@@ -142,8 +163,7 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             elif not isinstance(parameters, dict):
                 raise TypeError("Plan step parameters must be a mapping")
 
-            storage = ArtifactStorage(_artifact_root())
-            storage.ensure_run_directory(run.id)
+            storage = _build_storage_for_run(run)
             profile = get_service_profile(run.target_service)
             runner = CommandRunner(
                 run_id=run.id, profile=profile, artifact_storage=storage
