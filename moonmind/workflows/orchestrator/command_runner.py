@@ -84,17 +84,31 @@ class CommandRunner:
             if completed.stderr:
                 command_logs.append(completed.stderr.strip())
 
-        diff_output = self._execute_command(["git", "diff"], cwd=workspace).stdout
+        diff_command = ["git", "diff", "HEAD"]
+        try:
+            diff_output = self._execute_command(diff_command, cwd=workspace).stdout
+        except CommandExecutionError as exc:
+            if "unknown revision" in str(exc) or "ambiguous argument 'HEAD'" in str(exc):
+                diff_output = self._execute_command(["git", "diff"], cwd=workspace).stdout
+            else:
+                raise
         diff_artifact_name = str(parameters.get("diffArtifact", "patch.diff"))
         diff_artifact = self._storage.write_text(
             self._run_id, diff_artifact_name, diff_output or "# No changes generated"
         )
 
-        changed_files_output = self._execute_command(
+        unstaged_output = self._execute_command(
             ["git", "diff", "--name-only"], cwd=workspace
         ).stdout
-        changed_files = [
-            line.strip() for line in changed_files_output.splitlines() if line.strip()
+        unstaged_files = [
+            line.strip() for line in unstaged_output.splitlines() if line.strip()
+        ]
+
+        staged_output = self._execute_command(
+            ["git", "diff", "--cached", "--name-only"], cwd=workspace
+        ).stdout
+        staged_files = [
+            line.strip() for line in staged_output.splitlines() if line.strip()
         ]
 
         untracked_output = self._execute_command(
@@ -105,9 +119,11 @@ class CommandRunner:
         ]
 
         validated_files: list[str] = []
-        for path in changed_files + untracked_files:
-            if path not in validated_files:
+        seen: set[str] = set()
+        for path in (*unstaged_files, *staged_files, *untracked_files):
+            if path and path not in seen:
                 validated_files.append(path)
+                seen.add(path)
 
         allowlist_override = parameters.get("allowlist")
         normalized_allowlist = None
@@ -127,7 +143,8 @@ class CommandRunner:
             ),
             artifacts=[diff_artifact, patch_log_artifact],
             metadata={
-                "changedFiles": changed_files,
+                "unstagedFiles": unstaged_files,
+                "stagedFiles": staged_files,
                 "untrackedFiles": untracked_files,
                 "validatedFiles": validated_files,
             },
