@@ -41,14 +41,14 @@
 **Independent Test**: Trigger a failing service locally, POST `/orchestrator/runs`, and verify the run produces a diff, rebuilds only the target service, restarts it, and stores verify logs/artifacts end-to-end.
 
 ### Tests for User Story 1
-- [ ] T014 [P] [US1] Add a compose-based integration test `tests/integration/orchestrator/test_autonomous_run.py` that simulates a dependency fix, asserts `analyze→patch→build→restart→verify` log entries, and checks artifacts under `var/artifacts/spec_workflows/<run_id>/`.
+- [x] T014 [P] [US1] Add a compose-based integration test `tests/integration/orchestrator/test_autonomous_run.py` that simulates a dependency fix, asserts `analyze→patch→build→restart→verify` log entries, and checks artifacts under `var/artifacts/spec_workflows/<run_id>/`.
 
 ### Implementation for User Story 1
-- [ ] T009 [P] [US1] Define service metadata (allow-listed files, compose service names, health URLs) in `moonmind/workflows/orchestrator/service_profiles.py` so instructions can be validated up front.
-- [ ] T010 [US1] Implement ActionPlan generation logic in `moonmind/workflows/orchestrator/action_plan.py` that expands instructions into analyze/patch/build/restart/verify steps with parameters.
-- [ ] T011 [US1] Build the patch/build/restart command runner in `moonmind/workflows/orchestrator/command_runner.py`, including allow-list enforcement, compose invocations, and artifact writers for diffs/build logs.
-- [ ] T012 [US1] Implement Celery step tasks and chaining in `moonmind/workflows/orchestrator/tasks.py` to execute the ActionPlan sequentially, update run status, and emit repository events.
-- [ ] T013 [US1] Add the `POST /orchestrator/runs` endpoint plus router registration inside `api_service/api/routers/orchestrator.py` (and `api_service/main.py`) to validate requests, create OrchestratorRun rows, and enqueue the Celery chain.
+- [x] T009 [P] [US1] Define service metadata (allow-listed files, compose service names, health URLs) in `moonmind/workflows/orchestrator/service_profiles.py` so instructions can be validated up front.
+- [x] T010 [US1] Implement ActionPlan generation logic in `moonmind/workflows/orchestrator/action_plan.py` that expands instructions into analyze/patch/build/restart/verify steps with parameters.
+- [x] T011 [US1] Build the patch/build/restart command runner in `moonmind/workflows/orchestrator/command_runner.py`, including allow-list enforcement, compose invocations, and artifact writers for diffs/build logs.
+- [x] T012 [US1] Implement Celery step tasks and chaining in `moonmind/workflows/orchestrator/tasks.py` to execute the ActionPlan sequentially, update run status, and emit repository events.
+- [x] T013 [US1] Add the `POST /orchestrator/runs` endpoint plus router registration inside `api_service/api/routers/orchestrator.py` (and `api_service/main.py`) to validate requests, create OrchestratorRun rows, and enqueue the Celery chain.
 
 **Checkpoint**: Operators can queue autonomous fix runs that patch/build/restart services and persist artifacts without manual Docker commands.
 
