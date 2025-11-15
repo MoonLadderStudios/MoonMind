@@ -61,7 +61,9 @@ class ServiceProfile:
             return False
 
         relative_str = str(relative)
-        patterns = tuple(str(pattern) for pattern in (allowlist or self.allowlist_globs))
+        patterns = tuple(
+            str(pattern) for pattern in (allowlist or self.allowlist_globs)
+        )
         for pattern in patterns:
             normalized_pattern = pattern.lstrip("./")
             if fnmatch(relative_str, pattern) or fnmatch(

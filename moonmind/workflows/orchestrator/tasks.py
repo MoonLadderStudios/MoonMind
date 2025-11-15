@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 app = Celery("moonmind.workflows.orchestrator")
 app.config_from_object("moonmind.workflows.orchestrator.celeryconfig")
 
-_DEFAULT_QUEUE: Final[str] = app.conf.get(
-    "task_default_queue", os.getenv("ORCHESTRATOR_CELERY_QUEUE", "orchestrator.run")
+_ENV_QUEUE = os.getenv("ORCHESTRATOR_CELERY_QUEUE")
+_DEFAULT_QUEUE: Final[str] = (
+    _ENV_QUEUE if _ENV_QUEUE else app.conf.get("task_default_queue", "orchestrator.run")
 )
 app.conf.update(
     task_default_queue=_DEFAULT_QUEUE,

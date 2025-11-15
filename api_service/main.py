@@ -27,9 +27,9 @@ from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
+from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
-from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.spec_automation import router as spec_automation_router
 from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.schemas import UserProfileUpdate

@@ -88,8 +88,12 @@ class CommandRunner:
         try:
             diff_output = self._execute_command(diff_command, cwd=workspace).stdout
         except CommandExecutionError as exc:
-            if "unknown revision" in str(exc) or "ambiguous argument 'HEAD'" in str(exc):
-                diff_output = self._execute_command(["git", "diff"], cwd=workspace).stdout
+            if "unknown revision" in str(exc) or "ambiguous argument 'HEAD'" in str(
+                exc
+            ):
+                diff_output = self._execute_command(
+                    ["git", "diff"], cwd=workspace
+                ).stdout
             else:
                 raise
         diff_artifact_name = str(parameters.get("diffArtifact", "patch.diff"))
@@ -130,7 +134,9 @@ class CommandRunner:
         if allowlist_override:
             normalized_allowlist = [str(pattern) for pattern in allowlist_override]
 
-        self._enforce_allowlist(validated_files, allowlist_override=normalized_allowlist)
+        self._enforce_allowlist(
+            validated_files, allowlist_override=normalized_allowlist
+        )
 
         patch_log_artifact = self._storage.write_text(
             self._run_id, "patch.log", "\n".join(command_logs)

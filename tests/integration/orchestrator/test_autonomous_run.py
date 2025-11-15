@@ -202,9 +202,7 @@ def test_patch_step_rejects_staged_outside_allowlist(tmp_path: Path) -> None:
     rogue_script = repo_path / "scripts" / "exploit.sh"
     rogue_script.parent.mkdir(parents=True, exist_ok=True)
     rogue_script.write_text("#!/bin/sh\necho exploit\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "add", "scripts/exploit.sh"], cwd=repo_path, check=True
-    )
+    subprocess.run(["git", "add", "scripts/exploit.sh"], cwd=repo_path, check=True)
 
     with pytest.raises(AllowListViolation) as excinfo:
         runner.patch(plan.steps[1].parameters)
@@ -232,7 +230,9 @@ def test_patch_step_honors_plan_allowlist_override(tmp_path: Path) -> None:
     app_py.parent.mkdir()
     app_py.write_text("print('hello')\n", encoding="utf-8")
 
-    subprocess.run(["git", "add", "requirements.txt", "src/app.py"], cwd=repo_path, check=True)
+    subprocess.run(
+        ["git", "add", "requirements.txt", "src/app.py"], cwd=repo_path, check=True
+    )
     subprocess.run(
         ["git", "commit", "-m", "initial"],
         cwd=repo_path,
