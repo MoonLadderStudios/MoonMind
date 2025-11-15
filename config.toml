@@ -22,8 +22,8 @@ google_application_credentials = "/path/to/your/service-account-file.json"
 [spec_workflow]
 job_image = "moonmind/spec-automation-job:latest"
 workspace_root = "/work"
-celery_broker_url = ""
-celery_result_backend = ""
+celery_broker_url = "amqp://guest:guest@rabbitmq:5672//"
+celery_result_backend = "db+postgresql://postgres:password@api-db:5432/moonmind"
 codex_queue = "codex"
 artifact_root = "var/artifacts/spec_workflows"
 metrics_enabled = false
