@@ -13,6 +13,13 @@ down_revision: Union[str, None] = "202402150001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+]
+
 
 SPEC_WORKFLOW_RUN_STATUS = postgresql.ENUM(
     "pending",
@@ -66,14 +73,26 @@ WORKFLOW_ARTIFACT_TYPE = postgresql.ENUM(
     create_type=False,
 )
 
+LEGACY_WORKFLOW_TABLES: tuple[str, ...] = (
+    "workflow_artifacts",
+    "workflow_credential_audits",
+    "spec_workflow_task_states",
+    "spec_workflow_runs",
+)
 
-def _drop_existing_tables() -> None:
-    """Remove legacy Spec workflow tables when present."""
 
-    op.execute("DROP TABLE IF EXISTS workflow_artifacts CASCADE")
-    op.execute("DROP TABLE IF EXISTS workflow_credential_audits CASCADE")
-    op.execute("DROP TABLE IF EXISTS spec_workflow_task_states CASCADE")
-    op.execute("DROP TABLE IF EXISTS spec_workflow_runs CASCADE")
+def _backup_existing_tables() -> None:
+    """Rename legacy Spec workflow tables to preserve their contents."""
+
+    for table_name in LEGACY_WORKFLOW_TABLES:
+        backup_name = f"legacy_{table_name}"
+        quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
+        quoted_backup = sa.sql.elements.quoted_name(backup_name, quote=True)
+
+        op.execute(f"DROP TABLE IF EXISTS {quoted_backup} CASCADE")
+        op.execute(
+            f"ALTER TABLE IF EXISTS {quoted_table} RENAME TO {quoted_backup}"
+        )
 
 
 def _drop_legacy_enums() -> None:
@@ -93,30 +112,22 @@ def _drop_legacy_enums() -> None:
 def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
     """Create a PostgreSQL enum type only if it does not already exist."""
 
-    literal_values = ", ".join(
-        f"'{value.replace("'", "''")}'" for value in enum_type.enums
-    )
-    type_name_literal = enum_type.name.replace("'", "''")
-    quoted_type_name = sa.sql.elements.quoted_name(enum_type.name, quote=True)
+    bind = op.get_bind()
+    exists = bind.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = :type_name)"
+        ),
+        {"type_name": enum_type.name},
+    ).scalar()
 
-    op.execute(
-        f"""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_type WHERE typname = '{type_name_literal}'
-            ) THEN
-                CREATE TYPE {quoted_type_name} AS ENUM ({literal_values});
-            END IF;
-        END $$;
-        """
-    )
+    if not exists:
+        enum_type.create(bind, checkfirst=False)
 
 
 def upgrade() -> None:  # noqa: D401
     """Install Spec workflow tables aligned with the new data model."""
 
-    _drop_existing_tables()
+    _backup_existing_tables()
     _drop_legacy_enums()
 
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
@@ -395,6 +406,11 @@ def downgrade() -> None:  # noqa: D401
     ):
         enum_type.drop(bind, checkfirst=True)
 
+    # ------------------------------------------------------------------
+    # Recreate the legacy workflow enums and tables that existed before
+    # the Celery chain migration. This mirrors the schema installed by
+    # historical migrations so that older code paths continue to work.
+    # ------------------------------------------------------------------
     # Recreate legacy enums
     legacy_run_status = postgresql.ENUM(
         "pending",
@@ -437,6 +453,14 @@ def downgrade() -> None:  # noqa: D401
         name="workflowgithubcredentialstatus",
         create_type=False,
     )
+    legacy_preflight_status = postgresql.ENUM(
+        "pending",
+        "passed",
+        "failed",
+        "skipped",
+        name="codexpreflightstatus",
+        create_type=False,
+    )
     legacy_artifact_type = postgresql.ENUM(
         "codex_logs",
         "codex_patch",
@@ -452,6 +476,7 @@ def downgrade() -> None:  # noqa: D401
         legacy_task_status,
         legacy_codex_status,
         legacy_github_status,
+        legacy_preflight_status,
         legacy_artifact_type,
     ):
         _create_enum_if_missing(enum_type)
@@ -480,7 +505,7 @@ def downgrade() -> None:  # noqa: D401
         sa.Column("codex_volume", sa.String(length=64), nullable=True),
         sa.Column(
             "codex_preflight_status",
-            postgresql.ENUM(name="codexpreflightstatus", create_type=False),
+            legacy_preflight_status,
             nullable=True,
         ),
         sa.Column("codex_preflight_message", sa.Text(), nullable=True),
@@ -664,6 +689,11 @@ def downgrade() -> None:  # noqa: D401
         ["workflow_run_id"],
     )
 
+    # ------------------------------------------------------------------
+    # Reapply orchestrator-specific columns that were introduced by
+    # earlier migrations. Keeping this logic here prevents future
+    # downgrades from failing when those migrations are not rerun.
+    # ------------------------------------------------------------------
     op.add_column(
         "spec_workflow_task_states",
         sa.Column("orchestrator_run_id", sa.Uuid(), nullable=True),
