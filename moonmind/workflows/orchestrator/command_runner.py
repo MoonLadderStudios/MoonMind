@@ -35,6 +35,16 @@ class AllowListViolation(CommandRunnerError):
 class CommandExecutionError(CommandRunnerError):
     """Raised when a subprocess command returns a non-zero exit code."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        output: str | None = None,
+        artifacts: Sequence[ArtifactWriteResult] | None = None,
+    ) -> None:
+        super().__init__(message, artifacts=artifacts)
+        self.output = output
+
 
 @dataclass(slots=True)
 class StepResult:
@@ -175,10 +185,22 @@ class CommandRunner:
             "build",
             self._profile.compose_service,
         ]
-        result = self._execute_command(_ensure_sequence(command), cwd=workspace)
+        log_name = str(parameters.get("logArtifact", "build.log"))
+        try:
+            result = self._execute_command(
+                _ensure_sequence(command), cwd=workspace
+            )
+        except CommandExecutionError as exc:
+            artifact = self._storage.write_text(
+                self._run_id,
+                log_name,
+                exc.output or str(exc),
+            )
+            exc.artifacts.append(artifact)
+            raise
         artifact = self._storage.write_text(
             self._run_id,
-            str(parameters.get("logArtifact", "build.log")),
+            log_name,
             self._combine_streams(result),
         )
         return StepResult(
@@ -198,10 +220,22 @@ class CommandRunner:
             "--no-deps",
             self._profile.compose_service,
         ]
-        result = self._execute_command(_ensure_sequence(command), cwd=workspace)
+        log_name = str(parameters.get("logArtifact", "restart.log"))
+        try:
+            result = self._execute_command(
+                _ensure_sequence(command), cwd=workspace
+            )
+        except CommandExecutionError as exc:
+            artifact = self._storage.write_text(
+                self._run_id,
+                log_name,
+                exc.output or str(exc),
+            )
+            exc.artifacts.append(artifact)
+            raise
         artifact = self._storage.write_text(
             self._run_id,
-            str(parameters.get("logArtifact", "restart.log")),
+            log_name,
             self._combine_streams(result),
         )
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
@@ -332,7 +366,8 @@ class CommandRunner:
         except subprocess.CalledProcessError as exc:
             combined = self._combine_streams(exc)
             raise CommandExecutionError(
-                f"Command {' '.join(cmd_sequence)} failed with code {exc.returncode}: {combined}"
+                f"Command {' '.join(cmd_sequence)} failed with code {exc.returncode}: {combined}",
+                output=combined,
             ) from exc
         return result
 

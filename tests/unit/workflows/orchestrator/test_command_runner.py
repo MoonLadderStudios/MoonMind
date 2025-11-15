@@ -65,3 +65,59 @@ def test_verify_timeout_emits_artifact(tmp_path, monkeypatch):
     contents = log_path.read_text()
     assert "Attempt 1" in contents
     assert "timed out" in contents
+
+
+def test_build_failure_emits_log_artifact(tmp_path, monkeypatch):
+    """Failed builds should persist their log output before raising."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        raise CommandExecutionError("build failed", output="build output")
+
+    monkeypatch.setattr(
+        CommandRunner,
+        "_execute_command",
+        fail_execute,
+    )
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.build({"logArtifact": "build.log"})
+
+    error = excinfo.value
+    assert error.artifacts, "build failure should include log artifacts"
+    artifact = error.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    assert log_path.read_text() == "build output"
+
+
+def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
+    """Failed restarts should persist their log output before raising."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        raise CommandExecutionError("restart failed", output="restart output")
+
+    monkeypatch.setattr(
+        CommandRunner,
+        "_execute_command",
+        fail_execute,
+    )
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.restart({"logArtifact": "restart.log"})
+
+    error = excinfo.value
+    assert error.artifacts, "restart failure should include log artifacts"
+    artifact = error.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    assert log_path.read_text() == "restart output"
