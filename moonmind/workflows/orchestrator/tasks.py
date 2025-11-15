@@ -281,14 +281,17 @@ def enqueue_action_plan(
     step_signatures = [
         execute_plan_step.si(str(run_id), step_name) for step_name in normalized
     ]
-    workflow = chain(*step_signatures)
-    logger.info("Queueing orchestrator run %s with steps=%s", run_id, normalized)
 
+    rollback_sig = None
     if include_rollback and rollback_present:
         rollback_sig = execute_plan_step.si(
             str(run_id), db_models.OrchestratorPlanStep.ROLLBACK.value
-        )
-        return workflow.apply_async(queue=_DEFAULT_QUEUE, link_error=[rollback_sig])
+        ).set(queue=_DEFAULT_QUEUE)
+        for signature in step_signatures:
+            signature.link_error(rollback_sig.clone())
+
+    workflow = chain(*step_signatures)
+    logger.info("Queueing orchestrator run %s with steps=%s", run_id, normalized)
 
     return workflow.apply_async(queue=_DEFAULT_QUEUE)
 
