@@ -121,3 +121,27 @@ def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
     log_path = storage.ensure_run_directory(run_id) / artifact.path
     assert log_path.exists()
     assert log_path.read_text() == "restart output"
+
+
+def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
+    """Empty subprocess output should fall back to the formatted command."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del command, cwd
+        raise CommandExecutionError("build failed")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.build({"command": ["docker", "compose", "build"], "logArtifact": "build.log"})
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "docker compose build" in contents
