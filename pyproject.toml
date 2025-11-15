@@ -84,5 +84,10 @@ line-length = 88
 [tool.ruff.lint]
 extend-ignore = ["E402", "E722", "F841"]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks integration tests that exercise orchestrator workflows.",
+]
+
 [tool.pre-commit]
 repos = []

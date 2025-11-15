@@ -27,6 +27,7 @@ from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.models import router as models_router
+from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.spec_automation import router as spec_automation_router
@@ -255,6 +256,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(spec_automation_router)
+app.include_router(orchestrator_router)
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity
