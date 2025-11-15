@@ -177,7 +177,7 @@ class CommandRunner:
 
     def build(self, parameters: Mapping[str, Any]) -> StepResult:
         workspace = self._resolve_workspace(parameters.get("workspace"))
-        command = parameters.get("command") or [
+        raw_command = parameters.get("command") or [
             "docker",
             "compose",
             "--project-name",
@@ -186,15 +186,18 @@ class CommandRunner:
             self._profile.compose_service,
         ]
         log_name = str(parameters.get("logArtifact", "build.log"))
+        command = _ensure_sequence(raw_command)
+        formatted = self._format_command(command)
         try:
-            result = self._execute_command(
-                _ensure_sequence(command), cwd=workspace
-            )
+            result = self._execute_command(command, cwd=workspace)
         except CommandExecutionError as exc:
+            log_content = (exc.output or "").strip()
+            if not log_content:
+                log_content = formatted or str(exc)
             artifact = self._storage.write_text(
                 self._run_id,
                 log_name,
-                exc.output or str(exc),
+                log_content,
             )
             exc.artifacts.append(artifact)
             raise
@@ -210,7 +213,7 @@ class CommandRunner:
 
     def restart(self, parameters: Mapping[str, Any]) -> StepResult:
         workspace = self._resolve_workspace(parameters.get("workspace"))
-        command = parameters.get("command") or [
+        raw_command = parameters.get("command") or [
             "docker",
             "compose",
             "--project-name",
@@ -221,15 +224,18 @@ class CommandRunner:
             self._profile.compose_service,
         ]
         log_name = str(parameters.get("logArtifact", "restart.log"))
+        command = _ensure_sequence(raw_command)
+        formatted = self._format_command(command)
         try:
-            result = self._execute_command(
-                _ensure_sequence(command), cwd=workspace
-            )
+            result = self._execute_command(command, cwd=workspace)
         except CommandExecutionError as exc:
+            log_content = (exc.output or "").strip()
+            if not log_content:
+                log_content = formatted or str(exc)
             artifact = self._storage.write_text(
                 self._run_id,
                 log_name,
-                exc.output or str(exc),
+                log_content,
             )
             exc.artifacts.append(artifact)
             raise
