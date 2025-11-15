@@ -8,7 +8,6 @@ from uuid import uuid4
 import pytest
 
 from api_service.db import models as db_models
-
 from moonmind.workflows.orchestrator import tasks
 from moonmind.workflows.orchestrator.command_runner import CommandExecutionError
 from moonmind.workflows.orchestrator.storage import ArtifactWriteResult
