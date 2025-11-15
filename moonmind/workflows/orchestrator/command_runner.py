@@ -18,6 +18,15 @@ from .storage import ArtifactStorage, ArtifactWriteResult
 class CommandRunnerError(RuntimeError):
     """Base class for orchestrator command runner failures."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        artifacts: Sequence[ArtifactWriteResult] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.artifacts: list[ArtifactWriteResult] = list(artifacts or [])
+
 
 class AllowListViolation(CommandRunnerError):
     """Raised when a patch attempts to modify files outside the allow list."""
@@ -204,6 +213,7 @@ class CommandRunner:
     def verify(self, parameters: Mapping[str, Any]) -> StepResult:
         health = parameters.get("healthcheck") or {}
         log_lines: list[str] = []
+        log_name = str(parameters.get("logArtifact", "verify.log"))
         if health:
             url = str(health.get("url"))
             method = str(health.get("method", "GET")).upper()
@@ -226,8 +236,17 @@ class CommandRunner:
                     if response.status_code == expected_status:
                         break
                 if time.monotonic() >= deadline:
+                    log_lines.append(
+                        "Health check timed out before reaching expected status"
+                    )
+                    artifact = self._storage.write_text(
+                        self._run_id,
+                        log_name,
+                        "\n".join(log_lines) or "Verification failed",
+                    )
                     raise CommandExecutionError(
-                        f"Health check for {url} timed out after {timeout_seconds}s"
+                        f"Health check for {url} timed out after {timeout_seconds}s",
+                        artifacts=[artifact],
                     )
                 time.sleep(interval)
         else:
@@ -235,7 +254,7 @@ class CommandRunner:
 
         artifact = self._storage.write_text(
             self._run_id,
-            str(parameters.get("logArtifact", "verify.log")),
+            log_name,
             "\n".join(log_lines) or "Verification completed",
         )
         return StepResult(message="Verification succeeded", artifacts=[artifact])

@@ -5,9 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from api_service.db import models as db_models
 
 from moonmind.workflows.orchestrator import tasks
+from moonmind.workflows.orchestrator.command_runner import CommandExecutionError
+from moonmind.workflows.orchestrator.storage import ArtifactWriteResult
 
 
 def test_build_storage_for_run_uses_persisted_directory(tmp_path):
@@ -104,3 +108,46 @@ def test_enqueue_action_plan_links_rollback_for_all_steps(monkeypatch):
             assert linked.options.get("queue") == tasks._DEFAULT_QUEUE
     kwargs = captured["apply_async_kwargs"]
     assert kwargs["queue"] == tasks._DEFAULT_QUEUE
+
+
+@pytest.mark.asyncio
+async def test_record_plan_failure_registers_artifacts():
+    """Failures with artifacts should persist them and record references."""
+
+    run_id = uuid4()
+    run = SimpleNamespace(id=run_id)
+    artifact = ArtifactWriteResult(
+        path="verify.log", size_bytes=12, checksum="deadbeef"
+    )
+    error = CommandExecutionError("boom", artifacts=[artifact])
+    step = db_models.OrchestratorPlanStep.VERIFY
+
+    captured = SimpleNamespace(added=[], upsert=None, updated=None, committed=False)
+
+    class StubRepo:
+        async def add_artifact(self, **kwargs):
+            captured.added.append(kwargs)
+            return SimpleNamespace(id=uuid4())
+
+        async def upsert_plan_step_state(self, **kwargs):
+            captured.upsert = kwargs
+            return SimpleNamespace()
+
+        async def update_run(self, run_obj, **kwargs):
+            captured.updated = (run_obj, kwargs)
+
+        async def commit(self):
+            captured.committed = True
+
+    repo = StubRepo()
+
+    await tasks._record_plan_failure(repo, run, step, error)
+
+    assert captured.added, "artifact should be saved on failure"
+    assert (
+        captured.added[0]["artifact_type"]
+        == db_models.OrchestratorRunArtifactType.VERIFY_LOG
+    )
+    assert captured.upsert is not None
+    assert captured.upsert["artifact_refs"], "artifact references should be recorded"
+    assert captured.committed is True

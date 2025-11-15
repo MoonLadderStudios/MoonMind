@@ -109,12 +109,24 @@ async def _record_plan_failure(
     exc: Exception,
 ) -> None:
     finished = _utcnow()
+    artifact_ids: list[UUID] = []
+    if isinstance(exc, CommandRunnerError) and exc.artifacts:
+        for artifact in exc.artifacts:
+            record = await repo.add_artifact(
+                run_id=run.id,
+                artifact_type=_classify_artifact(step, artifact.path),
+                path=artifact.path,
+                checksum=artifact.checksum,
+                size_bytes=artifact.size_bytes,
+            )
+            artifact_ids.append(record.id)
     await repo.upsert_plan_step_state(
         run_id=run.id,
         plan_step=step,
         plan_step_status=db_models.OrchestratorPlanStepStatus.FAILED,
         celery_state=db_models.OrchestratorTaskState.FAILURE,
         message=str(exc),
+        artifact_refs=artifact_ids,
         finished_at=finished,
     )
     await repo.update_run(
