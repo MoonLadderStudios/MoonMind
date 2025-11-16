@@ -96,6 +96,7 @@ def test_build_failure_emits_log_artifact(tmp_path, monkeypatch):
     contents = log_path.read_text()
     assert "build output" in contents
     assert "docker compose" in contents
+    assert artifact.path in str(error)
 
 
 def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
@@ -126,6 +127,7 @@ def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
     contents = log_path.read_text()
     assert "restart output" in contents
     assert "docker compose" in contents
+    assert artifact.path in str(error)
 
 
 def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):

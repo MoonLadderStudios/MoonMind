@@ -387,8 +387,16 @@ class CommandRunner:
                 log_name,
                 "\n".join(line for line in log_lines if line) or "Command failed",
             )
-            exc.artifacts.append(artifact)
-            raise
+            artifacts = list(getattr(exc, "artifacts", []))
+            artifacts.append(artifact)
+            message = f"{exc} (see {artifact.path})"
+            if isinstance(exc, CommandExecutionError):
+                raise CommandExecutionError(
+                    message,
+                    output=exc.output,
+                    artifacts=artifacts,
+                ) from exc
+            raise exc.__class__(message, artifacts=artifacts) from exc
         combined = self._combine_streams(result)
         if combined:
             log_lines.append(combined)
