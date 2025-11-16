@@ -372,17 +372,32 @@ class CommandRunner:
         log_name: str,
     ) -> ArtifactWriteResult:
         formatted = self._format_command(command)
+        header = f"$ {formatted}" if formatted else ""
         try:
             result = self._execute_command(command, cwd=workspace)
         except CommandExecutionError as exc:
-            log_content = (exc.output or "").strip()
-            if not log_content:
-                log_content = formatted or str(exc)
-            artifact = self._storage.write_text(self._run_id, log_name, log_content)
+            log_lines = [header] if header else []
+            log_body = (exc.output or "").strip()
+            if log_body:
+                log_lines.append(log_body)
+            else:
+                log_lines.append(str(exc))
+            artifact = self._storage.write_text(
+                self._run_id,
+                log_name,
+                "\n".join(line for line in log_lines if line) or "Command failed",
+            )
             exc.artifacts.append(artifact)
             raise
         combined = self._combine_streams(result)
-        return self._storage.write_text(self._run_id, log_name, combined)
+        log_lines = [header] if header else []
+        if combined:
+            log_lines.append(combined)
+        return self._storage.write_text(
+            self._run_id,
+            log_name,
+            "\n".join(line for line in log_lines if line) or formatted,
+        )
 
 
 def _ensure_sequence(command: Any) -> Sequence[str]:
