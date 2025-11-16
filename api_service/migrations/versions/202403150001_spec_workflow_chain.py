@@ -90,9 +90,7 @@ def _backup_existing_tables() -> None:
         quoted_backup = sa.sql.elements.quoted_name(backup_name, quote=True)
 
         op.execute(f"DROP TABLE IF EXISTS {quoted_backup} CASCADE")
-        op.execute(
-            f"ALTER TABLE IF EXISTS {quoted_table} RENAME TO {quoted_backup}"
-        )
+        op.execute(f"ALTER TABLE IF EXISTS {quoted_table} RENAME TO {quoted_backup}")
 
 
 def _drop_legacy_enums() -> None:
@@ -114,9 +112,7 @@ def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
 
     bind = op.get_bind()
     exists = bind.execute(
-        sa.text(
-            "SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = :type_name)"
-        ),
+        sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = :type_name)"),
         {"type_name": enum_type.name},
     ).scalar()
 
@@ -381,14 +377,20 @@ def downgrade() -> None:  # noqa: D401
         type_="foreignkey",
     )
 
-    op.drop_index("ix_workflow_credential_audits_run", table_name="workflow_credential_audits")
+    op.drop_index(
+        "ix_workflow_credential_audits_run", table_name="workflow_credential_audits"
+    )
     op.drop_table("workflow_credential_audits")
 
     op.drop_index("ix_workflow_artifacts_run_id", table_name="workflow_artifacts")
     op.drop_table("workflow_artifacts")
 
-    op.drop_index("ix_spec_workflow_task_states_task", table_name="spec_workflow_task_states")
-    op.drop_index("ix_spec_workflow_task_states_run_id", table_name="spec_workflow_task_states")
+    op.drop_index(
+        "ix_spec_workflow_task_states_task", table_name="spec_workflow_task_states"
+    )
+    op.drop_index(
+        "ix_spec_workflow_task_states_run_id", table_name="spec_workflow_task_states"
+    )
     op.drop_table("spec_workflow_task_states")
 
     op.drop_index("ix_spec_workflow_runs_requested_by", table_name="spec_workflow_runs")
