@@ -145,3 +145,36 @@ def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert log_path.exists()
     contents = log_path.read_text()
     assert "docker compose build" in contents
+
+
+def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
+    """Restart failures without output should store the executed command."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del command, cwd
+        raise CommandExecutionError("restart failed")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.restart({
+            "command": [
+                "docker",
+                "compose",
+                "up",
+                "--no-deps",
+                profile.compose_service,
+            ],
+            "logArtifact": "restart.log",
+        })
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "docker compose up --no-deps" in contents
