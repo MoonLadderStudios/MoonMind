@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Union
-
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202403150001"
-down_revision: Union[str, None] = "202402150001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = "202403150001"
+down_revision = "202402150001"
 
 __all__ = [
     "revision",
     "down_revision",
-    "branch_labels",
-    "depends_on",
 ]
 
 
@@ -80,6 +74,20 @@ LEGACY_WORKFLOW_TABLES: tuple[str, ...] = (
     "spec_workflow_runs",
 )
 
+LEGACY_ENUM_COLUMNS: dict[str, tuple[str, ...]] = {
+    "legacy_spec_workflow_runs": (
+        "status",
+        "phase",
+        "codex_preflight_status",
+    ),
+    "legacy_spec_workflow_task_states": ("status",),
+    "legacy_workflow_credential_audits": (
+        "codex_status",
+        "github_status",
+    ),
+    "legacy_workflow_artifacts": ("artifact_type",),
+}
+
 
 def _backup_existing_tables() -> None:
     """Rename legacy Spec workflow tables to preserve their contents."""
@@ -93,6 +101,20 @@ def _backup_existing_tables() -> None:
         op.execute(f"ALTER TABLE IF EXISTS {quoted_table} RENAME TO {quoted_backup}")
 
 
+def _detach_legacy_tables_from_enums() -> None:
+    """Cast legacy enum columns to text so types can be dropped safely."""
+
+    for table_name, columns in LEGACY_ENUM_COLUMNS.items():
+        quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
+        for column in columns:
+            quoted_column = sa.sql.elements.quoted_name(column, quote=True)
+            op.execute(
+                f"ALTER TABLE IF EXISTS {quoted_table} "
+                f"ALTER COLUMN {quoted_column} TYPE TEXT "
+                f"USING {quoted_column}::text"
+            )
+
+
 def _drop_legacy_enums() -> None:
     """Drop enums installed by prior Spec workflow migrations."""
 
@@ -103,8 +125,10 @@ def _drop_legacy_enums() -> None:
         "specworkflowtaskstatus",
         "specworkflowrunphase",
         "specworkflowrunstatus",
+        "codexpreflightstatus",
     ):
-        op.execute(f"DROP TYPE IF EXISTS {type_name} CASCADE")
+        quoted_type = sa.sql.elements.quoted_name(type_name, quote=True)
+        op.execute(f"DROP TYPE IF EXISTS {quoted_type}")
 
 
 def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
@@ -124,6 +148,7 @@ def upgrade() -> None:  # noqa: D401
     """Install Spec workflow tables aligned with the new data model."""
 
     _backup_existing_tables()
+    _detach_legacy_tables_from_enums()
     _drop_legacy_enums()
 
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
