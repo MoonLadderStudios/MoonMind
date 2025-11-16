@@ -186,29 +186,15 @@ class CommandRunner:
             self._profile.compose_service,
         ]
         log_name = str(parameters.get("logArtifact", "build.log"))
-        command = _ensure_sequence(raw_command)
-        formatted = self._format_command(command)
-        try:
-            result = self._execute_command(command, cwd=workspace)
-        except CommandExecutionError as exc:
-            log_content = (exc.output or "").strip()
-            if not log_content:
-                log_content = formatted or str(exc)
-            artifact = self._storage.write_text(
-                self._run_id,
-                log_name,
-                log_content,
-            )
-            exc.artifacts.append(artifact)
-            raise
-        artifact = self._storage.write_text(
-            self._run_id,
-            log_name,
-            self._combine_streams(result),
+        artifact = self._run_logged_command(
+            command=_ensure_sequence(raw_command),
+            workspace=workspace,
+            log_name=log_name,
         )
         return StepResult(
             message="Build completed",
             artifacts=[artifact],
+            metadata={"log": artifact.path},
         )
 
     def restart(self, parameters: Mapping[str, Any]) -> StepResult:
@@ -224,31 +210,20 @@ class CommandRunner:
             self._profile.compose_service,
         ]
         log_name = str(parameters.get("logArtifact", "restart.log"))
-        command = _ensure_sequence(raw_command)
-        formatted = self._format_command(command)
-        try:
-            result = self._execute_command(command, cwd=workspace)
-        except CommandExecutionError as exc:
-            log_content = (exc.output or "").strip()
-            if not log_content:
-                log_content = formatted or str(exc)
-            artifact = self._storage.write_text(
-                self._run_id,
-                log_name,
-                log_content,
-            )
-            exc.artifacts.append(artifact)
-            raise
-        artifact = self._storage.write_text(
-            self._run_id,
-            log_name,
-            self._combine_streams(result),
+        artifact = self._run_logged_command(
+            command=_ensure_sequence(raw_command),
+            workspace=workspace,
+            log_name=log_name,
         )
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
         message = "Restart command issued"
         if timeout:
             message = f"Restart command issued (timeout {timeout}s)"
-        return StepResult(message=message, artifacts=[artifact])
+        return StepResult(
+            message=message,
+            artifacts=[artifact],
+            metadata={"log": artifact.path},
+        )
 
     def verify(self, parameters: Mapping[str, Any]) -> StepResult:
         health = parameters.get("healthcheck") or {}
@@ -388,6 +363,26 @@ class CommandRunner:
         if isinstance(command, str):
             return command
         return " ".join(command)
+
+    def _run_logged_command(
+        self,
+        *,
+        command: Sequence[str],
+        workspace: Path,
+        log_name: str,
+    ) -> ArtifactWriteResult:
+        formatted = self._format_command(command)
+        try:
+            result = self._execute_command(command, cwd=workspace)
+        except CommandExecutionError as exc:
+            log_content = (exc.output or "").strip()
+            if not log_content:
+                log_content = formatted or str(exc)
+            artifact = self._storage.write_text(self._run_id, log_name, log_content)
+            exc.artifacts.append(artifact)
+            raise
+        combined = self._combine_streams(result)
+        return self._storage.write_text(self._run_id, log_name, combined)
 
 
 def _ensure_sequence(command: Any) -> Sequence[str]:

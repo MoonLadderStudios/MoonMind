@@ -178,3 +178,25 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert log_path.exists()
     contents = log_path.read_text()
     assert "docker compose up --no-deps" in contents
+
+
+def test_build_step_metadata_includes_log_path(tmp_path, monkeypatch):
+    """Successful builds should expose the log artifact path in metadata."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def succeed_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del self, command, cwd
+        return SimpleNamespace(stdout="build ok", stderr="")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", succeed_execute)
+
+    result = runner.build({"logArtifact": "build.log"})
+
+    assert result.metadata and result.metadata["log"].endswith("build.log")
+    artifact = result.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
