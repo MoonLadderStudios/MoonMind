@@ -67,6 +67,8 @@ WORKFLOW_ARTIFACT_TYPE = postgresql.ENUM(
     create_type=False,
 )
 
+SPEC_UPDATED_AT_TRIGGER_FUNCTION = "spec_workflow_set_updated_at"
+
 LEGACY_WORKFLOW_TABLES: tuple[str, ...] = (
     "workflow_artifacts",
     "workflow_credential_audits",
@@ -129,6 +131,56 @@ def _drop_legacy_enums() -> None:
     ):
         quoted_type = sa.sql.elements.quoted_name(type_name, quote=True)
         op.execute(f"DROP TYPE IF EXISTS {quoted_type}")
+
+
+def _ensure_updated_at_function() -> None:
+    """Install the trigger function used to auto-update timestamps."""
+
+    quoted_name = sa.sql.elements.quoted_name(
+        SPEC_UPDATED_AT_TRIGGER_FUNCTION, quote=True
+    )
+    op.execute(
+        f"""
+        CREATE OR REPLACE FUNCTION {quoted_name}()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+
+
+def _create_updated_at_trigger(table_name: str) -> None:
+    """Attach an auto-updating trigger to the given table."""
+
+    _ensure_updated_at_function()
+    quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
+    trigger_name = sa.sql.elements.quoted_name(
+        f"trg_{table_name}_updated_at", quote=True
+    )
+    function_name = sa.sql.elements.quoted_name(
+        SPEC_UPDATED_AT_TRIGGER_FUNCTION, quote=True
+    )
+
+    op.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {quoted_table}")
+    op.execute(
+        f"""
+        CREATE TRIGGER {trigger_name}
+        BEFORE UPDATE ON {quoted_table}
+        FOR EACH ROW EXECUTE FUNCTION {function_name}();
+        """
+    )
+
+
+def _drop_updated_at_function() -> None:
+    """Remove the helper trigger function if this migration is downgraded."""
+
+    quoted_name = sa.sql.elements.quoted_name(
+        SPEC_UPDATED_AT_TRIGGER_FUNCTION, quote=True
+    )
+    op.execute(f"DROP FUNCTION IF EXISTS {quoted_name}()")
 
 
 def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
@@ -217,6 +269,8 @@ def upgrade() -> None:  # noqa: D401
         ["requested_by_user_id"],
     )
 
+    _create_updated_at_trigger("spec_workflow_runs")
+
     op.create_table(
         "spec_workflow_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
@@ -288,6 +342,8 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_task_states",
         ["task_name"],
     )
+
+    _create_updated_at_trigger("spec_workflow_task_states")
 
     op.create_table(
         "workflow_artifacts",
@@ -422,6 +478,8 @@ def downgrade() -> None:  # noqa: D401
     op.drop_index("ix_spec_workflow_runs_status", table_name="spec_workflow_runs")
     op.drop_index("ix_spec_workflow_runs_feature_key", table_name="spec_workflow_runs")
     op.drop_table("spec_workflow_runs")
+
+    _drop_updated_at_function()
 
     bind = op.get_bind()
     for enum_type in (
