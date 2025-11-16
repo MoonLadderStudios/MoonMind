@@ -11,6 +11,7 @@ import pytest
 from moonmind.workflows.orchestrator.command_runner import (
     CommandExecutionError,
     CommandRunner,
+    CommandRunnerError,
 )
 from moonmind.workflows.orchestrator.service_profiles import ServiceProfile
 from moonmind.workflows.orchestrator.storage import ArtifactStorage
@@ -182,6 +183,32 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert log_path.exists()
     contents = log_path.read_text()
     assert "docker compose up --no-deps" in contents
+
+
+def test_build_failure_handles_generic_runner_error(tmp_path, monkeypatch):
+    """Errors derived from ``CommandRunnerError`` should record logs."""
+
+    class CustomRunnerError(CommandRunnerError):
+        pass
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del command, cwd
+        raise CustomRunnerError("custom failure")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+
+    with pytest.raises(CustomRunnerError) as excinfo:
+        runner.build({"logArtifact": "build.log"})
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    assert "custom failure" in log_path.read_text()
 
 
 def test_build_step_metadata_includes_log_path(tmp_path, monkeypatch):

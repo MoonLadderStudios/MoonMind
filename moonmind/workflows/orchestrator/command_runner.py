@@ -373,11 +373,11 @@ class CommandRunner:
     ) -> ArtifactWriteResult:
         formatted = self._format_command(command)
         header = f"$ {formatted}" if formatted else ""
+        log_lines = [header] if header else []
         try:
             result = self._execute_command(command, cwd=workspace)
-        except CommandExecutionError as exc:
-            log_lines = [header] if header else []
-            log_body = (exc.output or "").strip()
+        except CommandRunnerError as exc:
+            log_body = (getattr(exc, "output", None) or "").strip()
             if log_body:
                 log_lines.append(log_body)
             else:
@@ -390,7 +390,6 @@ class CommandRunner:
             exc.artifacts.append(artifact)
             raise
         combined = self._combine_streams(result)
-        log_lines = [header] if header else []
         if combined:
             log_lines.append(combined)
         return self._storage.write_text(
