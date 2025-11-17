@@ -456,15 +456,19 @@ class CommandRunner:
             log_lines.append(combined)
 
         if completed.returncode != 0:
-            error = self._command_failure(cmd_sequence, completed)
-            if not combined:
-                log_lines.append(str(error))
-            self._persist_failure_artifact(
-                log_name=log_name,
-                command=cmd_sequence,
-                exc=error,
-                log_lines=log_lines,
+            if not log_lines:
+                formatted = self._format_command(cmd_sequence)
+                if formatted:
+                    log_lines.append(f"$ {formatted}")
+            artifact = self._storage.write_text(
+                self._run_id,
+                log_name,
+                "\n".join(line for line in log_lines if line) or "Command failed",
             )
+            error = self._command_failure(
+                cmd_sequence, completed, artifacts=[artifact]
+            )
+            self._attach_failure_artifact(error, artifact)
             raise error
 
         artifact = self._storage.write_text(
