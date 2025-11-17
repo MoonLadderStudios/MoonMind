@@ -97,6 +97,7 @@ def test_build_failure_emits_log_artifact(tmp_path, monkeypatch):
     assert "build output" in contents
     assert "docker compose" in contents
     assert artifact.path in str(error)
+    assert error.metadata and error.metadata["log"].endswith("build.log")
 
 
 def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
@@ -128,6 +129,7 @@ def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
     assert "restart output" in contents
     assert "docker compose" in contents
     assert artifact.path in str(error)
+    assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
 def test_build_failure_without_artifact_creates_fallback_log(tmp_path, monkeypatch):
@@ -152,6 +154,8 @@ def test_build_failure_without_artifact_creates_fallback_log(tmp_path, monkeypat
     assert log_path.exists()
     contents = log_path.read_text()
     assert "build failed" in contents
+    error = excinfo.value
+    assert error.metadata and error.metadata["log"].endswith("build.log")
 
 
 def test_restart_failure_without_artifact_creates_fallback_log(tmp_path, monkeypatch):
@@ -176,6 +180,8 @@ def test_restart_failure_without_artifact_creates_fallback_log(tmp_path, monkeyp
     assert log_path.exists()
     contents = log_path.read_text()
     assert "restart failed" in contents
+    error = excinfo.value
+    assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
 def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
@@ -200,6 +206,8 @@ def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert log_path.exists()
     contents = log_path.read_text()
     assert "docker compose build" in contents
+    error = excinfo.value
+    assert error.metadata and error.metadata["log"].endswith("build.log")
 
 
 def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
@@ -233,6 +241,8 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert log_path.exists()
     contents = log_path.read_text()
     assert "docker compose up --no-deps" in contents
+    error = excinfo.value
+    assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
 def test_build_failure_handles_generic_runner_error(tmp_path, monkeypatch):
@@ -259,6 +269,8 @@ def test_build_failure_handles_generic_runner_error(tmp_path, monkeypatch):
     log_path = storage.ensure_run_directory(run_id) / artifact.path
     assert log_path.exists()
     assert "custom failure" in log_path.read_text()
+    error = excinfo.value
+    assert error.metadata and error.metadata["log"].endswith("build.log")
 
 
 def test_build_step_metadata_includes_log_path(tmp_path, monkeypatch):

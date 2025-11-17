@@ -110,6 +110,7 @@ async def _record_plan_failure(
 ) -> None:
     finished = _utcnow()
     artifact_ids: list[UUID] = []
+    payload: dict[str, object] | None = None
     if isinstance(exc, CommandRunnerError) and exc.artifacts:
         for artifact in exc.artifacts:
             record = await repo.add_artifact(
@@ -120,6 +121,9 @@ async def _record_plan_failure(
                 size_bytes=artifact.size_bytes,
             )
             artifact_ids.append(record.id)
+        metadata = getattr(exc, "metadata", None)
+        if isinstance(metadata, dict):
+            payload = metadata
     await repo.upsert_plan_step_state(
         run_id=run.id,
         plan_step=step,
@@ -127,6 +131,7 @@ async def _record_plan_failure(
         celery_state=db_models.OrchestratorTaskState.FAILURE,
         message=str(exc),
         artifact_refs=artifact_ids,
+        payload=payload,
         finished_at=finished,
     )
     await repo.update_run(

@@ -26,6 +26,7 @@ class CommandRunnerError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.artifacts: list[ArtifactWriteResult] = list(artifacts or [])
+        self.metadata: dict[str, Any] | None = None
 
 
 class AllowListViolation(CommandRunnerError):
@@ -413,17 +414,22 @@ class CommandRunner:
         log_name: str,
         command: Sequence[str],
         exc: CommandRunnerError,
-    ) -> None:
+    ) -> ArtifactWriteResult:
         """Persist a fallback log artifact when a command fails early."""
 
-        existing = getattr(exc, "artifacts", None) or []
+        existing = getattr(exc, "artifacts", None)
         log_basename = Path(log_name).name
-        if any(Path(artifact.path).name == log_basename for artifact in existing):
-            return
+        if existing:
+            for artifact in existing:
+                if Path(artifact.path).name == log_basename:
+                    self._annotate_failure_metadata(exc, artifact)
+                    return artifact
 
-        self._persist_failure_artifact(
+        artifact = self._persist_failure_artifact(
             log_name=log_name, command=command, exc=exc, log_lines=None
         )
+        self._annotate_failure_metadata(exc, artifact)
+        return artifact
 
     def _persist_failure_artifact(
         self,
@@ -459,7 +465,17 @@ class CommandRunner:
             exc.artifacts = artifacts
         artifacts.append(artifact)
         exc.args = (f"{exc} (see {artifact.path})",)
+        self._annotate_failure_metadata(exc, artifact)
         return artifact
+
+    def _annotate_failure_metadata(
+        self, exc: CommandRunnerError, artifact: ArtifactWriteResult
+    ) -> None:
+        metadata = getattr(exc, "metadata", None)
+        if metadata is None:
+            metadata = {}
+            exc.metadata = metadata
+        metadata.setdefault("log", artifact.path)
 
 
 def _ensure_sequence(command: Any) -> Sequence[str]:

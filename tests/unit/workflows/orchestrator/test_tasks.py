@@ -119,6 +119,7 @@ async def test_record_plan_failure_registers_artifacts():
         path="verify.log", size_bytes=12, checksum="deadbeef"
     )
     error = CommandExecutionError("boom", artifacts=[artifact])
+    error.metadata = {"log": artifact.path}
     step = db_models.OrchestratorPlanStep.VERIFY
 
     captured = SimpleNamespace(added=[], upsert=None, updated=None, committed=False)
@@ -149,4 +150,5 @@ async def test_record_plan_failure_registers_artifacts():
     )
     assert captured.upsert is not None
     assert captured.upsert["artifact_refs"], "artifact references should be recorded"
+    assert captured.upsert["payload"] == error.metadata
     assert captured.committed is True
