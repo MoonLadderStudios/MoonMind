@@ -38,28 +38,56 @@ SPEC_WORKFLOW_TASK_NAME = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_WORKFLOW_TASK_STATE = postgresql.ENUM(
-    "waiting",
-    "received",
-    "started",
-    "succeeded",
-    "failed",
-    "retrying",
-    name="specworkflowtaskstate",
+SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
+    "discover",
+    "submit",
+    "apply",
+    "publish",
+    "complete",
+    name="specworkflowrunphase",
     create_type=False,
 )
 
-WORKFLOW_CREDENTIAL_STATUS = postgresql.ENUM(
+SPEC_WORKFLOW_TASK_STATUS = postgresql.ENUM(
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "skipped",
+    name="specworkflowtaskstatus",
+    create_type=False,
+)
+
+CODEX_PREFLIGHT_STATUS = postgresql.ENUM(
+    "pending",
     "passed",
     "failed",
     "skipped",
-    name="workflowcredentialstatus",
+    name="codexpreflightstatus",
+    create_type=False,
+)
+
+WORKFLOW_CODEX_CREDENTIAL_STATUS = postgresql.ENUM(
+    "valid",
+    "invalid",
+    "expires_soon",
+    name="workflowcodexcredentialstatus",
+    create_type=False,
+)
+
+WORKFLOW_GITHUB_CREDENTIAL_STATUS = postgresql.ENUM(
+    "valid",
+    "invalid",
+    "scope_missing",
+    name="workflowgithubcredentialstatus",
     create_type=False,
 )
 
 WORKFLOW_ARTIFACT_TYPE = postgresql.ENUM(
     "codex_logs",
     "codex_patch",
+    "gh_push_log",
+    "gh_pr_response",
     "apply_output",
     "pr_payload",
     "retry_context",
@@ -98,6 +126,65 @@ LEGACY_ENUM_TYPES: tuple[str, ...] = tuple(
     )
 )
 
+LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "spec_workflow_runs": (
+        "id",
+        "feature_key",
+        "celery_chain_id",
+        "status",
+        "phase",
+        "branch_name",
+        "pr_url",
+        "codex_task_id",
+        "codex_queue",
+        "codex_volume",
+        "codex_preflight_status",
+        "codex_preflight_message",
+        "codex_logs_path",
+        "codex_patch_path",
+        "artifacts_path",
+        "created_by",
+        "started_at",
+        "finished_at",
+        "created_at",
+        "updated_at",
+    ),
+    "spec_workflow_task_states": (
+        "id",
+        "workflow_run_id",
+        "task_name",
+        "status",
+        "attempt",
+        "payload",
+        "started_at",
+        "finished_at",
+        "created_at",
+        "updated_at",
+        "orchestrator_run_id",
+        "plan_step",
+        "plan_step_status",
+        "celery_state",
+        "celery_task_id",
+        "message",
+        "artifact_refs",
+    ),
+    "workflow_credential_audits": (
+        "id",
+        "workflow_run_id",
+        "codex_status",
+        "github_status",
+        "checked_at",
+        "notes",
+    ),
+    "workflow_artifacts": (
+        "id",
+        "workflow_run_id",
+        "artifact_type",
+        "path",
+        "created_at",
+    ),
+}
+
 
 def _backup_existing_tables() -> None:
     """Rename legacy Spec workflow tables to preserve their contents."""
@@ -109,6 +196,44 @@ def _backup_existing_tables() -> None:
 
         op.execute(f"DROP TABLE IF EXISTS {quoted_backup} CASCADE")
         op.execute(f"ALTER TABLE IF EXISTS {quoted_table} RENAME TO {quoted_backup}")
+
+
+def _copy_legacy_table_data(target_table: str) -> None:
+    """Copy data from a legacy backup table into the new schema."""
+
+    columns = LEGACY_TABLE_COLUMNS.get(target_table)
+    if not columns:
+        return
+
+    source_table = f"legacy_{target_table}"
+    bind = op.get_bind()
+    exists = bind.execute(
+        sa.text("SELECT to_regclass(:name) IS NOT NULL"),
+        {"name": source_table},
+    ).scalar()
+    if not exists:
+        return
+
+    column_csv = ", ".join(
+        str(sa.sql.elements.quoted_name(column, quote=True)) for column in columns
+    )
+    quoted_source = sa.sql.elements.quoted_name(source_table, quote=True)
+    quoted_target = sa.sql.elements.quoted_name(target_table, quote=True)
+
+    bind.execute(
+        sa.text(
+            f"INSERT INTO {quoted_target} ({column_csv}) "
+            f"SELECT {column_csv} FROM {quoted_source}"
+        )
+    )
+
+
+def _drop_legacy_backups() -> None:
+    """Remove legacy_* tables after their contents have been restored."""
+
+    for table_name in LEGACY_WORKFLOW_TABLES:
+        quoted_backup = sa.sql.elements.quoted_name(f"legacy_{table_name}", quote=True)
+        op.execute(f"DROP TABLE IF EXISTS {quoted_backup} CASCADE")
 
 
 def _detach_legacy_tables_from_enums() -> None:
@@ -204,25 +329,19 @@ def upgrade() -> None:  # noqa: D401
     _drop_legacy_enums()
 
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
+    _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)
+    _create_enum_if_missing(SPEC_WORKFLOW_TASK_STATUS)
     _create_enum_if_missing(SPEC_WORKFLOW_TASK_NAME)
-    _create_enum_if_missing(SPEC_WORKFLOW_TASK_STATE)
-    _create_enum_if_missing(WORKFLOW_CREDENTIAL_STATUS)
+    _create_enum_if_missing(CODEX_PREFLIGHT_STATUS)
+    _create_enum_if_missing(WORKFLOW_CODEX_CREDENTIAL_STATUS)
+    _create_enum_if_missing(WORKFLOW_GITHUB_CREDENTIAL_STATUS)
     _create_enum_if_missing(WORKFLOW_ARTIFACT_TYPE)
 
     op.create_table(
         "spec_workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
-        sa.Column(
-            "requested_by_user_id",
-            sa.Uuid(),
-            sa.ForeignKey("user.id", ondelete="RESTRICT"),
-            nullable=False,
-        ),
-        sa.Column("repository", sa.String(length=255), nullable=False),
-        sa.Column("branch_name", sa.String(length=255), nullable=True),
-        sa.Column("pull_request_url", sa.String(length=512), nullable=True),
-        sa.Column("celery_chain_id", sa.String(length=255), nullable=False),
+        sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
             SPEC_WORKFLOW_RUN_STATUS,
@@ -230,13 +349,46 @@ def upgrade() -> None:  # noqa: D401
             server_default=sa.text("'pending'::specworkflowrunstatus"),
         ),
         sa.Column(
+            "phase",
+            SPEC_WORKFLOW_RUN_PHASE,
+            nullable=False,
+            server_default=sa.text("'discover'::specworkflowrunphase"),
+        ),
+        sa.Column("branch_name", sa.String(length=255), nullable=True),
+        sa.Column("pr_url", sa.String(length=512), nullable=True),
+        sa.Column("repository", sa.String(length=255), nullable=True),
+        sa.Column(
+            "requested_by_user_id",
+            sa.Uuid(),
+            sa.ForeignKey("user.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "created_by",
+            sa.Uuid(),
+            sa.ForeignKey("user.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column("codex_task_id", sa.String(length=255), nullable=True),
+        sa.Column("codex_queue", sa.String(length=64), nullable=True),
+        sa.Column("codex_volume", sa.String(length=64), nullable=True),
+        sa.Column(
+            "codex_preflight_status",
+            CODEX_PREFLIGHT_STATUS,
+            nullable=True,
+        ),
+        sa.Column("codex_preflight_message", sa.Text(), nullable=True),
+        sa.Column("codex_logs_path", sa.String(length=1024), nullable=True),
+        sa.Column("codex_patch_path", sa.String(length=1024), nullable=True),
+        sa.Column("artifacts_path", sa.String(length=512), nullable=True),
+        sa.Column(
             "current_task_name",
             SPEC_WORKFLOW_TASK_NAME,
             nullable=True,
         ),
-        sa.Column("codex_task_id", sa.String(length=255), nullable=True),
-        sa.Column("codex_logs_path", sa.String(length=1024), nullable=True),
         sa.Column("credential_audit_id", sa.Uuid(), nullable=True),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -251,6 +403,16 @@ def upgrade() -> None:  # noqa: D401
             server_onupdate=sa.func.now(),
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["codex_queue"],
+            ["codex_worker_shards.queue_name"],
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["codex_volume"],
+            ["codex_auth_volumes.name"],
+            ondelete="SET NULL",
+        ),
     )
 
     op.create_index(
@@ -268,6 +430,13 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_runs",
         ["requested_by_user_id"],
     )
+    op.create_index(
+        "ix_spec_workflow_runs_created_by",
+        "spec_workflow_runs",
+        ["created_by"],
+    )
+
+    _copy_legacy_table_data("spec_workflow_runs")
 
     _create_updated_at_trigger("spec_workflow_runs")
 
@@ -275,41 +444,58 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
-            "run_id",
+            "workflow_run_id",
             sa.Uuid(),
             sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column(
+            "orchestrator_run_id",
+            sa.Uuid(),
+            sa.ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column("task_name", sa.String(length=128), nullable=False),
+        sa.Column(
+            "status",
+            SPEC_WORKFLOW_TASK_STATUS,
             nullable=False,
         ),
         sa.Column(
-            "task_name",
-            SPEC_WORKFLOW_TASK_NAME,
+            "attempt",
+            sa.Integer(),
             nullable=False,
+            server_default="1",
         ),
         sa.Column(
-            "state",
-            SPEC_WORKFLOW_TASK_STATE,
-            nullable=False,
-            server_default=sa.text("'waiting'::specworkflowtaskstate"),
-        ),
-        sa.Column(
-            "message",
+            "payload",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=True,
         ),
         sa.Column(
-            "artifact_paths",
+            "plan_step",
+            postgresql.ENUM(name="orchestratorplanstep", create_type=False),
+            nullable=True,
+        ),
+        sa.Column(
+            "plan_step_status",
+            postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
+            nullable=True,
+        ),
+        sa.Column(
+            "celery_state",
+            postgresql.ENUM(name="orchestratortaskstate", create_type=False),
+            nullable=True,
+        ),
+        sa.Column("celery_task_id", sa.String(length=255), nullable=True),
+        sa.Column("message", sa.Text(), nullable=True),
+        sa.Column(
+            "artifact_refs",
             postgresql.JSONB(astext_type=sa.Text()),
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
+            nullable=True,
         ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "retry_count",
-            sa.Integer(),
-            nullable=False,
-            server_default=sa.text("0"),
-        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -324,32 +510,45 @@ def upgrade() -> None:  # noqa: D401
             server_onupdate=sa.func.now(),
         ),
         sa.UniqueConstraint(
-            "run_id",
+            "workflow_run_id",
             "task_name",
-            "retry_count",
-            "state",
-            name="uq_spec_workflow_task_state_event",
+            "attempt",
+            name="uq_spec_workflow_task_state_attempt",
+        ),
+        sa.UniqueConstraint(
+            "orchestrator_run_id",
+            "plan_step",
+            "attempt",
+            name="uq_orchestrator_task_state_attempt",
         ),
     )
 
     op.create_index(
         "ix_spec_workflow_task_states_run_id",
         "spec_workflow_task_states",
-        ["run_id"],
+        ["workflow_run_id"],
     )
     op.create_index(
-        "ix_spec_workflow_task_states_task",
+        "ix_spec_workflow_task_states_failed",
         "spec_workflow_task_states",
-        ["task_name"],
+        ["workflow_run_id"],
+        postgresql_where=sa.text("status = 'failed'"),
+    )
+    op.create_index(
+        "ix_spec_workflow_task_states_orchestrator_run_id",
+        "spec_workflow_task_states",
+        ["orchestrator_run_id"],
     )
 
     _create_updated_at_trigger("spec_workflow_task_states")
+
+    _copy_legacy_table_data("spec_workflow_task_states")
 
     op.create_table(
         "workflow_artifacts",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
-            "run_id",
+            "workflow_run_id",
             sa.Uuid(),
             sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
@@ -370,7 +569,7 @@ def upgrade() -> None:  # noqa: D401
             server_default=sa.func.now(),
         ),
         sa.UniqueConstraint(
-            "run_id",
+            "workflow_run_id",
             "artifact_type",
             "path",
             name="uq_workflow_artifact_path",
@@ -380,32 +579,39 @@ def upgrade() -> None:  # noqa: D401
     op.create_index(
         "ix_workflow_artifacts_run_id",
         "workflow_artifacts",
-        ["run_id"],
+        ["workflow_run_id"],
     )
+
+    _copy_legacy_table_data("workflow_artifacts")
 
     op.create_table(
         "workflow_credential_audits",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
-            "run_id",
+            "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="SET NULL"),
-            nullable=True,
+            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            nullable=False,
         ),
         sa.Column(
             "codex_status",
-            WORKFLOW_CREDENTIAL_STATUS,
+            WORKFLOW_CODEX_CREDENTIAL_STATUS,
             nullable=False,
-            server_default=sa.text("'skipped'::workflowcredentialstatus"),
         ),
-        sa.Column("codex_checked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("codex_message", sa.Text(), nullable=True),
         sa.Column(
             "github_status",
-            WORKFLOW_CREDENTIAL_STATUS,
+            WORKFLOW_GITHUB_CREDENTIAL_STATUS,
             nullable=False,
-            server_default=sa.text("'skipped'::workflowcredentialstatus"),
         ),
+        sa.Column(
+            "checked_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.Column("notes", sa.Text(), nullable=True),
+        sa.Column("codex_checked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("codex_message", sa.Text(), nullable=True),
         sa.Column("github_checked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("github_message", sa.Text(), nullable=True),
         sa.Column(
@@ -419,14 +625,19 @@ def upgrade() -> None:  # noqa: D401
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.UniqueConstraint("run_id", name="uq_workflow_credential_audits_run"),
+        sa.UniqueConstraint(
+            "workflow_run_id",
+            name="uq_workflow_credential_audit_run",
+        ),
     )
 
     op.create_index(
         "ix_workflow_credential_audits_run",
         "workflow_credential_audits",
-        ["run_id"],
+        ["workflow_run_id"],
     )
+
+    _copy_legacy_table_data("workflow_credential_audits")
 
     op.create_foreign_key(
         "fk_spec_workflow_run_credential_audit",
@@ -483,11 +694,14 @@ def downgrade() -> None:  # noqa: D401
 
     bind = op.get_bind()
     for enum_type in (
-        SPEC_WORKFLOW_TASK_STATE,
         SPEC_WORKFLOW_TASK_NAME,
         WORKFLOW_ARTIFACT_TYPE,
-        WORKFLOW_CREDENTIAL_STATUS,
+        SPEC_WORKFLOW_TASK_STATUS,
+        SPEC_WORKFLOW_RUN_PHASE,
         SPEC_WORKFLOW_RUN_STATUS,
+        WORKFLOW_CODEX_CREDENTIAL_STATUS,
+        WORKFLOW_GITHUB_CREDENTIAL_STATUS,
+        CODEX_PREFLIGHT_STATUS,
     ):
         enum_type.drop(bind, checkfirst=True)
 
@@ -774,6 +988,8 @@ def downgrade() -> None:  # noqa: D401
         ["workflow_run_id"],
     )
 
+    _copy_legacy_table_data("workflow_artifacts")
+
     # ------------------------------------------------------------------
     # Reapply orchestrator-specific columns that were introduced by
     # earlier migrations. Keeping this logic here prevents future
@@ -850,3 +1066,7 @@ def downgrade() -> None:  # noqa: D401
         "spec_workflow_task_states",
         ["orchestrator_run_id", "plan_step", "attempt"],
     )
+
+    _copy_legacy_table_data("spec_workflow_task_states")
+
+    _drop_legacy_backups()
