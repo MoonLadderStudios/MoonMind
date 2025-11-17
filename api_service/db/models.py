@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
-    from moonmind.workflows.speckit_celery.models import SpecWorkflowTaskState
+    from moonmind.workflows.speckit_celery.models import (
+        CodexAuthVolume,
+        CodexWorkerShard,
+        SpecWorkflowTaskState,
+    )
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
@@ -637,7 +641,7 @@ class WorkflowCredentialAudit(Base):
 
     workflow_run: Mapped["SpecWorkflowRun"] = relationship(
         "SpecWorkflowRun",
-        back_populates="credential_audits",
+        back_populates="credential_audit",
         foreign_keys=[workflow_run_id],
     )
 
@@ -718,11 +722,6 @@ class SpecWorkflowRun(Base):
         ),
         nullable=True,
     )
-    credential_audit_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey("workflow_credential_audits.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
@@ -750,17 +749,12 @@ class SpecWorkflowRun(Base):
         cascade="all, delete-orphan",
         order_by="WorkflowArtifact.created_at",
     )
-    credential_audits: Mapped[list[WorkflowCredentialAudit]] = relationship(
+    credential_audit: Mapped[Optional[WorkflowCredentialAudit]] = relationship(
         "WorkflowCredentialAudit",
         back_populates="workflow_run",
         cascade="all, delete-orphan",
         foreign_keys=lambda: [WorkflowCredentialAudit.workflow_run_id],
-    )
-    credential_audit: Mapped[Optional[WorkflowCredentialAudit]] = relationship(
-        "WorkflowCredentialAudit",
-        foreign_keys=lambda: [SpecWorkflowRun.credential_audit_id],
         uselist=False,
-        post_update=True,
     )
     requested_by: Mapped[Optional[User]] = relationship(
         "User",
@@ -826,6 +820,11 @@ class SpecWorkflowTaskState(Base):
 
     __tablename__ = "spec_workflow_task_states"
     __table_args__ = (
+        CheckConstraint(
+            "(workflow_run_id IS NOT NULL AND orchestrator_run_id IS NULL) OR "
+            "(workflow_run_id IS NULL AND orchestrator_run_id IS NOT NULL)",
+            name="ck_spec_workflow_task_state_run_id_exclusive",
+        ),
         UniqueConstraint(
             "workflow_run_id", "task_name", "attempt", name="uq_spec_workflow_task_state_attempt"
         ),
@@ -845,6 +844,14 @@ class SpecWorkflowTaskState(Base):
             "ix_spec_workflow_task_states_orchestrator_run_id",
             "orchestrator_run_id",
         ),
+        CheckConstraint(
+            "(orchestrator_run_id IS NULL) OR (plan_step IS NOT NULL)",
+            name="ck_spec_workflow_task_state_orchestrator_plan_step",
+        ),
+        CheckConstraint(
+            "(workflow_run_id IS NULL) OR (task_name IS NOT NULL)",
+            name="ck_spec_workflow_task_state_task_name_required",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -858,7 +865,7 @@ class SpecWorkflowTaskState(Base):
         ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
         nullable=True,
     )
-    task_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[SpecWorkflowTaskStatus] = mapped_column(
         Enum(
             SpecWorkflowTaskStatus,

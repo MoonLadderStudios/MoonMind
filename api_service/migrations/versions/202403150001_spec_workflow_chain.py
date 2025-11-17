@@ -386,7 +386,6 @@ def upgrade() -> None:  # noqa: D401
             SPEC_WORKFLOW_TASK_NAME,
             nullable=True,
         ),
-        sa.Column("credential_audit_id", sa.Uuid(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -455,7 +454,7 @@ def upgrade() -> None:  # noqa: D401
             sa.ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
             nullable=True,
         ),
-        sa.Column("task_name", sa.String(length=128), nullable=False),
+        sa.Column("task_name", sa.String(length=128), nullable=True),
         sa.Column(
             "status",
             SPEC_WORKFLOW_TASK_STATUS,
@@ -520,6 +519,19 @@ def upgrade() -> None:  # noqa: D401
             "plan_step",
             "attempt",
             name="uq_orchestrator_task_state_attempt",
+        ),
+        sa.CheckConstraint(
+            "(workflow_run_id IS NOT NULL AND orchestrator_run_id IS NULL) OR "
+            "(workflow_run_id IS NULL AND orchestrator_run_id IS NOT NULL)",
+            name="ck_spec_workflow_task_state_run_id_exclusive",
+        ),
+        sa.CheckConstraint(
+            "(orchestrator_run_id IS NULL) OR (plan_step IS NOT NULL)",
+            name="ck_spec_workflow_task_state_orchestrator_plan_step",
+        ),
+        sa.CheckConstraint(
+            "(workflow_run_id IS NULL) OR (task_name IS NOT NULL)",
+            name="ck_spec_workflow_task_state_task_name_required",
         ),
     )
 
@@ -639,35 +651,10 @@ def upgrade() -> None:  # noqa: D401
 
     _copy_legacy_table_data("workflow_credential_audits")
 
-    op.create_foreign_key(
-        "fk_spec_workflow_run_credential_audit",
-        "spec_workflow_runs",
-        "workflow_credential_audits",
-        ["credential_audit_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
-
-    op.create_unique_constraint(
-        "uq_spec_workflow_run_credential_audit",
-        "spec_workflow_runs",
-        ["credential_audit_id"],
-    )
 
 
 def downgrade() -> None:  # noqa: D401
     """Drop Spec workflow chain tables and restore legacy schema."""
-
-    op.drop_constraint(
-        "uq_spec_workflow_run_credential_audit",
-        "spec_workflow_runs",
-        type_="unique",
-    )
-    op.drop_constraint(
-        "fk_spec_workflow_run_credential_audit",
-        "spec_workflow_runs",
-        type_="foreignkey",
-    )
 
     op.drop_index(
         "ix_workflow_credential_audits_run", table_name="workflow_credential_audits"
