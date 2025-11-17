@@ -200,6 +200,10 @@ class CommandRunner:
         ]
         log_name = str(parameters.get("logArtifact", "build.log"))
         command = _ensure_sequence(raw_command)
+        fallback_lines = []
+        formatted = self._format_command(command)
+        if formatted:
+            fallback_lines.append(f"$ {formatted}")
         try:
             artifact = self._run_logged_command(
                 command=command,
@@ -208,7 +212,10 @@ class CommandRunner:
             )
         except CommandRunnerError as exc:
             self._ensure_failure_artifact(
-                log_name=log_name, command=command, exc=exc
+                log_name=log_name,
+                command=command,
+                exc=exc,
+                log_lines=fallback_lines,
             )
             raise
         return StepResult(
@@ -231,6 +238,10 @@ class CommandRunner:
         ]
         log_name = str(parameters.get("logArtifact", "restart.log"))
         command = _ensure_sequence(raw_command)
+        fallback_lines = []
+        formatted = self._format_command(command)
+        if formatted:
+            fallback_lines.append(f"$ {formatted}")
         try:
             artifact = self._run_logged_command(
                 command=command,
@@ -239,7 +250,10 @@ class CommandRunner:
             )
         except CommandRunnerError as exc:
             self._ensure_failure_artifact(
-                log_name=log_name, command=command, exc=exc
+                log_name=log_name,
+                command=command,
+                exc=exc,
+                log_lines=fallback_lines,
             )
             raise
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
@@ -404,7 +418,7 @@ class CommandRunner:
         try:
             result = self._execute_command(command, cwd=workspace)
         except CommandRunnerError as exc:
-            self._persist_failure_artifact(
+            self._ensure_failure_artifact(
                 log_name=log_name,
                 command=command,
                 exc=exc,
