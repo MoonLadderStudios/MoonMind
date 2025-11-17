@@ -391,7 +391,7 @@ class CommandRunner:
         log_lines = [header] if header else []
         try:
             result = self._execute_command(command, cwd=workspace)
-        except CommandExecutionError as exc:
+        except CommandRunnerError as exc:
             self._persist_failure_artifact(
                 log_name=log_name,
                 command=command,

@@ -245,6 +245,38 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
+def test_run_logged_command_persists_artifact_on_failure(tmp_path, monkeypatch):
+    """The helper should attach log artifacts before re-raising errors."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del command, cwd
+        raise CommandExecutionError("boom", output="failure output")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner._run_logged_command(
+            command=["docker", "compose", "build"],
+            workspace=tmp_path,
+            log_name="custom.log",
+        )
+
+    error = excinfo.value
+    assert error.artifacts, "failure should include the log artifact"
+    artifact = error.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "failure output" in contents
+    assert artifact.path in str(error)
+    assert error.metadata and error.metadata["log"].endswith("custom.log")
+
+
 def test_build_failure_handles_generic_runner_error(tmp_path, monkeypatch):
     """Errors derived from ``CommandRunnerError`` should record logs."""
 
