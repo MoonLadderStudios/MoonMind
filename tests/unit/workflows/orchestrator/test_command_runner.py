@@ -185,6 +185,34 @@ def test_restart_failure_without_artifact_creates_fallback_log(tmp_path, monkeyp
     assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
+def test_build_failure_reuses_existing_artifact(tmp_path, monkeypatch):
+    """Re-run failures should not duplicate existing log artifacts."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    artifact = storage.write_text(run_id, "build.log", "existing log")
+    error = CommandExecutionError("build failed")
+    error.artifacts = [artifact]
+
+    def fail_logged_command(self, *, command, workspace, log_name):  # pragma: no cover
+        del command, workspace, log_name
+        raise error
+
+    monkeypatch.setattr(CommandRunner, "_run_logged_command", fail_logged_command)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.build({"logArtifact": "build.log"})
+
+    assert len(error.artifacts) == 1
+    artifact_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert artifact_path.read_text() == "existing log"
+    metadata = excinfo.value.metadata
+    assert metadata and metadata["log"].endswith("build.log")
+
+
 def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
     """Empty subprocess output should fall back to the formatted command."""
 

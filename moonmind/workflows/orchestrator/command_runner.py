@@ -211,7 +211,7 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            self._ensure_failure_artifact(
+            self._persist_failure_artifact(
                 log_name=log_name,
                 command=command,
                 exc=exc,
@@ -249,7 +249,7 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            self._ensure_failure_artifact(
+            self._persist_failure_artifact(
                 log_name=log_name,
                 command=command,
                 exc=exc,
@@ -444,6 +444,14 @@ class CommandRunner:
     ) -> ArtifactWriteResult:
         """Write ``log_name`` with failure diagnostics and attach to ``exc``."""
 
+        log_basename = Path(log_name).name
+        artifacts = getattr(exc, "artifacts", None)
+        if artifacts:
+            for artifact in artifacts:
+                if Path(artifact.path).name == log_basename:
+                    self._annotate_failure_metadata(exc, artifact)
+                    return artifact
+
         lines = [line for line in (log_lines or []) if line]
         if not lines:
             formatted = self._format_command(command)
@@ -462,7 +470,6 @@ class CommandRunner:
             log_name,
             "\n".join(lines) or "Command failed",
         )
-        artifacts = getattr(exc, "artifacts", None)
         if artifacts is None:
             artifacts = []
             exc.artifacts = artifacts
@@ -470,7 +477,6 @@ class CommandRunner:
         exc.args = (f"{exc} (see {artifact.path})",)
         self._annotate_failure_metadata(exc, artifact)
         return artifact
-
     def _annotate_failure_metadata(
         self, exc: CommandRunnerError, artifact: ArtifactWriteResult
     ) -> None:
@@ -479,33 +485,6 @@ class CommandRunner:
             metadata = {}
             exc.metadata = metadata
         metadata.setdefault("log", artifact.path)
-
-    def _ensure_failure_artifact(
-        self,
-        *,
-        log_name: str,
-        command: Sequence[str],
-        exc: CommandRunnerError,
-        log_lines: Sequence[str] | None = None,
-    ) -> ArtifactWriteResult:
-        """Persist a fallback log artifact when a command fails early."""
-
-        existing = getattr(exc, "artifacts", None)
-        log_basename = Path(log_name).name
-        if existing:
-            for artifact in existing:
-                if Path(artifact.path).name == log_basename:
-                    self._annotate_failure_metadata(exc, artifact)
-                    return artifact
-
-        artifact = self._persist_failure_artifact(
-            log_name=log_name,
-            command=command,
-            exc=exc,
-            log_lines=log_lines,
-        )
-        self._annotate_failure_metadata(exc, artifact)
-        return artifact
 
 
 def _ensure_sequence(command: Any) -> Sequence[str]:
