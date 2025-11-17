@@ -77,14 +77,18 @@ def test_build_failure_emits_log_artifact(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        raise CommandExecutionError("build failed", output="build output")
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
+            returncode=1,
+            stdout="build output",
+            stderr="",
+        )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(
-        CommandRunner,
-        "_execute_command",
-        fail_execute,
-    )
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner.build({"logArtifact": "build.log"})
@@ -109,14 +113,18 @@ def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        raise CommandExecutionError("restart failed", output="restart output")
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
+            returncode=1,
+            stdout="restart output",
+            stderr="",
+        )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(
-        CommandRunner,
-        "_execute_command",
-        fail_execute,
-    )
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner.restart({"logArtifact": "restart.log"})
@@ -221,11 +229,18 @@ def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        del command, cwd
-        raise CommandExecutionError("build failed")
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
+            returncode=1,
+            stdout="",
+            stderr="",
+        )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner.build({"command": ["docker", "compose", "build"], "logArtifact": "build.log"})
@@ -247,11 +262,18 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        del command, cwd
-        raise CommandExecutionError("restart failed")
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
+            returncode=1,
+            stdout="",
+            stderr="",
+        )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner.restart({
@@ -284,18 +306,18 @@ def test_build_failure_from_subprocess_persists_combined_output(
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_run(*args, **kwargs):  # pragma: no cover - helper
-        raise subprocess.CalledProcessError(
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - helper
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
             returncode=1,
-            cmd=args[0],
-            output="compose stdout",  # type: ignore[arg-type]
-            stderr="compose stderr",  # type: ignore[arg-type]
+            stdout="compose stdout",
+            stderr="compose stderr",
         )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(
-        "moonmind.workflows.orchestrator.command_runner.subprocess.run",
-        fail_run,
-    )
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner.build({"logArtifact": "build.log"})
@@ -317,18 +339,18 @@ def test_restart_failure_from_subprocess_persists_combined_output(
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_run(*args, **kwargs):  # pragma: no cover - helper
-        raise subprocess.CalledProcessError(
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - helper
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
             returncode=1,
-            cmd=args[0],
-            output="restart stdout",  # type: ignore[arg-type]
-            stderr="restart stderr",  # type: ignore[arg-type]
+            stdout="restart stdout",
+            stderr="restart stderr",
         )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(
-        "moonmind.workflows.orchestrator.command_runner.subprocess.run",
-        fail_run,
-    )
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner.restart({"logArtifact": "restart.log"})
@@ -378,11 +400,18 @@ def test_run_logged_command_persists_artifact_on_failure(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        del command, cwd
-        raise CommandExecutionError("boom", output="failure output")
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
+            returncode=1,
+            stdout="failure output",
+            stderr="",
+        )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
         runner._run_logged_command(
@@ -413,11 +442,11 @@ def test_build_failure_handles_generic_runner_error(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        del command, cwd
+    def fail_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
         raise CustomRunnerError("custom failure")
 
-    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+    monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CustomRunnerError) as excinfo:
         runner.build({"logArtifact": "build.log"})
@@ -438,11 +467,18 @@ def test_build_step_metadata_includes_log_path(tmp_path, monkeypatch):
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def succeed_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
-        del self, command, cwd
-        return SimpleNamespace(stdout="build ok", stderr="")
+    def succeed_invoke(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        cmd_sequence = list(command)
+        completed = subprocess.CompletedProcess(
+            args=cmd_sequence,
+            returncode=0,
+            stdout="build ok",
+            stderr="",
+        )
+        return cmd_sequence, completed
 
-    monkeypatch.setattr(CommandRunner, "_execute_command", succeed_execute)
+    monkeypatch.setattr(CommandRunner, "_invoke_command", succeed_invoke)
 
     result = runner.build({"logArtifact": "build.log"})
 

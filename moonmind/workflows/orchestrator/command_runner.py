@@ -370,28 +370,52 @@ class CommandRunner:
         *,
         cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        cmd_sequence, completed = self._invoke_command(command, cwd=cwd)
+        if completed.returncode != 0:
+            raise self._command_failure(cmd_sequence, completed)
+        return completed
+
+    def _invoke_command(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+    ) -> tuple[list[str], subprocess.CompletedProcess[str]]:
         cmd_sequence = list(command)
         if not cmd_sequence:
             raise CommandExecutionError("Command sequence must not be empty")
         try:
-            result = subprocess.run(
+            completed = subprocess.run(
                 cmd_sequence,
                 cwd=str(cwd or self._workspace_root),
                 text=True,
                 capture_output=True,
-                check=True,
+                check=False,
             )
         except FileNotFoundError as exc:  # pragma: no cover - environment dependent
             raise CommandExecutionError(
                 f"Command not found: {cmd_sequence[0]}"
             ) from exc
-        except subprocess.CalledProcessError as exc:
-            combined = self._combine_streams(exc)
-            raise CommandExecutionError(
-                f"Command {' '.join(cmd_sequence)} failed with code {exc.returncode}: {combined}",
-                output=combined,
-            ) from exc
-        return result
+        return cmd_sequence, completed
+
+    def _command_failure(
+        self,
+        cmd_sequence: Sequence[str],
+        completed: subprocess.CompletedProcess[str],
+        *,
+        artifacts: Sequence[ArtifactWriteResult] | None = None,
+    ) -> CommandExecutionError:
+        combined = self._combine_streams(completed)
+        message = (
+            f"Command {' '.join(cmd_sequence)} failed with code {completed.returncode}"
+        )
+        if combined:
+            message = f"{message}: {combined}"
+        return CommandExecutionError(
+            message,
+            output=combined,
+            artifacts=artifacts,
+        )
 
     def _combine_streams(self, completed: subprocess.CompletedProcess[str]) -> str:
         stdout = (completed.stdout or "").strip()
@@ -412,27 +436,33 @@ class CommandRunner:
         workspace: Path,
         log_name: str,
     ) -> ArtifactWriteResult:
-        formatted = self._format_command(command)
+        cmd_sequence = list(command)
+        formatted = self._format_command(cmd_sequence)
         header = f"$ {formatted}" if formatted else ""
         log_lines = [header] if header else []
         try:
-            result = self._execute_command(command, cwd=workspace)
+            _, completed = self._invoke_command(cmd_sequence, cwd=workspace)
         except CommandRunnerError as exc:
             self._persist_failure_artifact(
                 log_name=log_name,
-                command=command,
+                command=cmd_sequence,
                 exc=exc,
                 log_lines=log_lines,
             )
             raise
-        combined = self._combine_streams(result)
+        combined = self._combine_streams(completed)
         if combined:
             log_lines.append(combined)
-        return self._storage.write_text(
+        artifact = self._storage.write_text(
             self._run_id,
             log_name,
             "\n".join(line for line in log_lines if line) or formatted,
         )
+        if completed.returncode != 0:
+            error = self._command_failure(cmd_sequence, completed)
+            self._attach_failure_artifact(error, artifact)
+            raise error
+        return artifact
 
     def _persist_failure_artifact(
         self,
@@ -470,13 +500,21 @@ class CommandRunner:
             log_name,
             "\n".join(lines) or "Command failed",
         )
+        self._attach_failure_artifact(exc, artifact)
+        return artifact
+
+    def _attach_failure_artifact(
+        self, exc: CommandRunnerError, artifact: ArtifactWriteResult
+    ) -> None:
+        artifacts = getattr(exc, "artifacts", None)
         if artifacts is None:
             artifacts = []
             exc.artifacts = artifacts
-        artifacts.append(artifact)
-        exc.args = (f"{exc} (see {artifact.path})",)
+        if not any(existing.path == artifact.path for existing in artifacts):
+            artifacts.append(artifact)
+        message = str(exc)
+        exc.args = (f"{message} (see {artifact.path})",)
         self._annotate_failure_metadata(exc, artifact)
-        return artifact
     def _annotate_failure_metadata(
         self, exc: CommandRunnerError, artifact: ArtifactWriteResult
     ) -> None:
