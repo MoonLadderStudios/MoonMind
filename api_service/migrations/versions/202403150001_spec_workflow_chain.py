@@ -860,6 +860,8 @@ def downgrade() -> None:  # noqa: D401
         ["created_by"],
     )
 
+    _copy_legacy_table_data("spec_workflow_runs")
+
     op.create_table(
         "spec_workflow_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
@@ -952,6 +954,8 @@ def downgrade() -> None:  # noqa: D401
             name="uq_workflow_credential_audit_run",
         ),
     )
+
+    _copy_legacy_table_data("workflow_credential_audits")
 
     op.create_table(
         "workflow_artifacts",
