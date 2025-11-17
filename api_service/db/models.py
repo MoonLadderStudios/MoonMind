@@ -4,18 +4,12 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from importlib import import_module
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
-    from moonmind.workflows.speckit_celery.models import (
-        CodexAuthVolume,
-        CodexWorkerShard,
-        SpecWorkflowTaskState,
-    )
-else:  # pragma: no cover - runtime fallbacks avoid circular imports
-    CodexAuthVolume = Any  # type: ignore[assignment]
-    CodexWorkerShard = Any  # type: ignore[assignment]
+    from moonmind.workflows.speckit_celery.models import CodexAuthVolume, CodexWorkerShard
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
@@ -944,3 +938,15 @@ class SpecWorkflowTaskState(Base):
 Index("ix_orchestrator_runs_status", OrchestratorRun.status)
 Index("ix_orchestrator_runs_target_service", OrchestratorRun.target_service)
 Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)
+
+
+def _register_celery_model_dependencies() -> None:
+    """Import Celery-side ORM models so string relationships can resolve."""
+
+    if TYPE_CHECKING:
+        return
+
+    import_module("moonmind.workflows.speckit_celery.models")
+
+
+_register_celery_model_dependencies()
