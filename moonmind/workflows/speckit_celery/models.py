@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
@@ -30,9 +30,6 @@ from api_service.db.models import (
     CodexCredentialStatus,
     CodexPreflightStatus,
     GitHubCredentialStatus,
-    OrchestratorPlanStep,
-    OrchestratorPlanStepStatus,
-    OrchestratorTaskState,
     SpecWorkflowRun,
     SpecWorkflowRunPhase,
     SpecWorkflowRunStatus,
@@ -42,9 +39,6 @@ from api_service.db.models import (
     WorkflowArtifactType,
     WorkflowCredentialAudit,
 )
-
-if TYPE_CHECKING:
-    from api_service.db.models import OrchestratorRun
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 _MUTABLE_JSON_LIST = MutableList.as_mutable(JSON().with_variant(JSONB, "postgresql"))
@@ -466,6 +460,7 @@ __all__ = [
     "SpecWorkflowTaskStatus",
     "WorkflowCredentialAudit",
     "CodexCredentialStatus",
+    "CodexPreflightStatus",
     "GitHubCredentialStatus",
     "WorkflowArtifact",
     "WorkflowArtifactType",
