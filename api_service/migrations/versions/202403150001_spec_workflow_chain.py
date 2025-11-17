@@ -652,7 +652,6 @@ def upgrade() -> None:  # noqa: D401
     _copy_legacy_table_data("workflow_credential_audits")
 
 
-
 def downgrade() -> None:  # noqa: D401
     """Drop Spec workflow chain tables and restore legacy schema."""
 

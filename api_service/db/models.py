@@ -829,7 +829,10 @@ class SpecWorkflowTaskState(Base):
             name="ck_spec_workflow_task_state_run_id_exclusive",
         ),
         UniqueConstraint(
-            "workflow_run_id", "task_name", "attempt", name="uq_spec_workflow_task_state_attempt"
+            "workflow_run_id",
+            "task_name",
+            "attempt",
+            name="uq_spec_workflow_task_state_attempt",
         ),
         UniqueConstraint(
             "orchestrator_run_id",
