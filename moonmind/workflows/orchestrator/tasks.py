@@ -19,7 +19,12 @@ from moonmind.config.settings import settings
 from .command_runner import AllowListViolation, CommandRunner, CommandRunnerError
 from .repositories import OrchestratorRepository
 from .service_profiles import get_service_profile
-from .storage import ArtifactStorage, ArtifactStorageError, resolve_artifact_root
+from .storage import (
+    ArtifactStorage,
+    ArtifactStorageError,
+    ArtifactWriteResult,
+    resolve_artifact_root,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,17 +107,61 @@ def _locate_step_definition(
     raise ValueError(f"Action plan missing step '{step.value}'")
 
 
+_FALLBACK_LOG_NAMES: dict[db_models.OrchestratorPlanStep, str] = {
+    db_models.OrchestratorPlanStep.ANALYZE: "analyze.log",
+    db_models.OrchestratorPlanStep.PATCH: "patch.log",
+    db_models.OrchestratorPlanStep.BUILD: "build.log",
+    db_models.OrchestratorPlanStep.RESTART: "restart.log",
+    db_models.OrchestratorPlanStep.VERIFY: "verify.log",
+    db_models.OrchestratorPlanStep.ROLLBACK: "rollback.log",
+}
+
+
+def _default_failure_log(step: db_models.OrchestratorPlanStep) -> str:
+    return _FALLBACK_LOG_NAMES.get(step, f"{step.value}.log")
+
+
+def _ensure_failure_artifact(
+    storage: ArtifactStorage,
+    run: db_models.OrchestratorRun,
+    step: db_models.OrchestratorPlanStep,
+    exc: "CommandRunnerError",
+) -> ArtifactWriteResult:
+    log_name = _default_failure_log(step)
+    lines = [f"{step.value} step failed while executing orchestrator command."]
+    output = getattr(exc, "output", None)
+    if output:
+        lines.append(str(output))
+    message = str(exc)
+    if message:
+        lines.append(message)
+    artifact = storage.write_text(run.id, log_name, "\n".join(lines))
+    metadata = getattr(exc, "metadata", None)
+    if metadata is None:
+        metadata = {}
+        exc.metadata = metadata
+    metadata.setdefault("log", artifact.path)
+    exc.artifacts.append(artifact)
+    return artifact
+
+
 async def _record_plan_failure(
     repo: OrchestratorRepository,
     run: db_models.OrchestratorRun,
     step: db_models.OrchestratorPlanStep,
     exc: Exception,
+    *,
+    storage: ArtifactStorage | None = None,
 ) -> None:
     finished = _utcnow()
     artifact_ids: list[UUID] = []
     payload: dict[str, object] | None = None
-    if isinstance(exc, CommandRunnerError) and exc.artifacts:
-        for artifact in exc.artifacts:
+    attachments: Sequence[ArtifactWriteResult] = []
+    if isinstance(exc, CommandRunnerError):
+        attachments = list(exc.artifacts)
+        if not attachments and storage is not None:
+            attachments = [_ensure_failure_artifact(storage, run, step, exc)]
+        for artifact in attachments:
             record = await repo.add_artifact(
                 run_id=run.id,
                 artifact_type=_classify_artifact(step, artifact.path),
@@ -170,6 +219,7 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                 started_at=started_at,
             )
 
+        storage: ArtifactStorage | None = None
         try:
             plan_steps = run.action_plan.steps or []
             step_def = _locate_step_definition(plan_steps, step)
@@ -189,13 +239,13 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             handler_name = _STEP_HANDLER[step]
             handler = getattr(runner, handler_name)
         except (ArtifactStorageError, KeyError, ValueError, TypeError) as exc:
-            await _record_plan_failure(repo, run, step, exc)
+            await _record_plan_failure(repo, run, step, exc, storage=storage)
             raise
 
         try:
             result = handler(parameters)
         except (AllowListViolation, CommandRunnerError) as exc:
-            await _record_plan_failure(repo, run, step, exc)
+            await _record_plan_failure(repo, run, step, exc, storage=storage)
             raise
         else:
             finished = _utcnow()

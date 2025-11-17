@@ -10,7 +10,10 @@ import pytest
 from api_service.db import models as db_models
 from moonmind.workflows.orchestrator import tasks
 from moonmind.workflows.orchestrator.command_runner import CommandExecutionError
-from moonmind.workflows.orchestrator.storage import ArtifactWriteResult
+from moonmind.workflows.orchestrator.storage import (
+    ArtifactStorage,
+    ArtifactWriteResult,
+)
 
 
 def test_build_storage_for_run_uses_persisted_directory(tmp_path):
@@ -152,3 +155,46 @@ async def test_record_plan_failure_registers_artifacts():
     assert captured.upsert["artifact_refs"], "artifact references should be recorded"
     assert captured.upsert["payload"] == error.metadata
     assert captured.committed is True
+
+
+@pytest.mark.asyncio
+async def test_record_plan_failure_creates_fallback_log(tmp_path):
+    """Missing artifacts should trigger fallback log persistence."""
+
+    run_id = uuid4()
+    run = SimpleNamespace(id=run_id)
+    storage = ArtifactStorage(tmp_path)
+    error = CommandExecutionError("build failed", output="compose error")
+    step = db_models.OrchestratorPlanStep.BUILD
+
+    captured = SimpleNamespace(added=[], upsert=None, updated=None, committed=False)
+
+    class StubRepo:
+        async def add_artifact(self, **kwargs):
+            captured.added.append(kwargs)
+            return SimpleNamespace(id=uuid4())
+
+        async def upsert_plan_step_state(self, **kwargs):
+            captured.upsert = kwargs
+            return SimpleNamespace()
+
+        async def update_run(self, run_obj, **kwargs):
+            captured.updated = (run_obj, kwargs)
+
+        async def commit(self):
+            captured.committed = True
+
+    repo = StubRepo()
+
+    await tasks._record_plan_failure(
+        repo, run, step, error, storage=storage
+    )
+
+    assert captured.added, "fallback artifact should be saved"
+    artifact = error.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "build step failed" in contents
+    assert "compose error" in contents
+    assert error.metadata and error.metadata["log"] == artifact.path
