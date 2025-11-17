@@ -329,6 +329,9 @@ jobs:
             const buildWorkflowPrefixes = BUILD_WORKFLOW_NAMES.map(
               name => `${name} /`.toLowerCase()
             );
+            const buildCheckExactNames = new Set([
+              'run pytest unit tests / test (pull_request)',
+            ]);
 
             const matchesBuildCheckName = (rawName) => {
               const name = (rawName || '').trim();
@@ -336,7 +339,10 @@ jobs:
                 return false;
               }
               const normalizedName = name.toLowerCase();
-              return buildWorkflowPrefixes.some(prefix => normalizedName.startsWith(prefix));
+              if (buildWorkflowPrefixes.some(prefix => normalizedName.startsWith(prefix))) {
+                return true;
+              }
+              return buildCheckExactNames.has(normalizedName);
             };
 
             const buildCheckCandidates = checkRunsExcludingSelf.filter(run =>
@@ -354,9 +360,12 @@ jobs:
               console.log(`No successful build/test check found. Candidates: [${availableNames}]`);
             }
 
-            const buildCheckSucceeded = Boolean(buildCheck) && buildCheck.conclusion === 'success';
+            let buildCheckSucceeded = Boolean(buildCheck) && buildCheck.conclusion === 'success';
             if (buildCheck) {
               console.log(`Evaluated build/test check '${buildCheck.name}' (conclusion: ${buildCheck.conclusion})`);
+            } else if (isSuccessfulBuildWorkflowRun) {
+              console.log('No matching build/test check run was returned, but the triggering workflow_run succeeded. Treating this as a successful build/test gate.');
+              buildCheckSucceeded = true;
             }
             console.log(`Build/test check succeeded: ${buildCheckSucceeded}`);
 
@@ -376,7 +385,13 @@ jobs:
               per_page: 100
             });
 
-            const allComments = [...reviewComments, ...issueComments];
+            const headShaLower = (pr.head.sha || '').toLowerCase();
+            const reviewCommentsOnHead = reviewComments.filter(comment => {
+              const commitIdLower = (comment.commit_id || '').toLowerCase();
+              return commitIdLower && commitIdLower === headShaLower;
+            });
+
+            const allComments = [...reviewCommentsOnHead, ...issueComments];
 
             console.log(`Total comments (all time): ${allComments.length}`);
 
