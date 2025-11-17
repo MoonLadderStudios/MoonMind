@@ -245,6 +245,36 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
+def test_patch_command_failure_persists_log(tmp_path, monkeypatch):
+    """Patch command failures should record logs for troubleshooting."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del cwd
+        if command[0] == "apply":
+            raise CommandExecutionError("patch failed", output="patch output")
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.patch({"commands": [["apply", "fix"]], "logArtifact": "patch.log"})
+
+    error = excinfo.value
+    assert error.artifacts, "patch failure should include log artifacts"
+    artifact = error.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "apply fix" in contents
+    assert "patch output" in contents
+    assert error.metadata and error.metadata["log"].endswith("patch.log")
+
+
 def test_run_logged_command_persists_artifact_on_failure(tmp_path, monkeypatch):
     """The helper should attach log artifacts before re-raising errors."""
 

@@ -95,10 +95,21 @@ class CommandRunner:
     def patch(self, parameters: Mapping[str, Any]) -> StepResult:
         workspace = self._resolve_workspace(parameters.get("workspace"))
         commands = parameters.get("commands") or []
+        log_name = str(parameters.get("logArtifact", "patch.log"))
         command_logs: list[str] = []
-        for command in commands:
-            completed = self._execute_command(_ensure_sequence(command), cwd=workspace)
+        for raw_command in commands:
+            command = _ensure_sequence(raw_command)
             command_logs.append(self._format_command(command))
+            try:
+                completed = self._execute_command(command, cwd=workspace)
+            except CommandRunnerError as exc:
+                self._persist_failure_artifact(
+                    log_name=log_name,
+                    command=command,
+                    exc=exc,
+                    log_lines=command_logs,
+                )
+                raise
             if completed.stdout:
                 command_logs.append(completed.stdout.strip())
             if completed.stderr:
@@ -159,7 +170,7 @@ class CommandRunner:
         )
 
         patch_log_artifact = self._storage.write_text(
-            self._run_id, "patch.log", "\n".join(command_logs)
+            self._run_id, log_name, "\n".join(command_logs)
         )
 
         return StepResult(
@@ -173,6 +184,7 @@ class CommandRunner:
                 "stagedFiles": staged_files,
                 "untrackedFiles": untracked_files,
                 "validatedFiles": validated_files,
+                "log": patch_log_artifact.path,
             },
         )
 
@@ -188,17 +200,11 @@ class CommandRunner:
         ]
         log_name = str(parameters.get("logArtifact", "build.log"))
         command = _ensure_sequence(raw_command)
-        try:
-            artifact = self._run_logged_command(
-                command=command,
-                workspace=workspace,
-                log_name=log_name,
-            )
-        except CommandRunnerError as exc:
-            self._attach_command_failure_artifact(
-                log_name=log_name, command=command, exc=exc
-            )
-            raise
+        artifact = self._execute_logged_step(
+            command=command,
+            workspace=workspace,
+            log_name=log_name,
+        )
         return StepResult(
             message="Build completed",
             artifacts=[artifact],
@@ -219,17 +225,11 @@ class CommandRunner:
         ]
         log_name = str(parameters.get("logArtifact", "restart.log"))
         command = _ensure_sequence(raw_command)
-        try:
-            artifact = self._run_logged_command(
-                command=command,
-                workspace=workspace,
-                log_name=log_name,
-            )
-        except CommandRunnerError as exc:
-            self._attach_command_failure_artifact(
-                log_name=log_name, command=command, exc=exc
-            )
-            raise
+        artifact = self._execute_logged_step(
+            command=command,
+            workspace=workspace,
+            log_name=log_name,
+        )
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
         message = "Restart command issued"
         if timeout:
@@ -407,6 +407,23 @@ class CommandRunner:
             log_name,
             "\n".join(line for line in log_lines if line) or formatted,
         )
+
+    def _execute_logged_step(
+        self,
+        *,
+        command: Sequence[str],
+        workspace: Path,
+        log_name: str,
+    ) -> ArtifactWriteResult:
+        try:
+            return self._run_logged_command(
+                command=command, workspace=workspace, log_name=log_name
+            )
+        except CommandRunnerError as exc:
+            self._attach_command_failure_artifact(
+                log_name=log_name, command=command, exc=exc
+            )
+            raise
 
     def _attach_command_failure_artifact(
         self,
