@@ -385,7 +385,13 @@ jobs:
               per_page: 100
             });
 
-            const allComments = [...reviewComments, ...issueComments];
+            const headShaLower = (pr.head.sha || '').toLowerCase();
+            const reviewCommentsOnHead = reviewComments.filter(comment => {
+              const commitIdLower = (comment.commit_id || '').toLowerCase();
+              return commitIdLower && commitIdLower === headShaLower;
+            });
+
+            const allComments = [...reviewCommentsOnHead, ...issueComments];
 
             console.log(`Total comments (all time): ${allComments.length}`);
 
