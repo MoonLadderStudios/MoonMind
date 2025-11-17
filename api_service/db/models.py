@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
-    from moonmind.workflows.speckit_celery.models import CodexAuthVolume, CodexWorkerShard
+    from moonmind.workflows.speckit_celery.models import (
+        CodexAuthVolume,
+        CodexWorkerShard,
+    )
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
