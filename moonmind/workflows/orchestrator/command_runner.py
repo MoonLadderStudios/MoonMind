@@ -211,12 +211,16 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            self._persist_failure_artifact(
-                log_name=log_name,
-                command=command,
-                exc=exc,
-                log_lines=fallback_lines,
-            )
+            artifacts = getattr(exc, "artifacts", None)
+            if not artifacts:
+                self._persist_failure_artifact(
+                    log_name=log_name,
+                    command=command,
+                    exc=exc,
+                    log_lines=fallback_lines,
+                )
+            else:
+                self._annotate_failure_metadata(exc, artifacts[0])
             raise
         return StepResult(
             message="Build completed",
@@ -249,12 +253,16 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            self._persist_failure_artifact(
-                log_name=log_name,
-                command=command,
-                exc=exc,
-                log_lines=fallback_lines,
-            )
+            artifacts = getattr(exc, "artifacts", None)
+            if not artifacts:
+                self._persist_failure_artifact(
+                    log_name=log_name,
+                    command=command,
+                    exc=exc,
+                    log_lines=fallback_lines,
+                )
+            else:
+                self._annotate_failure_metadata(exc, artifacts[0])
             raise
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
         message = "Restart command issued"
@@ -460,15 +468,13 @@ class CommandRunner:
                 formatted = self._format_command(cmd_sequence)
                 if formatted:
                     log_lines.append(f"$ {formatted}")
-            artifact = self._storage.write_text(
-                self._run_id,
-                log_name,
-                "\n".join(line for line in log_lines if line) or "Command failed",
+            error = self._command_failure(cmd_sequence, completed)
+            self._persist_failure_artifact(
+                log_name=log_name,
+                command=cmd_sequence,
+                exc=error,
+                log_lines=log_lines,
             )
-            error = self._command_failure(
-                cmd_sequence, completed, artifacts=[artifact]
-            )
-            self._attach_failure_artifact(error, artifact)
             raise error
 
         artifact = self._storage.write_text(
