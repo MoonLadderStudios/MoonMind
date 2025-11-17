@@ -391,22 +391,13 @@ class CommandRunner:
         try:
             result = self._execute_command(command, cwd=workspace)
         except CommandRunnerError as exc:
-            log_body = (getattr(exc, "output", None) or "").strip()
-            if log_body:
-                log_lines.append(log_body)
-            else:
-                log_lines.append(str(exc))
-            artifact = self._storage.write_text(
-                self._run_id,
-                log_name,
-                "\n".join(line for line in log_lines if line) or "Command failed",
+            log_header = log_lines[:] or None
+            self._persist_failure_artifact(
+                log_name=log_name,
+                command=command,
+                exc=exc,
+                log_lines=log_header,
             )
-            artifacts = getattr(exc, "artifacts", None)
-            if artifacts is None:
-                artifacts = []
-                exc.artifacts = artifacts
-            artifacts.append(artifact)
-            exc.args = (f"{exc} (see {artifact.path})",)
             raise
         combined = self._combine_streams(result)
         if combined:
@@ -426,26 +417,50 @@ class CommandRunner:
     ) -> None:
         """Persist a fallback log artifact when a command fails early."""
 
-        if getattr(exc, "artifacts", None):
+        existing = getattr(exc, "artifacts", None) or []
+        log_basename = Path(log_name).name
+        if any(Path(artifact.path).name == log_basename for artifact in existing):
             return
 
-        log_lines: list[str] = []
-        formatted = self._format_command(command)
-        if formatted:
-            log_lines.append(f"$ {formatted}")
-        output = getattr(exc, "output", None)
+        self._persist_failure_artifact(
+            log_name=log_name, command=command, exc=exc, log_lines=None
+        )
+
+    def _persist_failure_artifact(
+        self,
+        *,
+        log_name: str,
+        command: Sequence[str],
+        exc: CommandRunnerError,
+        log_lines: Sequence[str] | None,
+    ) -> ArtifactWriteResult:
+        """Write ``log_name`` with failure diagnostics and attach to ``exc``."""
+
+        lines = [line for line in (log_lines or []) if line]
+        if not lines:
+            formatted = self._format_command(command)
+            if formatted:
+                lines.append(f"$ {formatted}")
+        output = (getattr(exc, "output", None) or "").strip()
         if output:
-            log_lines.append(output.strip())
+            lines.append(output)
         else:
-            log_lines.append(str(exc))
+            message = str(exc)
+            if message:
+                lines.append(message)
 
         artifact = self._storage.write_text(
             self._run_id,
             log_name,
-            "\n".join(line for line in log_lines if line) or "Command failed",
+            "\n".join(lines) or "Command failed",
         )
-        exc.artifacts.append(artifact)
+        artifacts = getattr(exc, "artifacts", None)
+        if artifacts is None:
+            artifacts = []
+            exc.artifacts = artifacts
+        artifacts.append(artifact)
         exc.args = (f"{exc} (see {artifact.path})",)
+        return artifact
 
 
 def _ensure_sequence(command: Any) -> Sequence[str]:
