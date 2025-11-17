@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -243,6 +244,72 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert "docker compose up --no-deps" in contents
     error = excinfo.value
     assert error.metadata and error.metadata["log"].endswith("restart.log")
+
+
+def test_build_failure_from_subprocess_persists_combined_output(
+    tmp_path, monkeypatch
+):
+    """Docker build failures should emit stdout and stderr before raising."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_run(*args, **kwargs):  # pragma: no cover - helper
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=args[0],
+            output="compose stdout",  # type: ignore[arg-type]
+            stderr="compose stderr",  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.orchestrator.command_runner.subprocess.run",
+        fail_run,
+    )
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.build({"logArtifact": "build.log"})
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    contents = log_path.read_text()
+    assert "compose stdout" in contents
+    assert "compose stderr" in contents
+
+
+def test_restart_failure_from_subprocess_persists_combined_output(
+    tmp_path, monkeypatch
+):
+    """Docker restart failures should emit stdout and stderr before raising."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_run(*args, **kwargs):  # pragma: no cover - helper
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=args[0],
+            output="restart stdout",  # type: ignore[arg-type]
+            stderr="restart stderr",  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.orchestrator.command_runner.subprocess.run",
+        fail_run,
+    )
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.restart({"logArtifact": "restart.log"})
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    contents = log_path.read_text()
+    assert "restart stdout" in contents
+    assert "restart stderr" in contents
 
 
 def test_patch_command_failure_persists_log(tmp_path, monkeypatch):

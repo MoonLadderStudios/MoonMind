@@ -418,7 +418,7 @@ class CommandRunner:
         try:
             result = self._execute_command(command, cwd=workspace)
         except CommandRunnerError as exc:
-            self._ensure_failure_artifact(
+            self._persist_failure_artifact(
                 log_name=log_name,
                 command=command,
                 exc=exc,
