@@ -130,6 +130,54 @@ def test_restart_failure_emits_log_artifact(tmp_path, monkeypatch):
     assert artifact.path in str(error)
 
 
+def test_build_failure_without_artifact_creates_fallback_log(tmp_path, monkeypatch):
+    """If logging fails early, the build step should still persist a log."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_logged_command(self, *, command, workspace, log_name):  # pragma: no cover
+        del command, workspace, log_name
+        raise CommandExecutionError("build failed")
+
+    monkeypatch.setattr(CommandRunner, "_run_logged_command", fail_logged_command)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.build({"logArtifact": "build.log"})
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "build failed" in contents
+
+
+def test_restart_failure_without_artifact_creates_fallback_log(tmp_path, monkeypatch):
+    """Restart failures should create fallback logs if logging aborts early."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def fail_logged_command(self, *, command, workspace, log_name):  # pragma: no cover
+        del command, workspace, log_name
+        raise CommandExecutionError("restart failed")
+
+    monkeypatch.setattr(CommandRunner, "_run_logged_command", fail_logged_command)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.restart({"logArtifact": "restart.log"})
+
+    artifact = excinfo.value.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "restart failed" in contents
+
+
 def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
     """Empty subprocess output should fall back to the formatted command."""
 

@@ -186,11 +186,18 @@ class CommandRunner:
             self._profile.compose_service,
         ]
         log_name = str(parameters.get("logArtifact", "build.log"))
-        artifact = self._run_logged_command(
-            command=_ensure_sequence(raw_command),
-            workspace=workspace,
-            log_name=log_name,
-        )
+        command = _ensure_sequence(raw_command)
+        try:
+            artifact = self._run_logged_command(
+                command=command,
+                workspace=workspace,
+                log_name=log_name,
+            )
+        except CommandRunnerError as exc:
+            self._attach_command_failure_artifact(
+                log_name=log_name, command=command, exc=exc
+            )
+            raise
         return StepResult(
             message="Build completed",
             artifacts=[artifact],
@@ -210,11 +217,18 @@ class CommandRunner:
             self._profile.compose_service,
         ]
         log_name = str(parameters.get("logArtifact", "restart.log"))
-        artifact = self._run_logged_command(
-            command=_ensure_sequence(raw_command),
-            workspace=workspace,
-            log_name=log_name,
-        )
+        command = _ensure_sequence(raw_command)
+        try:
+            artifact = self._run_logged_command(
+                command=command,
+                workspace=workspace,
+                log_name=log_name,
+            )
+        except CommandRunnerError as exc:
+            self._attach_command_failure_artifact(
+                log_name=log_name, command=command, exc=exc
+            )
+            raise
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
         message = "Restart command issued"
         if timeout:
@@ -402,6 +416,36 @@ class CommandRunner:
             log_name,
             "\n".join(line for line in log_lines if line) or formatted,
         )
+
+    def _attach_command_failure_artifact(
+        self,
+        *,
+        log_name: str,
+        command: Sequence[str],
+        exc: CommandRunnerError,
+    ) -> None:
+        """Persist a fallback log artifact when a command fails early."""
+
+        if getattr(exc, "artifacts", None):
+            return
+
+        log_lines: list[str] = []
+        formatted = self._format_command(command)
+        if formatted:
+            log_lines.append(f"$ {formatted}")
+        output = getattr(exc, "output", None)
+        if output:
+            log_lines.append(output.strip())
+        else:
+            log_lines.append(str(exc))
+
+        artifact = self._storage.write_text(
+            self._run_id,
+            log_name,
+            "\n".join(line for line in log_lines if line) or "Command failed",
+        )
+        exc.artifacts.append(artifact)
+        exc.args = (f"{exc} (see {artifact.path})",)
 
 
 def _ensure_sequence(command: Any) -> Sequence[str]:
