@@ -388,17 +388,7 @@ class CommandRunner:
         formatted = self._format_command(command)
         header = f"$ {formatted}" if formatted else ""
         log_lines = [header] if header else []
-        try:
-            result = self._execute_command(command, cwd=workspace)
-        except CommandRunnerError as exc:
-            log_header = log_lines[:] or None
-            self._persist_failure_artifact(
-                log_name=log_name,
-                command=command,
-                exc=exc,
-                log_lines=log_header,
-            )
-            raise
+        result = self._execute_command(command, cwd=workspace)
         combined = self._combine_streams(result)
         if combined:
             log_lines.append(combined)
