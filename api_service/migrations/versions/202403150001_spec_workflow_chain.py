@@ -76,19 +76,27 @@ LEGACY_WORKFLOW_TABLES: tuple[str, ...] = (
     "spec_workflow_runs",
 )
 
-LEGACY_ENUM_COLUMNS: dict[str, tuple[str, ...]] = {
+LEGACY_ENUM_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "legacy_spec_workflow_runs": (
-        "status",
-        "phase",
-        "codex_preflight_status",
+        ("status", "specworkflowrunstatus"),
+        ("phase", "specworkflowrunphase"),
+        ("codex_preflight_status", "codexpreflightstatus"),
     ),
-    "legacy_spec_workflow_task_states": ("status",),
+    "legacy_spec_workflow_task_states": (("status", "specworkflowtaskstatus"),),
     "legacy_workflow_credential_audits": (
-        "codex_status",
-        "github_status",
+        ("codex_status", "workflowcodexcredentialstatus"),
+        ("github_status", "workflowgithubcredentialstatus"),
     ),
-    "legacy_workflow_artifacts": ("artifact_type",),
+    "legacy_workflow_artifacts": (("artifact_type", "workflowartifacttype"),),
 }
+
+LEGACY_ENUM_TYPES: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        enum_type
+        for columns in LEGACY_ENUM_COLUMNS.values()
+        for _, enum_type in columns
+    )
+)
 
 
 def _backup_existing_tables() -> None:
@@ -108,7 +116,7 @@ def _detach_legacy_tables_from_enums() -> None:
 
     for table_name, columns in LEGACY_ENUM_COLUMNS.items():
         quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
-        for column in columns:
+        for column, _ in columns:
             quoted_column = sa.sql.elements.quoted_name(column, quote=True)
             op.execute(
                 f"ALTER TABLE IF EXISTS {quoted_table} "
@@ -120,15 +128,7 @@ def _detach_legacy_tables_from_enums() -> None:
 def _drop_legacy_enums() -> None:
     """Drop enums installed by prior Spec workflow migrations."""
 
-    for type_name in (
-        "workflowartifacttype",
-        "workflowgithubcredentialstatus",
-        "workflowcodexcredentialstatus",
-        "specworkflowtaskstatus",
-        "specworkflowrunphase",
-        "specworkflowrunstatus",
-        "codexpreflightstatus",
-    ):
+    for type_name in LEGACY_ENUM_TYPES:
         quoted_type = sa.sql.elements.quoted_name(type_name, quote=True)
         op.execute(f"DROP TYPE IF EXISTS {quoted_type}")
 
