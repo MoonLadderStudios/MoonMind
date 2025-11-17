@@ -455,20 +455,23 @@ class CommandRunner:
         if combined:
             log_lines.append(combined)
 
-        error: CommandExecutionError | None = None
         if completed.returncode != 0:
             error = self._command_failure(cmd_sequence, completed)
             if not combined:
                 log_lines.append(str(error))
+            self._persist_failure_artifact(
+                log_name=log_name,
+                command=cmd_sequence,
+                exc=error,
+                log_lines=log_lines,
+            )
+            raise error
 
         artifact = self._storage.write_text(
             self._run_id,
             log_name,
             "\n".join(line for line in log_lines if line) or formatted,
         )
-        if error is not None:
-            self._attach_failure_artifact(error, artifact)
-            raise error
         return artifact
 
     def _persist_failure_artifact(
