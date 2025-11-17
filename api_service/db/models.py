@@ -13,6 +13,9 @@ if TYPE_CHECKING:
         CodexWorkerShard,
         SpecWorkflowTaskState,
     )
+else:  # pragma: no cover - runtime fallbacks avoid circular imports
+    CodexAuthVolume = Any  # type: ignore[assignment]
+    CodexWorkerShard = Any  # type: ignore[assignment]
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
