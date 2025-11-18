@@ -189,7 +189,7 @@ class OrchestratorRepository:
                 celery_state=None,
                 celery_task_id=None,
                 message=None,
-                artifact_refs=[],
+                artifact_paths=[],
             )
             self._session.add(task_state)
             created.append(task_state)
@@ -206,7 +206,7 @@ class OrchestratorRepository:
         celery_state: db_models.OrchestratorTaskState | str | None = None,
         celery_task_id: Optional[str] = None,
         message: Optional[str] = None,
-        artifact_refs: Optional[Sequence[UUID]] = None,
+        artifact_paths: Optional[Sequence[UUID]] = None,
         payload: Optional[Mapping[str, Any]] = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
@@ -247,8 +247,8 @@ class OrchestratorRepository:
         if message is not None:
             insert_values["message"] = message
             update_values["message"] = message
-        if artifact_refs is not None:
-            refs = [str(ref) for ref in artifact_refs]
+        if artifact_paths is not None:
+            refs = [str(ref) for ref in artifact_paths]
             insert_values["artifact_refs"] = refs
             update_values["artifact_refs"] = refs
         if payload is not None:

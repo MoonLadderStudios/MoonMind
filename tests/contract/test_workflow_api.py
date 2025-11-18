@@ -24,6 +24,8 @@ from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
 from moonmind.workflows.speckit_celery import tasks as workflow_tasks
 
+TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
+
 
 @pytest.mark.asyncio
 async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
@@ -141,7 +143,10 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         async with AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            response = await client.post("/api/workflows/speckit/runs", json={})
+            response = await client.post(
+                "/api/workflows/speckit/runs",
+                json={"repository": TEST_REPOSITORY},
+            )
             assert response.status_code == 202
             run_model = SpecWorkflowRunModel.model_validate(response.json())
             assert run_model.status == workflow_models.SpecWorkflowRunStatus.FAILED

@@ -492,7 +492,7 @@ class SpecWorkflowRepository:
         started_at: Optional[datetime] = None,
         finished_at: Optional[datetime] = None,
         message: Optional[str] = None,
-        artifact_refs: Optional[Sequence[str]] = None,
+        artifact_paths: Optional[Sequence[str]] = None,
     ) -> models.SpecWorkflowTaskState:
         """Create or update a task state for the given run/task/attempt."""
 
@@ -516,7 +516,7 @@ class SpecWorkflowRepository:
                 started_at=started_at,
                 finished_at=finished_at,
                 message=message,
-                artifact_refs=list(artifact_refs or []),
+                artifact_paths=list(artifact_paths or []),
                 created_at=now,
                 updated_at=now,
             )
@@ -531,8 +531,8 @@ class SpecWorkflowRepository:
                 state.finished_at = finished_at
             if message is not None:
                 state.message = message
-            if artifact_refs is not None:
-                state.artifact_refs = list(artifact_refs)
+            if artifact_paths is not None:
+                state.artifact_paths = list(artifact_paths)
             state.updated_at = now
 
         await self._session.flush()

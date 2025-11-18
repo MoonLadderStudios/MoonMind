@@ -1003,6 +1003,9 @@ def _base_context(run: models.SpecWorkflowRun) -> dict[str, Any]:
         "feature_key": run.feature_key,
         "artifacts_path": str(_resolve_artifacts_dir(run)),
     }
+    repository = run.repository or settings.spec_workflow.github_repository
+    if repository:
+        context["repository"] = repository
     codex_volume = run.codex_volume or settings.spec_workflow.codex_volume_name
     if codex_volume:
         context["codex_volume"] = codex_volume

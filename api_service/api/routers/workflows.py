@@ -274,6 +274,7 @@ async def create_workflow_run(
             feature_key=payload.feature_key,
             created_by=payload.created_by,
             force_phase=payload.force_phase,
+            repository=payload.repository,
         )
     except WorkflowConflictError as exc:
         raise HTTPException(

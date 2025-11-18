@@ -18,6 +18,8 @@ from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
 
+TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
+
 
 @pytest.mark.asyncio
 async def test_trigger_workflow_chain(tmp_path, monkeypatch):
@@ -65,7 +67,9 @@ async def test_trigger_workflow_chain(tmp_path, monkeypatch):
         settings.spec_workflow, "default_feature_key", feature_key, raising=False
     )
 
-    triggered = await trigger_spec_workflow_run(feature_key=feature_key)
+    triggered = await trigger_spec_workflow_run(
+        feature_key=feature_key, repository=TEST_REPOSITORY
+    )
 
     async with db_base.async_session_maker() as session:
         repo = SpecWorkflowRepository(session)
@@ -177,7 +181,9 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
         _fake_github_client,
     )
 
-    triggered = await trigger_spec_workflow_run(feature_key=feature_key)
+    triggered = await trigger_spec_workflow_run(
+        feature_key=feature_key, repository=TEST_REPOSITORY
+    )
 
     async with db_base.async_session_maker() as session:
         repo = SpecWorkflowRepository(session)
