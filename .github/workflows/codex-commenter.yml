@@ -64,6 +64,17 @@ jobs:
               ? context.payload.workflow_run
               : null;
 
+            // Both the legacy and current CI workflows are treated as "build/test" gates
+            const BUILD_WORKFLOW_NAMES = [
+              'Build Project and Run Tests',
+              'Run Pytest Unit Tests',
+            ];
+
+            const isSuccessfulBuildWorkflowRun =
+              Boolean(workflowRun) &&
+              BUILD_WORKFLOW_NAMES.includes(workflowRun.name || '') &&
+              (workflowRun.conclusion || '').toLowerCase() === 'success';
+
             core.setOutput('ready', 'false');
             core.setOutput('pr', pr_number ? String(pr_number) : '');
 
@@ -154,6 +165,8 @@ jobs:
               }
             }
 
+            console.log(`Build workflow success gate (this run): ${isSuccessfulBuildWorkflowRun}`);
+
             // Get commits to find the latest commit timestamp
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
@@ -171,7 +184,7 @@ jobs:
               commentCutoffDate = new Date(latestCommit.commit.committer.date);
               console.log(`Multiple commits detected. Only considering comments after: ${commentCutoffDate.toISOString()}`);
             } else {
-              console.log(`Single commit. Considering all comments since PR creation.`);
+              console.log('Single commit. Considering all comments since PR creation.');
             }
 
             // Check if another instance of THIS workflow is already running for this PR
@@ -312,6 +325,41 @@ jobs:
 
             console.log(`Has failures: ${hasFailures}`);
 
+            // Identify build / test check run(s) for auto-review and auto-merge gating
+            const buildWorkflowPrefixes = BUILD_WORKFLOW_NAMES.map(
+              name => `${name} /`.toLowerCase()
+            );
+
+            const matchesBuildCheckName = (rawName) => {
+              const name = (rawName || '').trim();
+              if (!name) {
+                return false;
+              }
+              const normalizedName = name.toLowerCase();
+              return buildWorkflowPrefixes.some(prefix => normalizedName.startsWith(prefix));
+            };
+
+            const buildCheckCandidates = checkRunsExcludingSelf.filter(run =>
+              matchesBuildCheckName(run.name)
+            );
+
+            let buildCheck = null;
+            if (buildCheckCandidates.length > 0) {
+              // Prefer a successful build/test check if available
+              buildCheck = buildCheckCandidates.find(run => run.conclusion === 'success') || buildCheckCandidates[0];
+            }
+
+            if (!buildCheck && buildCheckCandidates.length > 0) {
+              const availableNames = buildCheckCandidates.map(run => run.name || '(unnamed)').join(', ');
+              console.log(`No successful build/test check found. Candidates: [${availableNames}]`);
+            }
+
+            const buildCheckSucceeded = Boolean(buildCheck) && buildCheck.conclusion === 'success';
+            if (buildCheck) {
+              console.log(`Evaluated build/test check '${buildCheck.name}' (conclusion: ${buildCheck.conclusion})`);
+            }
+            console.log(`Build/test check succeeded: ${buildCheckSucceeded}`);
+
             // Get all PR review comments
             const { data: reviewComments } = await github.rest.pulls.listReviewComments({
               owner: context.repo.owner,
@@ -333,10 +381,12 @@ jobs:
             console.log(`Total comments (all time): ${allComments.length}`);
 
             // Filter comments to only those after the cutoff date
-            let relevantComments = allComments.filter(comment => {
+            const commentsAfterCutoff = allComments.filter(comment => {
               const commentDate = new Date(comment.created_at);
               return commentDate > commentCutoffDate;
             });
+
+            let relevantComments = commentsAfterCutoff.slice();
 
             console.log(`Comments after cutoff date: ${relevantComments.length}`);
 
@@ -376,15 +426,27 @@ jobs:
               return patterns.some(pattern => pattern.test(body));
             };
 
-            // Check for Gemini Code Assist comments (High or Critical)
-            const geminiComments = relevantComments.filter(comment => {
+            const isGeminiComment = (comment) => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
-              const isGemini = userLogin.includes('gemini') ||
-                               body.includes('Gemini Code Assist') ||
-                               userLogin === 'gemini-code-assist';
-              if (!isGemini) return false;
-              const severity = extractGeminiSeverity(body);
+              return userLogin.includes('gemini') ||
+                     body.includes('Gemini Code Assist') ||
+                     userLogin === 'gemini-code-assist';
+            };
+
+            const isCodexComment = (comment) => {
+              const userLogin = comment.user?.login?.toLowerCase() || '';
+              const body = comment.body || '';
+              return userLogin.includes('codex') ||
+                     userLogin === 'chatgpt-codex-connector' ||
+                     body.includes('Codex Review') ||
+                     body.includes('💡 Codex Review');
+            };
+
+            // Check for Gemini Code Assist comments (High or Critical)
+            const geminiComments = relevantComments.filter(comment => {
+              if (!isGeminiComment(comment)) return false;
+              const severity = extractGeminiSeverity(comment.body || '');
               return severity === 'high' || severity === 'critical';
             });
 
@@ -392,13 +454,8 @@ jobs:
 
             // Check for Codex Review comments (only P0/P1 block/trigger)
             const codexComments = relevantComments.filter(comment => {
-              const userLogin = comment.user?.login?.toLowerCase() || '';
+              if (!isCodexComment(comment)) return false;
               const body = comment.body || '';
-              const isCodex = userLogin.includes('codex') ||
-                              userLogin === 'chatgpt-codex-connector' ||
-                              body.includes('Codex Review') ||
-                              body.includes('💡 Codex Review');
-              if (!isCodex) return false;
               // Exclude explicit "no issues" summaries
               const isNoIssues = body.includes("Codex Review: Didn't find any major issues.") ||
                                  body.includes("Didn't find any major issues");
@@ -413,6 +470,59 @@ jobs:
             console.log(`Codex high-priority (P0/P1) comments: ${codexHighPriorityComments.length}`);
 
             const hasReviewComments = geminiComments.length > 0 || codexHighPriorityComments.length > 0;
+            console.log(`Has blocking review comments (Gemini high/critical or Codex P0/P1): ${hasReviewComments}`);
+
+            // Detect whether a Codex review has already been requested since the latest commit
+            const reviewRequestCommentsSinceLastCommit = issueComments.filter(comment => {
+              const createdAt = new Date(comment.created_at);
+              if (createdAt <= commentCutoffDate) {
+                return false;
+              }
+              const body = (comment.body || '').toLowerCase();
+              return body.includes('@codex review');
+            });
+
+            const hasReviewRequestSinceLastCommit = reviewRequestCommentsSinceLastCommit.length > 0;
+            console.log(`Codex review requests since last commit: ${reviewRequestCommentsSinceLastCommit.length}`);
+
+            // Detect whether any review (Gemini or Codex) has occurred since the last commit
+            const anyGeminiReview = relevantComments.some(comment => isGeminiComment(comment));
+
+            const codexNoIssuesSummaries = relevantComments.filter(comment => {
+              if (!isCodexComment(comment)) return false;
+              const body = comment.body || '';
+              const isNoIssues = body.includes("Codex Review: Didn't find any major issues.") ||
+                                 body.includes("Didn't find any major issues");
+              return isNoIssues;
+            });
+
+            const hasNoIssuesCodexSummary = codexNoIssuesSummaries.length > 0;
+
+            const hasAnyReviewSinceLastCommit =
+              anyGeminiReview ||
+              geminiComments.length > 0 ||
+              codexComments.length > 0 ||
+              hasNoIssuesCodexSummary;
+
+            const reviewCompletedNoIssues =
+              hasAnyReviewSinceLastCommit &&
+              !hasReviewComments;
+
+            console.log(`Any review since last commit: ${hasAnyReviewSinceLastCommit}`);
+            console.log(`Review completed with no high-priority issues: ${reviewCompletedNoIssues}`);
+
+            // Determine build / review-trigger conditions
+            const buildFailed = hasFailures;
+            const buildSucceededForThisRun = isSuccessfulBuildWorkflowRun && buildCheckSucceeded;
+
+            const shouldRequestReviewFromBuild =
+              buildSucceededForThisRun &&
+              !buildFailed &&
+              !hasReviewComments &&
+              !hasReviewRequestSinceLastCommit;
+
+            console.log(`Build succeeded for this workflow_run: ${buildSucceededForThisRun}`);
+            console.log(`Should request Codex review from build: ${shouldRequestReviewFromBuild}`);
 
             // Determine what action to take
             let commentBody = null;
@@ -423,6 +533,8 @@ jobs:
               commentBody = '@codex fix build failures';
             } else if (hasReviewComments) {
               commentBody = '@codex fix comments';
+            } else if (shouldRequestReviewFromBuild) {
+              commentBody = '@codex review';
             }
 
             if (commentBody) {
@@ -437,6 +549,8 @@ jobs:
                 purpose = 'build-fix';
               } else if (normalizedCommentBodyLower.includes('fix comments')) {
                 purpose = 'comment-fix';
+              } else if (normalizedCommentBodyLower.includes('@codex review')) {
+                purpose = 'review';
               }
 
               const marker = `<!-- codex:${purpose} sha=${headSha} -->`;
@@ -476,6 +590,17 @@ jobs:
                   body: updatedBody
                 });
                 console.log('Codex comment updated successfully.');
+                return;
+              }
+
+              const hasRecentFixCommand = commentsAfterCutoff.some(comment => {
+                const body = (comment.body || '').toLowerCase();
+                return /@codex\s+fix\b/.test(body);
+              });
+
+              // Only block new fix commands if one already exists; allow @codex review
+              if (hasRecentFixCommand && normalizedCommentBodyLower.startsWith('@codex fix')) {
+                console.log('A @codex fix command already exists since the latest commit. Skipping new fix request.');
                 return;
               }
 
@@ -526,7 +651,12 @@ jobs:
               console.log('No action needed. PR looks good!');
             }
 
-            const readyToMerge = !hasFailures && !hasReviewComments && !pr.draft;
+            const readyToMerge = buildCheckSucceeded &&
+              !hasFailures &&
+              reviewCompletedNoIssues &&
+              !pr.draft &&
+              !shouldRequestReviewFromBuild;
+
             core.setOutput('ready', String(readyToMerge));
             core.setOutput('pr', String(pr_number));
             console.log(`Ready for auto-merge: ${readyToMerge}`);
