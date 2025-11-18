@@ -602,10 +602,14 @@ class SpecWorkflowRepository:
         audit = result.scalar_one_or_none()
         timestamp = checked_at or datetime.now(UTC)
         resolved_codex_checked_at = (
-            timestamp if codex_checked_at is _UNSET else codex_checked_at
+            timestamp
+            if codex_checked_at is _UNSET
+            else cast(Optional[datetime], codex_checked_at)
         )
         resolved_github_checked_at = (
-            timestamp if github_checked_at is _UNSET else github_checked_at
+            timestamp
+            if github_checked_at is _UNSET
+            else cast(Optional[datetime], github_checked_at)
         )
         snapshot_payload = (
             None
@@ -641,8 +645,10 @@ class SpecWorkflowRepository:
             audit.github_status = github_status
             audit.notes = notes
             audit.checked_at = timestamp
-            audit.codex_checked_at = resolved_codex_checked_at
-            audit.github_checked_at = resolved_github_checked_at
+            if codex_checked_at is not _UNSET:
+                audit.codex_checked_at = cast(Optional[datetime], codex_checked_at)
+            if github_checked_at is not _UNSET:
+                audit.github_checked_at = cast(Optional[datetime], github_checked_at)
             if codex_message is not _UNSET:
                 audit.codex_message = cast(Optional[str], codex_message)
             if github_message is not _UNSET:
