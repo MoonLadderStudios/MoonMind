@@ -551,6 +551,7 @@ class CommandRunner:
         message = str(exc)
         exc.args = (f"{message} (see {artifact.path})",)
         self._annotate_failure_metadata(exc, artifact)
+
     def _annotate_failure_metadata(
         self, exc: CommandRunnerError, artifact: ArtifactWriteResult
     ) -> None:
