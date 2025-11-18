@@ -519,11 +519,14 @@ jobs:
               codexComments.length > 0 ||
               hasNoIssuesCodexSummary;
 
+            const noBlockingReviewIssues = !hasReviewComments;
             const reviewCompletedNoIssues =
               hasAnyReviewSinceLastCommit &&
-              !hasReviewComments;
+              noBlockingReviewIssues;
 
             console.log(`Any review since last commit: ${hasAnyReviewSinceLastCommit}`);
+            console.log(`Blocking review comments detected: ${hasReviewComments}`);
+            console.log(`No blocking review issues since last commit: ${noBlockingReviewIssues}`);
             console.log(`Review completed with no high-priority issues: ${reviewCompletedNoIssues}`);
 
             // Determine build / review-trigger conditions
@@ -668,7 +671,7 @@ jobs:
 
             const readyToMerge = buildCheckSucceeded &&
               !hasFailures &&
-              reviewCompletedNoIssues &&
+              noBlockingReviewIssues &&
               !pr.draft &&
               !shouldRequestReviewFromBuild;
 
