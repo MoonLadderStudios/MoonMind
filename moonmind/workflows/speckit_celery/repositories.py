@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, func, select
@@ -68,6 +68,16 @@ def _coerce_run_status(
     return models.SpecAutomationRunStatus(str(value))
 
 
+def _coerce_artifact_type(
+    value: models.WorkflowArtifactType | str,
+) -> models.WorkflowArtifactType:
+    """Return the artifact type enum for ``value``."""
+
+    if isinstance(value, models.WorkflowArtifactType):
+        return value
+    return models.WorkflowArtifactType(str(value))
+
+
 class SpecWorkflowRepository:
     """Repository exposing CRUD helpers for workflow runs and related records."""
 
@@ -85,8 +95,10 @@ class SpecWorkflowRepository:
         "codex_logs_path",
         "codex_patch_path",
         "artifacts_path",
+        "current_task_name",
         "started_at",
         "finished_at",
+        "completed_at",
     }
 
     _UPDATABLE_VOLUME_FIELDS = {
@@ -112,21 +124,51 @@ class SpecWorkflowRepository:
         *,
         feature_key: str,
         created_by: Optional[UUID] = None,
+        requested_by_user_id: Optional[UUID] = None,
+        repository: Optional[str] = None,
+        branch_name: Optional[str] = None,
+        pr_url: Optional[str] = None,
         artifacts_path: Optional[str] = None,
         celery_chain_id: Optional[str] = None,
         status: models.SpecWorkflowRunStatus = models.SpecWorkflowRunStatus.PENDING,
         phase: models.SpecWorkflowRunPhase = models.SpecWorkflowRunPhase.DISCOVER,
+        codex_task_id: Optional[str] = None,
+        codex_queue: Optional[str] = None,
+        codex_volume: Optional[str] = None,
+        codex_preflight_status: Optional[models.CodexPreflightStatus] = None,
+        codex_preflight_message: Optional[str] = None,
+        codex_logs_path: Optional[str] = None,
+        codex_patch_path: Optional[str] = None,
+        current_task_name: Optional[models.SpecWorkflowTaskName] = None,
+        started_at: Optional[datetime] = None,
+        finished_at: Optional[datetime] = None,
+        completed_at: Optional[datetime] = None,
     ) -> models.SpecWorkflowRun:
-        """Create a new workflow run row."""
+        """Create a new workflow run row with the supplied metadata."""
 
         run = models.SpecWorkflowRun(
             id=uuid4(),
             feature_key=feature_key,
             created_by=created_by,
+            requested_by_user_id=requested_by_user_id,
+            repository=repository,
+            branch_name=branch_name,
+            pr_url=pr_url,
             artifacts_path=artifacts_path,
             status=status,
             phase=phase,
             celery_chain_id=celery_chain_id,
+            codex_task_id=codex_task_id,
+            codex_queue=codex_queue,
+            codex_volume=codex_volume,
+            codex_preflight_status=codex_preflight_status,
+            codex_preflight_message=codex_preflight_message,
+            codex_logs_path=codex_logs_path,
+            codex_patch_path=codex_patch_path,
+            current_task_name=current_task_name,
+            started_at=started_at,
+            finished_at=finished_at,
+            completed_at=completed_at,
         )
         self._session.add(run)
         await self._session.flush()
@@ -449,6 +491,8 @@ class SpecWorkflowRepository:
         payload: Optional[dict[str, object]] = None,
         started_at: Optional[datetime] = None,
         finished_at: Optional[datetime] = None,
+        message: Optional[str] = None,
+        artifact_refs: Optional[Sequence[str]] = None,
     ) -> models.SpecWorkflowTaskState:
         """Create or update a task state for the given run/task/attempt."""
 
@@ -471,6 +515,8 @@ class SpecWorkflowRepository:
                 payload=payload or {},
                 started_at=started_at,
                 finished_at=finished_at,
+                message=message,
+                artifact_refs=list(artifact_refs or []),
                 created_at=now,
                 updated_at=now,
             )
@@ -483,6 +529,10 @@ class SpecWorkflowRepository:
                 state.started_at = started_at
             if finished_at is not None:
                 state.finished_at = finished_at
+            if message is not None:
+                state.message = message
+            if artifact_refs is not None:
+                state.artifact_refs = list(artifact_refs)
             state.updated_at = now
 
         await self._session.flush()
@@ -537,6 +587,11 @@ class SpecWorkflowRepository:
         github_status: models.GitHubCredentialStatus,
         notes: Optional[str] = None,
         checked_at: Optional[datetime] = None,
+        codex_checked_at: datetime | None | object = _UNSET,
+        github_checked_at: datetime | None | object = _UNSET,
+        codex_message: str | None | object = _UNSET,
+        github_message: str | None | object = _UNSET,
+        environment_snapshot: Mapping[str, Any] | None | object = _UNSET,
     ) -> models.WorkflowCredentialAudit:
         """Persist credential audit data for a workflow run."""
 
@@ -546,6 +601,17 @@ class SpecWorkflowRepository:
         result = await self._session.execute(stmt)
         audit = result.scalar_one_or_none()
         timestamp = checked_at or datetime.now(UTC)
+        resolved_codex_checked_at = (
+            timestamp if codex_checked_at is _UNSET else codex_checked_at
+        )
+        resolved_github_checked_at = (
+            timestamp if github_checked_at is _UNSET else github_checked_at
+        )
+        snapshot_payload = (
+            None
+            if environment_snapshot in (_UNSET, None)
+            else dict(environment_snapshot)
+        )
 
         if audit is None:
             audit = models.WorkflowCredentialAudit(
@@ -555,6 +621,15 @@ class SpecWorkflowRepository:
                 github_status=github_status,
                 notes=notes,
                 checked_at=timestamp,
+                codex_checked_at=resolved_codex_checked_at,
+                github_checked_at=resolved_github_checked_at,
+                codex_message=None
+                if codex_message is _UNSET
+                else cast(Optional[str], codex_message),
+                github_message=None
+                if github_message is _UNSET
+                else cast(Optional[str], github_message),
+                environment_snapshot=snapshot_payload,
             )
             self._session.add(audit)
         else:
@@ -562,6 +637,14 @@ class SpecWorkflowRepository:
             audit.github_status = github_status
             audit.notes = notes
             audit.checked_at = timestamp
+            audit.codex_checked_at = resolved_codex_checked_at
+            audit.github_checked_at = resolved_github_checked_at
+            if codex_message is not _UNSET:
+                audit.codex_message = cast(Optional[str], codex_message)
+            if github_message is not _UNSET:
+                audit.github_message = cast(Optional[str], github_message)
+            if environment_snapshot is not _UNSET:
+                audit.environment_snapshot = snapshot_payload
 
         await self._session.flush()
         return audit
@@ -573,27 +656,42 @@ class SpecWorkflowRepository:
         artifact_type: models.WorkflowArtifactType,
         path: str,
         created_at: Optional[datetime] = None,
+        content_type: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+        digest: Optional[str] = None,
     ) -> models.WorkflowArtifact:
-        """Store a new artifact reference for the workflow run."""
+        """Store or update an artifact reference for the workflow run."""
 
+        artifact_type_enum = _coerce_artifact_type(artifact_type)
         existing_stmt = select(models.WorkflowArtifact).where(
             models.WorkflowArtifact.workflow_run_id == workflow_run_id,
-            models.WorkflowArtifact.artifact_type == artifact_type,
+            models.WorkflowArtifact.artifact_type == artifact_type_enum,
             models.WorkflowArtifact.path == path,
         )
         existing_result = await self._session.execute(existing_stmt)
         artifact = existing_result.scalar_one_or_none()
-        if artifact is not None:
-            return artifact
-
-        artifact = models.WorkflowArtifact(
-            id=uuid4(),
-            workflow_run_id=workflow_run_id,
-            artifact_type=artifact_type,
-            path=path,
-            created_at=created_at or datetime.now(UTC),
-        )
-        self._session.add(artifact)
+        now = datetime.now(UTC)
+        if artifact is None:
+            artifact = models.WorkflowArtifact(
+                id=uuid4(),
+                workflow_run_id=workflow_run_id,
+                artifact_type=artifact_type_enum,
+                path=path,
+                content_type=content_type,
+                size_bytes=size_bytes,
+                digest=digest,
+                created_at=created_at or now,
+            )
+            self._session.add(artifact)
+        else:
+            if content_type is not None:
+                artifact.content_type = content_type
+            if size_bytes is not None:
+                artifact.size_bytes = size_bytes
+            if digest is not None:
+                artifact.digest = digest
+            if created_at is not None:
+                artifact.created_at = created_at
         await self._session.flush()
         return artifact
 
@@ -602,27 +700,18 @@ class SpecWorkflowRepository:
         workflow_run_id: UUID,
         artifacts: Iterable[tuple[models.WorkflowArtifactType, str]],
     ) -> Sequence[models.WorkflowArtifact]:
-        """Bulk insert artifacts returning the persisted objects."""
+        """Persist multiple artifacts, returning the resulting models."""
 
-        now = datetime.now(UTC)
-        new_artifacts = [
-            models.WorkflowArtifact(
-                id=uuid4(),
-                workflow_run_id=workflow_run_id,
-                artifact_type=artifact_type,
-                path=path,
-                created_at=now,
+        created: list[models.WorkflowArtifact] = []
+        for artifact_type, path in artifacts:
+            created.append(
+                await self.add_artifact(
+                    workflow_run_id=workflow_run_id,
+                    artifact_type=artifact_type,
+                    path=path,
+                )
             )
-            for artifact_type, path in artifacts
-        ]
-
-        if not new_artifacts:
-            return []
-
-        self._session.add_all(new_artifacts)
-
-        await self._session.flush()
-        return new_artifacts
+        return created
 
     async def list_artifacts(
         self, workflow_run_id: UUID
