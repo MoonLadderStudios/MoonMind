@@ -211,16 +211,12 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            artifacts = getattr(exc, "artifacts", None)
-            if not artifacts:
-                self._persist_failure_artifact(
-                    log_name=log_name,
-                    command=command,
-                    exc=exc,
-                    log_lines=fallback_lines,
-                )
-            else:
-                self._annotate_failure_metadata(exc, artifacts[0])
+            self._persist_failure_artifact(
+                log_name=log_name,
+                command=command,
+                exc=exc,
+                log_lines=fallback_lines,
+            )
             raise
         return StepResult(
             message="Build completed",
@@ -253,16 +249,12 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            artifacts = getattr(exc, "artifacts", None)
-            if not artifacts:
-                self._persist_failure_artifact(
-                    log_name=log_name,
-                    command=command,
-                    exc=exc,
-                    log_lines=fallback_lines,
-                )
-            else:
-                self._annotate_failure_metadata(exc, artifacts[0])
+            self._persist_failure_artifact(
+                log_name=log_name,
+                command=command,
+                exc=exc,
+                log_lines=fallback_lines,
+            )
             raise
         timeout = int(parameters.get("restartTimeoutSeconds", 0))
         message = "Restart command issued"
