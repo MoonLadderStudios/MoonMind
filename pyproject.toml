@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
 license = "MIT"
+authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
 packages = [{ include = "moonmind" }]
 
 [tool.poetry.dependencies]
@@ -83,6 +84,11 @@ line-length = 88
 
 [tool.ruff.lint]
 extend-ignore = ["E402", "E722", "F841"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks integration tests that exercise orchestrator workflows.",
+]
 
 [tool.pre-commit]
 repos = []

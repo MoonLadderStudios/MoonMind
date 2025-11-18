@@ -84,9 +84,16 @@ The shared `api_service` image now includes the Codex CLI and GitHub Spec Kit CL
 Release notes should record the versions shipped with each published image so operators know when the automation toolchain changed.
 
 ## Development
-MoonMind relies on `pre-commit` to enforce formatting and linting. Install the hooks after cloning:
+
+### Setting Up Pre-commit
+
+MoonMind relies on `pre-commit` to enforce formatting and linting. Install pre-commit and set up the hooks after cloning:
 
 ```bash
+# Install pre-commit (if not already installed)
+pip install pre-commit
+
+# Install the git hooks
 pre-commit install
 ```
 
@@ -96,6 +103,13 @@ Attempting to commit with style violations will fail:
 $ git commit -am "msg"
 isort....................................................................Failed
 ```
+
+To manually run pre-commit checks on all files:
+```bash
+pre-commit run --all-files
+```
+
+**Note:** All test scripts (`test-unit.ps1`, `test-integration.ps1`, `test-e2e.ps1`) automatically run pre-commit checks before executing tests.
 
 ## Design Principles
 1. One-click deployment with smart defaults
@@ -529,12 +543,19 @@ While LangChain's direct support for the newest Gemini models might vary, MoonMi
 
 ## Running Tests
 
+All test scripts now include automatic pre-commit checks (formatting and linting) before running tests. If formatting issues are detected, the script will fail and prompt you to fix them.
+
 ### Unit Tests
 
 To run unit tests:
 ```powershell
 .\tools\test-unit.ps1
 ```
+
+This script will:
+1. Run `pre-commit` checks (black, isort, ruff)
+2. Build the test Docker container
+3. Execute all unit tests
 
 ### Confluence Integration Tests
 

@@ -10,6 +10,13 @@ jobs/
 .env-backup
 .openhands-state-data/
 
+# Codex user-specific data (sessions, logs, auth, history)
+.codex/sessions/
+.codex/log/
+.codex/history.jsonl
+.codex/auth.json
+# Note: .codex/config.toml and .codex/prompts/ should be committed (project config)
+
 # Build artifacts
 build/
 dist/

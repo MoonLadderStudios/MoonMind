@@ -10,6 +10,29 @@ from typing import BinaryIO
 from uuid import UUID
 
 
+def _resolve_root(base: Path, configured: str | os.PathLike[str] | None) -> Path:
+    """Return a safe artifact root based on ``configured`` or ``base``."""
+
+    root = base.resolve()
+    if configured in (None, ""):
+        return root
+
+    candidate = Path(configured)
+    if not candidate.is_absolute():
+        candidate = (root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ArtifactPathError(
+            "Configured artifact root escapes the allowed base directory"
+        ) from exc
+
+    return candidate
+
+
 class ArtifactStorageError(Exception):
     """Base class for storage related errors."""
 
@@ -27,11 +50,20 @@ class ArtifactWriteResult:
     checksum: str
 
 
+def resolve_artifact_root(
+    default_base: os.PathLike[str] | str, override: str | os.PathLike[str] | None
+) -> Path:
+    """Return a sanitized artifact root."""
+
+    base = Path(default_base)
+    return _resolve_root(base, override)
+
+
 class ArtifactStorage:
     """Manage orchestrator artifact directories under a configurable root."""
 
     def __init__(self, base_path: os.PathLike[str] | str) -> None:
-        self._base_path = Path(base_path)
+        self._base_path = _resolve_root(Path(base_path), None)
 
     @property
     def base_path(self) -> Path:
@@ -153,4 +185,5 @@ __all__ = [
     "ArtifactStorageError",
     "ArtifactPathError",
     "ArtifactWriteResult",
+    "resolve_artifact_root",
 ]

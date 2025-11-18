@@ -31,8 +31,7 @@ concurrency:
         github.event.workflow_run.pull_requests[0].number) ||
       github.event.workflow_run.head_sha ||
       github.event.pull_request.head.sha ||
-      github.event.workflow_run.id ||
-      github.run_id
+      'global'
     }}
   cancel-in-progress: true
 
@@ -608,16 +607,28 @@ jobs:
                 return;
               }
 
-              const hasRecentFixCommand = commentsAfterCutoff.some(comment => {
-                const body = (comment.body || '').toLowerCase();
-                return /@codex\s+fix\b/.test(body);
-              });
+            const hasRecentFixCommand = commentsAfterCutoff.some(comment => {
+              const body = (comment.body || '').toLowerCase();
+              return /@codex\s+fix\b/.test(body);
+            });
 
-              // Only block new fix commands if one already exists; allow @codex review
-              if (hasRecentFixCommand && normalizedCommentBodyLower.startsWith('@codex fix')) {
-                console.log('A @codex fix command already exists since the latest commit. Skipping new fix request.');
-                return;
-              }
+            // Only block new fix commands if one already exists; allow @codex review
+            if (hasRecentFixCommand && normalizedCommentBodyLower.startsWith('@codex fix')) {
+              console.log('A @codex fix command already exists since the latest commit. Skipping new fix request.');
+              return;
+            }
+
+            // Additional check: Prevent duplicate fix commands for the same exact issue on the same commit
+            const exactMatchInRecentComments = commentsAfterCutoff.some(comment => {
+              const body = (comment.body || '').toLowerCase();
+              const cleanBody = body.replace(/<!--[^>]*-->/g, '').trim();
+              return cleanBody === normalizedCommentBodyLower;
+            });
+
+            if (exactMatchInRecentComments) {
+              console.log(`Exact match found for "${normalizedCommentBody}" since latest commit. Skipping duplicate.`);
+              return;
+            }
 
               const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
               const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
