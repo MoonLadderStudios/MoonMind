@@ -520,6 +520,8 @@ jobs:
               hasNoIssuesCodexSummary;
 
             const noBlockingReviewIssues = !hasReviewComments;
+            // Track whether *any* review activity has ever occurred on the PR so we
+            // never auto-merge something that has not been reviewed at least once.
             const hasAnyReviewEver = allComments.some(comment =>
               isGeminiComment(comment) || isCodexComment(comment)
             );
@@ -532,6 +534,13 @@ jobs:
             console.log(`No blocking review issues since last commit: ${noBlockingReviewIssues}`);
             console.log(`Any historical review comments detected: ${hasAnyReviewEver}`);
             console.log(`Review gate satisfied: ${reviewGateSatisfied}`);
+            if (!reviewGateSatisfied) {
+              if (!noBlockingReviewIssues) {
+                console.log('Review gate blocking: high-priority review issues remain unresolved.');
+              } else if (!hasAnyReviewSinceLastCommit && !hasAnyReviewEver) {
+                console.log('Review gate blocking: no review activity has occurred on this PR yet.');
+              }
+            }
 
             // Determine build / review-trigger conditions
             const buildFailed = hasFailures;
