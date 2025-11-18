@@ -20,6 +20,8 @@ from moonmind.workflows.speckit_celery.serializers import (
     serialize_task_summary,
 )
 
+pytestmark = pytest.mark.speckit
+
 
 def _make_state(
     *,
