@@ -637,3 +637,45 @@ async def test_list_codex_shard_health_includes_volume_and_preflight():
             assert entry.latest_preflight_message == "Codex login status check passed"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_upsert_credential_audit_loadable_via_repository():
+    """Credential audits should be retrievable via get_run relationships."""
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with async_session() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            run = models.SpecWorkflowRun(
+                id=uuid4(),
+                feature_key="credential-audit-loadable",
+                status=models.SpecWorkflowRunStatus.PENDING,
+                phase=models.SpecWorkflowRunPhase.DISCOVER,
+            )
+            session.add(run)
+            await session.commit()
+
+            await repo.upsert_credential_audit(
+                workflow_run_id=run.id,
+                codex_status=models.CodexCredentialStatus.VALID,
+                github_status=models.GitHubCredentialStatus.INVALID,
+                notes="GitHub token expired",
+            )
+            await session.commit()
+
+            refreshed = await repo.get_run(run.id, with_relations=True)
+            assert refreshed is not None
+            assert refreshed.credential_audit is not None
+            assert (
+                refreshed.credential_audit.github_status
+                is models.GitHubCredentialStatus.INVALID
+            )
+            assert refreshed.credential_audit.notes == "GitHub token expired"
+    finally:
+        await engine.dispose()
