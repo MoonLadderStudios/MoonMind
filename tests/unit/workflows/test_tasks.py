@@ -21,6 +21,9 @@ from moonmind.workflows.speckit_celery.serializers import (
 )
 
 
+pytestmark = pytest.mark.speckit
+
+
 def _make_state(
     *,
     workflow_run_id,
