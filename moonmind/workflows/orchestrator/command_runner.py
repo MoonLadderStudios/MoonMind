@@ -103,7 +103,7 @@ class CommandRunner:
             try:
                 completed = self._execute_command(command, cwd=workspace)
             except CommandRunnerError as exc:
-                self._persist_failure_artifact(
+                self._ensure_failure_artifact(
                     log_name=log_name,
                     command=command,
                     exc=exc,
@@ -211,7 +211,7 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            self._persist_failure_artifact(
+            self._ensure_failure_artifact(
                 log_name=log_name,
                 command=command,
                 exc=exc,
@@ -249,7 +249,7 @@ class CommandRunner:
                 log_name=log_name,
             )
         except CommandRunnerError as exc:
-            self._persist_failure_artifact(
+            self._ensure_failure_artifact(
                 log_name=log_name,
                 command=command,
                 exc=exc,
@@ -512,6 +512,32 @@ class CommandRunner:
         )
         self._attach_failure_artifact(exc, artifact)
         return artifact
+
+    def _ensure_failure_artifact(
+        self,
+        *,
+        log_name: str,
+        command: Sequence[str],
+        exc: CommandRunnerError,
+        log_lines: Sequence[str] | None = None,
+    ) -> ArtifactWriteResult:
+        """Guarantee ``exc`` references the log artifact for ``log_name``."""
+
+        log_basename = Path(log_name).name
+        existing = [
+            artifact
+            for artifact in getattr(exc, "artifacts", [])
+            if Path(artifact.path).name == log_basename
+        ]
+        if existing:
+            self._annotate_failure_metadata(exc, existing[0])
+            return existing[0]
+        return self._persist_failure_artifact(
+            log_name=log_name,
+            command=command,
+            exc=exc,
+            log_lines=log_lines,
+        )
 
     def _attach_failure_artifact(
         self, exc: CommandRunnerError, artifact: ArtifactWriteResult
