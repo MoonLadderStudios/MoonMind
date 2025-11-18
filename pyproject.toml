@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
 license = "MIT"
+authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
 packages = [{ include = "moonmind" }]
 
 [tool.poetry.dependencies]
