@@ -623,12 +623,16 @@ class SpecWorkflowRepository:
                 checked_at=timestamp,
                 codex_checked_at=resolved_codex_checked_at,
                 github_checked_at=resolved_github_checked_at,
-                codex_message=None
-                if codex_message is _UNSET
-                else cast(Optional[str], codex_message),
-                github_message=None
-                if github_message is _UNSET
-                else cast(Optional[str], github_message),
+                codex_message=(
+                    None
+                    if codex_message is _UNSET
+                    else cast(Optional[str], codex_message)
+                ),
+                github_message=(
+                    None
+                    if github_message is _UNSET
+                    else cast(Optional[str], github_message)
+                ),
                 environment_snapshot=snapshot_payload,
             )
             self._session.add(audit)
