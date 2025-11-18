@@ -240,7 +240,7 @@ def serialize_run(
             str(run.requested_by_user_id) if run.requested_by_user_id else None
         ),
         createdBy=str(run.created_by) if run.created_by else None,
-        currentTaskName=getattr(run.current_task_name, "value", run.current_task_name),
+        currentTaskName=getattr(run.current_task_name, "value", None),
         startedAt=_serialize_datetime(run.started_at),
         finishedAt=_serialize_datetime(run.finished_at),
         completedAt=_serialize_datetime(run.completed_at),

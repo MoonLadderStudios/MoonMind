@@ -94,6 +94,7 @@ async def _create_workflow_run(
     feature_key: str,
     *,
     created_by: Optional[UUID] = None,
+    repository: Optional[str] = None,
 ) -> models.SpecWorkflowRun:
     async with get_async_session_context() as session:
         repo = SpecWorkflowRepository(session)
@@ -104,6 +105,7 @@ async def _create_workflow_run(
         run = await repo.create_run(
             feature_key=feature_key,
             created_by=created_by,
+            repository=repository or settings.spec_workflow.github_repository,
         )
         artifacts_root = Path(settings.spec_workflow.artifacts_root)
         artifacts_dir = artifacts_root / str(run.id)
@@ -132,12 +134,17 @@ async def trigger_spec_workflow_run(
     feature_key: Optional[str] = None,
     created_by: Optional[UUID] = None,
     force_phase: Optional[str] = None,
+    repository: Optional[str] = None,
 ) -> TriggeredWorkflow:
     """Create a workflow run and dispatch the Celery chain."""
 
     effective_feature = feature_key or settings.spec_workflow.default_feature_key
 
-    run = await _create_workflow_run(effective_feature, created_by=created_by)
+    run = await _create_workflow_run(
+        effective_feature,
+        created_by=created_by,
+        repository=repository or settings.spec_workflow.github_repository,
+    )
 
     task_chain = chain(
         discover_next_phase.s(
