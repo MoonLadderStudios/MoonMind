@@ -450,12 +450,15 @@ jobs:
             };
 
             const isCodexComment = (comment) => {
-              const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
+              const hasReviewHeading = body.includes('Codex Review');
+              if (!hasReviewHeading) {
+                return false;
+              }
+
+              const userLogin = comment.user?.login?.toLowerCase() || '';
               return userLogin.includes('codex') ||
-                     userLogin === 'chatgpt-codex-connector' ||
-                     body.includes('Codex Review') ||
-                     body.includes('💡 Codex Review');
+                     userLogin === 'chatgpt-codex-connector';
             };
 
             // Check for Gemini Code Assist comments (High or Critical)
