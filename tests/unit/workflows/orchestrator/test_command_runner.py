@@ -243,7 +243,9 @@ def test_build_failure_without_output_uses_command(tmp_path, monkeypatch):
     monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
-        runner.build({"command": ["docker", "compose", "build"], "logArtifact": "build.log"})
+        runner.build(
+            {"command": ["docker", "compose", "build"], "logArtifact": "build.log"}
+        )
 
     artifact = excinfo.value.artifacts[0]
     log_path = storage.ensure_run_directory(run_id) / artifact.path
@@ -276,16 +278,18 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     monkeypatch.setattr(CommandRunner, "_invoke_command", fail_invoke)
 
     with pytest.raises(CommandExecutionError) as excinfo:
-        runner.restart({
-            "command": [
-                "docker",
-                "compose",
-                "up",
-                "--no-deps",
-                profile.compose_service,
-            ],
-            "logArtifact": "restart.log",
-        })
+        runner.restart(
+            {
+                "command": [
+                    "docker",
+                    "compose",
+                    "up",
+                    "--no-deps",
+                    profile.compose_service,
+                ],
+                "logArtifact": "restart.log",
+            }
+        )
 
     artifact = excinfo.value.artifacts[0]
     log_path = storage.ensure_run_directory(run_id) / artifact.path
@@ -379,7 +383,9 @@ def test_patch_command_failure_persists_log(tmp_path, monkeypatch):
     monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
 
     with pytest.raises(CommandExecutionError) as excinfo:
-        runner.patch({"commands": [["apply", "fix"]], "logArtifact": "patch.log"})
+        runner.patch(
+            {"commands": [["apply", "fix"]], "logArtifact": "patch.log"}
+        )
 
     error = excinfo.value
     assert error.artifacts, "patch failure should include log artifacts"

@@ -10,10 +10,7 @@ import pytest
 from api_service.db import models as db_models
 from moonmind.workflows.orchestrator import tasks
 from moonmind.workflows.orchestrator.command_runner import CommandExecutionError
-from moonmind.workflows.orchestrator.storage import (
-    ArtifactStorage,
-    ArtifactWriteResult,
-)
+from moonmind.workflows.orchestrator.storage import ArtifactStorage, ArtifactWriteResult
 
 
 def test_build_storage_for_run_uses_persisted_directory(tmp_path):
@@ -186,9 +183,7 @@ async def test_record_plan_failure_creates_fallback_log(tmp_path):
 
     repo = StubRepo()
 
-    await tasks._record_plan_failure(
-        repo, run, step, error, storage=storage
-    )
+    await tasks._record_plan_failure(repo, run, step, error, storage=storage)
 
     assert captured.added, "fallback artifact should be saved"
     artifact = error.artifacts[0]
