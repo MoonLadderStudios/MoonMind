@@ -753,6 +753,8 @@ class SpecWorkflowRun(Base):
         "WorkflowCredentialAudit",
         back_populates="workflow_run",
         cascade="all, delete-orphan",
+        primaryjoin=lambda: SpecWorkflowRun.id
+        == WorkflowCredentialAudit.workflow_run_id,
         foreign_keys=lambda: [WorkflowCredentialAudit.workflow_run_id],
         uselist=False,
     )
