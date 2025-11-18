@@ -520,14 +520,18 @@ jobs:
               hasNoIssuesCodexSummary;
 
             const noBlockingReviewIssues = !hasReviewComments;
-            const reviewCompletedNoIssues =
-              hasAnyReviewSinceLastCommit &&
-              noBlockingReviewIssues;
+            const hasAnyReviewEver = allComments.some(comment =>
+              isGeminiComment(comment) || isCodexComment(comment)
+            );
+            const reviewGateSatisfied =
+              noBlockingReviewIssues &&
+              (hasAnyReviewSinceLastCommit || hasAnyReviewEver);
 
             console.log(`Any review since last commit: ${hasAnyReviewSinceLastCommit}`);
             console.log(`Blocking review comments detected: ${hasReviewComments}`);
             console.log(`No blocking review issues since last commit: ${noBlockingReviewIssues}`);
-            console.log(`Review completed with no high-priority issues: ${reviewCompletedNoIssues}`);
+            console.log(`Any historical review comments detected: ${hasAnyReviewEver}`);
+            console.log(`Review gate satisfied: ${reviewGateSatisfied}`);
 
             // Determine build / review-trigger conditions
             const buildFailed = hasFailures;
@@ -671,7 +675,7 @@ jobs:
 
             const readyToMerge = buildCheckSucceeded &&
               !hasFailures &&
-              noBlockingReviewIssues &&
+              reviewGateSatisfied &&
               !pr.draft &&
               !shouldRequestReviewFromBuild;
 
