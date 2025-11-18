@@ -17,6 +17,7 @@ from api_service.db.models import (
     OrchestratorRunPriority,
     OrchestratorRunStatus,
     OrchestratorTaskState,
+    SpecWorkflowTaskName,
 )
 from moonmind.workflows.speckit_celery import models
 
@@ -26,11 +27,13 @@ class WorkflowTaskStateModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Optional[str] = Field(None, alias="id")
+    id: Optional[UUID] = Field(None, alias="id")
     task_name: str = Field(..., alias="taskName")
     status: models.SpecWorkflowTaskStatus = Field(..., alias="status")
     attempt: int = Field(..., alias="attempt")
     payload: dict[str, Any] | None = Field(None, alias="payload")
+    message: Optional[str] = Field(None, alias="message")
+    artifact_paths: list[str] = Field(default_factory=list, alias="artifactPaths")
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
     created_at: datetime | None = Field(None, alias="createdAt")
@@ -55,9 +58,12 @@ class WorkflowArtifactModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Optional[str] = Field(None, alias="id")
+    id: Optional[UUID] = Field(None, alias="id")
     artifact_type: models.WorkflowArtifactType = Field(..., alias="artifactType")
     path: str = Field(..., alias="path")
+    content_type: Optional[str] = Field(None, alias="contentType")
+    size_bytes: Optional[int] = Field(None, alias="sizeBytes")
+    digest: Optional[str] = Field(None, alias="digest")
     created_at: datetime | None = Field(None, alias="createdAt")
 
 
@@ -81,6 +87,7 @@ class SpecWorkflowRunModel(BaseModel):
     feature_key: str = Field(..., alias="featureKey")
     status: models.SpecWorkflowRunStatus = Field(..., alias="status")
     phase: models.SpecWorkflowRunPhase = Field(..., alias="phase")
+    repository: Optional[str] = Field(None, alias="repository")
     branch_name: Optional[str] = Field(None, alias="branchName")
     pr_url: Optional[str] = Field(None, alias="prUrl")
     codex_task_id: Optional[str] = Field(None, alias="codexTaskId")
@@ -93,9 +100,14 @@ class SpecWorkflowRunModel(BaseModel):
     codex_logs_path: Optional[str] = Field(None, alias="codexLogsPath")
     codex_patch_path: Optional[str] = Field(None, alias="codexPatchPath")
     celery_chain_id: Optional[str] = Field(None, alias="celeryChainId")
+    requested_by: Optional[UUID] = Field(None, alias="requestedBy")
     created_by: Optional[UUID] = Field(None, alias="createdBy")
+    current_task_name: Optional[SpecWorkflowTaskName] = Field(
+        None, alias="currentTaskName"
+    )
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
     artifacts_path: Optional[str] = Field(None, alias="artifactsPath")
     created_at: datetime | None = Field(None, alias="createdAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
@@ -116,11 +128,15 @@ class CreateWorkflowRunRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    repository: str = Field(
+        ..., alias="repository", pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    )
     feature_key: Optional[str] = Field(None, alias="featureKey")
     force_phase: Optional[Literal["discover", "submit", "apply", "publish"]] = Field(
         None, alias="forcePhase"
     )
     created_by: Optional[UUID] = Field(None, alias="createdBy")
+    notes: Optional[str] = Field(None, alias="notes", max_length=1024)
 
 
 class WorkflowRunCollectionResponse(BaseModel):
@@ -193,11 +209,21 @@ class CodexPreflightResultModel(BaseModel):
     message: Optional[str] = Field(None, alias="message")
 
 
+class RetryWorkflowMode(str, enum.Enum):
+    """Retry semantics supported by the workflow API."""
+
+    RESUME_FAILED_TASK = "resume_failed_task"
+    RESTART_FROM_DISCOVERY = "restart_from_discovery"
+
+
 class RetryWorkflowRunRequest(BaseModel):
     """Request payload for retrying a failed workflow run."""
 
     model_config = ConfigDict(populate_by_name=True)
 
+    mode: RetryWorkflowMode = Field(
+        RetryWorkflowMode.RESUME_FAILED_TASK, alias="mode"
+    )
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
 
 
@@ -439,6 +465,7 @@ __all__ = [
     "CodexShardListResponse",
     "CodexPreflightRequest",
     "CodexPreflightResultModel",
+    "RetryWorkflowMode",
     "RetryWorkflowRunRequest",
     "OrchestratorApprovalStatus",
     "OrchestratorPlanStepDefinition",

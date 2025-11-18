@@ -23,6 +23,8 @@ class SerializedTaskState(TypedDict, total=False):
     status: str
     attempt: int
     payload: dict[str, Any]
+    message: str | None
+    artifactPaths: list[str]
     startedAt: str | None
     finishedAt: str | None
     createdAt: str | None
@@ -46,6 +48,9 @@ class SerializedArtifact(TypedDict):
     id: str
     artifactType: str
     path: str
+    contentType: str | None
+    sizeBytes: int | None
+    digest: str | None
     createdAt: str | None
 
 
@@ -65,6 +70,7 @@ class SerializedRun(TypedDict, total=False):
     featureKey: str
     status: str
     phase: str
+    repository: str | None
     branchName: str | None
     prUrl: str | None
     codexTaskId: str | None
@@ -75,9 +81,12 @@ class SerializedRun(TypedDict, total=False):
     codexLogsPath: str | None
     codexPatchPath: str | None
     celeryChainId: str | None
+    requestedBy: str | None
     createdBy: str | None
+    currentTaskName: str | None
     startedAt: str | None
     finishedAt: str | None
+    completedAt: str | None
     artifactsPath: str | None
     createdAt: str | None
     updatedAt: str | None
@@ -104,6 +113,8 @@ def serialize_task_state(state: models.SpecWorkflowTaskState) -> SerializedTaskS
         status=state.status.value,
         attempt=state.attempt,
         payload=dict(state.payload or {}),
+        message=state.message,
+        artifactPaths=list(state.artifact_refs or []),
         startedAt=_serialize_datetime(state.started_at),
         finishedAt=_serialize_datetime(state.finished_at),
         createdAt=_serialize_datetime(state.created_at),
@@ -179,6 +190,9 @@ def serialize_artifact(artifact: models.WorkflowArtifact) -> SerializedArtifact:
         id=str(artifact.id),
         artifactType=artifact.artifact_type.value,
         path=artifact.path,
+        contentType=artifact.content_type,
+        sizeBytes=artifact.size_bytes,
+        digest=artifact.digest,
         createdAt=_serialize_datetime(artifact.created_at),
     )
 
@@ -211,6 +225,7 @@ def serialize_run(
         featureKey=run.feature_key,
         status=run.status.value,
         phase=run.phase.value,
+        repository=run.repository,
         branchName=run.branch_name,
         prUrl=run.pr_url,
         codexTaskId=run.codex_task_id,
@@ -221,9 +236,14 @@ def serialize_run(
         codexLogsPath=run.codex_logs_path,
         codexPatchPath=run.codex_patch_path,
         celeryChainId=run.celery_chain_id,
+        requestedBy=(
+            str(run.requested_by_user_id) if run.requested_by_user_id else None
+        ),
         createdBy=str(run.created_by) if run.created_by else None,
+        currentTaskName=getattr(run.current_task_name, "value", run.current_task_name),
         startedAt=_serialize_datetime(run.started_at),
         finishedAt=_serialize_datetime(run.finished_at),
+        completedAt=_serialize_datetime(run.completed_at),
         artifactsPath=run.artifacts_path,
         createdAt=_serialize_datetime(run.created_at),
         updatedAt=_serialize_datetime(run.updated_at),
