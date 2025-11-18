@@ -303,9 +303,7 @@ def test_restart_failure_without_output_uses_command(tmp_path, monkeypatch):
     assert error.metadata and error.metadata["log"].endswith("restart.log")
 
 
-def test_build_failure_from_subprocess_persists_combined_output(
-    tmp_path, monkeypatch
-):
+def test_build_failure_from_subprocess_persists_combined_output(tmp_path, monkeypatch):
     """Docker build failures should emit stdout and stderr before raising."""
 
     profile = _make_profile(tmp_path)
@@ -386,9 +384,7 @@ def test_patch_command_failure_persists_log(tmp_path, monkeypatch):
     monkeypatch.setattr(CommandRunner, "_execute_command", fail_execute)
 
     with pytest.raises(CommandExecutionError) as excinfo:
-        runner.patch(
-            {"commands": [["apply", "fix"]], "logArtifact": "patch.log"}
-        )
+        runner.patch({"commands": [["apply", "fix"]], "logArtifact": "patch.log"})
 
     error = excinfo.value
     assert error.artifacts, "patch failure should include log artifacts"
