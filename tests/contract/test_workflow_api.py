@@ -24,7 +24,6 @@ from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
 from moonmind.workflows.speckit_celery import tasks as workflow_tasks
 
-
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 

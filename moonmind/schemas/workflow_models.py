@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import enum
+import re
 from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api_service.db.models import (
     OrchestratorPlanOrigin,
@@ -20,6 +21,24 @@ from api_service.db.models import (
     SpecWorkflowTaskName,
 )
 from moonmind.workflows.speckit_celery import models
+
+_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _validate_repository_slug(value: str) -> str:
+    """Ensure repository strings avoid traversal sequences like ``../``."""
+
+    if not _REPOSITORY_SLUG_PATTERN.fullmatch(value):
+        raise ValueError("Repository must be in the form 'owner/repo'.")
+
+    owner, repo = value.split("/", 1)
+    for segment in (owner, repo):
+        if segment in {".", ".."} or ".." in segment:
+            raise ValueError(
+                "Repository segments cannot contain path traversal tokens."
+            )
+
+    return value
 
 
 class WorkflowTaskStateModel(BaseModel):
@@ -122,21 +141,31 @@ class SpecWorkflowRunModel(BaseModel):
         None, alias="credentialAudit"
     )
 
+    @field_validator("repository")
+    @classmethod
+    def _validate_repository(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return _validate_repository_slug(value)
+
 
 class CreateWorkflowRunRequest(BaseModel):
     """Request payload for triggering a workflow run."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    repository: str = Field(
-        ..., alias="repository", pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-    )
+    repository: str = Field(..., alias="repository")
     feature_key: Optional[str] = Field(None, alias="featureKey")
     force_phase: Optional[Literal["discover", "submit", "apply", "publish"]] = Field(
         None, alias="forcePhase"
     )
     created_by: Optional[UUID] = Field(None, alias="createdBy")
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
+
+    @field_validator("repository")
+    @classmethod
+    def _validate_repository(cls, value: str) -> str:
+        return _validate_repository_slug(value)
 
 
 class WorkflowRunCollectionResponse(BaseModel):
@@ -221,9 +250,7 @@ class RetryWorkflowRunRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    mode: RetryWorkflowMode = Field(
-        RetryWorkflowMode.RESUME_FAILED_TASK, alias="mode"
-    )
+    mode: RetryWorkflowMode = Field(RetryWorkflowMode.RESUME_FAILED_TASK, alias="mode")
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
 
 

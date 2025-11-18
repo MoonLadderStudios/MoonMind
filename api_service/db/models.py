@@ -913,8 +913,8 @@ class SpecWorkflowTaskState(Base):
     )
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    artifact_refs: Mapped[Optional[list[str]]] = mapped_column(
-        mutable_json_list(), nullable=True
+    artifact_paths: Mapped[Optional[list[str]]] = mapped_column(
+        "artifact_refs", mutable_json_list(), nullable=True
     )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

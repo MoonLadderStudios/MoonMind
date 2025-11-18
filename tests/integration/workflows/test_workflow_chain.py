@@ -18,7 +18,6 @@ from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
 
-
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 
