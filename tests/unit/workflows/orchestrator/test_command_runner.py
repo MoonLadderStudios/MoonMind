@@ -149,7 +149,8 @@ def test_build_failure_without_artifact_creates_fallback_log(tmp_path, monkeypat
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_logged_command(self, *, command, workspace, log_name):  # pragma: no cover
+    # pragma: no cover
+    def fail_logged_command(self, *, command, workspace, log_name):
         del command, workspace, log_name
         raise CommandExecutionError("build failed")
 
@@ -175,7 +176,8 @@ def test_restart_failure_without_artifact_creates_fallback_log(tmp_path, monkeyp
     run_id = uuid4()
     runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
 
-    def fail_logged_command(self, *, command, workspace, log_name):  # pragma: no cover
+    # pragma: no cover
+    def fail_logged_command(self, *, command, workspace, log_name):
         del command, workspace, log_name
         raise CommandExecutionError("restart failed")
 
@@ -205,7 +207,8 @@ def test_build_failure_reuses_existing_artifact(tmp_path, monkeypatch):
     error = CommandExecutionError("build failed")
     error.artifacts = [artifact]
 
-    def fail_logged_command(self, *, command, workspace, log_name):  # pragma: no cover
+    # pragma: no cover
+    def fail_logged_command(self, *, command, workspace, log_name):
         del command, workspace, log_name
         raise error
 
