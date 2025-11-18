@@ -458,17 +458,13 @@ class CommandRunner:
         log_content = "\n".join(line for line in log_lines if line) or formatted or ""
 
         if completed.returncode != 0:
-            artifact = self._storage.write_text(
-                self._run_id,
-                log_name,
-                log_content or "Command failed",
+            error = self._command_failure(cmd_sequence, completed)
+            self._persist_failure_artifact(
+                log_name=log_name,
+                command=cmd_sequence,
+                exc=error,
+                log_lines=log_lines,
             )
-            error = self._command_failure(
-                cmd_sequence,
-                completed,
-                artifacts=[artifact],
-            )
-            self._attach_failure_artifact(error, artifact)
             raise error
 
         artifact = self._storage.write_text(
