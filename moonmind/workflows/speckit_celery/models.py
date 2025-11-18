@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
@@ -27,63 +27,22 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api_service.db.models import (
     Base,
-    OrchestratorPlanStep,
-    OrchestratorPlanStepStatus,
-    OrchestratorTaskState,
+    CodexCredentialStatus,
+    CodexPreflightStatus,
+    GitHubCredentialStatus,
+    SpecWorkflowRun,
+    SpecWorkflowRunPhase,
+    SpecWorkflowRunStatus,
+    SpecWorkflowTaskState,
+    SpecWorkflowTaskStatus,
+    WorkflowArtifact,
+    WorkflowArtifactType,
+    WorkflowCredentialAudit,
 )
-
-if TYPE_CHECKING:
-    from api_service.db.models import OrchestratorRun
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 _MUTABLE_JSON_LIST = MutableList.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 _TASK_PAYLOAD_TYPE = _MUTABLE_JSON
-
-
-class SpecWorkflowRunStatus(str, enum.Enum):
-    """Lifecycle states for a workflow run."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class SpecWorkflowRunPhase(str, enum.Enum):
-    """Logical phase executed by the workflow chain."""
-
-    DISCOVER = "discover"
-    SUBMIT = "submit"
-    APPLY = "apply"
-    PUBLISH = "publish"
-    COMPLETE = "complete"
-
-
-class SpecWorkflowTaskStatus(str, enum.Enum):
-    """Per-task execution states."""
-
-    QUEUED = "queued"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
-class CodexCredentialStatus(str, enum.Enum):
-    """Credential states for Codex validation."""
-
-    VALID = "valid"
-    INVALID = "invalid"
-    EXPIRES_SOON = "expires_soon"
-
-
-class GitHubCredentialStatus(str, enum.Enum):
-    """Credential states for GitHub validation."""
-
-    VALID = "valid"
-    INVALID = "invalid"
-    SCOPE_MISSING = "scope_missing"
 
 
 class CodexAuthVolumeStatus(str, enum.Enum):
@@ -102,14 +61,6 @@ class CodexWorkerShardStatus(str, enum.Enum):
     OFFLINE = "offline"
 
 
-class CodexPreflightStatus(str, enum.Enum):
-    """Result of the Codex login pre-flight verification."""
-
-    PASSED = "passed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
 @dataclass(slots=True)
 class CredentialAuditResult:
     """Represents the outcome of a credential validation attempt."""
@@ -125,305 +76,6 @@ class CredentialAuditResult:
             self.codex_status is CodexCredentialStatus.VALID
             and self.github_status is GitHubCredentialStatus.VALID
         )
-
-
-class WorkflowArtifactType(str, enum.Enum):
-    """Supported artifact classifications."""
-
-    CODEX_LOGS = "codex_logs"
-    CODEX_PATCH = "codex_patch"
-    GH_PUSH_LOG = "gh_push_log"
-    GH_PR_RESPONSE = "gh_pr_response"
-
-
-class SpecWorkflowRun(Base):
-    """Persisted record for a full Spec Kit workflow execution."""
-
-    __tablename__ = "spec_workflow_runs"
-    __table_args__ = (
-        Index("ix_spec_workflow_runs_feature_key", "feature_key"),
-        Index("ix_spec_workflow_runs_status", "status"),
-        Index("ix_spec_workflow_runs_created_by", "created_by"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    feature_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    celery_chain_id: Mapped[Optional[str]] = mapped_column(String(255))
-    status: Mapped[SpecWorkflowRunStatus] = mapped_column(
-        Enum(
-            SpecWorkflowRunStatus,
-            name="specworkflowrunstatus",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=False,
-        default=SpecWorkflowRunStatus.PENDING,
-    )
-    phase: Mapped[SpecWorkflowRunPhase] = mapped_column(
-        Enum(
-            SpecWorkflowRunPhase,
-            name="specworkflowrunphase",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=False,
-        default=SpecWorkflowRunPhase.DISCOVER,
-    )
-    branch_name: Mapped[Optional[str]] = mapped_column(String(255))
-    pr_url: Mapped[Optional[str]] = mapped_column(String(512))
-    codex_task_id: Mapped[Optional[str]] = mapped_column(String(255))
-    codex_queue: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey("codex_worker_shards.queue_name", ondelete="SET NULL"),
-    )
-    codex_volume: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey("codex_auth_volumes.name", ondelete="SET NULL"),
-    )
-    codex_preflight_status: Mapped[Optional[CodexPreflightStatus]] = mapped_column(
-        Enum(
-            CodexPreflightStatus,
-            name="codexpreflightstatus",
-            native_enum=True,
-            validate_strings=True,
-        )
-    )
-    codex_preflight_message: Mapped[Optional[str]] = mapped_column(Text)
-    codex_logs_path: Mapped[Optional[str]] = mapped_column(String(1024))
-    codex_patch_path: Mapped[Optional[str]] = mapped_column(String(1024))
-    artifacts_path: Mapped[Optional[str]] = mapped_column(String(512))
-    created_by: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-        server_onupdate=text("CURRENT_TIMESTAMP"),
-    )
-
-    task_states: Mapped[list["SpecWorkflowTaskState"]] = relationship(
-        "SpecWorkflowTaskState",
-        back_populates="workflow_run",
-        cascade="all, delete-orphan",
-        order_by="SpecWorkflowTaskState.created_at",
-    )
-    artifacts: Mapped[list["WorkflowArtifact"]] = relationship(
-        "WorkflowArtifact",
-        back_populates="workflow_run",
-        cascade="all, delete-orphan",
-        order_by="WorkflowArtifact.created_at",
-    )
-    codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
-        "CodexAuthVolume",
-        back_populates="runs",
-        foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
-    )
-    codex_shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
-        "CodexWorkerShard",
-        back_populates="runs",
-        foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
-    )
-    credential_audit: Mapped[Optional["WorkflowCredentialAudit"]] = relationship(
-        "WorkflowCredentialAudit",
-        back_populates="workflow_run",
-        uselist=False,
-        cascade="all, delete-orphan",
-    )
-
-
-class SpecWorkflowTaskState(Base):
-    """Individual Celery task execution state for a workflow run."""
-
-    __tablename__ = "spec_workflow_task_states"
-    __table_args__ = (
-        UniqueConstraint(
-            "workflow_run_id",
-            "task_name",
-            "attempt",
-            name="uq_spec_workflow_task_state_attempt",
-        ),
-        Index("ix_spec_workflow_task_states_run_id", "workflow_run_id"),
-        Index(
-            "ix_spec_workflow_task_states_failed",
-            "workflow_run_id",
-            postgresql_where=text("status = 'failed'"),
-        ),
-        UniqueConstraint(
-            "orchestrator_run_id",
-            "plan_step",
-            "attempt",
-            name="uq_orchestrator_task_state_attempt",
-        ),
-        Index(
-            "ix_spec_workflow_task_states_orchestrator_run_id",
-            "orchestrator_run_id",
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    workflow_run_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    orchestrator_run_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    task_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[SpecWorkflowTaskStatus] = mapped_column(
-        Enum(
-            SpecWorkflowTaskStatus,
-            name="specworkflowtaskstatus",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=False,
-    )
-    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    payload: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        _TASK_PAYLOAD_TYPE, nullable=True
-    )
-    plan_step: Mapped[Optional[OrchestratorPlanStep]] = mapped_column(
-        Enum(
-            OrchestratorPlanStep,
-            name="orchestratorplanstep",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=True,
-    )
-    plan_step_status: Mapped[Optional[OrchestratorPlanStepStatus]] = mapped_column(
-        Enum(
-            OrchestratorPlanStepStatus,
-            name="orchestratorplanstepstatus",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=True,
-    )
-    celery_state: Mapped[Optional[OrchestratorTaskState]] = mapped_column(
-        Enum(
-            OrchestratorTaskState,
-            name="orchestratortaskstate",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=True,
-    )
-    celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    artifact_refs: Mapped[Optional[list[UUID]]] = mapped_column(
-        _MUTABLE_JSON_LIST, nullable=True
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-        server_onupdate=text("CURRENT_TIMESTAMP"),
-    )
-
-    workflow_run: Mapped[SpecWorkflowRun] = relationship(
-        "SpecWorkflowRun", back_populates="task_states"
-    )
-    orchestrator_run: Mapped[Optional["OrchestratorRun"]] = relationship(
-        "OrchestratorRun",
-        back_populates="task_states",
-    )
-
-
-class WorkflowCredentialAudit(Base):
-    """Credential verification results associated with a workflow run."""
-
-    __tablename__ = "workflow_credential_audits"
-    __table_args__ = (
-        UniqueConstraint("workflow_run_id", name="uq_workflow_credential_audit_run"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    workflow_run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"), nullable=False
-    )
-    codex_status: Mapped[CodexCredentialStatus] = mapped_column(
-        Enum(
-            CodexCredentialStatus,
-            name="workflowcodexcredentialstatus",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=False,
-    )
-    github_status: Mapped[GitHubCredentialStatus] = mapped_column(
-        Enum(
-            GitHubCredentialStatus,
-            name="workflowgithubcredentialstatus",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=False,
-    )
-    checked_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-
-    workflow_run: Mapped[SpecWorkflowRun] = relationship(
-        "SpecWorkflowRun", back_populates="credential_audit"
-    )
-
-
-class WorkflowArtifact(Base):
-    """Artifact generated by the workflow chain (logs, patches, PR responses)."""
-
-    __tablename__ = "workflow_artifacts"
-    __table_args__ = (
-        UniqueConstraint(
-            "workflow_run_id", "artifact_type", "path", name="uq_workflow_artifact_path"
-        ),
-        Index("ix_workflow_artifacts_run_id", "workflow_run_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    workflow_run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"), nullable=False
-    )
-    artifact_type: Mapped[WorkflowArtifactType] = mapped_column(
-        Enum(
-            WorkflowArtifactType,
-            name="workflowartifacttype",
-            native_enum=True,
-            validate_strings=True,
-        ),
-        nullable=False,
-    )
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-    workflow_run: Mapped[SpecWorkflowRun] = relationship(
-        "SpecWorkflowRun", back_populates="artifacts"
-    )
 
 
 class CodexAuthVolume(Base):
@@ -808,6 +460,7 @@ __all__ = [
     "SpecWorkflowTaskStatus",
     "WorkflowCredentialAudit",
     "CodexCredentialStatus",
+    "CodexPreflightStatus",
     "GitHubCredentialStatus",
     "WorkflowArtifact",
     "WorkflowArtifactType",

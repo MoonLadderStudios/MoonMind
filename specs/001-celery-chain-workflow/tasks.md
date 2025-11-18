@@ -26,9 +26,9 @@
 ## Phase 2: Foundational (Blocking Prerequisites)
 **Purpose**: Create database entities, repositories, and Celery configuration required by every story. ⚠️ Do not start story work until these tasks finish.
 
-- [ ] T004 Create Alembic migration `api_service/migrations/versions/<timestamp>_spec_workflow_chain.py` adding `spec_workflow_runs`, `spec_workflow_task_states`, `workflow_credential_audits`, and `workflow_artifacts` per `data-model.md`.
-- [ ] T005 Update ORM models in `api_service/db/models.py` so SQLAlchemy knows about the new tables, FKs, and relationships.
-- [ ] T006 Implement persistence helpers in `moonmind/workflows/speckit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
+- [x] T004 Create Alembic migration `api_service/migrations/versions/<timestamp>_spec_workflow_chain.py` adding `spec_workflow_runs`, `spec_workflow_task_states`, `workflow_credential_audits`, and `workflow_artifacts` per `data-model.md`.
+- [x] T005 Update ORM models in `api_service/db/models.py` so SQLAlchemy knows about the new tables, FKs, and relationships.
+- [x] T006 Implement persistence helpers in `moonmind/workflows/speckit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
 - [ ] T007 Expand Pydantic schemas in `moonmind/schemas/workflow_models.py` and serializers in `moonmind/workflows/speckit_celery/serializers.py` to match the contract outputs.
 - [ ] T008 Add artifact storage utilities in `moonmind/workflows/speckit_celery/storage.py` (new file) that normalize `var/artifacts/spec_workflows/<run_id>` paths, file metadata, and digests.
 - [ ] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/speckit_celery/celeryconfig.py` and ensure `celery_worker/speckit_worker.py` consumes those settings on startup.
