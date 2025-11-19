@@ -435,51 +435,87 @@ jobs:
               return patterns.some(pattern => pattern.test(body));
             };
 
+            const geminiStatusPatterns = [
+              /unable to generate (?:a\s+)?summary/i,
+              /unable to complete (?:the\s+)?review/i,
+              /unable to review(?:\s+this\s+(?:pull\s+request|pr))?/i,
+              /could not review/i,
+              /cannot review/i,
+              /review (?:results )?are not available/i,
+              /review is (?:temporarily\s+)?unavailable/i,
+              /analysis is not available/i,
+              /not (?:being\s+)?currently\s+supported/i,
+            ];
+
+            const isGeminiStatusOnlyComment = (body) => {
+              if (!body) {
+                return false;
+              }
+              return geminiStatusPatterns.some(pattern => pattern.test(body));
+            };
+
             const isGeminiComment = (comment) => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
-              return userLogin.includes('gemini') ||
-                     body.includes('Gemini Code Assist') ||
-                     userLogin === 'gemini-code-assist';
+              const normalizedBody = body.toLowerCase();
+
+              const isGeminiUser =
+                userLogin.includes('gemini') ||
+                userLogin === 'gemini-code-assist';
+
+              if (!isGeminiUser) {
+                return false;
+              }
+
+              if (isGeminiStatusOnlyComment(normalizedBody)) {
+                console.log('Ignoring Gemini status-only message that is not a review.');
+                return false;
+              }
+
+              return true;
             };
 
             const isCodexComment = (comment) => {
-              const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
+              const hasReviewHeading = body.includes('Codex Review');
+              if (!hasReviewHeading) {
+                return false;
+              }
+
+              const userLogin = comment.user?.login?.toLowerCase() || '';
               return userLogin.includes('codex') ||
-                     userLogin === 'chatgpt-codex-connector' ||
-                     body.includes('Codex Review') ||
-                     body.includes('💡 Codex Review');
+                     userLogin === 'chatgpt-codex-connector';
             };
 
             // Check for Gemini Code Assist comments (High or Critical)
-            const geminiComments = relevantComments.filter(comment => {
+            const isHighPriorityGeminiReview = (comment) => {
               if (!isGeminiComment(comment)) return false;
               const severity = extractGeminiSeverity(comment.body || '');
               return severity === 'high' || severity === 'critical';
-            });
+            };
+
+            const isHighPriorityCodexReview = (comment) => {
+              if (!isCodexComment(comment)) return false;
+              return hasCodexHighPriorityFinding(comment.body || '');
+            };
+
+            const geminiComments = relevantComments.filter(isHighPriorityGeminiReview);
 
             console.log(`Gemini High/Critical comments: ${geminiComments.length}`);
 
-            // Check for Codex Review comments (only P0/P1 block/trigger)
-            const codexComments = relevantComments.filter(comment => {
-              if (!isCodexComment(comment)) return false;
-              const body = comment.body || '';
-              // Exclude explicit "no issues" summaries
-              const isNoIssues = body.includes("Codex Review: Didn't find any major issues.") ||
-                                 body.includes("Didn't find any major issues");
-              if (isNoIssues) return false;
-              return true;
-            });
-
-            const codexHighPriorityComments = codexComments.filter(comment =>
-              hasCodexHighPriorityFinding(comment.body || '')
-            );
+            const codexHighPriorityComments = relevantComments.filter(isHighPriorityCodexReview);
 
             console.log(`Codex high-priority (P0/P1) comments: ${codexHighPriorityComments.length}`);
 
-            const hasReviewComments = geminiComments.length > 0 || codexHighPriorityComments.length > 0;
-            console.log(`Has blocking review comments (Gemini high/critical or Codex P0/P1): ${hasReviewComments}`);
+            const hasBlockingReviewCommentsInRelevantWindow =
+              geminiComments.length > 0 || codexHighPriorityComments.length > 0;
+            console.log(`Has blocking review comments in relevant window: ${hasBlockingReviewCommentsInRelevantWindow}`);
+
+            const allGeminiHighPriorityComments = allComments.filter(isHighPriorityGeminiReview);
+            const allCodexHighPriorityComments = allComments.filter(isHighPriorityCodexReview);
+            const hasHistoricalBlockingReviewComments =
+              allGeminiHighPriorityComments.length > 0 || allCodexHighPriorityComments.length > 0;
+            console.log(`Historical blocking review comments detected: ${hasHistoricalBlockingReviewComments}`);
 
             // Detect whether a Codex review has already been requested since the latest commit
             const reviewRequestCommentsSinceLastCommit = issueComments.filter(comment => {
@@ -495,30 +531,43 @@ jobs:
             console.log(`Codex review requests since last commit: ${reviewRequestCommentsSinceLastCommit.length}`);
 
             // Detect whether any review (Gemini or Codex) has occurred since the last commit
-            const anyGeminiReview = relevantComments.some(comment => isGeminiComment(comment));
-
-            const codexNoIssuesSummaries = relevantComments.filter(comment => {
-              if (!isCodexComment(comment)) return false;
-              const body = comment.body || '';
-              const isNoIssues = body.includes("Codex Review: Didn't find any major issues.") ||
-                                 body.includes("Didn't find any major issues");
-              return isNoIssues;
-            });
-
-            const hasNoIssuesCodexSummary = codexNoIssuesSummaries.length > 0;
-
+            const anyGeminiReviewSinceLastCommit = commentsAfterCutoff.some(comment => isGeminiComment(comment));
+            const anyCodexReviewSinceLastCommit = commentsAfterCutoff.some(comment => isCodexComment(comment));
             const hasAnyReviewSinceLastCommit =
-              anyGeminiReview ||
-              geminiComments.length > 0 ||
-              codexComments.length > 0 ||
-              hasNoIssuesCodexSummary;
+              anyGeminiReviewSinceLastCommit ||
+              anyCodexReviewSinceLastCommit;
 
+            const hasUnresolvedBlockingReviewComments = hasAnyReviewSinceLastCommit
+              ? hasBlockingReviewCommentsInRelevantWindow
+              : (hasBlockingReviewCommentsInRelevantWindow || hasHistoricalBlockingReviewComments);
+            const noBlockingReviewIssues = !hasUnresolvedBlockingReviewComments;
+            // Track whether *any* review activity has ever occurred on the PR so we
+            // never auto-merge something that has not been reviewed at least once.
+            const hasAnyReviewEver = allComments.some(comment =>
+              isGeminiComment(comment) || isCodexComment(comment)
+            );
+            const needsInitialReview = !hasAnyReviewEver;
             const reviewCompletedNoIssues =
-              hasAnyReviewSinceLastCommit &&
-              !hasReviewComments;
+              !needsInitialReview &&
+              noBlockingReviewIssues &&
+              (hasAnyReviewSinceLastCommit || hasAnyReviewEver);
 
             console.log(`Any review since last commit: ${hasAnyReviewSinceLastCommit}`);
-            console.log(`Review completed with no high-priority issues: ${reviewCompletedNoIssues}`);
+            console.log(`Blocking review comments currently detected: ${hasBlockingReviewCommentsInRelevantWindow}`);
+            console.log(`Unresolved blocking review comments (after historical fallback): ${hasUnresolvedBlockingReviewComments}`);
+            console.log(`No blocking review issues detected: ${noBlockingReviewIssues}`);
+            console.log(`Any historical review comments detected: ${hasAnyReviewEver}`);
+            console.log(`Review completed with no blocking issues: ${reviewCompletedNoIssues}`);
+            if (needsInitialReview) {
+              console.log('Review gate blocking: no Codex/Gemini review has ever occurred on this PR.');
+            }
+            if (!reviewCompletedNoIssues) {
+              if (!noBlockingReviewIssues) {
+                console.log('Review gate blocking: high-priority review issues remain unresolved.');
+              } else if (needsInitialReview) {
+                console.log('Review gate blocking: no review activity has occurred on this PR yet.');
+              }
+            }
 
             // Determine build / review-trigger conditions
             const buildFailed = hasFailures;
@@ -527,8 +576,9 @@ jobs:
             const shouldRequestReviewFromBuild =
               buildSucceededForThisRun &&
               !buildFailed &&
-              !hasReviewComments &&
-              !hasReviewRequestSinceLastCommit;
+              !hasUnresolvedBlockingReviewComments &&
+              !hasReviewRequestSinceLastCommit &&
+              needsInitialReview;
 
             console.log(`Build succeeded for this workflow_run: ${buildSucceededForThisRun}`);
             console.log(`Should request Codex review from build: ${shouldRequestReviewFromBuild}`);
@@ -536,11 +586,11 @@ jobs:
             // Determine what action to take
             let commentBody = null;
 
-            if (hasFailures && hasReviewComments) {
+            if (hasFailures && hasUnresolvedBlockingReviewComments) {
               commentBody = '@codex fix comments and fix build failures';
             } else if (hasFailures) {
               commentBody = '@codex fix build failures';
-            } else if (hasReviewComments) {
+            } else if (hasUnresolvedBlockingReviewComments) {
               commentBody = '@codex fix comments';
             } else if (shouldRequestReviewFromBuild) {
               commentBody = '@codex review';
