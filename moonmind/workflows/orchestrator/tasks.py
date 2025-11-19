@@ -66,6 +66,10 @@ def _utcnow() -> datetime:
 def _duration_ms(started_at: datetime | None, finished_at: datetime) -> float | None:
     if started_at is None:
         return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    if finished_at.tzinfo is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
     elapsed = (finished_at - started_at).total_seconds() * 1000
     return max(elapsed, 0.0)
 
