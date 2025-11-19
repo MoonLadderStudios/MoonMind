@@ -210,10 +210,7 @@ async def provide_orchestrator_approval(
             detail={"code": "run_not_found", "message": "Run does not exist."},
         )
 
-    if run.status not in {
-        db_models.OrchestratorRunStatus.AWAITING_APPROVAL,
-        db_models.OrchestratorRunStatus.PENDING,
-    }:
+    if run.status != db_models.OrchestratorRunStatus.AWAITING_APPROVAL:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -222,11 +219,12 @@ async def provide_orchestrator_approval(
             },
         )
 
+    now = _utcnow()
     policy = await resolve_policy(repo, run.target_service)
     approved, reason = validate_approval_token(
         policy,
         payload.token,
-        granted_at=_utcnow(),
+        granted_at=now,
         expires_at=payload.expires_at,
     )
     if not approved:
@@ -239,7 +237,7 @@ async def provide_orchestrator_approval(
         run,
         token=payload.token,
         approver={"id": payload.approver.id, "role": payload.approver.role},
-        granted_at=_utcnow(),
+        granted_at=now,
         expires_at=payload.expires_at,
     )
     await repo.commit()
@@ -278,6 +276,14 @@ async def retry_orchestrator_run(
             detail={
                 "code": "retry_not_allowed",
                 "message": "Run is still in progress and cannot be retried.",
+            },
+        )
+    if run.status == db_models.OrchestratorRunStatus.AWAITING_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "retry_not_allowed",
+                "message": "Run requires approval before it can be retried.",
             },
         )
     if run.action_plan is None:
@@ -326,7 +332,6 @@ async def retry_orchestrator_run(
         status=db_models.OrchestratorRunStatus.PENDING,
         started_at=None,
         completed_at=None,
-        metrics_snapshot=None,
     )
     await repo.commit()
 

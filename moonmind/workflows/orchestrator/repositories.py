@@ -204,32 +204,19 @@ class OrchestratorRepository:
     ) -> db_models.OrchestratorRun:
         """Persist approval metadata onto ``run`` and reset status."""
 
+        from .policies import ApprovalPolicy, apply_approval_snapshot
+
         run.approval_token = token
 
-        snapshot = dict(run.metrics_snapshot or {})
-        approval_snapshot = snapshot.get("approval")
-        if not isinstance(approval_snapshot, dict):
-            approval_snapshot = {}
-        approval_snapshot.update(
-            {
-                "required": run.approval_gate is not None,
-                "requirement": (
-                    run.approval_gate.requirement.value
-                    if run.approval_gate
-                    else db_models.OrchestratorApprovalRequirement.NONE.value
-                ),
-                "status": "granted",
-            }
+        policy = ApprovalPolicy(gate=run.approval_gate)
+        run.metrics_snapshot = apply_approval_snapshot(
+            run.metrics_snapshot,
+            policy=policy,
+            token=token,
+            approver=dict(approver) if approver else None,
+            granted_at=granted_at,
+            expires_at=expires_at,
         )
-        if approver:
-            approval_snapshot["approver"] = dict(approver)
-        if granted_at:
-            approval_snapshot["grantedAt"] = granted_at.isoformat()
-        if expires_at:
-            approval_snapshot["expiresAt"] = expires_at.isoformat()
-
-        snapshot["approval"] = approval_snapshot
-        run.metrics_snapshot = snapshot
         run.status = db_models.OrchestratorRunStatus.PENDING
         run.started_at = None
         run.completed_at = None

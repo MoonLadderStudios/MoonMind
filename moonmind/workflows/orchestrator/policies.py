@@ -55,15 +55,15 @@ def validate_approval_token(
         return False, "Approval token required for protected service"
 
     gate = policy.gate
-    if gate is None:
-        return True, None
+    assert gate is not None
 
-    issued = granted_at or _utcnow()
+    now = _utcnow()
+    issued = granted_at or now
     expiry_candidate = expires_at
     if expiry_candidate is None and gate.valid_for_minutes:
         expiry_candidate = issued + timedelta(minutes=gate.valid_for_minutes)
 
-    if expiry_candidate is not None and expiry_candidate < _utcnow():
+    if expiry_candidate is not None and expiry_candidate < now:
         return False, "Approval token has expired"
 
     return True, None
