@@ -43,7 +43,7 @@
 
 ### Tests (write before implementation)
 - [x] T010 [P] [US1] Add Celery-chain happy-path coverage to `tests/unit/workflows/test_tasks.py`, asserting discovery/submit/apply/publish states populate the DB.
-- [ ] T011 [P] [US1] Add contract coverage for `POST /api/workflows/speckit/runs` in `tests/contract/test_workflow_api.py`, checking 202 payload shape and idempotent branch names.
+- [x] T011 [P] [US1] Add contract coverage for `POST /api/workflows/speckit/runs` in `tests/contract/test_workflow_api.py`, checking 202 payload shape and idempotent branch names.
 
 ### Implementation
 - [ ] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/speckit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `SpecWorkflowRun`.
