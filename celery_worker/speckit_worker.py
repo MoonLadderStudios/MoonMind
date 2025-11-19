@@ -145,6 +145,31 @@ def _log_codex_cli_version() -> None:
     )
 
 
+def _log_queue_configuration() -> tuple[str, ...]:
+    """Emit a log describing the Celery queues/QoS bindings for this worker."""
+
+    task_queues = getattr(speckit_celery_app.conf, "task_queues", None) or ()
+    queue_names = tuple(queue.name for queue in task_queues)
+    if not queue_names:
+        fallback_queue = (
+            settings.spec_workflow.codex_queue or settings.celery.default_queue
+        )
+        queue_names = (fallback_queue,)
+
+    queue_csv = ",".join(queue_names)
+    os.environ.setdefault("CELERY_QUEUES", queue_csv)
+    logger.info(
+        "SpecKit worker consuming Celery queues: %s",
+        queue_csv,
+        extra={
+            "celery_queues": queue_names,
+            "celery_prefetch": speckit_celery_app.conf.worker_prefetch_multiplier,
+            "celery_reject_on_worker_lost": speckit_celery_app.conf.task_reject_on_worker_lost,
+        },
+    )
+    return queue_names
+
+
 celery_app = speckit_celery_app
 
 # Celery uses the module-level ``app`` attribute as the default application target
@@ -153,6 +178,7 @@ app = celery_app
 
 _enforce_codex_approval_policy()
 _log_codex_cli_version()
+_log_queue_configuration()
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI execution path

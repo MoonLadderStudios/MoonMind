@@ -31,7 +31,7 @@
 - [x] T006 Implement persistence helpers in `moonmind/workflows/speckit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
 - [x] T007 Expand Pydantic schemas in `moonmind/schemas/workflow_models.py` and serializers in `moonmind/workflows/speckit_celery/serializers.py` to match the contract outputs.
 - [x] T008 Add artifact storage utilities in `moonmind/workflows/speckit_celery/storage.py` (new file) that normalize `var/artifacts/spec_workflows/<run_id>` paths, file metadata, and digests.
-- [ ] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/speckit_celery/celeryconfig.py` and ensure `celery_worker/speckit_worker.py` consumes those settings on startup.
+- [x] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/speckit_celery/celeryconfig.py` and ensure `celery_worker/speckit_worker.py` consumes those settings on startup.
 
 **Checkpoint**: Database + serialization + Celery plumbing ready for user stories.
 

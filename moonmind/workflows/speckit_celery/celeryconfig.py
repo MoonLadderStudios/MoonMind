@@ -1,4 +1,4 @@
-"""Celery routing helpers for Spec Kit Codex shard queues."""
+"""Celery routing helpers for Spec Kit Codex queue bindings."""
 
 from __future__ import annotations
 
@@ -21,6 +21,15 @@ def _ensure_positive(value: int, *, field: str) -> int:
     return value
 
 
+def _normalize_queue_name(queue_name: str) -> str:
+    """Normalize queue names configured via environment or config files."""
+
+    candidate = queue_name.strip()
+    if not candidate:
+        raise ValueError("codex_queue must be a non-empty string")
+    return candidate
+
+
 def _hash_affinity_key(key: str) -> int:
     digest = hashlib.sha256(key.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big", signed=False)
@@ -31,8 +40,15 @@ class CodexShardRouter:
     """Utility for deterministic Codex queue selection."""
 
     shard_count: int
+    codex_queue: str | None = None
 
     def __post_init__(self) -> None:
+        if self.codex_queue:
+            queue_name = _normalize_queue_name(self.codex_queue)
+            object.__setattr__(self, "codex_queue", queue_name)
+            object.__setattr__(self, "shard_count", 1)
+            return
+
         _ensure_positive(self.shard_count, field="shard_count")
 
     @property
@@ -44,6 +60,13 @@ class CodexShardRouter:
         return settings.celery.default_queue
 
     def queue_name(self, shard_index: int) -> str:
+        if self.codex_queue:
+            if shard_index != 0:
+                raise ValueError(
+                    "shard_index must be 0 when a fixed codex_queue is configured"
+                )
+            return self.codex_queue
+
         if shard_index < 0 or shard_index >= self.shard_count:
             raise ValueError(
                 "shard_index must be between 0 and shard_count - 1; "
@@ -52,15 +75,21 @@ class CodexShardRouter:
         return f"{CODEX_QUEUE_PREFIX}{shard_index}"
 
     def queue_names(self) -> Tuple[str, ...]:
+        if self.codex_queue:
+            return (self.codex_queue,)
         return tuple(self.queue_name(index) for index in range(self.shard_count))
 
     def shard_for_key(self, affinity_key: str) -> int:
         if not affinity_key:
             raise ValueError("affinity_key must be a non-empty string")
+        if self.codex_queue:
+            return 0
         hashed = _hash_affinity_key(affinity_key)
         return hashed % self.shard_count
 
     def queue_for_key(self, affinity_key: str) -> str:
+        if self.codex_queue:
+            return self.codex_queue
         return self.queue_name(self.shard_for_key(affinity_key))
 
     def build_queues(self, *, include_default: bool = False) -> Tuple[Queue, ...]:
@@ -74,7 +103,10 @@ class CodexShardRouter:
                     durable=True,
                 )
             )
+        configured_names = {queue.name for queue in queues}
         for name in self.queue_names():
+            if name in configured_names:
+                continue
             queues.append(
                 Queue(
                     name,
@@ -83,10 +115,19 @@ class CodexShardRouter:
                     durable=True,
                 )
             )
+            configured_names.add(name)
         return tuple(queues)
 
 
-def get_codex_shard_router(shard_count: int | None = None) -> CodexShardRouter:
+def get_codex_shard_router(
+    shard_count: int | None = None,
+    *,
+    codex_queue: str | None = None,
+) -> CodexShardRouter:
+    if codex_queue is None:
+        codex_queue = settings.spec_workflow.codex_queue
+    if codex_queue:
+        return CodexShardRouter(shard_count=1, codex_queue=codex_queue)
     count = shard_count or settings.spec_workflow.codex_shards
     return CodexShardRouter(shard_count=count)
 

@@ -28,8 +28,13 @@ def create_celery_app() -> Celery:
     app = Celery(CELERY_NAMESPACE)
     shard_router = get_codex_shard_router()
     app.conf.update(
-        broker_url=settings.celery.broker_url,
-        result_backend=settings.celery.result_backend,
+        broker_url=(
+            settings.spec_workflow.celery_broker_url or settings.celery.broker_url
+        ),
+        result_backend=(
+            settings.spec_workflow.celery_result_backend
+            or settings.celery.result_backend
+        ),
         task_default_queue=settings.celery.default_queue,
         task_default_exchange=settings.celery.default_exchange,
         task_default_routing_key=settings.celery.default_routing_key,

@@ -570,10 +570,14 @@ def test_codex_routing_reuses_existing_queue(monkeypatch):
         "task": {"taskId": "T021"},
     }
 
+    affinity_key = tasks._derive_codex_affinity_key(dict(context))
+    router = get_codex_shard_router()
+    expected_queue = router.queue_for_key(affinity_key)
+
     tasks.submit_codex_job.apply_async((context,))
     assert calls, "submit_codex_job should invoke apply_async"
     submit_queue = calls[-1]["options"]["queue"]
-    assert submit_queue.startswith("codex-")
+    assert submit_queue == expected_queue
     assert context["codex_queue"] == submit_queue
 
     calls.clear()
