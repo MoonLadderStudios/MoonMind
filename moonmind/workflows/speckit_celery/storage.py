@@ -1,8 +1,7 @@
 import hashlib
+import shutil
 from pathlib import Path
 from typing import Any, Dict
-
-import shutil
 
 
 class ArtifactStorage:
@@ -17,7 +16,25 @@ class ArtifactStorage:
         """
         Returns the artifact path for a given run ID.
         """
-        return self.artifact_root / str(run_id)
+        run_relative = Path(str(run_id))
+
+        if not run_relative.parts:
+            raise ValueError("run_id must not be empty")
+
+        if run_relative.is_absolute() or any(
+            part == ".." for part in run_relative.parts
+        ):
+            raise ValueError(
+                "run_id must be a relative path without traversal components"
+            )
+
+        run_path = (self.artifact_root / run_relative).resolve()
+        artifact_root_resolved = self.artifact_root.resolve()
+
+        if not run_path.is_relative_to(artifact_root_resolved):
+            raise ValueError("run_id resolves outside the artifact root directory")
+
+        return run_path
 
     def store_artifact(
         self, run_id: str, file_path: Path, artifact_name: str
@@ -32,8 +49,12 @@ class ArtifactStorage:
         if not artifact_relative.parts:
             raise ValueError("artifact_name must not be empty")
 
-        if artifact_relative.is_absolute() or any(part == ".." for part in artifact_relative.parts):
-            raise ValueError("artifact_name must be a relative path without traversal components")
+        if artifact_relative.is_absolute() or any(
+            part == ".." for part in artifact_relative.parts
+        ):
+            raise ValueError(
+                "artifact_name must be a relative path without traversal components"
+            )
 
         destination = (run_path / artifact_relative).resolve()
         run_path_resolved = run_path.resolve()

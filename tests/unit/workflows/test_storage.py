@@ -56,6 +56,13 @@ class TestArtifactStorage(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.storage.store_artifact(run_id, source_file, absolute_name)
 
+    def test_get_run_path_rejects_traversal(self):
+        with self.assertRaises(ValueError):
+            self.storage.get_run_path("../escape")
+
+        with self.assertRaises(ValueError):
+            self.storage.get_run_path("/absolute")
+
     def test_store_artifact_allows_nested_relative_paths(self):
         run_id = "test_run_nested"
         artifact_name = "nested/dir/artifact.txt"
