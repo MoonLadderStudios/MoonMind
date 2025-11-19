@@ -44,6 +44,30 @@ class TestArtifactStorage(unittest.TestCase):
         stored_path = self.storage.get_run_path(run_id) / artifact_name
         self.assertTrue(stored_path.exists())
 
+    def test_store_artifact_rejects_traversal(self):
+        run_id = "test_run"
+        source_file = Path(self.temp_dir) / "source.txt"
+        source_file.write_text("content")
+
+        with self.assertRaises(ValueError):
+            self.storage.store_artifact(run_id, source_file, "../escape.txt")
+
+        absolute_name = f"/{run_id}/escape.txt"
+        with self.assertRaises(ValueError):
+            self.storage.store_artifact(run_id, source_file, absolute_name)
+
+    def test_store_artifact_allows_nested_relative_paths(self):
+        run_id = "test_run_nested"
+        artifact_name = "nested/dir/artifact.txt"
+        source_file = Path(self.temp_dir) / "source_nested.txt"
+        source_file.write_text("nested content")
+
+        metadata = self.storage.store_artifact(run_id, source_file, artifact_name)
+
+        expected_path = self.storage.get_run_path(run_id) / artifact_name
+        self.assertEqual(metadata["path"], str(expected_path))
+        self.assertTrue(expected_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

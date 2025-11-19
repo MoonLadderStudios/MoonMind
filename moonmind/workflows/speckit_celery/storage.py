@@ -2,6 +2,8 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict
 
+import shutil
+
 
 class ArtifactStorage:
     """
@@ -26,10 +28,20 @@ class ArtifactStorage:
         run_path = self.get_run_path(run_id)
         run_path.mkdir(parents=True, exist_ok=True)
 
-        destination = run_path / artifact_name
+        artifact_relative = Path(artifact_name)
+        if not artifact_relative.parts:
+            raise ValueError("artifact_name must not be empty")
 
-        # For now, we'll just copy the file. In a real scenario, this might be a move or upload.
-        import shutil
+        if artifact_relative.is_absolute() or any(part == ".." for part in artifact_relative.parts):
+            raise ValueError("artifact_name must be a relative path without traversal components")
+
+        destination = (run_path / artifact_relative).resolve()
+        run_path_resolved = run_path.resolve()
+
+        if not destination.is_relative_to(run_path_resolved):
+            raise ValueError("artifact_name resolves outside the run directory")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
 
         shutil.copy(file_path, destination)
 
