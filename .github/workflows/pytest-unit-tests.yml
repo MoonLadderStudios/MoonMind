@@ -43,6 +43,17 @@ jobs:
       run: |
         python -m pytest -q
 
+    - name: Prepare orchestrator integration environment
+      run: |
+        cp .env-template .env
+        docker network create local-network || true
+
+    - name: Run orchestrator integration tests (docker compose)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        docker compose -f docker-compose.test.yaml run --rm orchestrator-tests
+
   # integration:
   #   runs-on: ubuntu-latest
   #   steps:
