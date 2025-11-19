@@ -59,14 +59,14 @@
 **Independent Test**: Start a run, poll the listing/detail endpoints, and confirm each plan step exposes timestamps, messages, artifact links, and StatsD counters while failures show actionable errors.
 
 ### Tests for User Story 2
-- [ ] T020 [P] [US2] Add orchestrator API/serializer tests in `tests/contract/test_orchestrator_api.py` and repository unit tests in `tests/unit/workflows/test_orchestrator_repository.py` covering run list/detail/artifact responses and filtering.
+- [x] T020 [P] [US2] Add orchestrator API/serializer tests in `tests/contract/test_orchestrator_api.py` and repository unit tests in `tests/unit/workflows/test_orchestrator_repository.py` covering run list/detail/artifact responses and filtering.
 
 ### Implementation for User Story 2
-- [ ] T015 [P] [US2] Implement run listing/detail queries plus serializer helpers inside `moonmind/workflows/orchestrator/repositories.py` and `moonmind/workflows/orchestrator/serializers.py`, including pagination/filter options.
-- [ ] T016 [US2] Add `GET /orchestrator/runs` and `GET /orchestrator/runs/{run_id}` handlers in `api_service/api/routers/orchestrator.py` that call the new repository methods and enforce auth/query validation.
-- [ ] T017 [P] [US2] Implement `GET /orchestrator/runs/{run_id}/artifacts` in the same router to expose `RunArtifact` metadata and signed paths to files under `var/artifacts/spec_workflows/<run_id>/`.
-- [ ] T018 [US2] Enhance `moonmind/workflows/orchestrator/tasks.py` so each Celery step writes `spec_workflow_task_states` rows with timestamps, Celery IDs, messages, and artifact references per `data-model.md`.
-- [ ] T019 [US2] Emit StatsD counters/timers for run lifecycle events inside `moonmind/workflows/orchestrator/metrics.py` and hook the calls into step transitions so monitoring reflects throughput and latency.
+- [x] T015 [P] [US2] Implement run listing/detail queries plus serializer helpers inside `moonmind/workflows/orchestrator/repositories.py` and `moonmind/workflows/orchestrator/serializers.py`, including pagination/filter options.
+- [x] T016 [US2] Add `GET /orchestrator/runs` and `GET /orchestrator/runs/{run_id}` handlers in `api_service/api/routers/orchestrator.py` that call the new repository methods and enforce auth/query validation.
+- [x] T017 [P] [US2] Implement `GET /orchestrator/runs/{run_id}/artifacts` in the same router to expose `RunArtifact` metadata and signed paths to files under `var/artifacts/spec_workflows/<run_id>/`.
+- [x] T018 [US2] Enhance `moonmind/workflows/orchestrator/tasks.py` so each Celery step writes `spec_workflow_task_states` rows with timestamps, Celery IDs, messages, and artifact references per `data-model.md`.
+- [x] T019 [US2] Emit StatsD counters/timers for run lifecycle events inside `moonmind/workflows/orchestrator/metrics.py` and hook the calls into step transitions so monitoring reflects throughput and latency.
 
 **Checkpoint**: Operators and observability tooling can watch orchestrator runs progress with full artifact and metric trails.
 
