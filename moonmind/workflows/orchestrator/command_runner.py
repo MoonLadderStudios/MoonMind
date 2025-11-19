@@ -11,9 +11,10 @@ from uuid import UUID
 
 import httpx
 
+from moonmind.utils.logging import SecretRedactor
+
 from .service_profiles import ServiceProfile
 from .storage import ArtifactStorage, ArtifactWriteResult
-from moonmind.utils.logging import SecretRedactor
 
 
 class CommandRunnerError(RuntimeError):
@@ -425,9 +426,7 @@ class CommandRunner:
     ) -> CommandExecutionError:
         scrubbed_output = self._scrub(self._combine_streams(completed))
         scrubbed_command = self._scrub(self._format_command(cmd_sequence))
-        message = (
-            f"Command {scrubbed_command} failed with code {completed.returncode}"
-        )
+        message = f"Command {scrubbed_command} failed with code {completed.returncode}"
         if scrubbed_output:
             message = f"{message}: {scrubbed_output}"
         return CommandExecutionError(

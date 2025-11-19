@@ -5,11 +5,9 @@ from __future__ import annotations
 import os
 import re
 from base64 import b64encode
-from urllib.parse import quote_plus
 from typing import Iterable, Sequence
+from urllib.parse import quote_plus
 
-
-_SENSITIVE_KEYS = ("token", "secret", "password", "key", "credential", "auth")
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth)(?:$|[^a-z0-9])"
 )
@@ -40,7 +38,9 @@ class SecretRedactor:
     artifacts without adding heavy dependencies.
     """
 
-    def __init__(self, secrets: Iterable[str] | None = None, placeholder: str = "***") -> None:
+    def __init__(
+        self, secrets: Iterable[str] | None = None, placeholder: str = "***"
+    ) -> None:
         self._placeholder = placeholder
         seen: set[str] = set()
         unique_secrets: list[str] = []
