@@ -9,8 +9,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.auth_providers import get_current_user
 from api_service.api.routers.workflows import _get_repository
+from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
