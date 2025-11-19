@@ -62,7 +62,9 @@ async def workflow_db(monkeypatch, tmp_path):
 
     db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_chain.db"
     engine = create_async_engine(db_url, future=True)
-    async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session_maker = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     monkeypatch.setattr(db_base, "DATABASE_URL", db_url)
     monkeypatch.setattr(db_base, "engine", engine)
@@ -674,10 +676,14 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
         )
         discovery_context = discovery_result.get()
 
-        submit_result = tasks.submit_codex_job.apply_async(args=[dict(discovery_context)])
+        submit_result = tasks.submit_codex_job.apply_async(
+            args=[dict(discovery_context)]
+        )
         submit_context = submit_result.get()
 
-        publish_result = tasks.apply_and_publish.apply_async(args=[dict(submit_context)])
+        publish_result = tasks.apply_and_publish.apply_async(
+            args=[dict(submit_context)]
+        )
         publish_context = publish_result.get()
 
         async with async_session_maker() as session:
