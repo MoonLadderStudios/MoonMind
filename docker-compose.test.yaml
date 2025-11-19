@@ -34,7 +34,11 @@ services:
       - ./specs:/app/specs
       - ./tests:/app/tests
     working_dir: /app
-    command: ["bash", "-c", "pytest -s /app/tests/${TEST_TYPE}"]
+    command: [
+      "bash",
+      "-c",
+      "pip install -e .[tests] && pytest -s /app/tests/${TEST_TYPE}"
+    ]
     networks:
       - local-network
 

@@ -71,7 +71,9 @@ class CommandRunner:
         self._profile = profile
         self._storage = artifact_storage
         self._workspace_root = profile.workspace_path.resolve()
-        self._redactor = SecretRedactor.from_environ()
+        self._redactor_placeholder = "***"
+        self._extra_secrets: list[str] = []
+        self._refresh_redactor()
 
     # ------------------------------------------------------------------
     # Step handlers
@@ -347,7 +349,14 @@ class CommandRunner:
     # Helpers
     # ------------------------------------------------------------------
     def _scrub(self, text: str | None) -> str:
+        self._refresh_redactor()
         return self._redactor.scrub(text or "")
+
+    def _refresh_redactor(self) -> None:
+        self._redactor = SecretRedactor.from_environ(
+            placeholder=self._redactor_placeholder,
+            extra_secrets=self._extra_secrets,
+        )
 
     def _resolve_workspace(self, workspace: str | None) -> Path:
         if not workspace:
@@ -414,15 +423,16 @@ class CommandRunner:
         *,
         artifacts: Sequence[ArtifactWriteResult] | None = None,
     ) -> CommandExecutionError:
-        combined = self._scrub(self._combine_streams(completed))
+        scrubbed_output = self._scrub(self._combine_streams(completed))
+        scrubbed_command = self._scrub(self._format_command(cmd_sequence))
         message = (
-            f"Command {' '.join(cmd_sequence)} failed with code {completed.returncode}"
+            f"Command {scrubbed_command} failed with code {completed.returncode}"
         )
-        if combined:
-            message = f"{message}: {combined}"
+        if scrubbed_output:
+            message = f"{message}: {scrubbed_output}"
         return CommandExecutionError(
             message,
-            output=combined,
+            output=scrubbed_output,
             artifacts=artifacts,
         )
 

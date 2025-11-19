@@ -3,15 +3,33 @@
 from __future__ import annotations
 
 import os
+import re
+from base64 import b64encode
+from urllib.parse import quote_plus
 from typing import Iterable, Sequence
 
 
 _SENSITIVE_KEYS = ("token", "secret", "password", "key", "credential", "auth")
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth)(?:$|[^a-z0-9])"
+)
 
 
 def _is_sensitive_key(key: str) -> bool:
-    lowered = key.lower()
-    return any(marker in lowered for marker in _SENSITIVE_KEYS)
+    return bool(_SENSITIVE_KEY_PATTERN.search(key))
+
+
+def _secret_variants(secret: str) -> set[str]:
+    variants = {secret}
+    try:
+        variants.add(b64encode(secret.encode()).decode())
+    except Exception:  # pragma: no cover - defensive
+        pass
+    try:
+        variants.add(quote_plus(secret))
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return variants
 
 
 class SecretRedactor:
@@ -25,11 +43,15 @@ class SecretRedactor:
     def __init__(self, secrets: Iterable[str] | None = None, placeholder: str = "***") -> None:
         self._placeholder = placeholder
         seen: set[str] = set()
-        self._secrets: list[str] = []
+        unique_secrets: list[str] = []
         for value in secrets or []:
-            if value and value not in seen:
-                seen.add(value)
-                self._secrets.append(value)
+            if not value:
+                continue
+            for variant in _secret_variants(value):
+                if variant and variant not in seen:
+                    seen.add(variant)
+                    unique_secrets.append(variant)
+        self._secrets: list[str] = sorted(unique_secrets, key=len, reverse=True)
 
     @classmethod
     def from_environ(
