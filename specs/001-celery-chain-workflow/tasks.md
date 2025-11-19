@@ -42,7 +42,7 @@
 **Independent Test**: POST `/api/workflows/speckit/runs` against a staging repo and verify a branch/PR plus Codex logs are created without manual steps.
 
 ### Tests (write before implementation)
-- [ ] T010 [P] [US1] Add Celery-chain happy-path coverage to `tests/unit/workflows/test_tasks.py`, asserting discovery/submit/apply/publish states populate the DB.
+- [x] T010 [P] [US1] Add Celery-chain happy-path coverage to `tests/unit/workflows/test_tasks.py`, asserting discovery/submit/apply/publish states populate the DB.
 - [ ] T011 [P] [US1] Add contract coverage for `POST /api/workflows/speckit/runs` in `tests/contract/test_workflow_api.py`, checking 202 payload shape and idempotent branch names.
 
 ### Implementation
