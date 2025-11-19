@@ -638,8 +638,6 @@ class AppSettings(BaseSettings):
             self.spec_workflow.celery_broker_url = self.celery.broker_url
         if not self.spec_workflow.celery_result_backend:
             self.spec_workflow.celery_result_backend = self.celery.result_backend
-        if not self.spec_workflow.codex_queue:
-            self.spec_workflow.codex_queue = self.celery.default_queue
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
