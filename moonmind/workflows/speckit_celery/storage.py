@@ -1,7 +1,7 @@
 import hashlib
-import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 
 class ArtifactStorage:
     """
@@ -17,7 +17,9 @@ class ArtifactStorage:
         """
         return self.artifact_root / str(run_id)
 
-    def store_artifact(self, run_id: str, file_path: Path, artifact_name: str) -> Dict[str, Any]:
+    def store_artifact(
+        self, run_id: str, file_path: Path, artifact_name: str
+    ) -> Dict[str, Any]:
         """
         Stores an artifact and returns its metadata.
         """
@@ -28,6 +30,7 @@ class ArtifactStorage:
 
         # For now, we'll just copy the file. In a real scenario, this might be a move or upload.
         import shutil
+
         shutil.copy(file_path, destination)
 
         return self.get_artifact_metadata(destination)

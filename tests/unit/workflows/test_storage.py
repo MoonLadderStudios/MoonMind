@@ -1,8 +1,10 @@
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
+
 from moonmind.workflows.speckit_celery.storage import ArtifactStorage
-import tempfile
-import shutil
+
 
 class TestArtifactStorage(unittest.TestCase):
     def setUp(self):
@@ -42,5 +44,6 @@ class TestArtifactStorage(unittest.TestCase):
         stored_path = self.storage.get_run_path(run_id) / artifact_name
         self.assertTrue(stored_path.exists())
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
