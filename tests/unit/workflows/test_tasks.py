@@ -51,6 +51,32 @@ def _make_state(
     )
 
 
+TEST_FEATURE_KEY = "001-celery-chain-workflow"
+TEST_GITHUB_REPOSITORY = "moonmind/test-repo"
+TEST_CODEX_VOLUME = "codex_auth_test"
+
+
+@asynccontextmanager
+async def workflow_db(monkeypatch, tmp_path):
+    """Provide an isolated async database session maker for workflow tests."""
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_chain.db"
+    engine = create_async_engine(db_url, future=True)
+    async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    monkeypatch.setattr(db_base, "DATABASE_URL", db_url)
+    monkeypatch.setattr(db_base, "engine", engine)
+    monkeypatch.setattr(db_base, "async_session_maker", async_session_maker)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        yield async_session_maker
+    finally:
+        await engine.dispose()
+
+
 def test_serialize_task_state_includes_temporal_fields():
     """Task state serialization should surface temporal metadata."""
 
@@ -595,16 +621,6 @@ def test_codex_routing_reuses_existing_queue(monkeypatch):
 async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatch):
     """Executing the Celery chain should persist task state transitions."""
 
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_chain.db"
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
     monkeypatch.setitem(tasks.celery_app.conf, "task_always_eager", True)
     monkeypatch.setitem(tasks.celery_app.conf, "task_eager_propagates", True)
 
@@ -617,8 +633,7 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
         ),
     )
 
-    feature_key = "001-celery-chain-workflow"
-    specs_dir = tmp_path / "specs" / feature_key
+    specs_dir = tmp_path / "specs" / TEST_FEATURE_KEY
     specs_dir.mkdir(parents=True)
     (specs_dir / "tasks.md").write_text(
         "\n".join(
@@ -631,42 +646,43 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     )
 
     artifacts_root = tmp_path / "artifacts"
-    monkeypatch.setattr(tasks.settings.spec_workflow, "test_mode", True, raising=False)
-    monkeypatch.setattr(tasks.settings.spec_workflow, "repo_root", str(tmp_path), raising=False)
-    monkeypatch.setattr(tasks.settings.spec_workflow, "tasks_root", "specs", raising=False)
-    monkeypatch.setattr(
-        tasks.settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
-    )
-    monkeypatch.setattr(
-        tasks.settings.spec_workflow,
-        "github_repository",
-        "moonmind/test-repo",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        tasks.settings.spec_workflow, "default_feature_key", feature_key, raising=False
-    )
-    monkeypatch.setattr(
-        tasks.settings.spec_workflow, "codex_volume_name", "codex_auth_test", raising=False
-    )
+    workflow_settings = {
+        "test_mode": True,
+        "repo_root": str(tmp_path),
+        "tasks_root": "specs",
+        "artifacts_root": str(artifacts_root),
+        "github_repository": TEST_GITHUB_REPOSITORY,
+        "default_feature_key": TEST_FEATURE_KEY,
+        "codex_volume_name": TEST_CODEX_VOLUME,
+    }
+    for key, value in workflow_settings.items():
+        monkeypatch.setattr(tasks.settings.spec_workflow, key, value, raising=False)
 
-    async with db_base.async_session_maker() as session:
-        repo = repositories.SpecWorkflowRepository(session)
-        run = await repo.create_run(
-            feature_key=feature_key, repository="moonmind/test-repo"
+    async with workflow_db(monkeypatch, tmp_path) as async_session_maker:
+        async with async_session_maker() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            run = await repo.create_run(
+                feature_key=TEST_FEATURE_KEY, repository=TEST_GITHUB_REPOSITORY
+            )
+            artifacts_dir = artifacts_root / str(run.id)
+            artifacts_dir.mkdir(parents=True)
+            await repo.update_run(run.id, artifacts_path=str(artifacts_dir))
+            await session.commit()
+
+        discovery_result = tasks.discover_next_phase.apply_async(
+            args=[str(run.id)], kwargs={"feature_key": TEST_FEATURE_KEY}
         )
-        artifacts_dir = artifacts_root / str(run.id)
-        artifacts_dir.mkdir(parents=True)
-        await repo.update_run(run.id, artifacts_path=str(artifacts_dir))
-        await session.commit()
+        discovery_context = discovery_result.get()
 
-    discovery_context = tasks.discover_next_phase(str(run.id), feature_key=feature_key)
-    submit_context = tasks.submit_codex_job(dict(discovery_context))
-    publish_context = tasks.apply_and_publish(dict(submit_context))
+        submit_result = tasks.submit_codex_job.apply_async(args=[dict(discovery_context)])
+        submit_context = submit_result.get()
 
-    async with db_base.async_session_maker() as session:
-        repo = repositories.SpecWorkflowRepository(session)
-        persisted = await repo.get_run(run.id, with_relations=True)
+        publish_result = tasks.apply_and_publish.apply_async(args=[dict(submit_context)])
+        publish_context = publish_result.get()
+
+        async with async_session_maker() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            persisted = await repo.get_run(run.id, with_relations=True)
 
     assert persisted is not None
     assert persisted.status is models.SpecWorkflowRunStatus.SUCCEEDED
