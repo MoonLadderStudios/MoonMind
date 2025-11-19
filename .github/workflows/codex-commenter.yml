@@ -444,9 +444,33 @@ jobs:
             const isGeminiComment = (comment) => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
-              return userLogin.includes('gemini') ||
-                     body.includes('Gemini Code Assist') ||
-                     userLogin === 'gemini-code-assist';
+              const normalizedBody = body.toLowerCase();
+
+              const isGeminiUser =
+                userLogin.includes('gemini') ||
+                body.includes('Gemini Code Assist') ||
+                userLogin === 'gemini-code-assist';
+
+              if (!isGeminiUser) {
+                return false;
+              }
+
+              const nonReviewPhrases = [
+                'unable to generate a summary',
+                'unable to generate summary',
+                'unable to complete a review',
+                'unable to review this pull request',
+              ];
+
+              const isStatusOnlyMessage = nonReviewPhrases.some(phrase =>
+                normalizedBody.includes(phrase)
+              );
+
+              if (isStatusOnlyMessage) {
+                return false;
+              }
+
+              return true;
             };
 
             const isCodexComment = (comment) => {
