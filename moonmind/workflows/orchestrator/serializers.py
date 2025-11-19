@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 from uuid import UUID
 
 from api_service.db import models as db_models
@@ -16,6 +16,9 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunSummaryModel,
 )
 from moonmind.workflows.speckit_celery import models as workflow_models
+
+if TYPE_CHECKING:  # pragma: no cover - import used for type checking only
+    from moonmind.schemas.workflow_models import OrchestratorApprovalStatus
 
 
 def _resolve_approval_state(
