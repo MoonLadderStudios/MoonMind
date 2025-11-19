@@ -221,23 +221,24 @@ async def _record_plan_failure(
     duration_ms = _duration_ms(started_at, finished)
     record_step_result(step.value, "failed", duration_ms)
     run.metrics_snapshot = apply_step_snapshot(
-        run.metrics_snapshot,
+        getattr(run, "metrics_snapshot", None),
         step=step.value,
         status=db_models.OrchestratorPlanStepStatus.FAILED.value,
         duration_ms=duration_ms,
     )
 
     has_rollback = _plan_contains_step(
-        run.action_plan, db_models.OrchestratorPlanStep.ROLLBACK
+        getattr(run, "action_plan", None),
+        db_models.OrchestratorPlanStep.ROLLBACK,
     )
     final_failure = (not has_rollback) or (
         step == db_models.OrchestratorPlanStep.ROLLBACK
     )
     run_duration_ms: float | None = None
     if final_failure:
-        run_duration_ms = _duration_ms(run.started_at, finished)
+        run_duration_ms = _duration_ms(getattr(run, "started_at", None), finished)
         run.metrics_snapshot = apply_run_snapshot(
-            run.metrics_snapshot,
+            getattr(run, "metrics_snapshot", None),
             status=db_models.OrchestratorRunStatus.FAILED.value,
             duration_ms=run_duration_ms,
         )
@@ -362,16 +363,16 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             duration_ms = _duration_ms(started_at, finished)
             record_step_result(step.value, "succeeded", duration_ms)
             run.metrics_snapshot = apply_step_snapshot(
-                run.metrics_snapshot,
+                getattr(run, "metrics_snapshot", None),
                 step=step.value,
                 status=db_models.OrchestratorPlanStepStatus.SUCCEEDED.value,
                 duration_ms=duration_ms,
             )
 
             if step == db_models.OrchestratorPlanStep.VERIFY:
-                run_duration_ms = _duration_ms(run.started_at, finished)
+                run_duration_ms = _duration_ms(getattr(run, "started_at", None), finished)
                 run.metrics_snapshot = apply_run_snapshot(
-                    run.metrics_snapshot,
+                    getattr(run, "metrics_snapshot", None),
                     status=db_models.OrchestratorRunStatus.SUCCEEDED.value,
                     duration_ms=run_duration_ms,
                 )
@@ -399,9 +400,9 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                         finished_at=finished,
                     )
             elif step == db_models.OrchestratorPlanStep.ROLLBACK:
-                run_duration_ms = _duration_ms(run.started_at, finished)
+                run_duration_ms = _duration_ms(getattr(run, "started_at", None), finished)
                 run.metrics_snapshot = apply_run_snapshot(
-                    run.metrics_snapshot,
+                    getattr(run, "metrics_snapshot", None),
                     status=db_models.OrchestratorRunStatus.ROLLED_BACK.value,
                     duration_ms=run_duration_ms,
                 )
