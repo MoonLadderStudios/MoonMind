@@ -441,6 +441,25 @@ jobs:
               return patterns.some(pattern => pattern.test(body));
             };
 
+            const geminiStatusPatterns = [
+              /unable to generate (?:a\s+)?summary/i,
+              /unable to complete (?:the\s+)?review/i,
+              /unable to review(?:\s+this\s+(?:pull\s+request|pr))?/i,
+              /could not review/i,
+              /cannot review/i,
+              /review (?:results )?are not available/i,
+              /review is (?:temporarily\s+)?unavailable/i,
+              /analysis is not available/i,
+              /not (?:being\s+)?currently\s+supported/i,
+            ];
+
+            const isGeminiStatusOnlyComment = (body) => {
+              if (!body) {
+                return false;
+              }
+              return geminiStatusPatterns.some(pattern => pattern.test(body));
+            };
+
             const isGeminiComment = (comment) => {
               const userLogin = comment.user?.login?.toLowerCase() || '';
               const body = comment.body || '';
@@ -448,25 +467,14 @@ jobs:
 
               const isGeminiUser =
                 userLogin.includes('gemini') ||
-                body.includes('Gemini Code Assist') ||
                 userLogin === 'gemini-code-assist';
 
               if (!isGeminiUser) {
                 return false;
               }
 
-              const nonReviewPhrases = [
-                'unable to generate a summary',
-                'unable to generate summary',
-                'unable to complete a review',
-                'unable to review this pull request',
-              ];
-
-              const isStatusOnlyMessage = nonReviewPhrases.some(phrase =>
-                normalizedBody.includes(phrase)
-              );
-
-              if (isStatusOnlyMessage) {
+              if (isGeminiStatusOnlyComment(normalizedBody)) {
+                console.log('Ignoring Gemini status-only message that is not a review.');
                 return false;
               }
 
