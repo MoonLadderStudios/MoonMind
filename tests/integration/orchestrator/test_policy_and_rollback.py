@@ -19,12 +19,12 @@ from moonmind.schemas.workflow_models import (
     OrchestratorCreateRunRequest,
     OrchestratorRunStatus,
 )
-from moonmind.workflows.orchestrator.action_plan import generate_action_plan
-from moonmind.workflows.orchestrator.services import OrchestratorService
-from moonmind.workflows.orchestrator.storage import ArtifactStorage
 from moonmind.workflows.orchestrator import tasks as orchestrator_tasks
+from moonmind.workflows.orchestrator.action_plan import generate_action_plan
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
 from moonmind.workflows.orchestrator.service_profiles import ServiceProfile
+from moonmind.workflows.orchestrator.services import OrchestratorService
+from moonmind.workflows.orchestrator.storage import ArtifactStorage
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,9 @@ async def test_protected_service_requires_approval(tmp_path: Path, monkeypatch) 
         run_id = run_summary["runId"]
         assert run_summary["status"] == OrchestratorRunStatus.AWAITING_APPROVAL.value
         assert run_summary["approvalRequired"] is True
-        assert run_summary["approvalStatus"] == OrchestratorApprovalStatus.AWAITING.value
+        assert (
+            run_summary["approvalStatus"] == OrchestratorApprovalStatus.AWAITING.value
+        )
 
         approval_payload = OrchestratorApprovalRequest(
             approver={"id": "user-1", "role": "sre"},
@@ -92,8 +94,7 @@ async def test_protected_service_requires_approval(tmp_path: Path, monkeypatch) 
         approval_body = approval_response.json()
         assert approval_body["status"] == OrchestratorRunStatus.PENDING.value
         assert (
-            approval_body["approvalStatus"]
-            == OrchestratorApprovalStatus.GRANTED.value
+            approval_body["approvalStatus"] == OrchestratorApprovalStatus.GRANTED.value
         )
 
     async with db_base.async_session_maker() as session:
@@ -172,7 +173,6 @@ async def test_verify_failure_triggers_rollback(tmp_path: Path, monkeypatch) -> 
         artifacts = await repo.list_artifacts(run_id)
         assert artifacts
         assert any(
-            artifact.artifact_type
-            == db_models.OrchestratorRunArtifactType.ROLLBACK_LOG
+            artifact.artifact_type == db_models.OrchestratorRunArtifactType.ROLLBACK_LOG
             for artifact in artifacts
         )

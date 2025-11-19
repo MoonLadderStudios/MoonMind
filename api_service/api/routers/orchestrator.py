@@ -18,11 +18,11 @@ from moonmind.schemas.workflow_models import (
     OrchestratorApprovalRequest,
     OrchestratorArtifactListResponse,
     OrchestratorCreateRunRequest,
+    OrchestratorRetryRequest,
     OrchestratorRunDetailModel,
     OrchestratorRunListResponse,
     OrchestratorRunStatus,
     OrchestratorRunSummaryModel,
-    OrchestratorRetryRequest,
 )
 from moonmind.workflows.orchestrator.action_plan import generate_action_plan
 from moonmind.workflows.orchestrator.metrics import record_run_queued
@@ -186,7 +186,7 @@ async def list_orchestrator_artifacts(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "run_not_found", "message": "Run does not exist."},
-    )
+        )
     artifacts = await repo.list_artifacts(run_id)
     return OrchestratorArtifactListResponse(artifacts=serialize_artifacts(artifacts))
 
