@@ -37,6 +37,9 @@ TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
 async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypatch):
     """Ensure POST /runs returns contract payloads and deterministic branches."""
 
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
     db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_contract.db"
     db_base.DATABASE_URL = db_url
     db_base.engine = create_async_engine(db_url, future=True)
@@ -49,16 +52,16 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
 
     branch_history: dict[str, str] = {}
     run_store: dict = {}
+    test_timestamp = datetime(2024, 1, 1, tzinfo=UTC)
 
     async def _fake_trigger_spec_workflow_run(
         *, feature_key=None, created_by=None, force_phase=None, repository=None
     ):
         del created_by, force_phase  # unused in this contract test
         key = feature_key or settings.spec_workflow.default_feature_key
-        now = datetime(2024, 1, 1, tzinfo=UTC)
         run_id = uuid4()
         branch_name = branch_history.setdefault(
-            key, generate_branch_name(run_id, prefix=key, timestamp=now)
+            key, generate_branch_name(run_id, prefix=key, timestamp=test_timestamp)
         )
 
         run = workflow_models.SpecWorkflowRun(
@@ -68,8 +71,8 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             branch_name=branch_name,
             status=workflow_models.SpecWorkflowRunStatus.PENDING,
             phase=workflow_models.SpecWorkflowRunPhase.DISCOVER,
-            created_at=now,
-            updated_at=now,
+            created_at=test_timestamp,
+            updated_at=test_timestamp,
         )
         run_store[run_id] = run
 
@@ -85,9 +88,6 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             del with_relations
             return self._store.get(run_id)
 
-    monkeypatch.setattr(
-        "moonmind.workflows.trigger_spec_workflow_run", _fake_trigger_spec_workflow_run
-    )
     monkeypatch.setattr(
         "api_service.api.routers.workflows.trigger_spec_workflow_run",
         _fake_trigger_spec_workflow_run,
@@ -118,10 +118,13 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
 
             assert run_model.branch_name is not None
             branch_parts = run_model.branch_name.split("/")
-            assert branch_parts[0] == sanitize_branch_component(feature_key)
-            assert branch_parts[1].isdigit()
-            assert len(branch_parts[1]) == 8
-            assert branch_parts[2]
+            assert len(branch_parts) == 3
+            sanitized_key, date_str, run_id_part = branch_parts
+            assert sanitized_key == sanitize_branch_component(feature_key)
+            assert date_str.isdigit() and len(date_str) == 8
+            assert len(run_id_part) == 8 and all(
+                char in "0123456789abcdef" for char in run_id_part.lower()
+            )
 
             second_response = await client.post(
                 "/api/workflows/speckit/runs",
@@ -133,6 +136,9 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             assert second_model.id != run_model.id
     finally:
         await db_base.engine.dispose()
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
         app.dependency_overrides.pop(_get_repository, None)
         app.dependency_overrides.pop(get_current_user, None)
 
@@ -141,6 +147,9 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
 async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     """Ensure the workflow API adheres to the documented contract."""
 
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
     db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_contract.db"
     db_base.DATABASE_URL = db_url
     db_base.engine = create_async_engine(db_url, future=True)
@@ -372,4 +381,8 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
                 == workflow_models.CodexAuthVolumeStatus.READY
             )
     finally:
+        await db_base.engine.dispose()
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
         app.dependency_overrides.pop(get_current_user, None)
