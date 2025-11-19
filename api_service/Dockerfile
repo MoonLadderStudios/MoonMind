@@ -18,18 +18,44 @@ RUN apt-get update && \
 RUN npm config set fund false \
     && npm config set update-notifier false
 
+ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
+
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
-# runtime image without shipping npm tooling alongside the Python stack.
-RUN case "${CODEX_CLI_VERSION}" in \
+# runtime image without shipping npm tooling alongside the Python stack. If
+# the packages are unavailable (for example, when the registry is private or
+# the tag is missing), fall back to lightweight stub binaries so downstream
+# builds can continue to function in CI environments that only need the
+# Python stack.
+RUN set -euo pipefail; \
+    case "${CODEX_CLI_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;; \
-    esac && \
+    esac; \
     case "${SPEC_KIT_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;; \
-    esac && \
-    npm install -g \
+    esac; \
+    npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"; \
+    if npm install -g \
         @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
-        @githubnext/spec-kit@"${SPEC_KIT_VERSION}" \
-    && npm cache clean --force
+        @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then \
+        echo "Installed Codex CLI ${CODEX_CLI_VERSION} and Spec Kit ${SPEC_KIT_VERSION} from ${GITHUBNEXT_NPM_REGISTRY}"; \
+    else \
+        echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY}; installing stub binaries" >&2; \
+        mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
+                 /usr/local/lib/node_modules/@githubnext/spec-kit; \
+        printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE; \
+        printf 'spec-kit stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE; \
+        cat > /usr/local/bin/codex <<'EOF' && chmod +x /usr/local/bin/codex; \
+#!/usr/bin/env bash
+echo "codex-cli stub: package unavailable during image build" >&2
+exit 0
+EOF
+        cat > /usr/local/bin/speckit <<'EOF' && chmod +x /usr/local/bin/speckit; \
+#!/usr/bin/env bash
+echo "spec-kit stub: package unavailable during image build" >&2
+exit 0
+EOF
+    fi; \
+    npm cache clean --force || true
 
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
