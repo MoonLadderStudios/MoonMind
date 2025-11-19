@@ -124,18 +124,33 @@ class OrchestratorRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_recent_runs(
+    async def list_runs(
         self,
         *,
+        status: db_models.OrchestratorRunStatus | str | None = None,
+        target_service: Optional[str] = None,
         limit: int = 20,
+        offset: int = 0,
     ) -> list[db_models.OrchestratorRun]:
-        """Return the most recent orchestrator runs ordered by ``queued_at``."""
+        """Return orchestrator runs filtered by status/service with pagination."""
 
-        stmt = (
-            select(db_models.OrchestratorRun)
-            .order_by(db_models.OrchestratorRun.queued_at.desc())
-            .limit(limit)
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+
+        stmt = select(db_models.OrchestratorRun).order_by(
+            db_models.OrchestratorRun.queued_at.desc()
         )
+        if status is not None:
+            stmt = stmt.where(
+                db_models.OrchestratorRun.status
+                == _to_enum(status, db_models.OrchestratorRunStatus)
+            )
+        if target_service:
+            stmt = stmt.where(
+                db_models.OrchestratorRun.target_service == target_service
+            )
+
+        stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -323,10 +338,12 @@ class OrchestratorRepository:
     async def list_artifacts(
         self, run_id: UUID
     ) -> list[db_models.OrchestratorRunArtifact]:
-        """Return artifacts stored for ``run_id``."""
+        """Return artifacts stored for ``run_id`` ordered chronologically."""
 
-        stmt = select(db_models.OrchestratorRunArtifact).where(
-            db_models.OrchestratorRunArtifact.run_id == run_id
+        stmt = (
+            select(db_models.OrchestratorRunArtifact)
+            .where(db_models.OrchestratorRunArtifact.run_id == run_id)
+            .order_by(db_models.OrchestratorRunArtifact.created_at.asc())
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

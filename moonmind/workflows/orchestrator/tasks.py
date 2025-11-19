@@ -17,6 +17,14 @@ from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
 
 from .command_runner import AllowListViolation, CommandRunner, CommandRunnerError
+from .metrics import (
+    apply_run_snapshot,
+    apply_step_snapshot,
+    record_run_completed,
+    record_run_transition,
+    record_step_result,
+    record_step_started,
+)
 from .repositories import OrchestratorRepository
 from .service_profiles import get_service_profile
 from .storage import (
@@ -53,6 +61,13 @@ _STEP_HANDLER = {
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _duration_ms(started_at: datetime | None, finished_at: datetime) -> float | None:
+    if started_at is None:
+        return None
+    elapsed = (finished_at - started_at).total_seconds() * 1000
+    return max(elapsed, 0.0)
 
 
 def _artifact_root() -> Path:
@@ -107,6 +122,22 @@ def _locate_step_definition(
     raise ValueError(f"Action plan missing step '{step.value}'")
 
 
+def _plan_contains_step(
+    plan: db_models.OrchestratorActionPlan | None,
+    step: db_models.OrchestratorPlanStep,
+) -> bool:
+    if plan is None:
+        return False
+    for entry in plan.steps or []:
+        if isinstance(entry, dict):
+            name = entry.get("name")
+        else:
+            name = entry
+        if name == step.value:
+            return True
+    return False
+
+
 _FALLBACK_LOG_NAMES: dict[db_models.OrchestratorPlanStep, str] = {
     db_models.OrchestratorPlanStep.ANALYZE: "analyze.log",
     db_models.OrchestratorPlanStep.PATCH: "patch.log",
@@ -152,6 +183,8 @@ async def _record_plan_failure(
     exc: Exception,
     *,
     storage: ArtifactStorage | None = None,
+    started_at: datetime | None = None,
+    celery_task_id: str | None = None,
 ) -> None:
     finished = _utcnow()
     artifact_ids: list[UUID] = []
@@ -178,16 +211,53 @@ async def _record_plan_failure(
         plan_step=step,
         plan_step_status=db_models.OrchestratorPlanStepStatus.FAILED,
         celery_state=db_models.OrchestratorTaskState.FAILURE,
+        celery_task_id=celery_task_id,
         message=str(exc),
         artifact_refs=artifact_ids,
         payload=payload,
         finished_at=finished,
     )
+
+    duration_ms = _duration_ms(started_at, finished)
+    record_step_result(step.value, "failed", duration_ms)
+    run.metrics_snapshot = apply_step_snapshot(
+        getattr(run, "metrics_snapshot", None),
+        step=step.value,
+        status=db_models.OrchestratorPlanStepStatus.FAILED.value,
+        duration_ms=duration_ms,
+    )
+
+    has_rollback = _plan_contains_step(
+        getattr(run, "action_plan", None),
+        db_models.OrchestratorPlanStep.ROLLBACK,
+    )
+    final_failure = (not has_rollback) or (
+        step == db_models.OrchestratorPlanStep.ROLLBACK
+    )
+    run_duration_ms: float | None = None
+    if final_failure:
+        run_duration_ms = _duration_ms(getattr(run, "started_at", None), finished)
+        run.metrics_snapshot = apply_run_snapshot(
+            getattr(run, "metrics_snapshot", None),
+            status=db_models.OrchestratorRunStatus.FAILED.value,
+            duration_ms=run_duration_ms,
+        )
+
     await repo.update_run(
         run,
         status=db_models.OrchestratorRunStatus.FAILED,
-        completed_at=finished,
+        completed_at=finished if final_failure else None,
+        metrics_snapshot=run.metrics_snapshot,
     )
+
+    if final_failure:
+        record_run_completed(
+            db_models.OrchestratorRunStatus.FAILED.value,
+            run_duration_ms,
+        )
+    else:
+        record_run_transition(db_models.OrchestratorRunStatus.FAILED.value)
+
     await repo.commit()
     logger.error("Plan step %s failed for run %s: %s", step.value, run.id, exc)
 
@@ -212,12 +282,14 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             celery_task_id=task_id,
             started_at=started_at,
         )
+        record_step_started(step.value)
         if run.status == db_models.OrchestratorRunStatus.PENDING:
             await repo.update_run(
                 run,
                 status=db_models.OrchestratorRunStatus.RUNNING,
                 started_at=started_at,
             )
+            record_run_transition(db_models.OrchestratorRunStatus.RUNNING.value)
 
         storage: ArtifactStorage | None = None
         try:
@@ -239,13 +311,29 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             handler_name = _STEP_HANDLER[step]
             handler = getattr(runner, handler_name)
         except (ArtifactStorageError, KeyError, ValueError, TypeError) as exc:
-            await _record_plan_failure(repo, run, step, exc, storage=storage)
+            await _record_plan_failure(
+                repo,
+                run,
+                step,
+                exc,
+                storage=storage,
+                started_at=started_at,
+                celery_task_id=task_id,
+            )
             raise
 
         try:
             result = handler(parameters)
         except (AllowListViolation, CommandRunnerError) as exc:
-            await _record_plan_failure(repo, run, step, exc, storage=storage)
+            await _record_plan_failure(
+                repo,
+                run,
+                step,
+                exc,
+                storage=storage,
+                started_at=started_at,
+                celery_task_id=task_id,
+            )
             raise
         else:
             finished = _utcnow()
@@ -265,17 +353,40 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                 plan_step=step,
                 plan_step_status=db_models.OrchestratorPlanStepStatus.SUCCEEDED,
                 celery_state=db_models.OrchestratorTaskState.SUCCESS,
+                celery_task_id=task_id,
                 message=result.message,
                 artifact_refs=artifact_ids,
                 payload=result.metadata,
                 finished_at=finished,
             )
 
+            duration_ms = _duration_ms(started_at, finished)
+            record_step_result(step.value, "succeeded", duration_ms)
+            run.metrics_snapshot = apply_step_snapshot(
+                getattr(run, "metrics_snapshot", None),
+                step=step.value,
+                status=db_models.OrchestratorPlanStepStatus.SUCCEEDED.value,
+                duration_ms=duration_ms,
+            )
+
             if step == db_models.OrchestratorPlanStep.VERIFY:
+                run_duration_ms = _duration_ms(
+                    getattr(run, "started_at", None), finished
+                )
+                run.metrics_snapshot = apply_run_snapshot(
+                    getattr(run, "metrics_snapshot", None),
+                    status=db_models.OrchestratorRunStatus.SUCCEEDED.value,
+                    duration_ms=run_duration_ms,
+                )
                 await repo.update_run(
                     run,
                     status=db_models.OrchestratorRunStatus.SUCCEEDED,
                     completed_at=finished,
+                    metrics_snapshot=run.metrics_snapshot,
+                )
+                record_run_completed(
+                    db_models.OrchestratorRunStatus.SUCCEEDED.value,
+                    run_duration_ms,
                 )
                 if any(
                     entry.get("name") == db_models.OrchestratorPlanStep.ROLLBACK.value
@@ -291,10 +402,23 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                         finished_at=finished,
                     )
             elif step == db_models.OrchestratorPlanStep.ROLLBACK:
+                run_duration_ms = _duration_ms(
+                    getattr(run, "started_at", None), finished
+                )
+                run.metrics_snapshot = apply_run_snapshot(
+                    getattr(run, "metrics_snapshot", None),
+                    status=db_models.OrchestratorRunStatus.ROLLED_BACK.value,
+                    duration_ms=run_duration_ms,
+                )
                 await repo.update_run(
                     run,
                     status=db_models.OrchestratorRunStatus.ROLLED_BACK,
                     completed_at=finished,
+                    metrics_snapshot=run.metrics_snapshot,
+                )
+                record_run_completed(
+                    db_models.OrchestratorRunStatus.ROLLED_BACK.value,
+                    run_duration_ms,
                 )
 
             await repo.commit()

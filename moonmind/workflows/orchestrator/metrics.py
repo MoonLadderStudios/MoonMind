@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -159,4 +159,109 @@ def get_metrics_client() -> MetricsClient:
     return _metrics
 
 
-__all__ = ["MetricsClient", "get_metrics_client"]
+def _sanitize_segment(segment: str) -> str:
+    return segment.replace(" ", "_").replace("/", "-")
+
+
+def record_run_queued(service: str | None = None) -> None:
+    """Increment counters for newly queued runs."""
+
+    client = get_metrics_client()
+    client.increment("runs.queued")
+    if service:
+        client.increment(f"runs.queued.service.{_sanitize_segment(service)}")
+
+
+def record_run_transition(status: str) -> None:
+    """Emit a counter for a run transitioning into ``status``."""
+
+    client = get_metrics_client()
+    client.increment(f"runs.status.{_sanitize_segment(status)}")
+
+
+def record_run_completed(status: str, duration_ms: float | None = None) -> None:
+    """Emit completion counters/timers for a run."""
+
+    record_run_transition(status)
+    if duration_ms is not None:
+        client = get_metrics_client()
+        client.timing(
+            f"runs.duration.{_sanitize_segment(status)}",
+            duration_ms,
+        )
+
+
+def record_step_started(step: str) -> None:
+    """Emit counters when a step begins executing."""
+
+    client = get_metrics_client()
+    client.increment(f"steps.{_sanitize_segment(step)}.started")
+
+
+def record_step_result(
+    step: str, outcome: str, duration_ms: float | None = None
+) -> None:
+    """Emit counters/timers when a step finishes."""
+
+    client = get_metrics_client()
+    client.increment(f"steps.{_sanitize_segment(step)}.{_sanitize_segment(outcome)}")
+    if duration_ms is not None:
+        client.timing(
+            f"steps.{_sanitize_segment(step)}.duration",
+            duration_ms,
+        )
+
+
+def _ensure_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if snapshot is None:
+        snapshot = {}
+    steps = snapshot.get("steps")
+    if not isinstance(steps, dict):
+        snapshot["steps"] = {}
+    return snapshot
+
+
+def apply_step_snapshot(
+    snapshot: dict[str, Any] | None,
+    *,
+    step: str,
+    status: str,
+    duration_ms: float | None = None,
+) -> dict[str, Any]:
+    """Return a snapshot with the given step recorded."""
+
+    snapshot = _ensure_snapshot(snapshot)
+    entry: dict[str, Any] = {"status": status}
+    if duration_ms is not None:
+        entry["durationMs"] = duration_ms
+    snapshot["steps"][step] = entry
+    return snapshot
+
+
+def apply_run_snapshot(
+    snapshot: dict[str, Any] | None,
+    *,
+    status: str,
+    duration_ms: float | None = None,
+) -> dict[str, Any]:
+    """Return a snapshot with run-level metrics updated."""
+
+    snapshot = _ensure_snapshot(snapshot)
+    entry: dict[str, Any] = {"status": status}
+    if duration_ms is not None:
+        entry["durationMs"] = duration_ms
+    snapshot["run"] = entry
+    return snapshot
+
+
+__all__ = [
+    "MetricsClient",
+    "apply_run_snapshot",
+    "apply_step_snapshot",
+    "get_metrics_client",
+    "record_run_completed",
+    "record_run_queued",
+    "record_run_transition",
+    "record_step_result",
+    "record_step_started",
+]

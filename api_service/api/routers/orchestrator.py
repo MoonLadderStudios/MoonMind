@@ -4,21 +4,30 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Tuple
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db import models as db_models
 from api_service.db.base import get_async_session
 from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
-    OrchestratorApprovalStatus,
+    OrchestratorArtifactListResponse,
     OrchestratorCreateRunRequest,
+    OrchestratorRunDetailModel,
+    OrchestratorRunListResponse,
+    OrchestratorRunStatus,
     OrchestratorRunSummaryModel,
 )
 from moonmind.workflows.orchestrator.action_plan import generate_action_plan
+from moonmind.workflows.orchestrator.metrics import record_run_queued
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
+from moonmind.workflows.orchestrator.serializers import (
+    serialize_artifacts,
+    serialize_run_detail,
+    serialize_run_list,
+    serialize_run_summary,
+)
 from moonmind.workflows.orchestrator.service_profiles import get_service_profile
 from moonmind.workflows.orchestrator.services import OrchestratorService
 from moonmind.workflows.orchestrator.storage import (
@@ -44,34 +53,6 @@ def _artifact_root() -> Path:
                 "message": "Artifact storage root misconfigured.",
             },
         ) from exc
-
-
-def _resolve_approval_state(
-    run: db_models.OrchestratorRun,
-) -> Tuple[bool, OrchestratorApprovalStatus]:
-    if run.approval_gate_id is None:
-        return False, OrchestratorApprovalStatus.NOT_REQUIRED
-    if run.approval_token:
-        return True, OrchestratorApprovalStatus.GRANTED
-    return True, OrchestratorApprovalStatus.AWAITING
-
-
-def _serialize_run_summary(
-    run: db_models.OrchestratorRun,
-) -> OrchestratorRunSummaryModel:
-    approval_required, approval_status = _resolve_approval_state(run)
-    return OrchestratorRunSummaryModel(
-        run_id=run.id,
-        status=run.status,
-        priority=run.priority,
-        target_service=run.target_service,
-        instruction=run.instruction,
-        queued_at=run.queued_at,
-        started_at=run.started_at,
-        completed_at=run.completed_at,
-        approval_required=approval_required,
-        approval_status=approval_status,
-    )
 
 
 @router.post(
@@ -118,5 +99,66 @@ async def create_orchestrator_run(
 
     step_sequence = [step.name for step in plan.steps]
     enqueue_action_plan(run.id, step_sequence, include_rollback=True)
+    record_run_queued(run.target_service)
 
-    return _serialize_run_summary(run)
+    return serialize_run_summary(run)
+
+
+@router.get(
+    "/runs",
+    response_model=OrchestratorRunListResponse,
+)
+async def list_orchestrator_runs(
+    *,
+    status_filter: OrchestratorRunStatus | None = Query(
+        None, alias="status", description="Filter by run status"
+    ),
+    service: str | None = Query(
+        None, alias="service", description="Filter by target service"
+    ),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_async_session),
+) -> OrchestratorRunListResponse:
+    repo = OrchestratorRepository(session)
+    runs = await repo.list_runs(
+        status=status_filter, target_service=service, limit=limit, offset=offset
+    )
+    return serialize_run_list(runs)
+
+
+@router.get(
+    "/runs/{run_id}",
+    response_model=OrchestratorRunDetailModel,
+)
+async def get_orchestrator_run(
+    run_id: UUID,
+    session: AsyncSession = Depends(get_async_session),
+) -> OrchestratorRunDetailModel:
+    repo = OrchestratorRepository(session)
+    run = await repo.get_run(run_id, with_relations=True)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "run_not_found", "message": "Run does not exist."},
+        )
+    return serialize_run_detail(run)
+
+
+@router.get(
+    "/runs/{run_id}/artifacts",
+    response_model=OrchestratorArtifactListResponse,
+)
+async def list_orchestrator_artifacts(
+    run_id: UUID,
+    session: AsyncSession = Depends(get_async_session),
+) -> OrchestratorArtifactListResponse:
+    repo = OrchestratorRepository(session)
+    run = await repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "run_not_found", "message": "Run does not exist."},
+        )
+    artifacts = await repo.list_artifacts(run_id)
+    return OrchestratorArtifactListResponse(artifacts=serialize_artifacts(artifacts))
