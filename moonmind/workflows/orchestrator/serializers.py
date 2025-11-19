@@ -110,7 +110,9 @@ def _convert_task_states(
     return serialized
 
 
-def serialize_run_summary(run: db_models.OrchestratorRun) -> OrchestratorRunSummaryModel:
+def serialize_run_summary(
+    run: db_models.OrchestratorRun,
+) -> OrchestratorRunSummaryModel:
     approval_required, approval_status = _resolve_approval_state(run)
     return OrchestratorRunSummaryModel(
         run_id=run.id,

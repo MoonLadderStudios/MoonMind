@@ -24,9 +24,7 @@ from moonmind.workflows.speckit_celery import models as workflow_models
 
 @pytest.mark.asyncio
 async def test_list_runs_supports_filters_and_pagination(tmp_path) -> None:
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{tmp_path}/repo.db", future=True
-    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/repo.db", future=True)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with engine.begin() as conn:
@@ -86,7 +84,9 @@ async def test_get_run_with_relations_returns_details(tmp_path) -> None:
         await session.flush()
 
         run = OrchestratorRun(
-            instruction="Inspect", target_service="api", queued_at=datetime.now(timezone.utc)
+            instruction="Inspect",
+            target_service="api",
+            queued_at=datetime.now(timezone.utc),
         )
         run.action_plan = plan
         session.add(run)

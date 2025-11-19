@@ -9,16 +9,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db import models as db_models
 from api_service.db.base import get_async_session
 from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
+    OrchestratorArtifactListResponse,
     OrchestratorCreateRunRequest,
     OrchestratorRunDetailModel,
     OrchestratorRunListResponse,
-    OrchestratorRunSummaryModel,
     OrchestratorRunStatus,
-    OrchestratorArtifactListResponse,
+    OrchestratorRunSummaryModel,
 )
 from moonmind.workflows.orchestrator.action_plan import generate_action_plan
 from moonmind.workflows.orchestrator.metrics import record_run_queued

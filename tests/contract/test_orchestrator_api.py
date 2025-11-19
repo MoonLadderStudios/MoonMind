@@ -135,12 +135,13 @@ async def test_orchestrator_visibility_contract(tmp_path) -> None:
         assert detail_response.status_code == 200
         detail_model = OrchestratorRunDetailModel.model_validate(detail_response.json())
         assert detail_model.action_plan is not None
-        assert detail_model.steps and detail_model.steps[0].name == OrchestratorPlanStep.VERIFY
+        assert (
+            detail_model.steps
+            and detail_model.steps[0].name == OrchestratorPlanStep.VERIFY
+        )
         assert detail_model.metrics_snapshot is not None
 
-        artifacts_response = await client.get(
-            f"/orchestrator/runs/{run_id}/artifacts"
-        )
+        artifacts_response = await client.get(f"/orchestrator/runs/{run_id}/artifacts")
         assert artifacts_response.status_code == 200
         artifacts_model = OrchestratorArtifactListResponse.model_validate(
             artifacts_response.json()

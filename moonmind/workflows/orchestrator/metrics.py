@@ -204,9 +204,7 @@ def record_step_result(
     """Emit counters/timers when a step finishes."""
 
     client = get_metrics_client()
-    client.increment(
-        f"steps.{_sanitize_segment(step)}.{_sanitize_segment(outcome)}"
-    )
+    client.increment(f"steps.{_sanitize_segment(step)}.{_sanitize_segment(outcome)}")
     if duration_ms is not None:
         client.timing(
             f"steps.{_sanitize_segment(step)}.duration",
