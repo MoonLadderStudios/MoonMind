@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.db import base as db_base
 from api_service.db.models import Base
 from moonmind.workflows.speckit_celery import models, repositories, tasks
 from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
@@ -588,6 +589,95 @@ def test_codex_routing_reuses_existing_queue(monkeypatch):
     routed_context = calls[-1]["args"][0]
     assert routed_context["codex_queue"] == submit_queue
     assert routed_context["codex_shard_index"] == context["codex_shard_index"]
+
+
+@pytest.mark.asyncio
+async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatch):
+    """Executing the Celery chain should persist task state transitions."""
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_chain.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    monkeypatch.setitem(tasks.celery_app.conf, "task_always_eager", True)
+    monkeypatch.setitem(tasks.celery_app.conf, "task_eager_propagates", True)
+
+    monkeypatch.setattr(
+        tasks,
+        "_run_codex_preflight_check",
+        lambda: tasks.CodexPreflightResult(
+            status=models.CodexPreflightStatus.SKIPPED,
+            message="preflight skipped in unit test",
+        ),
+    )
+
+    feature_key = "001-celery-chain-workflow"
+    specs_dir = tmp_path / "specs" / feature_key
+    specs_dir.mkdir(parents=True)
+    (specs_dir / "tasks.md").write_text(
+        "\n".join(
+            [
+                "## Phase 3 – User Story 1",
+                "- [ ] T010 Validate Celery chain persistence",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(tasks.settings.spec_workflow, "test_mode", True, raising=False)
+    monkeypatch.setattr(tasks.settings.spec_workflow, "repo_root", str(tmp_path), raising=False)
+    monkeypatch.setattr(tasks.settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "github_repository",
+        "moonmind/test-repo",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow, "default_feature_key", feature_key, raising=False
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow, "codex_volume_name", "codex_auth_test", raising=False
+    )
+
+    async with db_base.async_session_maker() as session:
+        repo = repositories.SpecWorkflowRepository(session)
+        run = await repo.create_run(
+            feature_key=feature_key, repository="moonmind/test-repo"
+        )
+        artifacts_dir = artifacts_root / str(run.id)
+        artifacts_dir.mkdir(parents=True)
+        await repo.update_run(run.id, artifacts_path=str(artifacts_dir))
+        await session.commit()
+
+    discovery_context = tasks.discover_next_phase(str(run.id), feature_key=feature_key)
+    submit_context = tasks.submit_codex_job(dict(discovery_context))
+    publish_context = tasks.apply_and_publish(dict(submit_context))
+
+    async with db_base.async_session_maker() as session:
+        repo = repositories.SpecWorkflowRepository(session)
+        persisted = await repo.get_run(run.id, with_relations=True)
+
+    assert persisted is not None
+    assert persisted.status is models.SpecWorkflowRunStatus.SUCCEEDED
+    assert persisted.phase is models.SpecWorkflowRunPhase.COMPLETE
+    assert publish_context.get("pr_url")
+    assert publish_context.get("codex_task_id")
+
+    statuses = {state.task_name: state.status for state in persisted.task_states}
+    assert statuses[tasks.TASK_DISCOVER] is models.SpecWorkflowTaskStatus.SUCCEEDED
+    assert statuses[tasks.TASK_SUBMIT] is models.SpecWorkflowTaskStatus.SUCCEEDED
+    assert statuses[tasks.TASK_PUBLISH] is models.SpecWorkflowTaskStatus.SUCCEEDED
 
 
 @pytest.mark.asyncio
