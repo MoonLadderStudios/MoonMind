@@ -528,10 +528,11 @@ jobs:
             const hasAnyReviewEver = allComments.some(comment =>
               isGeminiComment(comment) || isCodexComment(comment)
             );
+            const needsInitialReview = !hasAnyReviewEver;
             const reviewGateSatisfied =
+              !needsInitialReview &&
               noBlockingReviewIssues &&
               (hasAnyReviewSinceLastCommit || hasAnyReviewEver);
-            const needsInitialReview = !hasAnyReviewEver;
 
             console.log(`Any review since last commit: ${hasAnyReviewSinceLastCommit}`);
             console.log(`Blocking review comments detected: ${hasReviewComments}`);
@@ -544,7 +545,7 @@ jobs:
             if (!reviewGateSatisfied) {
               if (!noBlockingReviewIssues) {
                 console.log('Review gate blocking: high-priority review issues remain unresolved.');
-              } else if (!hasAnyReviewSinceLastCommit && needsInitialReview) {
+              } else if (needsInitialReview) {
                 console.log('Review gate blocking: no review activity has occurred on this PR yet.');
               }
             }
