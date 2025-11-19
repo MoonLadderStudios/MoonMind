@@ -77,13 +77,13 @@
 **Independent Test**: Configure a protected service, start a run without approval (expect `awaiting_approval`), provide approval to resume, then induce a verify failure to confirm rollback, artifact capture, and retry support.
 
 ### Tests for User Story 3
-- [ ] T025 [P] [US3] Add integration coverage in `tests/integration/orchestrator/test_policy_and_rollback.py` proving approval enforcement, rollback artifacts, and retry flows, plus contract assertions for approval/retry endpoints.
+- [x] T025 [P] [US3] Add integration coverage in `tests/integration/orchestrator/test_policy_and_rollback.py` proving approval enforcement, rollback artifacts, and retry flows, plus contract assertions for approval/retry endpoints.
 
 ### Implementation for User Story 3
-- [ ] T021 [US3] Implement approval policy resolution and validation helpers in `moonmind/workflows/orchestrator/policies.py`, and enforce them in run creation so protected services block before patching.
-- [ ] T022 [US3] Add the `POST /orchestrator/runs/{run_id}/approvals` handler in `api_service/api/routers/orchestrator.py` plus repository updates to persist approval tokens, approver metadata, and unblock pending runs.
-- [ ] T023 [US3] Extend `moonmind/workflows/orchestrator/command_runner.py` and `moonmind/workflows/orchestrator/tasks.py` with rollback execution (git revert/file restore, compose restart, rollback.log artifact) triggered on verify failure.
-- [ ] T024 [US3] Implement `POST /orchestrator/runs/{run_id}/retry` in the router and Celery entry points so operators can resume from a stored plan step or queue a fresh chain that reuses artifacts.
+- [x] T021 [US3] Implement approval policy resolution and validation helpers in `moonmind/workflows/orchestrator/policies.py`, and enforce them in run creation so protected services block before patching.
+- [x] T022 [US3] Add the `POST /orchestrator/runs/{run_id}/approvals` handler in `api_service/api/routers/orchestrator.py` plus repository updates to persist approval tokens, approver metadata, and unblock pending runs.
+- [x] T023 [US3] Extend `moonmind/workflows/orchestrator/command_runner.py` and `moonmind/workflows/orchestrator/tasks.py` with rollback execution (git revert/file restore, compose restart, rollback.log artifact) triggered on verify failure.
+- [x] T024 [US3] Implement `POST /orchestrator/runs/{run_id}/retry` in the router and Celery entry points so operators can resume from a stored plan step or queue a fresh chain that reuses artifacts.
 
 **Checkpoint**: Approval-sensitive services are protected, failures roll back automatically, and operators can approve or retry runs confidently.
 

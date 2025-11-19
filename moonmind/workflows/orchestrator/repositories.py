@@ -47,6 +47,20 @@ class OrchestratorRepository:
         await self._session.commit()
 
     # ------------------------------------------------------------------
+    # Approval helpers
+    # ------------------------------------------------------------------
+    async def get_approval_gate(
+        self, service_name: str
+    ) -> Optional[db_models.ApprovalGate]:
+        """Return the approval gate protecting ``service_name`` if present."""
+
+        stmt: Select[tuple[db_models.ApprovalGate]] = select(
+            db_models.ApprovalGate
+        ).where(db_models.ApprovalGate.service_name == service_name)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    # ------------------------------------------------------------------
     # Action plan helpers
     # ------------------------------------------------------------------
     async def create_action_plan(
@@ -179,6 +193,36 @@ class OrchestratorRepository:
         await self._session.flush()
         return run
 
+    async def record_approval(
+        self,
+        run: db_models.OrchestratorRun,
+        *,
+        token: str,
+        approver: Mapping[str, str] | None = None,
+        granted_at: datetime | None = None,
+        expires_at: datetime | None = None,
+    ) -> db_models.OrchestratorRun:
+        """Persist approval metadata onto ``run`` and reset status."""
+
+        from .policies import ApprovalPolicy, apply_approval_snapshot
+
+        run.approval_token = token
+
+        policy = ApprovalPolicy(gate=run.approval_gate)
+        run.metrics_snapshot = apply_approval_snapshot(
+            run.metrics_snapshot,
+            policy=policy,
+            token=token,
+            approver=dict(approver) if approver else None,
+            granted_at=granted_at,
+            expires_at=expires_at,
+        )
+        run.status = db_models.OrchestratorRunStatus.PENDING
+        run.started_at = None
+        run.completed_at = None
+        await self._session.flush()
+        return run
+
     # ------------------------------------------------------------------
     # Task state helpers
     # ------------------------------------------------------------------
@@ -221,7 +265,7 @@ class OrchestratorRepository:
         celery_state: db_models.OrchestratorTaskState | str | None = None,
         celery_task_id: Optional[str] = None,
         message: Optional[str] = None,
-        artifact_paths: Optional[Sequence[UUID]] = None,
+        artifact_refs: Optional[Sequence[UUID]] = None,
         payload: Optional[Mapping[str, Any]] = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
@@ -262,8 +306,8 @@ class OrchestratorRepository:
         if message is not None:
             insert_values["message"] = message
             update_values["message"] = message
-        if artifact_paths is not None:
-            refs = [str(ref) for ref in artifact_paths]
+        if artifact_refs is not None:
+            refs = [str(ref) for ref in artifact_refs]
             insert_values["artifact_refs"] = refs
             update_values["artifact_refs"] = refs
         if payload is not None:
@@ -306,6 +350,31 @@ class OrchestratorRepository:
             )
         )
         return state_result.scalar_one()
+
+    async def reset_plan_steps(
+        self,
+        run: db_models.OrchestratorRun,
+        *,
+        steps: Iterable[db_models.OrchestratorPlanStep],
+        bump_attempt: bool = False,
+        reason: Optional[str] = None,
+    ) -> list[workflow_models.SpecWorkflowTaskState]:
+        """Reset the stored state for ``steps`` to allow retries."""
+
+        updated: list[workflow_models.SpecWorkflowTaskState] = []
+        targets = {step for step in steps}
+        for state in run.task_states or []:
+            if state.plan_step in targets:
+                if bump_attempt:
+                    state.attempt = (state.attempt or 0) + 1
+                state.plan_step_status = db_models.OrchestratorPlanStepStatus.PENDING
+                state.celery_state = db_models.OrchestratorTaskState.PENDING
+                state.message = reason
+                state.started_at = None
+                state.finished_at = None
+                updated.append(state)
+        await self._session.flush()
+        return updated
 
     # ------------------------------------------------------------------
     # Artifact helpers
