@@ -400,14 +400,9 @@ jobs:
               return commentDate > commentCutoffDate;
             });
 
-            let relevantComments = commentsAfterCutoff.slice();
+            const relevantComments = commentsAfterCutoff.slice();
 
             console.log(`Comments after cutoff date: ${relevantComments.length}`);
-
-            if (relevantComments.length === 0 && commits.length > 1) {
-              console.log('No post-cutoff comments found but multiple commits exist; falling back to all comments.');
-              relevantComments = allComments;
-            }
 
             const extractGeminiSeverity = (body) => {
               if (!body) {
