@@ -5,6 +5,7 @@ services:
       dockerfile: api_service/Dockerfile
       args:
         INSTALL_CODEX_CLI: "false"
+        INSTALL_TEST_DEPS: "true"
     env_file:
       - .env
     environment:
@@ -24,6 +25,7 @@ services:
       dockerfile: api_service/Dockerfile
       args:
         INSTALL_CODEX_CLI: "false"
+        INSTALL_TEST_DEPS: "true"
     env_file:
       - .env
     environment:
@@ -36,11 +38,7 @@ services:
       - ./specs:/app/specs
       - ./tests:/app/tests
     working_dir: /app
-    command: [
-      "bash",
-      "-c",
-      "pip install -e .[tests] && pytest -s /app/tests/${TEST_TYPE}"
-    ]
+    command: ["bash", "-c", "pytest -s /app/tests/${TEST_TYPE}"]
     networks:
       - local-network
 

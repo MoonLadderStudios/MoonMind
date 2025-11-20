@@ -4,12 +4,14 @@ ARG SPEC_KIT_VERSION=0.4.0
 # depend on external npm registry availability. Enable explicitly with
 # `--build-arg INSTALL_CODEX_CLI=true` when the CLIs are required.
 ARG INSTALL_CODEX_CLI=false
+ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_CODEX_CLI
+ARG INSTALL_TEST_DEPS
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -91,6 +93,7 @@ FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
+ARG INSTALL_TEST_DEPS
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
@@ -153,6 +156,12 @@ RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 # Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
 RUN pip install -e .
 RUN pip install readmeai~=0.6.3 --no-deps
+
+# Install test extras when requested so compose-driven test runs have pytest and
+# related dependencies baked into the image, avoiding runtime network installs.
+RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+        pip install -e .[tests]; \
+    fi
 
 # Copy source code AFTER installing dependencies
 # This ensures that code changes don't invalidate the dependency cache
