@@ -1,6 +1,22 @@
 # MoonMind
 
-**MoonMind makes it easy to enhance AI chat with personal or proprietary data. It is a Retrieval-Augmented Generation (RAG) app built with Llama Index, FastAPI, Open-WebUI, Qdrant, and docker-compose. The API adheres to the OpenAI architecture, so Open-WebUI can be swapped for any OpenAI-compatible UI. It can also be exposed using MCP to other tools like agents.**
+**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Celery-based orchestrator that can run Spec-driven workflows across your code and infrastructure.**
+
+*AI orchestration hub for RAG, agents, and automated dev workflows.*
+
+## What is MoonMind?
+
+MoonMind is an AI control plane you run yourself. It gives you:
+
+- **Model routing:** An OpenAI-compatible `/v1/chat/completions` and `/v1/models` API that fans out to Google Gemini, OpenAI, Anthropic, Ollama, and VLLM without redeploying. Models are discovered from all enabled providers and cached for fast listing and routing.
+- **Memory and retrieval:** A RAG pipeline powered by LlamaIndex, Qdrant, and configurable embeddings, with loaders for Confluence, GitHub, Google Drive, and more so agents and UIs can ground their reasoning in your real documents.
+- **Automation and orchestration:** A Celery-based automation layer and mm-orchestrator service that run Spec Kit / Codex workflows, execute task chains over RabbitMQ + PostgreSQL, emit StatsD metrics, and write artifacts under `var/artifacts/spec_workflows/<run_id>`.
+
+MoonMind exposes all of this through:
+
+- **OpenAI-compatible APIs** for drop-in use with tools and UIs like Open-WebUI.
+- **Model Context Protocol (MCP)** so external agents can treat MoonMind as a standardized model and tools backend.
+- **Apps and manifests** that describe higher-level workflows declaratively and can be invoked from CLIs, agents, or CI.
 
 ## Quick Start
 
@@ -49,9 +65,11 @@ docker-compose down
 
 This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration (e.g., without Qdrant or with different services), you might use `docker-compose.dev.yaml` or other specific compose files.
 
-## Spec Kit Celery Worker
+## Automation & Orchestrator
 
-MoonMind's Spec Kit automation runs on a dedicated Celery worker. The worker shares configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
+### Spec-driven Celery automation
+
+MoonMind ships with a dedicated Celery worker for GitHub Spec Kit and Codex automation. The worker shares configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
 
 - `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://guest:guest@rabbitmq:5672//`).
 - `CELERY_RESULT_BACKEND` – SQLAlchemy URL for the PostgreSQL result backend (e.g., `db+postgresql://postgres:password@api-db:5432/moonmind`).
@@ -67,12 +85,10 @@ poetry run celery -A celery_worker.speckit_worker worker -Q speckit --loglevel=i
 
 The worker entrypoint in `celery_worker/speckit_worker.py` loads `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment.
 
-### Bundled Codex & Spec Kit CLIs
+The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:
 
-The shared `api_service` image now includes the Codex CLI and GitHub Spec Kit CLI. Both tools are installed during the Docker build from their npm packages so Celery workers can execute automation workflows without performing runtime downloads.
-
-- Default versions are pinned via build arguments: `CODEX_CLI_VERSION=0.6.0` and `SPEC_KIT_VERSION=0.4.0`.
-- Override the pins by passing new values when building the image:
+- Build args set defaults: `CODEX_CLI_VERSION=0.6.0` and `SPEC_KIT_VERSION=0.4.0`.
+- Override the pins when building the image:
 
   ```bash
   docker build \
@@ -82,6 +98,17 @@ The shared `api_service` image now includes the Codex CLI and GitHub Spec Kit CL
   ```
 
 Release notes should record the versions shipped with each published image so operators know when the automation toolchain changed.
+
+### mm-orchestrator service
+
+For longer-running, multi-step workflows, MoonMind provides an `orchestrator` service. It:
+
+- Listens on a dedicated Celery queue (`ORCHESTRATOR_CELERY_QUEUE`, default `orchestrator.run`).
+- Mounts `/workspace` and connects to a Docker host (`ORCHESTRATOR_DOCKER_HOST`) to patch, build, restart, and verify services based on an ActionPlan.
+- Emits StatsD metrics (`ORCHESTRATOR_STATSD_HOST` / `ORCHESTRATOR_STATSD_PORT`).
+- Stores run artifacts under `ORCHESTRATOR_ARTIFACT_ROOT` (default `var/artifacts/spec_workflows`) for later inspection.
+
+The orchestrator is designed to be driven by agents and CLIs: submit a Spec, get back a run id, and watch the system move through analyze → patch → build → restart → verify → rollback, with approvals enforced where required.
 
 ## Development
 
@@ -339,7 +366,26 @@ The API container is powered by FastAPI and LangChain, employing Dependency Inje
 
 ## Apps
 
-Apps are higher-level workflows built on top of MoonMind. They can be invoked from the CLI or other tools using the Model Context Protocol. When started with a manifest file, the application uses `ManifestLoader` to read reader definitions and defaults from YAML, returning a new settings instance that merges the manifest values with the environment configuration.
+Apps are orchestrated workflows built on top of MoonMind.
+
+An App can:
+
+- Declare its readers and defaults via a YAML manifest.
+- Use MoonMind’s retrieval layer to build a working context over your code and documents.
+- Dispatch long-running steps to the Spec Kit worker or mm-orchestrator over Celery queues.
+
+Apps can be invoked from:
+
+- the CLI,
+- agents via the Model Context Protocol (`/context`),
+- or CI pipelines that call MoonMind’s APIs.
+
+## Using MoonMind as an agent backend
+
+MoonMind is built to sit behind agent frameworks:
+
+- **Model Context Protocol:** The `/context` endpoint exposes a standard interface that tools like OpenHands can use to route chat and tool calls through MoonMind.
+- **Agent environments:** Sample configs and guides for running MoonMind from inside agent sandboxes like the Jules Agent and OpenHands (`OPENHANDS__*` settings) so agents can reuse your models, memory, and orchestrator queues.
 
 ## Running the VLLM Service
 
@@ -521,21 +567,21 @@ MoonMind checks user profile settings first when looking up API keys. If a key i
 
 You can view or change keys at `http://localhost:8080/settings`.
 
-## Roadmap
-MoonMind now supports:
-- Multiple chat models available from different providers (Google, OpenAI) without redeployment.
-- The ability to choose a provider based on the model name in API requests.
-- Enabling or disabling providers by setting their respective API keys.
+## Roadmap: from RAG server to orchestration hub
 
-Future plans include:
-- Multiple embedding models available without redeployment, e.g. a code embedding model and a general purpose embedding model.
-- The ability to change more settings at runtime.
-- The ability to pass API credentials with requests (as an alternative to server-side configuration).
+Today MoonMind supports:
 
-We may add support for:
-- Multiple projects with different settings in one deployment, e.g. different collection names and vector store configurations.
+- Multi-provider chat (Google Gemini, OpenAI, Anthropic, Ollama, VLLM) behind a single OpenAI-compatible API.
+- Retrieval-augmented chat over your own Confluence, GitHub, Google Drive, and other sources.
+- Celery-backed Spec Kit and Codex workflows plus an mm-orchestrator service for plan/patch/build/restart/verify loops.
 
-TODO: Add a notion of a collection which tracks the vector store and embedder. Once created, when you choose a collection, the vector store and embedder are selected for you.
+Planned evolution:
+
+- **Richer memory tools** – long-lived project and user memories that Apps and agents can read/write, beyond vector search, to ground orchestrated workflows and approvals.
+- **Voice-driven orchestration** – a small voice gateway that turns spoken commands into orchestrator runs (e.g., “deploy the latest Spec to staging and run tests”) and streams status updates back.
+- **Gemini CLI automation** – first-class support for a Gemini-powered CLI in Celery tasks, alongside Codex and Spec Kit, so you can mix tools from different ecosystems in the same workflow.
+
+The north star is for MoonMind to act as a single, self-hosted hub where chat, memory, and automation all meet.
 
 ## Gemini
 
