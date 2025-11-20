@@ -26,7 +26,7 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
 # Python stack.
-RUN set -euo pipefail; \
+RUN set -uo pipefail; \
     case "${CODEX_CLI_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;; \
     esac; \
@@ -58,7 +58,6 @@ echo "spec-kit stub: package unavailable during image build" >&2
 exit 0
 EOF
     }; \
-    INSTALL_STATUS=0; \
     if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then \
         echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2; \
         stub_binaries; \
@@ -68,10 +67,9 @@ EOF
         INSTALL_STATUS=$?; \
         echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2; \
         stub_binaries; \
-        INSTALL_STATUS=0; \
     fi; \
     npm cache clean --force || true; \
-    exit ${INSTALL_STATUS}
+    :
 
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
