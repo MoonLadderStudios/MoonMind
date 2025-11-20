@@ -12,17 +12,6 @@ from moonmind.workflows.speckit_celery.celeryconfig import (
     get_codex_shard_router,
 )
 
-# The orchestration helpers are imported after the Celery app is configured to
-# avoid circular imports. They expose the Celery chain entry points used by the
-# API and tests.
-from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: E402
-    TriggeredWorkflow,
-    WorkflowConflictError,
-    WorkflowRetryError,
-    retry_spec_workflow_run,
-    trigger_spec_workflow_run,
-)
-
 CELERY_NAMESPACE = "moonmind.workflows.speckit_celery"
 _TASK_IMPORT = "moonmind.workflows.speckit_celery.tasks"
 
@@ -68,13 +57,25 @@ def create_celery_app() -> Celery:
 celery_app = create_celery_app()
 
 
+# The orchestration helpers are imported after the Celery app is configured to
+# avoid circular imports. They expose the Celery chain entry points used by the
+# API and tests.
+from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: E402
+    TriggeredWorkflow,
+    WorkflowConflictError,
+    WorkflowRetryError,
+    retry_spec_workflow_run,
+    trigger_spec_workflow_run,
+)
+
+
 __all__ = [
-    "celery_app",
-    "create_celery_app",
     "CELERY_NAMESPACE",
-    "trigger_spec_workflow_run",
-    "retry_spec_workflow_run",
+    "TriggeredWorkflow",
     "WorkflowConflictError",
     "WorkflowRetryError",
-    "TriggeredWorkflow",
+    "celery_app",
+    "create_celery_app",
+    "retry_spec_workflow_run",
+    "trigger_spec_workflow_run",
 ]
