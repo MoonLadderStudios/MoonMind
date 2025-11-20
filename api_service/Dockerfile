@@ -1,6 +1,9 @@
 ARG CODEX_CLI_VERSION=0.6.0
 ARG SPEC_KIT_VERSION=0.4.0
-ARG INSTALL_CODEX_CLI=true
+# Default to skipping Codex/Spec Kit installs so CI and local builds do not
+# depend on external npm registry availability. Enable explicitly with
+# `--build-arg INSTALL_CODEX_CLI=true` when the CLIs are required.
+ARG INSTALL_CODEX_CLI=false
 
 FROM node:20-bookworm AS tooling-builder
 
