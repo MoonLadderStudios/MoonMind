@@ -39,12 +39,12 @@ RUN set -euo pipefail; \
     elif [ -n "${NPM_TOKEN:-}" ]; then \
         npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"; \
     fi; \
-    if npm install -g \
+    INSTALL_STATUS=0; \
+    if ! npm install -g \
         @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
         @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then \
-        echo "Installed Codex CLI ${CODEX_CLI_VERSION} and Spec Kit ${SPEC_KIT_VERSION} from ${GITHUBNEXT_NPM_REGISTRY}"; \
-    else \
-        echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY}; installing stub binaries" >&2; \
+        INSTALL_STATUS=$?; \
+        echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2; \
         mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
                  /usr/local/lib/node_modules/@githubnext/spec-kit; \
         printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE; \
@@ -59,8 +59,10 @@ EOF
 echo "spec-kit stub: package unavailable during image build" >&2
 exit 0
 EOF
+        INSTALL_STATUS=0; \
     fi; \
-    npm cache clean --force || true
+    npm cache clean --force || true; \
+    exit ${INSTALL_STATUS}
 
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
