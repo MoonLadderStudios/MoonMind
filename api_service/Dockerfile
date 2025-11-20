@@ -33,11 +33,14 @@ RUN set -euo pipefail; \
     case "${SPEC_KIT_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;; \
     esac; \
+    echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc; \
     npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"; \
     if [ -n "${GITHUB_TOKEN:-}" ]; then \
         npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"; \
+        npm config set always-auth true; \
     elif [ -n "${NPM_TOKEN:-}" ]; then \
         npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"; \
+        npm config set always-auth true; \
     fi; \
     stub_binaries() { \
         mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
