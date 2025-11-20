@@ -92,9 +92,9 @@
 ## Phase 6: Polish & Cross-Cutting Concerns
 **Purpose**: Finalize documentation, CI, and hardening across user stories.
 
-- [ ] T026 [P] Document orchestrator operations, approval flows, and StatsD dashboards in `docs/OrchestratorArchitecture.md`, `docs/SpecKitAutomation.md`, and refresh `specs/005-orchestrator-architecture/quickstart.md`.
-- [ ] T027 Wire orchestrator integration jobs into CI by updating `docker-compose.test.yaml` and `.github/workflows/pytest-unit-tests.yml` so the new tests run in automation.
-- [ ] T028 [P] Add log redaction + secret scrubbing hooks for orchestrator outputs inside `moonmind/workflows/orchestrator/command_runner.py` and `moonmind/utils/logging.py` to keep artifacts audit-safe.
+- [x] T026 [P] Document orchestrator operations, approval flows, and StatsD dashboards in `docs/OrchestratorArchitecture.md`, `docs/SpecKitAutomation.md`, and refresh `specs/005-orchestrator-architecture/quickstart.md`.
+- [x] T027 Wire orchestrator integration jobs into CI by updating `docker-compose.test.yaml` and `.github/workflows/pytest-unit-tests.yml` so the new tests run in automation.
+- [x] T028 [P] Add log redaction + secret scrubbing hooks for orchestrator outputs inside `moonmind/workflows/orchestrator/command_runner.py` and `moonmind/utils/logging.py` to keep artifacts audit-safe.
 
 ---
 

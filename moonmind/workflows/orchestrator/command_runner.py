@@ -11,6 +11,8 @@ from uuid import UUID
 
 import httpx
 
+from moonmind.utils.logging import SecretRedactor
+
 from .service_profiles import ServiceProfile
 from .storage import ArtifactStorage, ArtifactWriteResult
 
@@ -70,6 +72,9 @@ class CommandRunner:
         self._profile = profile
         self._storage = artifact_storage
         self._workspace_root = profile.workspace_path.resolve()
+        self._redactor_placeholder = "***"
+        self._extra_secrets: list[str] = []
+        self._refresh_redactor()
 
     # ------------------------------------------------------------------
     # Step handlers
@@ -84,7 +89,9 @@ class CommandRunner:
             parameters.get("notes", ""),
         ]
         artifact = self._storage.write_text(
-            self._run_id, log_name, "\n".join(line for line in lines if line)
+            self._run_id,
+            log_name,
+            self._scrub("\n".join(line for line in lines if line)),
         )
         return StepResult(
             message="Analysis complete",
@@ -99,7 +106,7 @@ class CommandRunner:
         command_logs: list[str] = []
         for raw_command in commands:
             command = _ensure_sequence(raw_command)
-            command_logs.append(self._format_command(command))
+            command_logs.append(self._scrub(self._format_command(command)))
             try:
                 completed = self._execute_command(command, cwd=workspace)
             except CommandRunnerError as exc:
@@ -111,9 +118,9 @@ class CommandRunner:
                 )
                 raise
             if completed.stdout:
-                command_logs.append(completed.stdout.strip())
+                command_logs.append(self._scrub(completed.stdout.strip()))
             if completed.stderr:
-                command_logs.append(completed.stderr.strip())
+                command_logs.append(self._scrub(completed.stderr.strip()))
 
         diff_command = ["git", "diff", "HEAD"]
         try:
@@ -129,7 +136,9 @@ class CommandRunner:
                 raise
         diff_artifact_name = str(parameters.get("diffArtifact", "patch.diff"))
         diff_artifact = self._storage.write_text(
-            self._run_id, diff_artifact_name, diff_output or "# No changes generated"
+            self._run_id,
+            diff_artifact_name,
+            self._scrub(diff_output or "# No changes generated"),
         )
 
         unstaged_output = self._execute_command(
@@ -170,7 +179,7 @@ class CommandRunner:
         )
 
         patch_log_artifact = self._storage.write_text(
-            self._run_id, log_name, "\n".join(command_logs)
+            self._run_id, log_name, self._scrub("\n".join(command_logs))
         )
 
         return StepResult(
@@ -203,7 +212,7 @@ class CommandRunner:
         fallback_lines = []
         formatted = self._format_command(command)
         if formatted:
-            fallback_lines.append(f"$ {formatted}")
+            fallback_lines.append(self._scrub(f"$ {formatted}"))
         try:
             artifact = self._run_logged_command(
                 command=command,
@@ -241,7 +250,7 @@ class CommandRunner:
         fallback_lines = []
         formatted = self._format_command(command)
         if formatted:
-            fallback_lines.append(f"$ {formatted}")
+            fallback_lines.append(self._scrub(f"$ {formatted}"))
         try:
             artifact = self._run_logged_command(
                 command=command,
@@ -298,7 +307,7 @@ class CommandRunner:
                     artifact = self._storage.write_text(
                         self._run_id,
                         log_name,
-                        "\n".join(log_lines) or "Verification failed",
+                        self._scrub("\n".join(log_lines) or "Verification failed"),
                     )
                     raise CommandExecutionError(
                         f"Health check for {url} timed out after {timeout_seconds}s",
@@ -311,7 +320,7 @@ class CommandRunner:
         artifact = self._storage.write_text(
             self._run_id,
             log_name,
-            "\n".join(log_lines) or "Verification completed",
+            self._scrub("\n".join(log_lines) or "Verification completed"),
         )
         return StepResult(message="Verification succeeded", artifacts=[artifact])
 
@@ -324,8 +333,8 @@ class CommandRunner:
             log_lines.append(f"Executing rollback strategy: {strategy_type}")
             for command in strategy.get("commands", []):
                 result = self._execute_command(_ensure_sequence(command), cwd=workspace)
-                log_lines.append(self._format_command(command))
-                combined = self._combine_streams(result)
+                log_lines.append(self._scrub(self._format_command(command)))
+                combined = self._scrub(self._combine_streams(result))
                 if combined:
                     log_lines.append(combined)
         if not log_lines:
@@ -333,13 +342,23 @@ class CommandRunner:
         artifact = self._storage.write_text(
             self._run_id,
             str(parameters.get("logArtifact", "rollback.log")),
-            "\n".join(log_lines),
+            self._scrub("\n".join(log_lines)),
         )
         return StepResult(message="Rollback executed", artifacts=[artifact])
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _scrub(self, text: str | None) -> str:
+        self._refresh_redactor()
+        return self._redactor.scrub(text or "")
+
+    def _refresh_redactor(self) -> None:
+        self._redactor = SecretRedactor.from_environ(
+            placeholder=self._redactor_placeholder,
+            extra_secrets=self._extra_secrets,
+        )
+
     def _resolve_workspace(self, workspace: str | None) -> Path:
         if not workspace:
             return self._workspace_root
@@ -405,15 +424,14 @@ class CommandRunner:
         *,
         artifacts: Sequence[ArtifactWriteResult] | None = None,
     ) -> CommandExecutionError:
-        combined = self._combine_streams(completed)
-        message = (
-            f"Command {' '.join(cmd_sequence)} failed with code {completed.returncode}"
-        )
-        if combined:
-            message = f"{message}: {combined}"
+        scrubbed_output = self._scrub(self._combine_streams(completed))
+        scrubbed_command = self._scrub(self._format_command(cmd_sequence))
+        message = f"Command {scrubbed_command} failed with code {completed.returncode}"
+        if scrubbed_output:
+            message = f"{message}: {scrubbed_output}"
         return CommandExecutionError(
             message,
-            output=combined,
+            output=scrubbed_output,
             artifacts=artifacts,
         )
 
@@ -438,7 +456,7 @@ class CommandRunner:
     ) -> ArtifactWriteResult:
         cmd_sequence = list(command)
         formatted = self._format_command(cmd_sequence)
-        header = f"$ {formatted}" if formatted else ""
+        header = self._scrub(f"$ {formatted}" if formatted else "")
         log_lines = [header] if header else []
         try:
             _, completed = self._invoke_command(cmd_sequence, cwd=workspace)
@@ -451,11 +469,13 @@ class CommandRunner:
             )
             raise
 
-        combined = self._combine_streams(completed)
+        combined = self._scrub(self._combine_streams(completed))
         if combined:
             log_lines.append(combined)
 
-        log_content = "\n".join(line for line in log_lines if line) or formatted or ""
+        log_content = self._scrub(
+            "\n".join(line for line in log_lines if line) or formatted or ""
+        )
 
         if completed.returncode != 0:
             error = self._command_failure(cmd_sequence, completed)
@@ -470,7 +490,7 @@ class CommandRunner:
         artifact = self._storage.write_text(
             self._run_id,
             log_name,
-            log_content or formatted or "Command completed",
+            log_content or self._scrub(formatted) or "Command completed",
         )
         return artifact
 
@@ -496,19 +516,19 @@ class CommandRunner:
         if not lines:
             formatted = self._format_command(command)
             if formatted:
-                lines.append(f"$ {formatted}")
+                lines.append(self._scrub(f"$ {formatted}"))
         output = (getattr(exc, "output", None) or "").strip()
         if output:
-            lines.append(output)
+            lines.append(self._scrub(output))
         else:
             message = str(exc)
             if message:
-                lines.append(message)
+                lines.append(self._scrub(message))
 
         artifact = self._storage.write_text(
             self._run_id,
             log_name,
-            "\n".join(lines) or "Command failed",
+            self._scrub("\n".join(lines) or "Command failed"),
         )
         self._attach_failure_artifact(exc, artifact)
         return artifact

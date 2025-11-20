@@ -1,10 +1,11 @@
-version: '3.8'
-
 services:
   pytest:
     build:
       context: .
       dockerfile: api_service/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "false"
+        INSTALL_TEST_DEPS: "true"
     env_file:
       - .env
     environment:
@@ -18,10 +19,35 @@ services:
     networks:
       - local-network
 
+  orchestrator-tests:
+    build:
+      context: .
+      dockerfile: api_service/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "false"
+        INSTALL_TEST_DEPS: "true"
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app:/app/moonmind
+      - TEST_TYPE=integration/orchestrator
+    volumes:
+      - ./moonmind:/app/moonmind
+      - ./api_service:/app/api_service
+      - ./services:/app/services
+      - ./specs:/app/specs
+      - ./tests:/app/tests
+    working_dir: /app
+    command: ["bash", "-c", "pytest -s /app/tests/${TEST_TYPE}"]
+    networks:
+      - local-network
+
   cli-tooling-smoke:
     build:
       context: .
       dockerfile: api_service/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "false"
     env_file:
       - .env
     environment:

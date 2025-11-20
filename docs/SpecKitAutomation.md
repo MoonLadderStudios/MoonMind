@@ -121,6 +121,19 @@ Note: home/.codex/ is a nested mount backed by a named Docker volume. It survive
 
 Unchanged; add log lines around codex pre-flight and mount selection.
 
+### 7.1 Orchestrator Interop (Spec Kit + Fix Runs)
+
+* **Approval-aware scheduling** – When Spec Kit delegates a follow-up fix to the orchestrator, protected services inherit the
+  same approval flow: the orchestrator will pause the ActionPlan in `awaiting_approval` until an operator calls
+  `POST /orchestrator/runs/{run_id}/approvals`.
+* **Artifact hand-off** – Spec Kit attaches discovery/submission artifacts to the orchestrator run so `patch.diff`, `build.log`,
+  `verify.log`, and `rollback.log` live beside the original Spec Kit outputs under `var/artifacts/spec_workflows/<run_id>/`.
+* **StatsD alignment** – Both systems emit StatsD when configured; orchestrator metrics use the `moonmind.orchestrator.*`
+  namespace (`runs.status.*`, `steps.<step>.started`, `steps.<step>.failed`). Pair these with existing Spec Kit counters to build
+  a single Grafana dashboard showing discovery → plan → patch/build/restart → verify.
+* **Operational checkpoints** – Watch the orchestrator worker logs for `analyze → patch → build → restart → verify`; if a run
+  gets stuck, poll `GET /orchestrator/runs/{run_id}` to confirm state and retry via `POST /orchestrator/runs/{run_id}/retry`.
+
 ### Health Checks for Bundled CLIs
 
 - Celery worker bootstrap should invoke `codex --version`, `codex login status`, and `speckit --version` once when the process starts.

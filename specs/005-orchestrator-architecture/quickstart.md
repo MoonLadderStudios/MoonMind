@@ -40,11 +40,21 @@
 2. For failed runs, request a retry from the failing step:
    ```bash
    curl -X POST http://localhost:8000/orchestrator/runs/<run_id>/retry \
-     -H 'Content-Type: application/json' \
-     -d '{"resume_from_step": "build", "reason": "Credentials refreshed"}'
+   -H 'Content-Type: application/json' \
+   -d '{"resume_from_step": "build", "reason": "Credentials refreshed"}'
    ```
 
-## 5. Testing workflow
+## 5. Metrics and dashboards
+1. Enable StatsD by exporting `STATSD_HOST`/`STATSD_PORT` (or `ORCHESTRATOR_STATSD_*`) in the orchestrator service. Metrics are
+   emitted under `moonmind.orchestrator.*`:
+   - `runs.queued`, `runs.status.<state>`, and `runs.duration.<state>` for lifecycle tracking.
+   - `steps.<step>.started` and `steps.<step>.<outcome>` for per-step throughput.
+2. Dashboard hints:
+   - Plot `runs.status.awaiting_approval` to catch approval bottlenecks.
+   - Graph `steps.verify.failed` next to `steps.verify.duration` to spot flaky health checks.
+   - Alert when `runs.status.failed` spikes or when `runs.queued` grows faster than `runs.status.running` (stuck queue).
+
+## 6. Testing workflow
 1. Execute integration tests that spin up the orchestrator stack:
    ```bash
    docker compose -f docker-compose.test.yaml run --rm orchestrator-tests

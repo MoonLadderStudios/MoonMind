@@ -269,6 +269,54 @@ Block modifications to:
     * Mean time to repair (MTTR).
   * Optional integration with Prometheus/Grafana.
 
+### 7.1 Operational Runbook
+
+The orchestrator worker is intentionally simple so SREs can reason about failures with the same primitives they already use for
+Compose-managed services.
+
+1. **Start the stack** – `docker compose up -d rabbitmq api celery-worker orchestrator` (optionally add a StatsD sidecar).
+2. **Submit a run** – POST `/orchestrator/runs` with `instruction` + `target_service`; confirm a new row in
+   `orchestrator_runs` shows `queued` and the Celery worker logs the ActionPlan.
+3. **Watch progress** – tail `celery-worker`/`orchestrator` logs for `analyze → patch → build → restart → verify`; poll
+   `GET /orchestrator/runs/{run_id}` for step timestamps and artifact paths.
+4. **Retrieve artifacts** – download `patch.diff`, `build.log`, `restart.log`, `verify.log`, and `rollback.log` from
+   `GET /orchestrator/runs/{run_id}/artifacts`; files are stored on-disk under `var/artifacts/spec_workflows/<run_id>/` for easy
+   rsync/scp.
+5. **Clean up** – stop services with `docker compose down` or prune old artifact directories per retention policy.
+
+### 7.2 Approval Flow
+
+Protected services (see `service_profiles.py`) move runs into `awaiting_approval` after the plan is created and before any patch
+is applied. Operators must:
+
+1. **Fetch the pending run** – `GET /orchestrator/runs?status=awaiting_approval` to list queued requests with plan summaries and
+   approver hints.
+2. **Approve** – `POST /orchestrator/runs/{run_id}/approvals` with approver identity + optional token; the run resumes from the
+   first actionable step and records the approver on the ActionPlan snapshot.
+3. **Rollback on verify failure** – if verification fails, the run automatically executes rollback strategies from the stored
+   plan and emits `rollback.log` in artifacts. Operators can retry with `POST /orchestrator/runs/{run_id}/retry` to re-use the
+   captured plan/artifacts after addressing root causes.
+
+### 7.3 StatsD Dashboards
+
+The orchestrator emits lightweight StatsD metrics when `STATSD_HOST`/`STATSD_PORT` (or `ORCHESTRATOR_STATSD_*`) are set. Key
+series include:
+
+* `moonmind.orchestrator.runs.queued` / `.runs.status.<state>` – run lifecycle counters (e.g., `queued`, `running`,
+  `succeeded`, `failed`, `awaiting_approval`).
+* `moonmind.orchestrator.runs.duration.<state>` – completion timing per terminal state.
+* `moonmind.orchestrator.steps.<step>.started` and `.steps.<step>.<outcome>` – per-step throughput and result breakdown
+  (`succeeded`, `failed`, `skipped`).
+
+Suggested dashboard cards:
+
+* **Run funnel** – stacked counter of `runs.status.*` to spot approval backlogs or failure spikes.
+* **Step latency** – timer percentiles for `steps.*.duration` (patch/build/verify) to highlight slow builds or flaky health
+  checks.
+* **Per-service health** – filter `runs.queued.service.<service>` to ensure the orchestrator is balancing work across services.
+* **Alerting** – trigger alarms when `runs.status.failed` or `steps.verify.failed` increase rapidly, or when there is a sustained
+  deficit between `runs.queued` and `runs.status.running` (stuck queue).
+
 ---
 
 ## 8. Limitations & Future Extensions
