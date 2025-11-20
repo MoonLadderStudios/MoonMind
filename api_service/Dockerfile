@@ -45,16 +45,14 @@ RUN set -uo pipefail; \
                  /usr/local/lib/node_modules/@githubnext/spec-kit; \
         printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE; \
         printf 'spec-kit stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE; \
-        cat > /usr/local/bin/codex <<'EOF' && chmod +x /usr/local/bin/codex; \
-#!/usr/bin/env bash
-echo "codex-cli stub: package unavailable during image build" >&2
-exit 0
-EOF
-        cat > /usr/local/bin/speckit <<'EOF' && chmod +x /usr/local/bin/speckit; \
-#!/usr/bin/env bash
-echo "spec-kit stub: package unavailable during image build" >&2
-exit 0
-EOF
+        printf '%s\n' "#!/usr/bin/env bash" \
+                       "echo \"codex-cli stub: package unavailable during image build\" >&2" \
+                       "exit 0" > /usr/local/bin/codex; \
+        chmod +x /usr/local/bin/codex; \
+        printf '%s\n' "#!/usr/bin/env bash" \
+                       "echo \"spec-kit stub: package unavailable during image build\" >&2" \
+                       "exit 0" > /usr/local/bin/speckit; \
+        chmod +x /usr/local/bin/speckit; \
     }; \
     if [ "${INSTALL_CODEX_CLI}" != "true" ]; then \
         echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2; \
