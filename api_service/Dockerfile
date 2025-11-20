@@ -35,15 +35,6 @@ RUN set -uo pipefail; \
     case "${SPEC_KIT_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;; \
     esac; \
-    echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc; \
-    npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"; \
-    if [ -n "${GITHUB_TOKEN:-}" ]; then \
-        npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"; \
-        npm config set always-auth true; \
-    elif [ -n "${NPM_TOKEN:-}" ]; then \
-        npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"; \
-        npm config set always-auth true; \
-    fi; \
     stub_binaries() { \
         mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
                  /usr/local/lib/node_modules/@githubnext/spec-kit; \
@@ -63,7 +54,19 @@ EOF
     if [ "${INSTALL_CODEX_CLI}" != "true" ]; then \
         echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2; \
         stub_binaries; \
-    elif [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then \
+        npm cache clean --force || true; \
+        exit 0; \
+    fi; \
+    echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc; \
+    npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"; \
+    if [ -n "${GITHUB_TOKEN:-}" ]; then \
+        npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"; \
+        npm config set always-auth true; \
+    elif [ -n "${NPM_TOKEN:-}" ]; then \
+        npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"; \
+        npm config set always-auth true; \
+    fi; \
+    if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then \
         echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2; \
         stub_binaries; \
     elif ! npm install -g \
@@ -75,7 +78,6 @@ EOF
     fi; \
     npm cache clean --force || true; \
     :
-
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
