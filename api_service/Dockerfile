@@ -1,10 +1,12 @@
 ARG CODEX_CLI_VERSION=0.6.0
 ARG SPEC_KIT_VERSION=0.4.0
+ARG INSTALL_CODEX_CLI=true
 
 FROM node:20-bookworm AS tooling-builder
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
+ARG INSTALL_CODEX_CLI
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -58,7 +60,10 @@ echo "spec-kit stub: package unavailable during image build" >&2
 exit 0
 EOF
     }; \
-    if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then \
+    if [ "${INSTALL_CODEX_CLI}" != "true" ]; then \
+        echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2; \
+        stub_binaries; \
+    elif [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then \
         echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2; \
         stub_binaries; \
     elif ! npm install -g \
