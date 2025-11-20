@@ -69,13 +69,15 @@ from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: E402
 )
 
 
-__all__ = [
-    "CELERY_NAMESPACE",
-    "TriggeredWorkflow",
-    "WorkflowConflictError",
-    "WorkflowRetryError",
-    "celery_app",
-    "create_celery_app",
-    "retry_spec_workflow_run",
-    "trigger_spec_workflow_run",
-]
+__all__ = sorted(
+    [
+        "CELERY_NAMESPACE",
+        "TriggeredWorkflow",
+        "WorkflowConflictError",
+        "WorkflowRetryError",
+        "celery_app",
+        "create_celery_app",
+        "retry_spec_workflow_run",
+        "trigger_spec_workflow_run",
+    ]
+)
