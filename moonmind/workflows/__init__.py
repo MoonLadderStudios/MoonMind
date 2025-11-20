@@ -32,15 +32,17 @@ def get_spec_automation_repository(
     return SpecAutomationRepository(session)
 
 
-__all__ = [
-    "celery_app",
-    "get_spec_workflow_repository",
-    "get_spec_automation_repository",
-    "SpecWorkflowRepository",
-    "SpecAutomationRepository",
-    "trigger_spec_workflow_run",
-    "retry_spec_workflow_run",
-    "WorkflowConflictError",
-    "WorkflowRetryError",
-    "TriggeredWorkflow",
-]
+__all__ = sorted(
+    [
+        "SpecAutomationRepository",
+        "SpecWorkflowRepository",
+        "TriggeredWorkflow",
+        "WorkflowConflictError",
+        "WorkflowRetryError",
+        "celery_app",
+        "get_spec_automation_repository",
+        "get_spec_workflow_repository",
+        "retry_spec_workflow_run",
+        "trigger_spec_workflow_run",
+    ]
+)
