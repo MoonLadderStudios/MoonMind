@@ -34,6 +34,11 @@ RUN set -euo pipefail; \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;; \
     esac; \
     npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"; \
+    if [ -n "${GITHUB_TOKEN:-}" ]; then \
+        npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"; \
+    elif [ -n "${NPM_TOKEN:-}" ]; then \
+        npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"; \
+    fi; \
     if npm install -g \
         @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
         @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then \
