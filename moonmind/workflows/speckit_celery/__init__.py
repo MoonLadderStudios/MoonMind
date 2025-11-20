@@ -81,4 +81,3 @@ __all__ = [
 ]
 
 # Keep exports alphabetized for readability and easier duplicate detection.
-__all__.sort()
