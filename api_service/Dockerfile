@@ -37,9 +37,11 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
-# Python stack. Invoke bash explicitly so the heredoc never falls back to
-# /bin/sh in environments that ignore the stage-level SHELL instruction.
-RUN /bin/bash -euo pipefail <<'BASH'
+# Python stack. Keep strict mode enabled inside the heredoc as well so any
+# future edits remain protected even if the stage-level shell directive is
+# moved.
+RUN <<'BASH'
+set -o errexit -o nounset -o pipefail
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
