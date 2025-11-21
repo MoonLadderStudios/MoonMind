@@ -102,6 +102,10 @@ ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_TEST_DEPS
 
+# Use bash with pipefail in the runtime image as well so future RUN commands
+# that rely on bash-specific behavior do not regress to /bin/sh defaults.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
     PATH="/usr/local/bin:${PATH}"
