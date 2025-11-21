@@ -39,9 +39,9 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # builds can continue to function in CI environments that only need the
 # Python stack. Keep strict mode enabled inside the heredoc as well so any
 # future edits remain protected even if the stage-level shell directive is
-# moved.
-RUN <<'BASH'
-set -o errexit -o nounset -o pipefail
+# moved. Explicitly invoke bash here to avoid any accidental regressions to
+# `/bin/sh` that would drop support for `pipefail`.
+RUN /bin/bash -euo pipefail <<'BASH'
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
