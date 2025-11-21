@@ -8,6 +8,8 @@ ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
 
+SHELL ["/bin/bash", "-c"]
+
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_CODEX_CLI
