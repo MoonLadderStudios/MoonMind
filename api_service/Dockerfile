@@ -8,7 +8,10 @@ ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
 
-SHELL ["/bin/bash", "-c"]
+# Ensure all RUN commands in this stage use bash with pipefail so we don't hit
+# dash incompatibilities when invoking bash-specific options like `set -o
+# pipefail`.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
