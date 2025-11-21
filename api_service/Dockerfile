@@ -37,9 +37,10 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
-# Python stack. We invoke bash explicitly so Docker cannot regress to /bin/sh
-# during this heredoc even if the stage shell changes.
-RUN /bin/bash -euo pipefail - <<'EOF'
+# Python stack. The stage-level SHELL already enables bash with strict mode,
+# so this heredoc inherits errexit/nounset/pipefail without falling back to
+# /bin/sh.
+RUN <<'EOF'
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
