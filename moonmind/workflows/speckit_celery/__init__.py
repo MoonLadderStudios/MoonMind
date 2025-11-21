@@ -68,6 +68,7 @@ from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: E402
     trigger_spec_workflow_run,
 )
 
+# Keep exports alphabetized for readability and easy scanning.
 __all__ = [
     "CELERY_NAMESPACE",
     "TriggeredWorkflow",
