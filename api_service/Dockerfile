@@ -11,7 +11,7 @@ FROM node:20-bookworm AS tooling-builder
 # Ensure all RUN commands in this stage use bash with pipefail and fail fast on
 # unset variables, so we don't hit dash incompatibilities or silently continue
 # when build args are missing.
-SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
@@ -106,7 +106,7 @@ ARG INSTALL_TEST_DEPS
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
 # /bin/sh defaults or ignore unset variables.
-SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
