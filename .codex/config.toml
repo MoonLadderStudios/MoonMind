@@ -1,7 +1,8 @@
-model = "gpt-5.1-codex"
+model = "gpt-5.1-codex-max"
 model_reasoning_effort = "high"
 [projects."/mnt/d/ai/MoonMind"]
 trust_level = "trusted"
 
 [notice]
 hide_gpt5_1_migration_prompt = true
+"hide_gpt-5.1-codex-max_migration_prompt" = true
