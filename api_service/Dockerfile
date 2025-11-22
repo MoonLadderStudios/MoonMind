@@ -37,9 +37,10 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
-# Python stack. Rely on the stage-level bash shell so the block inherits
-# strict mode without falling back to `/bin/sh` and losing `pipefail` support.
-RUN <<'BASH'
+# Python stack. Execute the block with an explicit bash invocation so we never
+# regress to `/bin/sh` (which lacks `set -o pipefail`) even if a future change
+# alters the stage-level `SHELL` directive.
+RUN /bin/bash -euo pipefail <<'BASH'
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
