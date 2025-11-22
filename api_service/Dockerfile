@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=0.6.0
 ARG SPEC_KIT_VERSION=0.4.0
 # Default to skipping Codex/Spec Kit installs so CI and local builds do not
