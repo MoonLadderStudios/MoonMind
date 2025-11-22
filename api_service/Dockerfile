@@ -1,5 +1,10 @@
 ARG CODEX_CLI_VERSION=0.6.0
 ARG SPEC_KIT_VERSION=0.4.0
+# Default to skipping Codex/Spec Kit installs so CI and local builds do not
+# depend on external npm registry availability. Enable explicitly with
+# `--build-arg INSTALL_CODEX_CLI=true` when the CLIs are required.
+ARG INSTALL_CODEX_CLI=false
+ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
 
@@ -7,6 +12,7 @@ ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_CODEX_CLI=true
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
+ARG INSTALL_TEST_DEPS
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -20,10 +26,17 @@ RUN apt-get update && \
 RUN npm config set fund false \
     && npm config set update-notifier false
 
+ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
+
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # Note: We avoid 'set -o pipefail' here as /bin/sh (dash) does not support it.
-RUN set -u; \
+# runtime image without shipping npm tooling alongside the Python stack. If
+# the packages are unavailable (for example, when the registry is private or
+# the tag is missing), fall back to lightweight stub binaries so downstream
+# builds can continue to function in CI environments that only need the
+# Python stack.
+RUN set -uo pipefail; \
     case "${CODEX_CLI_VERSION}" in \
         (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;; \
     esac; \
@@ -82,6 +95,7 @@ FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
+ARG INSTALL_TEST_DEPS
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
@@ -144,6 +158,12 @@ RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 # Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
 RUN pip install -e .
 RUN pip install readmeai~=0.6.3 --no-deps
+
+# Install test extras when requested so compose-driven test runs have pytest and
+# related dependencies baked into the image, avoiding runtime network installs.
+RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+        pip install -e .[tests]; \
+    fi
 
 # Copy source code AFTER installing dependencies
 # This ensures that code changes don't invalidate the dependency cache

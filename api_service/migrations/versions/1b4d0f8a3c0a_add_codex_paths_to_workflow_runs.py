@@ -14,14 +14,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "spec_workflow_runs",
-        sa.Column("codex_logs_path", sa.String(length=1024), nullable=True),
-    )
-    op.add_column(
-        "spec_workflow_runs",
-        sa.Column("codex_patch_path", sa.String(length=1024), nullable=True),
-    )
+    bind = op.get_context().bind
+    inspector = sa.inspect(bind)
+    columns = [c["name"] for c in inspector.get_columns("spec_workflow_runs")]
+
+    if "codex_logs_path" not in columns:
+        op.add_column(
+            "spec_workflow_runs",
+            sa.Column("codex_logs_path", sa.String(length=1024), nullable=True),
+        )
+    if "codex_patch_path" not in columns:
+        op.add_column(
+            "spec_workflow_runs",
+            sa.Column("codex_patch_path", sa.String(length=1024), nullable=True),
+        )
 
 
 def downgrade() -> None:
