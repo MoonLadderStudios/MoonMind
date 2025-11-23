@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import socket
@@ -846,6 +847,73 @@ def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
     return condensed
 
 
+def _poll_for_codex_diff(
+    codex_client: CodexClient,
+    *,
+    task_id: str,
+    artifacts_dir: Path,
+    task_identifier: str,
+    task_summary: str,
+    poll_interval: float = 1.5,
+    timeout: float = 30.0,
+) -> CodexDiffResult:
+    """Poll Codex for a diff until it is available or the timeout elapses."""
+
+    deadline = time.monotonic() + max(timeout, poll_interval)
+    last_error: Exception | None = None
+
+    while True:
+        try:
+            return codex_client.retrieve_patch(
+                task_id=task_id,
+                artifacts_dir=artifacts_dir,
+                task_identifier=task_identifier,
+                task_summary=task_summary,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            last_error = exc
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Timed out while polling Codex for diff availability"
+                ) from exc
+            time.sleep(poll_interval)
+
+    raise RuntimeError("Unexpected Codex polling exit") from last_error
+
+
+def _write_apply_output(artifacts_dir: Path, diff: CodexDiffResult) -> Path:
+    """Persist apply/poll metadata alongside the patch artifact."""
+
+    apply_payload = {
+        "description": diff.description,
+        "hasChanges": diff.has_changes,
+        "patchPath": str(diff.patch_path),
+    }
+    output_path = artifacts_dir / "apply_output.json"
+    output_path.write_text(json.dumps(apply_payload, indent=2), encoding="utf-8")
+    return output_path
+
+
+def _write_run_summary(artifacts_dir: Path, context: Mapping[str, Any]) -> Path:
+    """Persist a compact JSON summary of the workflow outcome."""
+
+    summary_payload = {
+        "runId": context.get("run_id"),
+        "featureKey": context.get("feature_key"),
+        "task": context.get("task"),
+        "codexTaskId": context.get("codex_task_id"),
+        "codexQueue": context.get("codex_queue"),
+        "branch": context.get("branch_name"),
+        "pullRequestUrl": context.get("pr_url"),
+        "codexPatchPath": context.get("codex_patch_path"),
+        "codexLogsPath": context.get("codex_logs_path"),
+        "noWork": bool(context.get("no_work")),
+    }
+    summary_path = artifacts_dir / "run_summary.json"
+    summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+    return summary_path
+
+
 def _run_codex_preflight_check(
     *, timeout: int = 60, volume_name: str | None = None
 ) -> CodexPreflightResult:
@@ -1589,8 +1657,16 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             )
             await session.commit()
 
+            artifacts_dir = _resolve_artifacts_dir(run)
+
             if context.get("no_work"):
                 finished = _now()
+                summary_path = _write_run_summary(artifacts_dir, context)
+                await repo.add_artifact(
+                    workflow_run_id=run_uuid,
+                    artifact_type=models.WorkflowArtifactType.PR_PAYLOAD,
+                    path=str(summary_path),
+                )
                 await _update_task_state(
                     repo,
                     workflow_run_id=run_uuid,
@@ -1612,15 +1688,15 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 await _maybe_include_codex_queue(repo, context, updates)
                 await repo.update_run(run_uuid, **updates)
                 await session.commit()
+                context["run_summary_path"] = str(summary_path)
                 return context
-
-            artifacts_dir = _resolve_artifacts_dir(run)
             discovered = context.get("task") or {}
             codex_client = _build_codex_client()
             github_client = _build_github_client()
 
             try:
-                diff: CodexDiffResult = codex_client.retrieve_patch(
+                diff: CodexDiffResult = _poll_for_codex_diff(
+                    codex_client,
                     task_id=context.get("codex_task_id", ""),
                     artifacts_dir=artifacts_dir,
                     task_identifier=discovered.get("taskId", ""),
@@ -1630,6 +1706,12 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     workflow_run_id=run_uuid,
                     artifact_type=models.WorkflowArtifactType.CODEX_PATCH,
                     path=str(diff.patch_path),
+                )
+                apply_output_path = _write_apply_output(artifacts_dir, diff)
+                await repo.add_artifact(
+                    workflow_run_id=run_uuid,
+                    artifact_type=models.WorkflowArtifactType.APPLY_OUTPUT,
+                    path=str(apply_output_path),
                 )
 
                 updates = {
@@ -1669,7 +1751,14 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     "pr_url": publish.pr_url,
                     "codex_patch_path": str(diff.patch_path),
                     "github_response_path": str(publish.response_path),
+                    "apply_output_path": str(apply_output_path),
                 }
+            )
+            summary_path = _write_run_summary(artifacts_dir, context)
+            await repo.add_artifact(
+                workflow_run_id=run_uuid,
+                artifact_type=models.WorkflowArtifactType.PR_PAYLOAD,
+                path=str(summary_path),
             )
             updates = {
                 "status": models.SpecWorkflowRunStatus.SUCCEEDED,
@@ -1693,6 +1782,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     prUrl=publish.pr_url,
                     patchPath=str(diff.patch_path),
                     responsePath=str(publish.response_path),
+                    applyOutputPath=str(apply_output_path),
                     codexCredentialStatus=context.get(
                         "credential_audit_status", {}
                     ).get("codex"),
@@ -1704,6 +1794,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 attempt=attempt,
             )
             await session.commit()
+            context["run_summary_path"] = str(summary_path)
             return context
 
     try:
