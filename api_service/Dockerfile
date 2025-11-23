@@ -39,11 +39,10 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
-# Python stack. Write the installer script to disk first so the heredoc is
-# handled by the default shell (even if it is `/bin/sh`) while the execution
-# happens under bash with strict mode.
-RUN cat <<'BASH' >/tmp/install_codex.sh
-set -euo pipefail
+# Python stack. Run the installer inside an explicit bash heredoc so the
+# command never falls back to `/bin/sh` even if the Dockerfile shell is
+# changed later.
+RUN /bin/bash -euo pipefail <<'BASH'
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
@@ -95,8 +94,6 @@ fi
 
 npm cache clean --force || true
 BASH
-
-RUN /bin/bash /tmp/install_codex.sh && rm /tmp/install_codex.sh
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
