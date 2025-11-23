@@ -64,9 +64,9 @@ When an instruction targets sensitive services or a verification step fails, the
 
 ### Functional Requirements
 
-- **FR-001**: The orchestrator must run as a dedicated service (mm-orchestrator) within the existing docker-compose project, mounting the repository workspace and host Docker socket as described in `docs/OrchestratorArchitecture.md`.
+- **FR-001**: The orchestrator must run as a dedicated service (mm-orchestrator) within the existing docker-compose project, mounting the repository workspace and host Docker socket as described in `docs/OrchestratorArchitecture.md`, and it must reuse the same Dockerfile definition as the `api_service` so both services share a single build recipe.
 - **FR-002**: Each run must accept a high-level instruction, derive or validate the target service, and expand it into a structured ActionPlan with explicit steps (analyze, patch, build, restart, verify, rollback).
-- **FR-003**: The orchestrator must restrict file edits to the approved allow list (service Dockerfiles and dependency manifests) and block all other filesystem changes unless a policy override exists.
+- **FR-003**: The orchestrator must restrict file edits to the approved allow list (the shared Dockerfile used by `api_service` and the orchestrator plus dependency manifests) and block all other filesystem changes unless a policy override exists.
 - **FR-004**: Patch generation must capture diffs before and after modifications, store them as artifacts per run, and expose the diff path to operators for audit.
 - **FR-005**: Builds must be executed through the Compose control plane for only the targeted service while streaming build output to storage so operators can review compiler or dependency results.
 - **FR-006**: Service restarts must redeploy only the targeted service via Compose's dependency-skipping semantics and confirm that all other containers remain untouched.
@@ -100,6 +100,7 @@ When an instruction targets sensitive services or a verification step fails, the
 - Service health endpoints (or equivalent checks) are documented so verification can be configured without further discovery.
 - Secrets such as GitHub and Codex tokens are provided through environment variables or Docker secrets and are masked in logs.
 - The spec workflow artifact storage location (local directory or object store namespace) has sufficient capacity and backup to retain logs for auditing periods.
+- A single shared Dockerfile is maintained for both `api_service` and the orchestrator, with service-specific commands or environment applied via Compose configuration rather than separate build definitions.
 
 ## Scope Boundaries
 
