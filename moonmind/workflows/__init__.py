@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from moonmind.workflows.speckit_celery import celery_app
+from moonmind.workflows.speckit_celery import celery_app  # noqa: F401
 from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: F401
     TriggeredWorkflow,
     WorkflowConflictError,
