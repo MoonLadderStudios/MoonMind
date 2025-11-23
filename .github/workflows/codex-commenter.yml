@@ -476,15 +476,14 @@ jobs:
             };
 
             const isCodexComment = (comment) => {
-              const body = comment.body || '';
-              const hasReviewHeading = body.includes('Codex Review');
-              if (!hasReviewHeading) {
-                return false;
-              }
-
               const userLogin = comment.user?.login?.toLowerCase() || '';
-              return userLogin.includes('codex') ||
-                     userLogin === 'chatgpt-codex-connector';
+              const body = comment.body || '';
+              const actorIsCodex = userLogin.includes('codex') ||
+                userLogin === 'chatgpt-codex-connector';
+              const hasCodexMarker = body.includes('Codex Review') || body.includes('<!-- codex:');
+
+              // Treat any comment from the Codex bot as Codex, even if it is an inline review without the heading.
+              return actorIsCodex || hasCodexMarker;
             };
 
             // Check for Gemini Code Assist comments (High or Critical)
