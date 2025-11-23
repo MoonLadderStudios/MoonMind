@@ -46,7 +46,7 @@
 - [x] T011 [P] [US1] Add contract coverage for `POST /api/workflows/speckit/runs` in `tests/contract/test_workflow_api.py`, checking 202 payload shape and idempotent branch names.
 
 ### Implementation
-- [ ] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/speckit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `SpecWorkflowRun`.
+- [x] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/speckit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `SpecWorkflowRun`.
 - [ ] T013 [US1] Implement discovery, submit, apply/poll, publish, and finalize tasks with artifact writes inside `moonmind/workflows/speckit_celery/tasks.py`.
 - [ ] T014 [US1] Create Codex/GitHub helper functions in `moonmind/workflows/speckit_celery/services.py` to enforce idempotent branch naming, push commits, and capture JSONL log paths.
 - [ ] T015 [US1] Wire `POST /api/workflows/speckit/runs` inside `api_service/api/routers/workflows.py` to validate input, create `SpecWorkflowRun`, and enqueue the chain.

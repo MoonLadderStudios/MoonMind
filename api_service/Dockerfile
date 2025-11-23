@@ -17,7 +17,8 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
-ARG INSTALL_CODEX_CLI
+ARG INSTALL_CODEX_CLI=true
+ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG INSTALL_TEST_DEPS
 
 # Install build prerequisites required for global npm CLI installs so future
@@ -35,8 +36,8 @@ RUN npm config set fund false \
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
-# runtime image without shipping npm tooling alongside the Python stack. If
-# the packages are unavailable (for example, when the registry is private or
+# runtime image without shipping npm tooling alongside the Python stack.
+# If the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
 # Python stack. Run the installer inside an explicit bash heredoc so the

@@ -57,4 +57,25 @@ def create_celery_app() -> Celery:
 celery_app = create_celery_app()
 
 
-__all__ = ["celery_app", "create_celery_app", "CELERY_NAMESPACE"]
+# The orchestration helpers are imported after the Celery app is configured to
+# avoid circular imports. They expose the Celery chain entry points used by the
+# API and tests.
+from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: E402, F401
+    TriggeredWorkflow,
+    WorkflowConflictError,
+    WorkflowRetryError,
+    retry_spec_workflow_run,
+    trigger_spec_workflow_run,
+)
+
+# Keep exports alphabetized for readability and easy scanning.
+__all__ = [
+    "CELERY_NAMESPACE",
+    "TriggeredWorkflow",
+    "WorkflowConflictError",
+    "WorkflowRetryError",
+    "celery_app",
+    "create_celery_app",
+    "retry_spec_workflow_run",
+    "trigger_spec_workflow_run",
+]
