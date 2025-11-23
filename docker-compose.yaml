@@ -74,6 +74,8 @@ services:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
       - MODEL_CONTEXT_PROTOCOL_PORT=5000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
@@ -187,6 +189,8 @@ services:
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
       - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     env_file:
       - .env
     volumes:
@@ -291,6 +295,8 @@ services:
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
       - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       - .:/workspace
     working_dir: /workspace

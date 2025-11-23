@@ -10,8 +10,9 @@ The Gemini CLI relies on environment variables for authentication and configurat
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `GOOGLE_API_KEY` | API Key for accessing Google Gemini models. | Yes |
-| `GEMINI_API_KEY` | Alternate API Key (tool dependent). | Optional |
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | API Key for accessing Google Gemini models. Only one is required. If both are set, `GEMINI_API_KEY` may take precedence depending on the tool. | Yes (one of them) |
+
+> Store API keys in your local `.env` file or secrets manager rather than committing them to version control. Rotate the keys periodically and prefer scoped keys when available.
 
 ### CLI State
 

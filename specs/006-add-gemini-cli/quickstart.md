@@ -31,6 +31,8 @@ You can pipe text into the CLI:
 echo "Refactor this code..." | gemini
 ```
 
+> Avoid piping secrets (including API keys or credentials) to prevent leaking them via shell history or logs.
+
 ### In Orchestrator
 
 The orchestrator can use `subprocess` to invoke the CLI:
@@ -41,7 +43,8 @@ import subprocess
 result = subprocess.run(
     ["gemini", "Generate a summary for this text"],
     capture_output=True,
-    text=True
+    text=True,
+    check=True
 )
 print(result.stdout)
 ```
