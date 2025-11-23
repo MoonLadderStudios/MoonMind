@@ -536,9 +536,7 @@ jobs:
               anyGeminiReviewSinceLastCommit ||
               anyCodexReviewSinceLastCommit;
 
-            const hasUnresolvedBlockingReviewComments = hasAnyReviewSinceLastCommit
-              ? hasBlockingReviewCommentsInRelevantWindow
-              : (hasBlockingReviewCommentsInRelevantWindow || hasHistoricalBlockingReviewComments);
+            const hasUnresolvedBlockingReviewComments = hasBlockingReviewCommentsInRelevantWindow;
             const noBlockingReviewIssues = !hasUnresolvedBlockingReviewComments;
             // Track whether *any* review activity has ever occurred on the PR so we
             // never auto-merge something that has not been reviewed at least once.

@@ -5,6 +5,8 @@ ARG SPEC_KIT_VERSION=0.4.0
 # depend on external npm registry availability. Enable explicitly with
 # `--build-arg INSTALL_CODEX_CLI=true` when the CLIs are required.
 ARG INSTALL_CODEX_CLI=false
+ARG INSTALL_GEMINI_CLI=true
+ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
@@ -20,6 +22,8 @@ ARG SPEC_KIT_VERSION
 ARG INSTALL_CODEX_CLI=true
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG INSTALL_TEST_DEPS
+ARG GEMINI_CLI_VERSION
+ARG INSTALL_GEMINI_CLI
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -34,6 +38,8 @@ RUN npm config set fund false \
     && npm config set update-notifier false
 
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
+ARG GEMINI_CLI_VERSION
+ARG INSTALL_GEMINI_CLI
 
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
@@ -50,7 +56,10 @@ esac
 case "${SPEC_KIT_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;;
 esac
-stub_binaries() {
+case "${GEMINI_CLI_VERSION}" in
+    (""|*[!0-9A-Za-z._-]*) echo "Invalid GEMINI_CLI_VERSION: ${GEMINI_CLI_VERSION}" >&2; exit 1;;
+esac
+stub_codex_and_spec() {
     mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
              /usr/local/lib/node_modules/@githubnext/spec-kit
     printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE
@@ -64,33 +73,49 @@ stub_binaries() {
                    "exit 0" > /usr/local/bin/speckit
     chmod +x /usr/local/bin/speckit
 }
+stub_gemini() {
+    mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
+    printf 'gemini-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@google/gemini-cli/LICENSE
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"gemini-cli stub: package unavailable during image build\" >&2" \
+                   "exit 0" > /usr/local/bin/gemini
+    chmod +x /usr/local/bin/gemini
+}
 
 if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
     echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2
-    stub_binaries
+    stub_codex_and_spec
     npm cache clean --force || true
-    exit 0
+else
+    echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc
+    npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"
+        npm config set always-auth true
+    elif [ -n "${NPM_TOKEN:-}" ]; then
+        npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"
+        npm config set always-auth true
+    fi
+
+    if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then
+        echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2
+        stub_codex_and_spec
+    elif ! npm install -g \
+        @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
+        @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then
+        INSTALL_STATUS=$?
+        echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2
+        stub_codex_and_spec
+    fi
 fi
 
-echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc
-npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-    npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"
-    npm config set always-auth true
-elif [ -n "${NPM_TOKEN:-}" ]; then
-    npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"
-    npm config set always-auth true
-fi
-
-if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then
-    echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2
-    stub_binaries
-elif ! npm install -g \
-    @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
-    @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then
+if [ "${INSTALL_GEMINI_CLI}" != "true" ]; then
+    echo "INSTALL_GEMINI_CLI=${INSTALL_GEMINI_CLI}; skipping Gemini CLI install and using stub" >&2
+    stub_gemini
+elif ! npm install -g @google/gemini-cli@"${GEMINI_CLI_VERSION}"; then
     INSTALL_STATUS=$?
-    echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2
-    stub_binaries
+    echo "Warning: Failed to install Gemini CLI (exit ${INSTALL_STATUS}); installing stub binary" >&2
+    stub_gemini
 fi
 
 npm cache clean --force || true
@@ -99,13 +124,15 @@ BASH
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
 RUN codex --version \
-    && speckit --version
+    && speckit --version \
+    && gemini --version
 
 FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_TEST_DEPS
+ARG GEMINI_CLI_VERSION
 
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
@@ -125,6 +152,7 @@ WORKDIR /app
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/speckit /usr/local/bin/speckit
+COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit
@@ -162,10 +190,10 @@ RUN apt-get update && \
 # Ensure the non-root ``app`` user exists for Celery workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit /usr/local/bin/gemini
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
-RUN runuser -u app -- sh -c 'codex --version && speckit --version'
+RUN runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at
