@@ -25,9 +25,20 @@ Once the dependencies are installed, you can run the unit tests to verify the co
 To run the unit tests, use the following command:
 
 ```bash
-poetry run pytest
+./tools/test_unit.sh
 ```
 
-This command will discover and run all the tests in the `tests/` directory. If all tests pass, you can be confident that your changes have not introduced any regressions and that the project is in a stable state.
+This command will discover and run all the tests in the `tests/unit` directory. If all tests pass, you can be confident that your changes have not introduced any regressions and that the project is in a stable state.
 
-By following these steps, you can ensure that your code is always in a compilable and testable state before sharing it with the rest of the team.
+### Test layers & CI
+
+- Unit tests
+  - Location: `tests/unit/...`
+  - CI Workflow: `.github/workflows/pytest-unit-tests.yml`
+  - Command: `./tools/test_unit.sh`
+  - Used by: GitHub Actions + Codex Cloud Agent
+
+- Orchestrator integration tests
+  - Entry point: `docker-compose.test.yaml` (`orchestrator-tests` service)
+  - CI Workflow: `.github/workflows/orchestrator-integration-tests.yml`
+  - Runs on: push to `main` + manual `workflow_dispatch`
