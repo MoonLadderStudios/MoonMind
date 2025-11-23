@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=0.6.0
 ARG SPEC_KIT_VERSION=0.4.0
 # Default to skipping Codex/Spec Kit installs so CI and local builds do not
@@ -7,6 +8,12 @@ ARG INSTALL_CODEX_CLI=false
 ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
+
+# Ensure all RUN commands in this stage use bash with pipefail and fail fast on
+# unset variables, so we don't hit dash incompatibilities or silently continue
+# when build args are missing. Keep the strict flags explicit on the SHELL
+# instruction so future RUN steps automatically inherit them.
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
@@ -32,55 +39,61 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 # the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
 # builds can continue to function in CI environments that only need the
-# Python stack.
-RUN set -uo pipefail; \
-    case "${CODEX_CLI_VERSION}" in \
-        (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;; \
-    esac; \
-    case "${SPEC_KIT_VERSION}" in \
-        (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;; \
-    esac; \
-    stub_binaries() { \
-        mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
-                 /usr/local/lib/node_modules/@githubnext/spec-kit; \
-        printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE; \
-        printf 'spec-kit stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE; \
-        printf '%s\n' "#!/usr/bin/env bash" \
-                       "echo \"codex-cli stub: package unavailable during image build\" >&2" \
-                       "exit 0" > /usr/local/bin/codex; \
-        chmod +x /usr/local/bin/codex; \
-        printf '%s\n' "#!/usr/bin/env bash" \
-                       "echo \"spec-kit stub: package unavailable during image build\" >&2" \
-                       "exit 0" > /usr/local/bin/speckit; \
-        chmod +x /usr/local/bin/speckit; \
-    }; \
-    if [ "${INSTALL_CODEX_CLI}" != "true" ]; then \
-        echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2; \
-        stub_binaries; \
-        npm cache clean --force || true; \
-        exit 0; \
-    fi; \
-    echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc; \
-    npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"; \
-    if [ -n "${GITHUB_TOKEN:-}" ]; then \
-        npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"; \
-        npm config set always-auth true; \
-    elif [ -n "${NPM_TOKEN:-}" ]; then \
-        npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"; \
-        npm config set always-auth true; \
-    fi; \
-    if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then \
-        echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2; \
-        stub_binaries; \
-    elif ! npm install -g \
-        @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
-        @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then \
-        INSTALL_STATUS=$?; \
-        echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2; \
-        stub_binaries; \
-    fi; \
-    npm cache clean --force || true; \
-    :
+# Python stack. Run the installer inside an explicit bash heredoc so the
+# command never falls back to `/bin/sh` even if the Dockerfile shell is
+# changed later.
+RUN /bin/bash -euo pipefail <<'BASH'
+case "${CODEX_CLI_VERSION}" in
+    (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
+esac
+case "${SPEC_KIT_VERSION}" in
+    (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;;
+esac
+stub_binaries() {
+    mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
+             /usr/local/lib/node_modules/@githubnext/spec-kit
+    printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE
+    printf 'spec-kit stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"codex-cli stub: package unavailable during image build\" >&2" \
+                   "exit 0" > /usr/local/bin/codex
+    chmod +x /usr/local/bin/codex
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"spec-kit stub: package unavailable during image build\" >&2" \
+                   "exit 0" > /usr/local/bin/speckit
+    chmod +x /usr/local/bin/speckit
+}
+
+if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
+    echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2
+    stub_binaries
+    npm cache clean --force || true
+    exit 0
+fi
+
+echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc
+npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+    npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"
+    npm config set always-auth true
+elif [ -n "${NPM_TOKEN:-}" ]; then
+    npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"
+    npm config set always-auth true
+fi
+
+if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then
+    echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2
+    stub_binaries
+elif ! npm install -g \
+    @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
+    @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then
+    INSTALL_STATUS=$?
+    echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2
+    stub_binaries
+fi
+
+npm cache clean --force || true
+BASH
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
@@ -92,6 +105,12 @@ FROM python:3.12-slim-bookworm
 ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_TEST_DEPS
+
+# Use bash with pipefail and strict mode in the runtime image as well so
+# future RUN commands that rely on bash-specific behavior do not regress to
+# /bin/sh defaults or ignore unset variables. Keep the options explicit for
+# readability.
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
@@ -124,7 +143,19 @@ RUN apt-get update && \
         tesseract-ocr-eng \
         git \
         curl \
+        gnupg \
         nodejs && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    chmod a+r /etc/apt/keyrings/docker.gpg && \
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        docker-ce-cli \
+        docker-compose-plugin && \
     rm -rf /var/lib/apt/lists/*
 
 # Ensure the non-root ``app`` user exists for Celery workers and the bundled

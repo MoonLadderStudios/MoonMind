@@ -276,9 +276,11 @@ services:
 
   orchestrator:
     build:
-      context: ./services/orchestrator
-      dockerfile: Dockerfile
-    image: moonmind/orchestrator:latest
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    command: >-
+      /app/services/orchestrator/entrypoint.sh
     env_file:
       - .env
     environment:
