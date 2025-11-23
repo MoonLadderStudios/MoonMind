@@ -1,6 +1,6 @@
 # Feature Specification: Integration of Gemini CLI into Orchestrator and Worker Environments
 
-**Feature Branch**: `001-add-gemini-cli`
+**Feature Branch**: `006-add-gemini-cli`
 **Created**: 2025-11-23
 **Status**: Draft
 **Input**: User description: "Gemini CLI: Gemini CLI should be added to my Dockerfile so that Gemini can be used both for the orchestrator to convert natural language into actions and so that the celery workers can use Gemini to execute tasks"
