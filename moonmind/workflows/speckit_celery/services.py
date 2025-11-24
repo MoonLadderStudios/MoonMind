@@ -84,7 +84,9 @@ def push_commits(
 
     repository = Path(repo_path)
     if not repository.is_dir():
-        raise ValueError(f"Repository path {repository} does not exist or is not a directory")
+        raise ValueError(
+            f"Repository path {repository} does not exist or is not a directory"
+        )
 
     ref = f"{remote}/{branch_name}"
     if test_mode is None:
@@ -93,7 +95,11 @@ def push_commits(
     if test_mode:
         logger.info(
             "Skipping git push in test mode",
-            extra={"repository": str(repository), "branch": branch_name, "remote": remote},
+            extra={
+                "repository": str(repository),
+                "branch": branch_name,
+                "remote": remote,
+            },
         )
         return ref
 
@@ -116,6 +122,7 @@ def push_commits(
         ) from exc
 
     logger.info(
-        "Pushed branch", extra={"repository": str(repository), "branch": branch_name, "remote": remote}
+        "Pushed branch",
+        extra={"repository": str(repository), "branch": branch_name, "remote": remote},
     )
     return ref

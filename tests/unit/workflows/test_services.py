@@ -13,7 +13,9 @@ def test_derive_branch_name_deterministic(attempt, expected_suffix):
     feature_key = "FR-008/idempotent-branch"
     timestamp = datetime(2024, 1, 1, tzinfo=UTC)
 
-    branch = services.derive_branch_name(feature_key, run_id, attempt=attempt, timestamp=timestamp)
+    branch = services.derive_branch_name(
+        feature_key, run_id, attempt=attempt, timestamp=timestamp
+    )
 
     parts = branch.split("/")
     assert parts[0] == "fr-008-idempotent-branch"
@@ -46,10 +48,14 @@ def test_push_commits_command_without_force(mock_run, tmp_path):
     repo.mkdir()
     mock_run.return_value.returncode = 0
 
-    services.push_commits(repo, "feature/test", remote="origin", force=False, test_mode=False)
+    services.push_commits(
+        repo, "feature/test", remote="origin", force=False, test_mode=False
+    )
 
     expected_command = ["git", "-C", str(repo), "push", "origin", "feature/test"]
-    mock_run.assert_called_once_with(expected_command, capture_output=True, text=True, check=True)
+    mock_run.assert_called_once_with(
+        expected_command, capture_output=True, text=True, check=True
+    )
 
 
 @patch("subprocess.run")
@@ -58,7 +64,9 @@ def test_push_commits_command_with_force(mock_run, tmp_path):
     repo.mkdir()
     mock_run.return_value.returncode = 0
 
-    services.push_commits(repo, "feature/test", remote="origin", force=True, test_mode=False)
+    services.push_commits(
+        repo, "feature/test", remote="origin", force=True, test_mode=False
+    )
 
     expected_command = [
         "git",
@@ -69,4 +77,6 @@ def test_push_commits_command_with_force(mock_run, tmp_path):
         "origin",
         "feature/test",
     ]
-    mock_run.assert_called_once_with(expected_command, capture_output=True, text=True, check=True)
+    mock_run.assert_called_once_with(
+        expected_command, capture_output=True, text=True, check=True
+    )
