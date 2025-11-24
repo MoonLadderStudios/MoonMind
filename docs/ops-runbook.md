@@ -7,6 +7,8 @@ MoonMind background jobs run using the default user account.
 
 Keys for model providers (e.g. Google and OpenAI) are read from this user's profile whenever jobs execute. In `disabled` auth mode, the values from `.env` seed this profile on startup. Remove them from the environment to verify jobs fail until a key is stored on this user.
 
+**Gemini CLI authentication**: Set `GOOGLE_API_KEY` in the deployment environment so the orchestrator and Celery worker can authenticate when calling the Gemini CLI. In `disabled` auth mode this value is copied from `.env` into the default user profile on startup; otherwise, ensure the default user has a stored Google API key before launching automation workloads.
+
 ## Spec Workflow Celery Chain Operations
 
 - **Services to run**: `docker compose up rabbitmq celery-worker api` (RabbitMQ broker, dedicated Celery worker, and API service). Ensure PostgreSQL is reachable for the Celery result backend.
