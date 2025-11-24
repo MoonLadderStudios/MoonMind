@@ -31,6 +31,7 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     cp .env-template .env
     ```
     Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc. For a basic local setup, default values might suffice for most fields other than an LLM provider API key.
+    The shared Docker image for the API, orchestrator, and Celery worker already bundles the Gemini CLI; set `GOOGLE_API_KEY` in `.env` so the CLI can authenticate during development (you can verify with `tools/verify-gemini.sh`).
 
 **Running MoonMind:**
 

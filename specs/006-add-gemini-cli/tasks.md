@@ -36,8 +36,8 @@
 
 ## Phase 5: Polish
 
-- [ ] T012 Update `docs/ops-runbook.md` to include `GOOGLE_API_KEY` requirement for deployment
-- [ ] T013 Update `README.md` to mention Gemini CLI availability in the development environment
+- [x] T012 Update `docs/ops-runbook.md` to include `GOOGLE_API_KEY` requirement for deployment
+- [x] T013 Update `README.md` to mention Gemini CLI availability in the development environment
 
 ## Dependencies
 
