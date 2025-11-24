@@ -55,9 +55,14 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
     test_timestamp = datetime(2024, 1, 1, tzinfo=UTC)
 
     async def _fake_trigger_spec_workflow_run(
-        *, feature_key=None, created_by=None, force_phase=None, repository=None
+        *,
+        feature_key=None,
+        created_by=None,
+        requested_by_user_id=None,
+        force_phase=None,
+        repository=None,
     ):
-        del created_by, force_phase  # unused in this contract test
+        del created_by, requested_by_user_id, force_phase  # unused in this contract test
         key = feature_key or settings.spec_workflow.default_feature_key
         run_id = uuid4()
         branch_name = branch_history.setdefault(
