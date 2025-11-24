@@ -49,7 +49,7 @@
 - [x] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/speckit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `SpecWorkflowRun`.
 - [x] T013 [US1] Implement discovery, submit, apply/poll, publish, and finalize tasks with artifact writes inside `moonmind/workflows/speckit_celery/tasks.py`.
 - [x] T014 [US1] Create Codex/GitHub helper functions in `moonmind/workflows/speckit_celery/services.py` to enforce idempotent branch naming, push commits, and capture JSONL log paths.
-- [ ] T015 [US1] Wire `POST /api/workflows/speckit/runs` inside `api_service/api/routers/workflows.py` to validate input, create `SpecWorkflowRun`, and enqueue the chain.
+- [x] T015 [US1] Wire `POST /api/workflows/speckit/runs` inside `api_service/api/routers/workflows.py` to validate input, create `SpecWorkflowRun`, and enqueue the chain.
 - [ ] T016 [US1] Update worker bootstrap scripts (`celery_worker/speckit_worker.py` and `celery_worker/scripts/codex_login_proxy.py`) to run Codex preflight checks and mount the configured auth volume before tasks start.
 
 **Checkpoint**: Triggering a run now creates branches/PRs and stores Codex artifacts automatically.
