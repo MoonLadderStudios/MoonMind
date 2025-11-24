@@ -10,6 +10,8 @@ from pathlib import Path
 
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
+from moonmind.workflows.speckit_celery import models as speckit_models
+from moonmind.workflows.speckit_celery import tasks as speckit_tasks
 from moonmind.workflows.speckit_celery.utils import (
     CliVerificationError,
     verify_cli_is_executable,
@@ -107,6 +109,20 @@ def _enforce_codex_approval_policy() -> Path:
             },
         )
 
+        os.environ.setdefault("CODEX_CONFIG_HOME", str(volume_mount))
+        os.environ.setdefault(
+            "CODEX_CONFIG_PATH", str(volume_mount / codex_config.CONFIG_FILENAME)
+        )
+        logger.info(
+            "Codex auth volume configured",
+            extra={
+                "codex_volume_name": volume_name,
+                "codex_volume_mount": str(volume_mount),
+                "codex_config_home": os.environ.get("CODEX_CONFIG_HOME"),
+                "codex_config_path": os.environ.get("CODEX_CONFIG_PATH"),
+            },
+        )
+
     return home_result.path
 
 
@@ -170,6 +186,39 @@ def _log_queue_configuration() -> tuple[str, ...]:
     return queue_names
 
 
+def _run_codex_preflight_check() -> None:
+    """Validate Codex authentication before accepting Celery tasks."""
+
+    try:
+        result = speckit_tasks.run_codex_preflight_check()
+    except Exception as exc:  # pragma: no cover - startup should fail fast
+        logger.critical("Codex pre-flight execution failed: %s", exc)
+        raise RuntimeError("Codex pre-flight check failed to execute") from exc
+
+    if result.status is speckit_models.CodexPreflightStatus.FAILED:
+        logger.critical(
+            "Codex pre-flight failed for volume %s",
+            result.volume,
+            extra={
+                "codex_volume": result.volume,
+                "codex_preflight_status": result.status.value,
+                "codex_preflight_exit_code": result.exit_code,
+                "codex_preflight_message": result.message,
+            },
+        )
+        raise RuntimeError(result.message or "Codex pre-flight failed")
+
+    log_message = result.message or "Codex pre-flight check completed"
+    logger.info(
+        log_message,
+        extra={
+            "codex_volume": result.volume,
+            "codex_preflight_status": result.status.value,
+            "codex_preflight_exit_code": result.exit_code,
+        },
+    )
+
+
 celery_app = speckit_celery_app
 
 # Celery uses the module-level ``app`` attribute as the default application target
@@ -179,6 +228,7 @@ app = celery_app
 _enforce_codex_approval_policy()
 _log_codex_cli_version()
 _log_queue_configuration()
+_run_codex_preflight_check()
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI execution path
