@@ -4,8 +4,8 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify repository state and checkout feature branch 006-add-gemini-cli
-- [ ] T002 Verify existence of environment templates (.env-template) for variable updates
+- [x] T001 Verify repository state and checkout feature branch 006-add-gemini-cli
+- [x] T002 Verify existence of environment templates (.env-template) for variable updates
 
 ## Phase 2: Foundational
 
