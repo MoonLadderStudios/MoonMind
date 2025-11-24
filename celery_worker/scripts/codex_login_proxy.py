@@ -17,6 +17,7 @@ import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 BUFFER_SIZE = 65536
 
@@ -75,6 +76,29 @@ def _load_config() -> ProxyConfig:
         listen_port=listen_port,
         target_host=target_host,
         target_port=target_port,
+    )
+
+
+def _configure_codex_volume_env() -> None:
+    """Ensure codex login writes to the mounted auth volume when configured."""
+
+    volume_name = os.getenv("CODEX_VOLUME_NAME")
+    if not volume_name:
+        logging.info(
+            "codex-login-proxy: no CODEX_VOLUME_NAME set; using default Codex home"
+        )
+        return
+
+    volume_mount = Path(os.getenv("CODEX_VOLUME_PATH", "/var/lib/codex-auth"))
+    volume_mount.mkdir(parents=True, exist_ok=True)
+
+    os.environ.setdefault("CODEX_CONFIG_HOME", str(volume_mount))
+    os.environ.setdefault("CODEX_CONFIG_PATH", str(volume_mount / "config.toml"))
+
+    logging.info(
+        "codex-login-proxy: using Codex auth volume '%s' at %s",
+        volume_name,
+        volume_mount,
     )
 
 
@@ -160,6 +184,7 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     logging.basicConfig(level=log_level, stream=sys.stdout, format="%(message)s")
+    _configure_codex_volume_env()
     try:
         config = _load_config()
     except ValueError as exc:
