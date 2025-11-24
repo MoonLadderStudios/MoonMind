@@ -62,7 +62,11 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
         force_phase=None,
         repository=None,
     ):
-        del created_by, requested_by_user_id, force_phase  # unused in this contract test
+        del (
+            created_by,
+            requested_by_user_id,
+            force_phase,
+        )  # unused in this contract test
         key = feature_key or settings.spec_workflow.default_feature_key
         run_id = uuid4()
         branch_name = branch_history.setdefault(
