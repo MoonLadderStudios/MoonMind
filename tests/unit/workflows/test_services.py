@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -37,3 +38,35 @@ def test_push_commits_skips_in_test_mode(tmp_path):
     ref = services.push_commits(repo, "feature/test", test_mode=True)
 
     assert ref == "origin/feature/test"
+
+
+@patch("subprocess.run")
+def test_push_commits_command_without_force(mock_run, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mock_run.return_value.returncode = 0
+
+    services.push_commits(repo, "feature/test", remote="origin", force=False, test_mode=False)
+
+    expected_command = ["git", "-C", str(repo), "push", "origin", "feature/test"]
+    mock_run.assert_called_once_with(expected_command, capture_output=True, text=True, check=True)
+
+
+@patch("subprocess.run")
+def test_push_commits_command_with_force(mock_run, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mock_run.return_value.returncode = 0
+
+    services.push_commits(repo, "feature/test", remote="origin", force=True, test_mode=False)
+
+    expected_command = [
+        "git",
+        "-C",
+        str(repo),
+        "push",
+        "--force-with-lease",
+        "origin",
+        "feature/test",
+    ]
+    mock_run.assert_called_once_with(expected_command, capture_output=True, text=True, check=True)

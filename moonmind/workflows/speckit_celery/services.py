@@ -97,16 +97,23 @@ def push_commits(
         )
         return ref
 
-    command = ["git", "-C", str(repository), "push", remote, branch_name]
-    if force:
-        command.insert(-1, "--force-with-lease")
+    if remote.startswith("-"):
+        raise ValueError("Remote name cannot start with '-'")
+    if branch_name.startswith("-"):
+        raise ValueError("Branch name cannot start with '-'")
 
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
+    command = ["git", "-C", str(repository), "push"]
+    if force:
+        command.append("--force-with-lease")
+    command.extend([remote, branch_name])
+
+    try:
+        subprocess.run(command, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
         raise RuntimeError(
-            "Failed to push branch to remote: "
-            f"{result.stderr.strip() or result.stdout.strip() or result.returncode}"
-        )
+            "Failed to push branch to remote. "
+            f"Command '{' '.join(exc.cmd)}' exited with return code {exc.returncode}."
+        ) from exc
 
     logger.info(
         "Pushed branch", extra={"repository": str(repository), "branch": branch_name, "remote": remote}
