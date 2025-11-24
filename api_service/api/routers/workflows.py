@@ -269,12 +269,18 @@ async def create_workflow_run(
 ) -> SpecWorkflowRunModel:
     """Trigger a new workflow run for the requested feature."""
 
+    feature_key = (payload.feature_key or "").strip() or None
+    repository = (payload.repository or "").strip() or None
+    created_by = payload.created_by or (_user.id if _user else None)
+    requested_by = _user.id if _user else None
+
     try:
         triggered: TriggeredWorkflow = await trigger_spec_workflow_run(
-            feature_key=payload.feature_key,
-            created_by=payload.created_by,
+            feature_key=feature_key,
+            created_by=created_by,
+            requested_by_user_id=requested_by,
             force_phase=payload.force_phase,
-            repository=payload.repository,
+            repository=repository,
         )
     except WorkflowConflictError as exc:
         raise HTTPException(

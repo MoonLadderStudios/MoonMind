@@ -94,6 +94,7 @@ async def _create_workflow_run(
     feature_key: str,
     *,
     created_by: Optional[UUID] = None,
+    requested_by_user_id: Optional[UUID] = None,
     repository: Optional[str] = None,
 ) -> models.SpecWorkflowRun:
     async with get_async_session_context() as session:
@@ -105,6 +106,7 @@ async def _create_workflow_run(
         run = await repo.create_run(
             feature_key=feature_key,
             created_by=created_by,
+            requested_by_user_id=requested_by_user_id,
             repository=repository or settings.spec_workflow.github_repository,
         )
         artifacts_root = Path(settings.spec_workflow.artifacts_root)
@@ -133,6 +135,7 @@ async def trigger_spec_workflow_run(
     *,
     feature_key: Optional[str] = None,
     created_by: Optional[UUID] = None,
+    requested_by_user_id: Optional[UUID] = None,
     force_phase: Optional[str] = None,
     repository: Optional[str] = None,
 ) -> TriggeredWorkflow:
@@ -143,6 +146,7 @@ async def trigger_spec_workflow_run(
     run = await _create_workflow_run(
         effective_feature,
         created_by=created_by,
+        requested_by_user_id=requested_by_user_id,
         repository=repository or settings.spec_workflow.github_repository,
     )
 
