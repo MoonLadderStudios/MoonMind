@@ -12,10 +12,10 @@
 **Goal**: Update the shared Docker image and configuration to support the Gemini CLI.
 **Independent Test**: Build the `api_service` image and verify `gemini` is present in the path.
 
-- [ ] T003 Update `api_service/Dockerfile` to add `GEMINI_CLI_VERSION` build argument and install `@google/gemini-cli` in the `tooling-builder` stage
-- [ ] T004 Update `api_service/Dockerfile` runtime stage to copy `gemini` binary and node modules from `tooling-builder`
-- [ ] T005 Update `docker-compose.yaml` to pass `GOOGLE_API_KEY` to `api` and `celery-worker` services
-- [ ] T006 Update `.env-template` to include `GOOGLE_API_KEY` placeholder
+- [x] T003 Update `api_service/Dockerfile` to add `GEMINI_CLI_VERSION` build argument and install `@google/gemini-cli` in the `tooling-builder` stage
+- [x] T004 Update `api_service/Dockerfile` runtime stage to copy `gemini` binary and node modules from `tooling-builder`
+- [x] T005 Update `docker-compose.yaml` to pass `GOOGLE_API_KEY` to `api` and `celery-worker` services
+- [x] T006 Update `.env-template` to include `GOOGLE_API_KEY` placeholder
 
 ## Phase 3: User Story 1 - Orchestrator Natural Language Processing (Priority: P1)
 
