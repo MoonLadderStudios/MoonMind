@@ -29,10 +29,20 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prompt)
+      if [[ $# -lt 2 || "${2:0:1}" == "-" ]]; then
+        echo "Error: --prompt requires a value that is not another option." >&2
+        usage
+        exit 1
+      fi
       PROMPT="$2"
       shift 2
       ;;
     --model)
+      if [[ $# -lt 2 || "${2:0:1}" == "-" ]]; then
+        echo "Error: --model requires a value that is not another option." >&2
+        usage
+        exit 1
+      fi
       MODEL="$2"
       shift 2
       ;;
@@ -59,7 +69,12 @@ fi
 
 echo "Gemini CLI path: $(command -v gemini)"
 echo "Checking gemini --version..."
-gemini --version
+VERSION_OUTPUT="$(gemini --version 2>&1)"
+echo "$VERSION_OUTPUT"
+if [[ "$VERSION_OUTPUT" == *"gemini-cli stub"* ]]; then
+  echo "Gemini CLI stub detected; real CLI is not installed." >&2
+  exit 1
+fi
 
 declare -a MODEL_FLAG=()
 if [[ -n "${MODEL:-}" ]]; then
