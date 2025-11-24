@@ -84,7 +84,9 @@ def _configure_codex_volume_env() -> None:
 
     volume_name = os.getenv("CODEX_VOLUME_NAME")
     if not volume_name:
-        logging.info("codex-login-proxy: no CODEX_VOLUME_NAME set; using default Codex home")
+        logging.info(
+            "codex-login-proxy: no CODEX_VOLUME_NAME set; using default Codex home"
+        )
         return
 
     volume_mount = Path(os.getenv("CODEX_VOLUME_PATH", "/var/lib/codex-auth"))
@@ -94,7 +96,9 @@ def _configure_codex_volume_env() -> None:
     os.environ.setdefault("CODEX_CONFIG_PATH", str(volume_mount / "config.toml"))
 
     logging.info(
-        "codex-login-proxy: using Codex auth volume '%s' at %s", volume_name, volume_mount
+        "codex-login-proxy: using Codex auth volume '%s' at %s",
+        volume_name,
+        volume_mount,
     )
 
 
