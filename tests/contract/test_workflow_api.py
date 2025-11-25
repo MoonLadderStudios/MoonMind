@@ -19,7 +19,9 @@ from moonmind.schemas.workflow_models import (
     CodexPreflightResultModel,
     CodexShardListResponse,
     SpecWorkflowRunModel,
+    WorkflowArtifactModel,
     WorkflowRunCollectionResponse,
+    WorkflowTaskStateModel,
 )
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
@@ -31,6 +33,140 @@ from moonmind.workflows.speckit_celery.workspace import (
 )
 
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
+
+
+def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
+    now = now or datetime(2024, 5, 1, tzinfo=UTC)
+    run_id = uuid4()
+    task_states = [
+        SimpleNamespace(
+            id=uuid4(),
+            workflow_run_id=run_id,
+            task_name="discover_next_phase",
+            status=workflow_models.SpecWorkflowTaskStatus.SUCCEEDED,
+            attempt=1,
+            payload={"status": "succeeded"},
+            message="Discovery completed",
+            artifact_paths=["/artifacts/discover.jsonl"],
+            started_at=now,
+            finished_at=now,
+            created_at=now,
+            updated_at=now,
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            workflow_run_id=run_id,
+            task_name="apply_and_publish",
+            status=workflow_models.SpecWorkflowTaskStatus.RUNNING,
+            attempt=2,
+            payload={"status": "running"},
+            message=None,
+            artifact_paths=["/artifacts/apply.log"],
+            started_at=now,
+            finished_at=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    ]
+    artifacts = [
+        SimpleNamespace(
+            id=uuid4(),
+            workflow_run_id=run_id,
+            artifact_type=workflow_models.WorkflowArtifactType.CODEX_LOGS,
+            path="/artifacts/codex_logs.jsonl",
+            content_type="application/json",
+            size_bytes=2048,
+            digest="sha256:deadbeef",
+            created_at=now,
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            workflow_run_id=run_id,
+            artifact_type=workflow_models.WorkflowArtifactType.GH_PR_RESPONSE,
+            path="/artifacts/pr.json",
+            content_type="application/json",
+            size_bytes=1024,
+            digest=None,
+            created_at=now,
+        ),
+    ]
+    credential_audit = SimpleNamespace(
+        codex_status=workflow_models.CodexCredentialStatus.VALID,
+        github_status=workflow_models.GitHubCredentialStatus.VALID,
+        checked_at=now,
+        notes="token ok",
+    )
+    return SimpleNamespace(
+        id=run_id,
+        feature_key="US2-monitoring",
+        status=workflow_models.SpecWorkflowRunStatus.RUNNING,
+        phase=workflow_models.SpecWorkflowRunPhase.SUBMIT,
+        repository=TEST_REPOSITORY,
+        branch_name="US2-monitoring/20240501/1234abcd",
+        pr_url="https://example.com/pr/123",
+        codex_task_id="codex-123",
+        codex_queue="codex-0",
+        codex_volume="codex_auth_0",
+        codex_preflight_status=workflow_models.CodexPreflightStatus.PASSED,
+        codex_preflight_message="ready",
+        codex_logs_path="/artifacts/codex_logs.jsonl",
+        codex_patch_path="/artifacts/patch.diff",
+        celery_chain_id="celery-abc123",
+        requested_by_user_id=uuid4(),
+        created_by=uuid4(),
+        current_task_name=workflow_models.SpecWorkflowTaskName.SUBMIT,
+        started_at=now,
+        finished_at=None,
+        completed_at=None,
+        artifacts_path="/artifacts",
+        created_at=now,
+        updated_at=now,
+        task_states=task_states,
+        artifacts=artifacts,
+        credential_audit=credential_audit,
+    )
+
+
+class _FakeRepo:
+    def __init__(self, run_obj):
+        self.run = run_obj
+
+    async def list_runs(
+        self,
+        *,
+        status=None,
+        feature_key=None,
+        created_by=None,
+        limit=25,
+        with_relations=False,
+    ):
+        if status and self.run.status != status:
+            return []
+        if feature_key and self.run.feature_key != feature_key:
+            return []
+        if created_by and self.run.created_by != created_by:
+            return []
+        run_copy = self.run
+        if not with_relations:
+            run_copy = SimpleNamespace(**vars(self.run))
+            run_copy.task_states = []
+            run_copy.artifacts = []
+        return [run_copy][:limit]
+
+    async def list_task_states_for_runs(self, run_ids):
+        if run_ids and self.run.id not in run_ids:
+            return {}
+        return {self.run.id: list(self.run.task_states)}
+
+    async def get_run(self, run_id, with_relations=True):
+        if run_id != self.run.id:
+            return None
+        if not with_relations:
+            run_copy = SimpleNamespace(**vars(self.run))
+            run_copy.task_states = []
+            run_copy.artifacts = []
+            return run_copy
+        return self.run
 
 
 @pytest.mark.asyncio
@@ -150,6 +286,100 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
         db_base.async_session_maker = original_session_maker
         app.dependency_overrides.pop(_get_repository, None)
         app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_monitor_workflow_contract_endpoints(monkeypatch):
+    """Contract coverage for run listing and detail retrieval endpoints."""
+
+    run = _build_sample_run()
+    run_id = run.id
+
+    app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        list_response = await client.get(
+            "/api/workflows/speckit/runs", params={"includeTasks": True}
+        )
+        assert list_response.status_code == 200
+        collection = WorkflowRunCollectionResponse.model_validate(list_response.json())
+        assert len(collection.items) == 1
+        listed = collection.items[0]
+        assert listed.id == run_id
+        assert listed.task_summary
+        assert listed.tasks
+        assert listed.artifacts == []
+
+        detail_response = await client.get(
+            f"/api/workflows/speckit/runs/{run_id}",
+            params={"includeArtifacts": True},
+        )
+        assert detail_response.status_code == 200
+        detail_model = SpecWorkflowRunModel.model_validate(detail_response.json())
+        assert detail_model.id == run_id
+        assert detail_model.artifacts
+        assert any(task.attempt == 2 for task in detail_model.tasks)
+        assert detail_model.credential_audit is not None
+        assert (
+            detail_model.credential_audit.codex_status
+            == workflow_models.CodexCredentialStatus.VALID
+        )
+
+    app.dependency_overrides.pop(_get_repository, None)
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="Task listing endpoint not implemented yet", strict=False)
+async def test_workflow_task_listing_contract(monkeypatch):
+    """Pending contract test for /runs/{id}/tasks until implementation lands."""
+
+    run = _build_sample_run()
+
+    app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/api/workflows/speckit/runs/{run.id}/tasks")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["runId"] == str(run.id)
+        tasks = payload["tasks"]
+        assert tasks
+        assert all(
+            WorkflowTaskStateModel.model_validate(task).task_name for task in tasks
+        )
+
+    app.dependency_overrides.pop(_get_repository, None)
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="Artifact listing endpoint not implemented yet", strict=False)
+async def test_workflow_artifact_listing_contract(monkeypatch):
+    """Pending contract test for /runs/{id}/artifacts until implementation lands."""
+
+    run = _build_sample_run()
+    app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/api/workflows/speckit/runs/{run.id}/artifacts")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["runId"] == str(run.id)
+        artifacts = payload.get("artifacts", [])
+        assert all(
+            WorkflowArtifactModel.model_validate(artifact).artifact_type
+            for artifact in artifacts
+        )
+
+    app.dependency_overrides.pop(_get_repository, None)
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 @pytest.mark.asyncio

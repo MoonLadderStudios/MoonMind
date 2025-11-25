@@ -583,7 +583,9 @@ jobs:
             // Determine what action to take
             let commentBody = null;
 
-            if (hasFailures && hasUnresolvedBlockingReviewComments) {
+            if (triggeredByCodexBot) {
+               console.log('Blocking command generation because the event was initiated by the Codex bot. Waiting for user action or CI completion.');
+            } else if (hasFailures && hasUnresolvedBlockingReviewComments) {
               commentBody = '@codex fix comments and fix build failures';
             } else if (hasFailures) {
               commentBody = '@codex fix build failures';
