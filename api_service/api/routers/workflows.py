@@ -341,12 +341,18 @@ async def list_workflow_runs(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_cursor", "message": str(exc)},
+            detail={
+                "code": "invalid_cursor",
+                "message": "Invalid cursor token",
+            },
         ) from exc
 
-    task_state_map = await repo.list_task_states_for_runs(
-        run.id for run in paginated_runs.items
+    items_source = (
+        paginated_runs.items
+        if hasattr(paginated_runs, "items")
+        else list(paginated_runs)
     )
+    task_state_map = await repo.list_task_states_for_runs(run.id for run in items_source)
     items = [
         _serialize_run_model(
             run,
@@ -355,10 +361,11 @@ async def list_workflow_runs(
             include_credential_audit=False,
             task_states=task_state_map.get(run.id, []),
         )
-        for run in paginated_runs.items
+        for run in items_source
     ]
     return WorkflowRunCollectionResponse(
-        items=items, nextCursor=paginated_runs.next_cursor
+        items=items,
+        nextCursor=getattr(paginated_runs, "next_cursor", None),
     )
 
 

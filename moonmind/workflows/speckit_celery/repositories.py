@@ -106,6 +106,9 @@ def _decode_run_cursor(cursor: str) -> tuple[datetime, UUID]:
     if not cursor:
         raise ValueError("Cursor cannot be empty")
 
+    if len(cursor) > 1024:
+        raise ValueError("Invalid cursor token")
+
     padding = "=" * (-len(cursor) % 4)
     try:
         decoded = base64.urlsafe_b64decode(cursor + padding).decode()

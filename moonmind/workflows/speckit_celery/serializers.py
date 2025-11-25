@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
+from uuid import UUID
 
 from moonmind.workflows.speckit_celery import models
 

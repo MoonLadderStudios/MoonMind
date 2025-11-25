@@ -26,6 +26,7 @@ from moonmind.schemas.workflow_models import (
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
+from moonmind.workflows.speckit_celery.repositories import PaginatedSpecWorkflowRuns
 from moonmind.workflows.speckit_celery import tasks as workflow_tasks
 from moonmind.workflows.speckit_celery.workspace import (
     generate_branch_name,
@@ -141,17 +142,17 @@ class _FakeRepo:
         with_relations=False,
     ):
         if status and self.run.status != status:
-            return []
+            return PaginatedSpecWorkflowRuns(items=[], next_cursor=None)
         if feature_key and self.run.feature_key != feature_key:
-            return []
+            return PaginatedSpecWorkflowRuns(items=[], next_cursor=None)
         if created_by and self.run.created_by != created_by:
-            return []
+            return PaginatedSpecWorkflowRuns(items=[], next_cursor=None)
         run_copy = self.run
         if not with_relations:
             run_copy = SimpleNamespace(**vars(self.run))
             run_copy.task_states = []
             run_copy.artifacts = []
-        return [run_copy][:limit]
+        return PaginatedSpecWorkflowRuns(items=[run_copy][:limit], next_cursor=None)
 
     async def list_task_states_for_runs(self, run_ids):
         if run_ids and self.run.id not in run_ids:
