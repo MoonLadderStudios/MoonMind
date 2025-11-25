@@ -64,9 +64,21 @@
    Response payloads follow `SpecWorkflowRun` in `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`. The API immediately returns HTTP `202` with the run record (status `pending` or `running`).
 7. **Monitor progress**
    ```bash
-   curl http://localhost:8000/api/workflows/speckit/runs/{run_id}
+   # Run overview (includes latest task snapshot + artifact refs when include flags are true)
+   curl "http://localhost:8000/api/workflows/speckit/runs/{run_id}?includeTasks=true&includeArtifacts=true"
+
+   # Task timeline with status, message, timestamps, and artifactPaths
+   curl http://localhost:8000/api/workflows/speckit/runs/{run_id}/tasks | jq
+
+   # Downloadable artifacts (Codex logs, patches, PR payload)
+   curl http://localhost:8000/api/workflows/speckit/runs/{run_id}/artifacts | jq
    ```
-   Task-level telemetry (`tasks`) shows the Celery chain states, while `artifacts` lists log/patch files stored under `var/artifacts/spec_workflows/{run_id}`. Poll `/api/workflows/speckit/runs?status=running` to watch multiple runs.
+   - Task payloads surface the current `status`, an operator-friendly `message`, and any Celery-produced paths under
+     `artifactPaths` (e.g., `codex_logs.jsonl`, `patch.diff`, `apply_output.json`).
+   - Celery workers log lifecycle messages such as `Spec workflow task submit_codex_job started...` and
+     `Spec workflow task apply_and_publish succeeded...`; watch these alongside API polling to confirm timestamps stay fresh.
+   - Poll `/api/workflows/speckit/runs?status=running` to watch multiple runs or use the task list endpoint to detect failures
+     early (`status: failed`, `message: <reason>`).
 8. **Retry a failed run**
    ```bash
    curl -X POST http://localhost:8000/api/workflows/speckit/runs/{run_id}/retry \\

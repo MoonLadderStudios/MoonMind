@@ -774,6 +774,8 @@ async def _update_task_state(
     payload: Optional[dict[str, Any]] = None,
     started_at: Optional[datetime] = None,
     finished_at: Optional[datetime] = None,
+    message: Optional[str] = None,
+    artifact_paths: Optional[Sequence[str]] = None,
 ) -> models.SpecWorkflowTaskState:
     state = await repo.upsert_task_state(
         workflow_run_id=workflow_run_id,
@@ -783,6 +785,8 @@ async def _update_task_state(
         payload=payload,
         started_at=started_at,
         finished_at=finished_at,
+        message=message,
+        artifact_paths=artifact_paths,
     )
     return state
 
@@ -808,6 +812,7 @@ async def _persist_failure(
         ),
         finished_at=finished,
         attempt=attempt,
+        message=message,
     )
     await repo.update_run(
         run_id,
@@ -1263,6 +1268,7 @@ def discover_next_phase(
                 ),
                 started_at=_now(),
                 attempt=attempt,
+                message="Discovering next Spec Kit task",
             )
             await session.commit()
 
@@ -1316,6 +1322,7 @@ def discover_next_phase(
                     ),
                     finished_at=finished,
                     attempt=attempt,
+                    message=message,
                 )
                 await repo.update_run(
                     run_uuid,
@@ -1340,6 +1347,7 @@ def discover_next_phase(
                 ),
                 finished_at=finished,
                 attempt=attempt,
+                message="Discovered next task",
             )
             context["task"] = payload
             await session.commit()
@@ -1431,6 +1439,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 ),
                 started_at=_now(),
                 attempt=attempt,
+                message="Submitting task to Codex",
             )
             await session.commit()
 
@@ -1448,6 +1457,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     ),
                     finished_at=finished,
                     attempt=attempt,
+                    message="Skipped because discovery found no remaining work",
                 )
                 await session.commit()
                 return context
@@ -1483,6 +1493,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     ),
                     finished_at=finished,
                     attempt=attempt,
+                    message=failure_message,
                 )
                 updates = {
                     "status": models.SpecWorkflowRunStatus.FAILED,
@@ -1572,6 +1583,8 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                 ),
                 finished_at=finished,
                 attempt=attempt,
+                message="Codex job submitted",
+                artifact_paths=[str(result.logs_path)],
             )
             await session.commit()
             return context
@@ -1654,6 +1667,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 ),
                 started_at=_now(),
                 attempt=attempt,
+                message="Retrieving Codex diff and publishing to GitHub",
             )
             await session.commit()
 
@@ -1679,6 +1693,8 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     ),
                     finished_at=finished,
                     attempt=attempt,
+                    message="Skipped publish because no work was required",
+                    artifact_paths=[str(summary_path)],
                 )
                 updates = {
                     "status": models.SpecWorkflowRunStatus.SUCCEEDED,
@@ -1792,6 +1808,13 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                 ),
                 finished_at=finished,
                 attempt=attempt,
+                message="Pull request published",
+                artifact_paths=[
+                    str(diff.patch_path),
+                    str(publish.response_path),
+                    str(apply_output_path),
+                    str(summary_path),
+                ],
             )
             await session.commit()
             context["run_summary_path"] = str(summary_path)
