@@ -26,8 +26,8 @@ from moonmind.schemas.workflow_models import (
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
-from moonmind.workflows.speckit_celery.repositories import PaginatedSpecWorkflowRuns
 from moonmind.workflows.speckit_celery import tasks as workflow_tasks
+from moonmind.workflows.speckit_celery.repositories import PaginatedSpecWorkflowRuns
 from moonmind.workflows.speckit_celery.workspace import (
     generate_branch_name,
     sanitize_branch_component,

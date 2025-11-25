@@ -352,7 +352,9 @@ async def list_workflow_runs(
         if hasattr(paginated_runs, "items")
         else list(paginated_runs)
     )
-    task_state_map = await repo.list_task_states_for_runs(run.id for run in items_source)
+    task_state_map = await repo.list_task_states_for_runs(
+        run.id for run in items_source
+    )
     items = [
         _serialize_run_model(
             run,
