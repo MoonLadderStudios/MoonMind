@@ -5,7 +5,7 @@ ARG SPEC_KIT_VERSION=0.4.0
 # depend on external npm registry availability. Enable explicitly with
 # `--build-arg INSTALL_CODEX_CLI=true` when the CLIs are required.
 ARG INSTALL_CODEX_CLI=false
-ARG INSTALL_GEMINI_CLI=true
+ARG INSTALL_GEMINI_CLI=false
 ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
@@ -133,6 +133,7 @@ ARG CODEX_CLI_VERSION
 ARG SPEC_KIT_VERSION
 ARG INSTALL_TEST_DEPS
 ARG GEMINI_CLI_VERSION
+ARG INSTALL_GEMINI_CLI
 
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
@@ -193,7 +194,11 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
     chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit /usr/local/bin/gemini
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
-RUN runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version'
+RUN if [ "${INSTALL_GEMINI_CLI:-true}" = "true" ]; then \
+        runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version'; \
+    else \
+        runuser -u app -- sh -c 'codex --version && speckit --version'; \
+    fi
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at

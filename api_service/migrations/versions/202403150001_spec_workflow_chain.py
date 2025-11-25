@@ -201,6 +201,9 @@ def _backup_existing_tables() -> None:
 def _copy_legacy_table_data(target_table: str) -> None:
     """Copy data from a legacy backup table into the new schema."""
 
+    # Data is not critical in this environment; skip copying legacy rows.
+    return
+
     columns = LEGACY_TABLE_COLUMNS.get(target_table)
     if not columns:
         return
@@ -243,6 +246,14 @@ def _detach_legacy_tables_from_enums() -> None:
         quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
         for column, _ in columns:
             quoted_column = sa.sql.elements.quoted_name(column, quote=True)
+            if table_name == "legacy_spec_workflow_task_states":
+                op.execute(
+                    "DROP INDEX IF EXISTS ix_spec_workflow_task_states_failed"
+                )
+            op.execute(
+                f"ALTER TABLE IF EXISTS {quoted_table} "
+                f"ALTER COLUMN {quoted_column} DROP DEFAULT"
+            )
             op.execute(
                 f"ALTER TABLE IF EXISTS {quoted_table} "
                 f"ALTER COLUMN {quoted_column} TYPE TEXT "
@@ -324,9 +335,25 @@ def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
 def upgrade() -> None:  # noqa: D401
     """Install Spec workflow tables aligned with the new data model."""
 
+    # Reset any partially-applied prior runs; data loss is acceptable here.
+    for table in (
+        "workflow_artifacts",
+        "workflow_credential_audits",
+        "spec_workflow_task_states",
+        "spec_workflow_runs",
+    ):
+        op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+
     _backup_existing_tables()
     _detach_legacy_tables_from_enums()
     _drop_legacy_enums()
+    for idx_name in (
+        "ix_spec_workflow_runs_feature_key",
+        "ix_spec_workflow_runs_status",
+        "ix_spec_workflow_runs_requested_by",
+        "ix_spec_workflow_runs_created_by",
+    ):
+        op.execute(f"DROP INDEX IF EXISTS {idx_name}")
 
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)

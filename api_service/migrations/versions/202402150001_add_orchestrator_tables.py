@@ -90,6 +90,7 @@ ORCHESTRATOR_TASK_STATE = postgresql.ENUM(
 
 
 _SAFE_ENUM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SAFE_ENUM_LITERAL = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
 def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
@@ -98,7 +99,7 @@ def _create_enum_if_missing(enum_type: postgresql.ENUM) -> None:
     if not _SAFE_ENUM_NAME.match(enum_type.name or ""):
         raise ValueError(f"Unsafe enum name: {enum_type.name}")
     for value in enum_type.enums:
-        if not _SAFE_ENUM_NAME.match(value):
+        if not _SAFE_ENUM_LITERAL.match(value):
             raise ValueError(f"Unsafe enum literal: {value}")
 
     literal_values = ", ".join(
