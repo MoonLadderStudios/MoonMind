@@ -138,6 +138,7 @@ class _FakeRepo:
         status=None,
         feature_key=None,
         created_by=None,
+        cursor=None,
         limit=25,
         with_relations=False,
     ):
