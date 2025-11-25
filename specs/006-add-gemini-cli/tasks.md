@@ -39,6 +39,12 @@
 - [x] T012 Update `docs/ops-runbook.md` to include `GOOGLE_API_KEY` requirement for deployment
 - [x] T013 Update `README.md` to mention Gemini CLI availability in the development environment
 
+## Phase 6: Polish & Cross-Cutting Concerns
+
+- [x] T014 Capture Gemini CLI release note entry in `docs/release-notes.md` (version, availability, upgrade cues)
+- [x] T015 Record verification guidance and expected outcomes in `specs/006-add-gemini-cli/research.md`
+- [x] T016 Add troubleshooting notes for missing keys/network issues to `specs/006-add-gemini-cli/quickstart.md`
+
 ## Dependencies
 
 1. Phase 2 (Docker build & Config) MUST complete before Phase 3 & 4.

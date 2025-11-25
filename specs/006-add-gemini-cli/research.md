@@ -30,3 +30,9 @@
 ## Outstanding Questions
 
 - **Command Name**: Verify if the binary is exposed as `gemini` or `gemini-cli`. (Assumed `gemini` based on naming conventions, will verify during implementation).
+
+## Verification
+
+- **Container CLI Availability**: From within the orchestrator or Celery worker container, `gemini --version` should print the installed version (defaults to `latest`) and exit 0.
+- **API Key Requirement**: Running `gemini models list` without `GOOGLE_API_KEY` should return an authentication error immediately rather than hanging; set the key in `.env` before `docker compose` to avoid this.
+- **Network Resilience**: If outbound network access is blocked, the CLI should emit a clear connectivity error; retry once connectivity is restored and rerun the quickstart prompt.

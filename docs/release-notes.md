@@ -1,5 +1,18 @@
 # MoonMind Release Notes
 
+## 2025-11-30 – Gemini CLI Availability
+
+### Highlights
+- Added the official `@google/gemini-cli` to the shared `api_service` image for orchestrator and Celery worker containers.
+- Documented verification guidance and troubleshooting for missing API keys or network access when invoking `gemini`.
+- Captured upgrade cues alongside existing Codex/Spec Kit tooling to keep CLI versions consistent across environments.
+
+### Bundled CLI Versions
+- `@google/gemini-cli` (`gemini`) – **latest** by default (controlled via `GEMINI_CLI_VERSION` build arg).
+
+### Upgrade Guidance
+- Bump `GEMINI_CLI_VERSION` and rebuild the `api_service` image; rerun the Gemini verification steps in `specs/006-add-gemini-cli/research.md#verification` to confirm availability.
+
 ## 2025-11-05 – Codex & Spec Kit Tooling Availability
 
 ### Highlights
