@@ -118,6 +118,7 @@ LEGACY_ENUM_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "legacy_workflow_artifacts": (("artifact_type", "workflowartifacttype"),),
 }
 
+# Keep enum drop order stable by deduplicating with an order-preserving dict.
 LEGACY_ENUM_TYPES: tuple[str, ...] = tuple(
     dict.fromkeys(
         enum_type
