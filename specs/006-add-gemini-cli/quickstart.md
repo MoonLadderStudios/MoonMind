@@ -33,6 +33,11 @@ echo "Refactor this code..." | gemini
 
 > Avoid piping secrets (including API keys or credentials) to prevent leaking them via shell history or logs.
 
+## Troubleshooting
+
+- **Missing API Key**: If commands fail with authentication errors, ensure `GOOGLE_API_KEY` is set in your `.env` and passed to the container; restart the service to pick up new values.
+- **Network Connectivity**: For timeouts or unreachable host errors, verify the container can reach the Gemini endpoints (no proxy blocks) before retrying the quickstart prompts.
+
 ### In Orchestrator
 
 The orchestrator can use `subprocess` to invoke the CLI:
