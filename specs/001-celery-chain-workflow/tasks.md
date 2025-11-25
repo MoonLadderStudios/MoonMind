@@ -61,7 +61,7 @@
 **Independent Test**: While a run executes, poll `GET /api/workflows/speckit/runs/{id}` and `/runs/{id}/tasks` to confirm timestamps, payloads, and artifacts update; induce a failure to verify actionable messages.
 
 ### Tests
-- [ ] T017 [P] [US2] Extend `tests/unit/workflows/test_tasks.py` to confirm each Celery state change writes `SpecWorkflowTaskState` with timestamps + artifact references.
+- [x] T017 [P] [US2] Extend `tests/unit/workflows/test_tasks.py` to confirm each Celery state change writes `SpecWorkflowTaskState` with timestamps + artifact references.
 - [ ] T018 [P] [US2] Add contract tests for `GET /api/workflows/speckit/runs`, `/runs/{id}`, `/runs/{id}/tasks`, and `/runs/{id}/artifacts` in `tests/contract/test_workflow_api.py`.
 
 ### Implementation
