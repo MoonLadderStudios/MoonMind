@@ -718,7 +718,9 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     assert discover_state.payload["taskId"] == "T010"
 
     submit_state = states_by_name.get(tasks.TASK_SUBMIT)
-    assert submit_state is not None, f"Submit task state '{tasks.TASK_SUBMIT}' not found."
+    assert (
+        submit_state is not None
+    ), f"Submit task state '{tasks.TASK_SUBMIT}' not found."
     assert submit_state.payload is not None, "Submit task state has no payload."
     assert (
         submit_state.payload["logsPath"]
