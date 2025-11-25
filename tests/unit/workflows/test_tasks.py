@@ -701,6 +701,37 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     assert statuses[tasks.TASK_SUBMIT] is models.SpecWorkflowTaskStatus.SUCCEEDED
     assert statuses[tasks.TASK_PUBLISH] is models.SpecWorkflowTaskStatus.SUCCEEDED
 
+    for state in persisted.task_states:
+        assert state.started_at is not None
+        assert state.finished_at is not None
+
+    artifacts_by_type = {
+        artifact.artifact_type: artifact for artifact in persisted.artifacts
+    }
+    submit_state = next(
+        state for state in persisted.task_states if state.task_name == tasks.TASK_SUBMIT
+    )
+    assert (
+        submit_state.payload.get("logsPath")
+        == artifacts_by_type[models.WorkflowArtifactType.CODEX_LOGS].path
+    )
+
+    publish_state = next(
+        state for state in persisted.task_states if state.task_name == tasks.TASK_PUBLISH
+    )
+    assert (
+        publish_state.payload.get("patchPath")
+        == artifacts_by_type[models.WorkflowArtifactType.CODEX_PATCH].path
+    )
+    assert (
+        publish_state.payload.get("responsePath")
+        == artifacts_by_type[models.WorkflowArtifactType.GH_PR_RESPONSE].path
+    )
+    assert (
+        publish_state.payload.get("applyOutputPath")
+        == artifacts_by_type[models.WorkflowArtifactType.APPLY_OUTPUT].path
+    )
+
 
 @pytest.mark.asyncio
 async def test_list_codex_shard_health_includes_volume_and_preflight():
