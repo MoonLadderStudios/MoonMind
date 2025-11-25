@@ -223,13 +223,13 @@ services:
         proxy_pid=$!
 
         shutdown() {
-          if kill -0 "$proxy_pid" 2>/dev/null; then
-            kill "$proxy_pid" 2>/dev/null || true
-            wait "$proxy_pid" 2>/dev/null || true
+          if kill -0 "$$proxy_pid" 2>/dev/null; then
+            kill "$$proxy_pid" 2>/dev/null || true
+            wait "$$proxy_pid" 2>/dev/null || true
           fi
-          if [ -n "${worker_pid:-}" ] && kill -0 "$worker_pid" 2>/dev/null; then
-            kill "$worker_pid" 2>/dev/null || true
-            wait "$worker_pid" 2>/dev/null || true
+          if [ -n "$${worker_pid:-}" ] && kill -0 "$$worker_pid" 2>/dev/null; then
+            kill "$$worker_pid" 2>/dev/null || true
+            wait "$$worker_pid" 2>/dev/null || true
           fi
         }
 
@@ -240,10 +240,10 @@ services:
           --queues=codex-0 &
         worker_pid=$!
 
-        wait -n "$proxy_pid" "$worker_pid"
+        wait -n "$$proxy_pid" "$$worker_pid"
         exit_code=$?
         shutdown
-        exit "$exit_code"
+        exit "$$exit_code"
       '
     environment:
       - PYTHONPATH=/app
@@ -255,6 +255,7 @@ services:
       - CODEX_VOLUME_NAME=codex_auth_0
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
       - CODEX_LOGIN_PROXY_LISTEN_PORT=${CODEX_LOGIN_PROXY_LISTEN_PORT:-51455}
+      - CODEX_LOGIN_CHECK_IMAGE=${CODEX_LOGIN_CHECK_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     env_file:
       - .env
     volumes:
