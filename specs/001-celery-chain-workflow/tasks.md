@@ -62,7 +62,7 @@
 
 ### Tests
 - [x] T017 [P] [US2] Extend `tests/unit/workflows/test_tasks.py` to confirm each Celery state change writes `SpecWorkflowTaskState` with timestamps + artifact references.
-- [ ] T018 [P] [US2] Add contract tests for `GET /api/workflows/speckit/runs`, `/runs/{id}`, `/runs/{id}/tasks`, and `/runs/{id}/artifacts` in `tests/contract/test_workflow_api.py`.
+- [x] T018 [P] [US2] Add contract tests for `GET /api/workflows/speckit/runs`, `/runs/{id}`, `/runs/{id}/tasks`, and `/runs/{id}/artifacts` in `tests/contract/test_workflow_api.py`.
 
 ### Implementation
 - [ ] T019 [US2] Implement run listing/filtering + task-state fetchers in `moonmind/workflows/speckit_celery/repositories.py`, including cursor pagination and error handling.
