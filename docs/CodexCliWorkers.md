@@ -119,6 +119,8 @@ A separate runbook will capture the exact commands; conceptually:
 
 Once the volume is authenticated, all future Codex runs executed by that worker group should complete without interactive re-authentication.:contentReference[oaicite:32]{index=32}
 
+> **Headless setup requirement:** During setup, configure the Codex CLI’s managed `config.toml` with `approval_policy = "never"` so the workflow never pauses to request interactive approvals. This keeps Celery-driven runs fully non-interactive in headless environments.
+
 ---
 
 ## 5. Container Image and `.codex/config.toml`
