@@ -708,27 +708,38 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     artifacts_by_type = {
         artifact.artifact_type: artifact for artifact in persisted.artifacts
     }
-    submit_state = next(
-        state for state in persisted.task_states if state.task_name == tasks.TASK_SUBMIT
-    )
+    states_by_name = {state.task_name: state for state in persisted.task_states}
+
+    discover_state = states_by_name.get(tasks.TASK_DISCOVER)
     assert (
-        submit_state.payload.get("logsPath")
+        discover_state is not None
+    ), f"Discover task state '{tasks.TASK_DISCOVER}' not found."
+    assert discover_state.payload is not None, "Discover task state has no payload."
+    assert discover_state.payload["taskId"] == "T010"
+
+    submit_state = states_by_name.get(tasks.TASK_SUBMIT)
+    assert submit_state is not None, f"Submit task state '{tasks.TASK_SUBMIT}' not found."
+    assert submit_state.payload is not None, "Submit task state has no payload."
+    assert (
+        submit_state.payload["logsPath"]
         == artifacts_by_type[models.WorkflowArtifactType.CODEX_LOGS].path
     )
 
-    publish_state = next(
-        state for state in persisted.task_states if state.task_name == tasks.TASK_PUBLISH
-    )
+    publish_state = states_by_name.get(tasks.TASK_PUBLISH)
     assert (
-        publish_state.payload.get("patchPath")
+        publish_state is not None
+    ), f"Publish task state '{tasks.TASK_PUBLISH}' not found."
+    assert publish_state.payload is not None, "Publish task state has no payload."
+    assert (
+        publish_state.payload["patchPath"]
         == artifacts_by_type[models.WorkflowArtifactType.CODEX_PATCH].path
     )
     assert (
-        publish_state.payload.get("responsePath")
+        publish_state.payload["responsePath"]
         == artifacts_by_type[models.WorkflowArtifactType.GH_PR_RESPONSE].path
     )
     assert (
-        publish_state.payload.get("applyOutputPath")
+        publish_state.payload["applyOutputPath"]
         == artifacts_by_type[models.WorkflowArtifactType.APPLY_OUTPUT].path
     )
 
