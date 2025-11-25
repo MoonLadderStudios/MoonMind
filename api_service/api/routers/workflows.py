@@ -6,7 +6,6 @@ import asyncio
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from collections.abc import Iterable
 from typing import Optional
 from uuid import UUID
 
@@ -392,9 +391,7 @@ async def get_workflow_run(
     )
 
 
-@router.get(
-    "/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse
-)
+@router.get("/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse)
 async def list_workflow_run_tasks(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
@@ -417,9 +414,7 @@ async def list_workflow_run_tasks(
     return WorkflowTaskStateListResponse.model_validate(payload)
 
 
-@router.get(
-    "/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse
-)
+@router.get("/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse)
 async def list_workflow_run_artifacts(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
