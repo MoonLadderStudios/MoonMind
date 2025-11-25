@@ -6,6 +6,7 @@ import asyncio
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from collections.abc import Iterable
 from typing import Optional
 from uuid import UUID
 
@@ -24,7 +25,9 @@ from moonmind.schemas.workflow_models import (
     CreateWorkflowRunRequest,
     RetryWorkflowRunRequest,
     SpecWorkflowRunModel,
+    WorkflowArtifactListResponse,
     WorkflowRunCollectionResponse,
+    WorkflowTaskStateListResponse,
 )
 from moonmind.workflows import (
     SpecWorkflowRepository,
@@ -37,7 +40,11 @@ from moonmind.workflows import (
 )
 from moonmind.workflows.speckit_celery import models
 from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
-from moonmind.workflows.speckit_celery.serializers import serialize_run
+from moonmind.workflows.speckit_celery.serializers import (
+    serialize_artifact_collection,
+    serialize_run,
+    serialize_task_collection,
+)
 from moonmind.workflows.speckit_celery.tasks import run_codex_preflight_check
 
 router = APIRouter(prefix="/api/workflows/speckit", tags=["speckit-workflows"])
@@ -323,14 +330,24 @@ async def list_workflow_runs(
                 detail={"code": "invalid_status", "message": str(exc)},
             ) from exc
 
-    runs = await repo.list_runs(
-        status=status_enum,
-        feature_key=feature_key,
-        created_by=created_by,
-        limit=limit,
-        with_relations=False,
+    try:
+        paginated_runs = await repo.list_runs(
+            status=status_enum,
+            feature_key=feature_key,
+            created_by=created_by,
+            cursor=cursor,
+            limit=limit,
+            with_relations=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_cursor", "message": str(exc)},
+        ) from exc
+
+    task_state_map = await repo.list_task_states_for_runs(
+        run.id for run in paginated_runs.items
     )
-    task_state_map = await repo.list_task_states_for_runs(run.id for run in runs)
     items = [
         _serialize_run_model(
             run,
@@ -339,11 +356,11 @@ async def list_workflow_runs(
             include_credential_audit=False,
             task_states=task_state_map.get(run.id, []),
         )
-        for run in runs
+        for run in paginated_runs.items
     ]
-    # Cursor support is not yet implemented; placeholder for future pagination.
-    _ = cursor
-    return WorkflowRunCollectionResponse(items=items, nextCursor=None)
+    return WorkflowRunCollectionResponse(
+        items=items, nextCursor=paginated_runs.next_cursor
+    )
 
 
 @router.get("/runs/{run_id}", response_model=SpecWorkflowRunModel)
@@ -373,6 +390,56 @@ async def get_workflow_run(
         include_artifacts=include_artifacts,
         include_credential_audit=include_credential_audit,
     )
+
+
+@router.get(
+    "/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse
+)
+async def list_workflow_run_tasks(
+    run_id: UUID,
+    repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
+) -> WorkflowTaskStateListResponse:
+    """Return ordered task states for the specified workflow run."""
+
+    try:
+        states = await repo.list_task_states(run_id, require_run=True)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "workflow_not_found",
+                "message": str(exc),
+            },
+        ) from exc
+
+    payload = serialize_task_collection(run_id, states)
+    return WorkflowTaskStateListResponse.model_validate(payload)
+
+
+@router.get(
+    "/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse
+)
+async def list_workflow_run_artifacts(
+    run_id: UUID,
+    repo: SpecWorkflowRepository = Depends(_get_repository),
+    _user: User = Depends(get_current_user()),
+) -> WorkflowArtifactListResponse:
+    """Return artifact metadata for the specified workflow run."""
+
+    run = await repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "workflow_not_found",
+                "message": f"Workflow run {run_id} was not found",
+            },
+        )
+
+    artifacts = await repo.list_artifacts(run_id)
+    payload = serialize_artifact_collection(run_id, artifacts)
+    return WorkflowArtifactListResponse.model_validate(payload)
 
 
 @router.post(

@@ -197,6 +197,28 @@ def serialize_artifact(artifact: models.WorkflowArtifact) -> SerializedArtifact:
     )
 
 
+def serialize_task_collection(
+    run_id: UUID, states: Iterable[models.SpecWorkflowTaskState]
+) -> dict[str, object]:
+    """Serialize task states grouped under a workflow run identifier."""
+
+    return {
+        "runId": str(run_id),
+        "tasks": [serialize_task_state(state) for state in states],
+    }
+
+
+def serialize_artifact_collection(
+    run_id: UUID, artifacts: Iterable[models.WorkflowArtifact]
+) -> dict[str, object]:
+    """Serialize artifact metadata grouped under a workflow run identifier."""
+
+    return {
+        "runId": str(run_id),
+        "artifacts": [serialize_artifact(item) for item in artifacts],
+    }
+
+
 def _serialize_credential_audit(
     audit: models.WorkflowCredentialAudit | None,
 ) -> SerializedCredentialAudit | None:
@@ -277,4 +299,6 @@ __all__ = [
     "serialize_run",
     "serialize_task_state",
     "serialize_artifact",
+    "serialize_task_collection",
+    "serialize_artifact_collection",
 ]

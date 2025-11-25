@@ -177,6 +177,26 @@ class WorkflowRunCollectionResponse(BaseModel):
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
 
+class WorkflowTaskStateListResponse(BaseModel):
+    """Envelope returned when listing task states for a workflow run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: UUID = Field(..., alias="runId")
+    tasks: list[WorkflowTaskStateModel] = Field(default_factory=list, alias="tasks")
+
+
+class WorkflowArtifactListResponse(BaseModel):
+    """Envelope returned when listing artifacts for a workflow run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: UUID = Field(..., alias="runId")
+    artifacts: list[WorkflowArtifactModel] = Field(
+        default_factory=list, alias="artifacts"
+    )
+
+
 class CodexShardHealthModel(BaseModel):
     """Schema describing the health of a Codex shard and its auth volume."""
 
@@ -488,6 +508,8 @@ __all__ = [
     "WorkflowCredentialAuditModel",
     "CreateWorkflowRunRequest",
     "WorkflowRunCollectionResponse",
+    "WorkflowTaskStateListResponse",
+    "WorkflowArtifactListResponse",
     "CodexShardHealthModel",
     "CodexShardListResponse",
     "CodexPreflightRequest",

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -36,6 +38,14 @@ class CodexShardHealth:
     latest_preflight_status: Optional[models.CodexPreflightStatus]
     latest_preflight_message: Optional[str]
     latest_preflight_checked_at: Optional[datetime]
+
+
+@dataclass(slots=True)
+class PaginatedSpecWorkflowRuns:
+    """Cursor-paginated response for workflow run listings."""
+
+    items: list[models.SpecWorkflowRun]
+    next_cursor: Optional[str]
 
 
 def _coerce_phase(
@@ -76,6 +86,41 @@ def _coerce_artifact_type(
     if isinstance(value, models.WorkflowArtifactType):
         return value
     return models.WorkflowArtifactType(str(value))
+
+
+def _encode_run_cursor(created_at: datetime, run_id: UUID) -> str:
+    """Encode a cursor token for pagination using created timestamp and id."""
+
+    payload = json.dumps(
+        {
+            "created_at": created_at.isoformat(),
+            "run_id": str(run_id),
+        }
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_run_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Decode a cursor token into created_at and run_id components."""
+
+    if not cursor:
+        raise ValueError("Cursor cannot be empty")
+
+    padding = "=" * (-len(cursor) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(cursor + padding).decode()
+        payload = json.loads(decoded)
+        created_at_raw = payload["created_at"]
+        run_id_raw = payload["run_id"]
+        created_at = datetime.fromisoformat(created_at_raw)
+        run_id = UUID(run_id_raw)
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid cursor token") from exc
+
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+
+    return created_at, run_id
 
 
 class SpecWorkflowRepository:
@@ -234,16 +279,16 @@ class SpecWorkflowRepository:
         status: Optional[models.SpecWorkflowRunStatus] = None,
         feature_key: Optional[str] = None,
         created_by: Optional[UUID] = None,
+        cursor: Optional[str] = None,
         limit: int = 25,
         with_relations: bool = False,
-    ) -> Sequence[models.SpecWorkflowRun]:
-        """Return workflow runs filtered by the provided parameters."""
+    ) -> PaginatedSpecWorkflowRuns:
+        """Return workflow runs filtered by the provided parameters with pagination."""
 
-        stmt: Select[tuple[models.SpecWorkflowRun]] = (
-            select(models.SpecWorkflowRun)
-            .order_by(models.SpecWorkflowRun.created_at.desc())
-            .limit(limit)
-        )
+        if limit < 1:
+            raise ValueError("Limit must be greater than zero")
+
+        stmt: Select[tuple[models.SpecWorkflowRun]] = select(models.SpecWorkflowRun)
 
         if status is not None:
             stmt = stmt.where(models.SpecWorkflowRun.status == status)
@@ -251,6 +296,23 @@ class SpecWorkflowRepository:
             stmt = stmt.where(models.SpecWorkflowRun.feature_key == feature_key)
         if created_by is not None:
             stmt = stmt.where(models.SpecWorkflowRun.created_by == created_by)
+
+        if cursor is not None:
+            created_at, run_id = _decode_run_cursor(cursor)
+            stmt = stmt.where(
+                or_(
+                    models.SpecWorkflowRun.created_at < created_at,
+                    and_(
+                        models.SpecWorkflowRun.created_at == created_at,
+                        models.SpecWorkflowRun.id < run_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.order_by(
+            models.SpecWorkflowRun.created_at.desc(), models.SpecWorkflowRun.id.desc()
+        ).limit(limit + 1)
+
         if with_relations:
             stmt = stmt.options(
                 selectinload(models.SpecWorkflowRun.task_states),
@@ -261,7 +323,15 @@ class SpecWorkflowRepository:
             )
 
         result = await self._session.execute(stmt)
-        return result.scalars().all()
+        runs = result.scalars().all()
+
+        next_cursor: Optional[str] = None
+        if len(runs) > limit:
+            last = runs[limit - 1]
+            next_cursor = _encode_run_cursor(last.created_at, last.id)
+            runs = runs[:limit]
+
+        return PaginatedSpecWorkflowRuns(items=list(runs), next_cursor=next_cursor)
 
     async def list_codex_auth_volumes(self) -> Sequence[models.CodexAuthVolume]:
         """Return all registered Codex auth volumes ordered by name."""
@@ -539,9 +609,23 @@ class SpecWorkflowRepository:
         return state
 
     async def list_task_states(
-        self, workflow_run_id: UUID
+        self, workflow_run_id: UUID, *, require_run: bool = False
     ) -> Sequence[models.SpecWorkflowTaskState]:
-        """Return task states ordered by creation time."""
+        """Return task states ordered by creation time.
+
+        When ``require_run`` is ``True`` a ``LookupError`` is raised if the
+        workflow run does not exist.
+        """
+
+        if require_run:
+            run_exists_stmt = (
+                select(models.SpecWorkflowRun.id)
+                .where(models.SpecWorkflowRun.id == workflow_run_id)
+                .limit(1)
+            )
+            run_exists = await self._session.execute(run_exists_stmt)
+            if run_exists.scalar_one_or_none() is None:
+                raise LookupError(f"Workflow run {workflow_run_id} was not found")
 
         stmt = (
             select(models.SpecWorkflowTaskState)
@@ -728,8 +812,10 @@ class SpecWorkflowRepository:
     ) -> Sequence[models.WorkflowArtifact]:
         """Fetch artifacts for the given workflow run."""
 
-        stmt = select(models.WorkflowArtifact).where(
-            models.WorkflowArtifact.workflow_run_id == workflow_run_id
+        stmt = (
+            select(models.WorkflowArtifact)
+            .where(models.WorkflowArtifact.workflow_run_id == workflow_run_id)
+            .order_by(models.WorkflowArtifact.created_at.asc())
         )
         result = await self._session.execute(stmt)
         return result.scalars().all()

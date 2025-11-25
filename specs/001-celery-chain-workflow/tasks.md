@@ -65,9 +65,9 @@
 - [x] T018 [P] [US2] Add contract tests for `GET /api/workflows/speckit/runs`, `/runs/{id}`, `/runs/{id}/tasks`, and `/runs/{id}/artifacts` in `tests/contract/test_workflow_api.py`.
 
 ### Implementation
-- [ ] T019 [US2] Implement run listing/filtering + task-state fetchers in `moonmind/workflows/speckit_celery/repositories.py`, including cursor pagination and error handling.
-- [ ] T020 [US2] Enhance `moonmind/workflows/speckit_celery/serializers.py` to embed task states, credential audit info, and artifacts per the OpenAPI schema.
-- [ ] T021 [US2] Add GET handlers for runs, run detail, task states, and artifacts inside `api_service/api/routers/workflows.py`, enforcing auth + query validation.
+- [x] T019 [US2] Implement run listing/filtering + task-state fetchers in `moonmind/workflows/speckit_celery/repositories.py`, including cursor pagination and error handling.
+- [x] T020 [US2] Enhance `moonmind/workflows/speckit_celery/serializers.py` to embed task states, credential audit info, and artifacts per the OpenAPI schema.
+- [x] T021 [US2] Add GET handlers for runs, run detail, task states, and artifacts inside `api_service/api/routers/workflows.py`, enforcing auth + query validation.
 - [ ] T022 [US2] Update `moonmind/workflows/speckit_celery/tasks.py` to emit structured status snapshots (state, timestamps, payload refs) into `SpecWorkflowTaskState`.
 - [ ] T023 [US2] Document monitoring workflows (API polling + expected logs) in `specs/001-celery-chain-workflow/quickstart.md` and `docs/SpecKitAutomation.md`.
 
