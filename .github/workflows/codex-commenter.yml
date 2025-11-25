@@ -582,9 +582,11 @@ jobs:
 
             // Determine what action to take
             let commentBody = null;
+            const allowSelfTriggeredBlockingHandling =
+              triggeredByCodexBot && hasUnresolvedBlockingReviewComments;
 
-            if (triggeredByCodexBot) {
-               console.log('Blocking command generation because the event was initiated by the Codex bot. Waiting for user action or CI completion.');
+            if (triggeredByCodexBot && !allowSelfTriggeredBlockingHandling) {
+              console.log('Blocking command generation because the event was initiated by the Codex bot and no blocking P0/P1 findings are present.');
             } else if (hasFailures && hasUnresolvedBlockingReviewComments) {
               commentBody = '@codex fix comments and fix build failures';
             } else if (hasFailures) {
