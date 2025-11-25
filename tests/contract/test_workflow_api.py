@@ -299,7 +299,10 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
         assert detail_model.artifacts
         assert any(task.attempt == 2 for task in detail_model.tasks)
         assert detail_model.credential_audit is not None
-        assert detail_model.credential_audit.codex_status == workflow_models.CodexCredentialStatus.VALID
+        assert (
+            detail_model.credential_audit.codex_status
+            == workflow_models.CodexCredentialStatus.VALID
+        )
 
     app.dependency_overrides.pop(_get_repository, None)
     app.dependency_overrides.pop(get_current_user, None)
@@ -322,7 +325,9 @@ async def test_workflow_task_listing_contract(monkeypatch):
         assert payload["runId"] == str(run_id)
         tasks = payload["tasks"]
         assert tasks
-        assert all(WorkflowTaskStateModel.model_validate(task).task_name for task in tasks)
+        assert all(
+            WorkflowTaskStateModel.model_validate(task).task_name for task in tasks
+        )
 
     app.dependency_overrides.pop(get_current_user, None)
 
