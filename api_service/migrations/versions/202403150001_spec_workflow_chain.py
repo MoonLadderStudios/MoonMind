@@ -248,9 +248,7 @@ def _detach_legacy_tables_from_enums() -> None:
         for column, _ in columns:
             quoted_column = sa.sql.elements.quoted_name(column, quote=True)
             if table_name == "legacy_spec_workflow_task_states":
-                op.execute(
-                    "DROP INDEX IF EXISTS ix_spec_workflow_task_states_failed"
-                )
+                op.execute("DROP INDEX IF EXISTS ix_spec_workflow_task_states_failed")
             op.execute(
                 f"ALTER TABLE IF EXISTS {quoted_table} "
                 f"ALTER COLUMN {quoted_column} DROP DEFAULT"

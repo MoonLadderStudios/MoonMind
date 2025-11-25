@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -15,6 +15,8 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.head_ref || github.ref }}
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -36,7 +38,17 @@ jobs:
         python -m pip install -e .[tests]
         python -m pip install pre-commit readmeai~=0.6.0
     - name: Run pre-commit
+      id: pre_commit
       run: pre-commit run --all-files
+      continue-on-error: true
+    - name: Commit changes
+      id: auto_commit
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "style: auto-fixes from pre-commit"
+    - name: Fail if pre-commit failed and no changes were auto-fixed
+      if: steps.pre_commit.outcome == 'failure' && steps.auto_commit.outputs.changes_detected == 'false'
+      run: exit 1
     - name: Run pytest unit tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
