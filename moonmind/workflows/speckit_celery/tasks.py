@@ -1856,15 +1856,15 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     codexCredentialStatus=context.get(
                         "credential_audit_status", {}
                     ).get("codex"),
-                githubCredentialStatus=context.get(
-                    "credential_audit_status", {}
-                ).get("github"),
-                resumed=context.get("resume_token") is not None,
-            ),
-            finished_at=finished,
-            attempt=attempt,
-            message="Pull request published",
-            artifact_paths=[
+                    githubCredentialStatus=context.get(
+                        "credential_audit_status", {}
+                    ).get("github"),
+                    resumed=context.get("resume_token") is not None,
+                ),
+                finished_at=finished,
+                attempt=attempt,
+                message="Pull request published",
+                artifact_paths=[
                     str(diff.patch_path),
                     str(publish.response_path),
                     str(apply_output_path),

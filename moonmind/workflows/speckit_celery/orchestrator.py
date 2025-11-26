@@ -203,7 +203,9 @@ async def retry_spec_workflow_run(
                 "Workflow run has no recorded task states to determine retry point",
             )
 
-        start_index: Optional[int] = 0 if resolved_mode is RetryWorkflowMode.RESTART_FROM_DISCOVERY else None
+        start_index: Optional[int] = (
+            0 if resolved_mode is RetryWorkflowMode.RESTART_FROM_DISCOVERY else None
+        )
         latest_by_task: dict[str, models.SpecWorkflowTaskState] = {}
         max_attempt_by_task: dict[str, int] = {}
         for task_name in TASK_SEQUENCE:
