@@ -329,6 +329,10 @@ jobs:
               name => `${name} /`.toLowerCase()
             );
             const buildCheckExactNames = new Set([
+              'test',
+              'test (pull_request)',
+              'run pytest unit tests',
+              'run pytest unit tests / test',
               'run pytest unit tests / test (pull_request)',
             ]);
 

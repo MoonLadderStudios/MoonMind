@@ -119,7 +119,17 @@ Note: home/.codex/ is a nested mount backed by a named Docker volume. It survive
 
 7. Observability & Artifacts
 
-Unchanged; add log lines around codex pre-flight and mount selection.
+Monitor the Celery chain from two angles:
+
+- **API polling** – `/api/workflows/speckit/runs/{run_id}` returns the run plus the latest task snapshot; `/runs/{run_id}/tasks`
+  exposes the full timeline including `status`, `message`, `startedAt`/`finishedAt`, and any `artifactPaths` emitted by the task
+  (Codex logs, patch diffs, apply output, PR payload). `/runs/{run_id}/artifacts` lists the same paths for download.
+- **Worker logs** – every phase logs `Spec workflow task <name> started/succeeded/failed` with attempt numbers and shard/volume
+  details. You should see a `Codex preflight` line before submission and `apply_and_publish` summary lines once the PR payload is
+  written. Missing updates in the task list usually correlate with Celery errors in these logs.
+
+Keep these signals aligned: a task stuck in `running` without fresh log lines indicates worker trouble, while `status: failed`
+entries include a `message` that should match the Celery exception output.
 
 ### 7.1 Orchestrator Interop (Spec Kit + Fix Runs)
 
