@@ -23,6 +23,7 @@ from moonmind.schemas.workflow_models import (
     CodexShardListResponse,
     CreateWorkflowRunRequest,
     RetryWorkflowRunRequest,
+    RetryWorkflowMode,
     SpecWorkflowRunModel,
     WorkflowArtifactListResponse,
     WorkflowRunCollectionResponse,
@@ -459,10 +460,12 @@ async def retry_workflow_run(
 ) -> SpecWorkflowRunModel:
     """Retry a failed workflow run starting from the failed stage."""
 
-    notes = payload.notes if payload else None
+    request = payload or RetryWorkflowRunRequest()
+    notes = request.notes
+    mode = request.mode or RetryWorkflowMode.RESUME_FAILED_TASK
 
     try:
-        triggered = await retry_spec_workflow_run(run_id, notes=notes)
+        triggered = await retry_spec_workflow_run(run_id, notes=notes, mode=mode)
     except WorkflowRetryError as exc:
         status_code_value = (
             status.HTTP_404_NOT_FOUND

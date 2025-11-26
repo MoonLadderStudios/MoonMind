@@ -1,4 +1,5 @@
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from typing import Any, Dict
@@ -66,6 +67,32 @@ class ArtifactStorage:
 
         shutil.copy(file_path, destination)
 
+        return self.get_artifact_metadata(destination)
+
+    def write_json_artifact(
+        self, run_id: str, artifact_name: str, payload: dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Serialize ``payload`` into the run directory and return its metadata."""
+
+        run_path = self.get_run_path(run_id)
+        run_path.mkdir(parents=True, exist_ok=True)
+
+        artifact_relative = Path(artifact_name)
+        if not artifact_relative.parts:
+            raise ValueError("artifact_name must not be empty")
+
+        if artifact_relative.is_absolute() or any(
+            part == ".." for part in artifact_relative.parts
+        ):
+            raise ValueError(
+                "artifact_name must be a relative path without traversal components"
+            )
+
+        destination = (run_path / artifact_relative).resolve()
+        if not destination.parent.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+        destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return self.get_artifact_metadata(destination)
 
     def get_artifact_metadata(self, file_path: Path) -> Dict[str, Any]:

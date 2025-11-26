@@ -1119,6 +1119,43 @@ def _prepare_retry_context(context: dict[str, Any]) -> int:
     return attempt
 
 
+def _resolve_resume_path(artifacts_dir: Path, raw_path: str | Path) -> Path:
+    """Return an absolute artifact path scoped within the run directory."""
+
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = artifacts_dir / candidate
+    return candidate
+
+
+def _apply_resume_token(context: dict[str, Any], *, artifacts_dir: Path) -> None:
+    """Merge resume token metadata into the task context when present."""
+
+    token = context.get("resume_token") if isinstance(context, dict) else None
+    if isinstance(token, Mapping):
+        field_map = {
+            "codex_task_id": "codexTaskId",
+            "codex_logs_path": "codexLogsPath",
+            "codex_patch_path": "codexPatchPath",
+            "branch_name": "branchName",
+            "pr_url": "prUrl",
+        }
+        for target, source in field_map.items():
+            if not context.get(target) and token.get(source):
+                context[target] = token.get(source)
+
+    for path_key in (
+        "codex_logs_path",
+        "codex_patch_path",
+        "apply_output_path",
+        "github_response_path",
+    ):
+        raw = context.get(path_key)
+        if not raw:
+            continue
+        context[path_key] = str(_resolve_resume_path(artifacts_dir, raw))
+
+
 async def _ensure_credentials_validated(
     repo: SpecWorkflowRepository,
     *,
@@ -1672,6 +1709,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             await session.commit()
 
             artifacts_dir = _resolve_artifacts_dir(run)
+            _apply_resume_token(context, artifacts_dir=artifacts_dir)
 
             if context.get("no_work"):
                 finished = _now()
@@ -1711,24 +1749,40 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             github_client = _build_github_client()
 
             try:
-                diff: CodexDiffResult = _poll_for_codex_diff(
-                    codex_client,
-                    task_id=context.get("codex_task_id", ""),
-                    artifacts_dir=artifacts_dir,
-                    task_identifier=discovered.get("taskId", ""),
-                    task_summary=discovered.get("title", ""),
-                )
+                codex_task_id = context.get("codex_task_id", "")
+                if context.get("retry") and context.get("codex_patch_path"):
+                    patch_path = _resolve_resume_path(
+                        artifacts_dir, str(context["codex_patch_path"])
+                    )
+                    diff = CodexDiffResult(
+                        patch_path=patch_path,
+                        description="resume_from_retry_context",
+                        has_changes=True,
+                    )
+                else:
+                    diff = _poll_for_codex_diff(
+                        codex_client,
+                        task_id=codex_task_id,
+                        artifacts_dir=artifacts_dir,
+                        task_identifier=discovered.get("taskId", ""),
+                        task_summary=discovered.get("title", ""),
+                    )
                 await repo.add_artifact(
                     workflow_run_id=run_uuid,
                     artifact_type=models.WorkflowArtifactType.CODEX_PATCH,
                     path=str(diff.patch_path),
                 )
-                apply_output_path = _write_apply_output(artifacts_dir, diff)
-                await repo.add_artifact(
-                    workflow_run_id=run_uuid,
-                    artifact_type=models.WorkflowArtifactType.APPLY_OUTPUT,
-                    path=str(apply_output_path),
-                )
+                if context.get("apply_output_path"):
+                    apply_output_path = _resolve_resume_path(
+                        artifacts_dir, str(context["apply_output_path"])
+                    )
+                else:
+                    apply_output_path = _write_apply_output(artifacts_dir, diff)
+                    await repo.add_artifact(
+                        workflow_run_id=run_uuid,
+                        artifact_type=models.WorkflowArtifactType.APPLY_OUTPUT,
+                        path=str(apply_output_path),
+                    )
 
                 updates = {
                     "phase": models.SpecWorkflowRunPhase.PUBLISH,
@@ -1802,14 +1856,15 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     codexCredentialStatus=context.get(
                         "credential_audit_status", {}
                     ).get("codex"),
-                    githubCredentialStatus=context.get(
-                        "credential_audit_status", {}
-                    ).get("github"),
-                ),
-                finished_at=finished,
-                attempt=attempt,
-                message="Pull request published",
-                artifact_paths=[
+                githubCredentialStatus=context.get(
+                    "credential_audit_status", {}
+                ).get("github"),
+                resumed=context.get("resume_token") is not None,
+            ),
+            finished_at=finished,
+            attempt=attempt,
+            message="Pull request published",
+            artifact_paths=[
                     str(diff.patch_path),
                     str(publish.response_path),
                     str(apply_output_path),

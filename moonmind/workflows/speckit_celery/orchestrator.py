@@ -12,8 +12,10 @@ from celery.canvas import Signature
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
+from moonmind.schemas.workflow_models import RetryWorkflowMode
 from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.repositories import SpecWorkflowRepository
+from moonmind.workflows.speckit_celery.storage import ArtifactStorage
 from moonmind.workflows.speckit_celery.tasks import (
     TASK_DISCOVER,
     TASK_PUBLISH,
@@ -168,9 +170,14 @@ async def trigger_spec_workflow_run(
 
 
 async def retry_spec_workflow_run(
-    run_id: UUID, *, notes: Optional[str] = None
+    run_id: UUID,
+    *,
+    notes: Optional[str] = None,
+    mode: RetryWorkflowMode = RetryWorkflowMode.RESUME_FAILED_TASK,
 ) -> TriggeredWorkflow:
     """Resume a previously failed workflow run starting at the failing task."""
+
+    resolved_mode = RetryWorkflowMode(mode)
 
     async with get_async_session_context() as session:
         repo = SpecWorkflowRepository(session)
@@ -196,7 +203,7 @@ async def retry_spec_workflow_run(
                 "Workflow run has no recorded task states to determine retry point",
             )
 
-        start_index: Optional[int] = None
+        start_index: Optional[int] = 0 if resolved_mode is RetryWorkflowMode.RESTART_FROM_DISCOVERY else None
         latest_by_task: dict[str, models.SpecWorkflowTaskState] = {}
         max_attempt_by_task: dict[str, int] = {}
         for task_name in TASK_SEQUENCE:
@@ -236,6 +243,33 @@ async def retry_spec_workflow_run(
             finished_at=None,
         )
 
+        resume_payload = {
+            "runId": str(run.id),
+            "mode": resolved_mode.value,
+            "resumeFrom": first_task,
+            "attempt": next_attempt,
+            "notes": notes,
+            "codexTaskId": run.codex_task_id,
+            "codexLogsPath": run.codex_logs_path,
+            "codexPatchPath": run.codex_patch_path,
+            "branchName": run.branch_name,
+            "prUrl": run.pr_url,
+        }
+
+        artifacts_root = settings.spec_workflow.artifacts_root
+        storage = ArtifactStorage(artifacts_root)
+        artifact_name = f"retry_context_attempt_{next_attempt}.json"
+        retry_artifact = storage.write_json_artifact(
+            str(run.id), artifact_name, resume_payload
+        )
+        await repo.add_artifact(
+            workflow_run_id=run.id,
+            artifact_type=models.WorkflowArtifactType.RETRY_CONTEXT,
+            path=str(retry_artifact["path"]),
+            size_bytes=retry_artifact.get("size"),
+            digest=retry_artifact.get("digest"),
+        )
+
         await session.commit()
 
     base_context = _base_context(run)
@@ -262,6 +296,9 @@ async def retry_spec_workflow_run(
         value = getattr(run, attr, None)
         if value:
             base_context[attr] = value
+
+    base_context["resume_token"] = resume_payload
+    base_context["resume_artifact_path"] = str(retry_artifact["path"])
 
     task_map = {
         TASK_DISCOVER: discover_next_phase,
