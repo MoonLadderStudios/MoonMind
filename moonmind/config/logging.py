@@ -5,7 +5,6 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
-
 _RESERVED_LOG_RECORD_FIELDS = {
     "name",
     "msg",
