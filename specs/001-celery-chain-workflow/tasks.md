@@ -96,9 +96,9 @@
 ## Phase 6: Polish & Cross-Cutting Concerns
 **Purpose**: Hardening, documentation, and observability after core stories ship.
 
-- [ ] T030 [P] Refresh operator runbooks in `docs/ops-runbook.md` and `docs/SpecKitAutomationInstructions.md` with queue setup, retry procedures, and artifact locations.
-- [ ] T031 Add structured logging + StatsD hooks for each Celery phase in `moonmind/config/logging.py` and `moonmind/workflows/speckit_celery/tasks.py`.
-- [ ] T032 Validate the end-to-end flow via `specs/001-celery-chain-workflow/quickstart.md`, capturing sample run IDs/artifacts for documentation.
+- [x] T030 [P] Refresh operator runbooks in `docs/ops-runbook.md` and `docs/SpecKitAutomationInstructions.md` with queue setup, retry procedures, and artifact locations.
+- [x] T031 Add structured logging + StatsD hooks for each Celery phase in `moonmind/config/logging.py` and `moonmind/workflows/speckit_celery/tasks.py`.
+- [x] T032 Validate the end-to-end flow via `specs/001-celery-chain-workflow/quickstart.md`, capturing sample run IDs/artifacts for documentation.
 
 ---
 

@@ -5,6 +5,7 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 ## Prerequisites
 
 1. **Runtime services** – Bring up RabbitMQ, the Spec Kit Celery worker, and the API service together; they share the automation queue, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
+   - Bind the worker to the Spec Workflow queue defined by `SPEC_WORKFLOW_CODEX_QUEUE` (default `codex`). The bundled `docker compose up rabbitmq celery-worker api` already uses this queue; when running a standalone worker, pass `-Q ${SPEC_WORKFLOW_CODEX_QUEUE}` to mirror production routing.
 2. **Credentials** – Export a GitHub token with `repo` scope and the Codex API key so the job container can clone, push, and execute Spec Kit prompts. Set `SPEC_WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
 3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
 4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/spec-automation` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
@@ -187,6 +188,8 @@ Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSI
      "http://localhost:5000/api/spec-automation/runs/<run_id>"
    ```
 3. **Artifacts** – Inspect logs and generated assets under `/work/runs/<run_id>/artifacts` or download them through `/api/spec-automation/runs/<run_id>/artifacts/<artifact_id>` as needed.【F:docs/SpecKitAutomation.md†L131-L156】【F:specs/002-document-speckit-automation/quickstart.md†L82-L106】【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L32-L77】
+   - Spec Workflow (Celery chain) runs store Codex JSONL logs, generated patches, and GitHub responses under `var/artifacts/spec_workflows/<run_id>/`. Mount this path when running Compose locally so retries can reuse the artifacts.
+   - To retry a failed Celery chain after fixing credentials, POST `/api/workflows/speckit/runs/{id}/retry` with `{"mode": "resume_failed_task"}`. The worker resumes from the failed task and reuses existing artifacts rather than recomputing patches.【F:specs/001-celery-chain-workflow/tasks.md†L85-L93】
 
 ## Step 5 – Review results and handoff
 
