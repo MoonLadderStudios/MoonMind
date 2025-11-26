@@ -80,11 +80,11 @@
 **Independent Test**: Force a failure at publish, POST `/api/workflows/speckit/runs/{id}/retry`, and confirm the chain resumes using stored diff context; retry again without fixing credentials to ensure fast failure with guidance.
 
 ### Tests
-- [ ] T024 [P] [US3] Add retry-state coverage in `tests/unit/workflows/test_tasks.py`, asserting transitions `failed → retrying → {running|failed|succeeded}` and artifact reuse.
-- [ ] T025 [P] [US3] Add contract tests for `POST /api/workflows/speckit/runs/{id}/retry` in `tests/contract/test_workflow_api.py`, covering successful resumes and credential errors.
+- [x] T024 [P] [US3] Add retry-state coverage in `tests/unit/workflows/test_tasks.py`, asserting transitions `failed → retrying → {running|failed|succeeded}` and artifact reuse.
+- [x] T025 [P] [US3] Add contract tests for `POST /api/workflows/speckit/runs/{id}/retry` in `tests/contract/test_workflow_api.py`, covering successful resumes and credential errors.
 
 ### Implementation
-- [ ] T026 [US3] Implement retry orchestration helpers (`retry_spec_workflow_run`, guard rails) in `moonmind/workflows/__init__.py` to locate failing task outputs and enqueue resumes.
+- [x] T026 [US3] Implement retry orchestration helpers (`retry_spec_workflow_run`, guard rails) in `moonmind/workflows/__init__.py` to locate failing task outputs and enqueue resumes.
 - [ ] T027 [US3] Update `moonmind/workflows/speckit_celery/tasks.py` to accept resume tokens, skip completed tasks, and reload artifacts/logs as inputs.
 - [ ] T028 [US3] Add the retry endpoint + validation to `api_service/api/routers/workflows.py`, surfacing guidance when retries are unsafe.
 - [ ] T029 [US3] Persist retry metadata (attempt counters, operator notes, extra artifacts) in `moonmind/workflows/speckit_celery/repositories.py` and `moonmind/workflows/speckit_celery/storage.py`.
