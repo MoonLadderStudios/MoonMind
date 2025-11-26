@@ -721,9 +721,7 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
                 f"/api/workflows/speckit/runs/{run_model.id}/retry", json={}
             )
             assert retry_response.status_code == 202
-            retry_model = SpecWorkflowRunModel.model_validate(
-                retry_response.json()
-            )
+            retry_model = SpecWorkflowRunModel.model_validate(retry_response.json())
             assert retry_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
             assert any(
                 task.task_name == "apply_and_publish"

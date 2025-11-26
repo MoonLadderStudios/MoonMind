@@ -13,12 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
 from api_service.db.models import Base
-from moonmind.workflows.speckit_celery import (
-    models,
-    orchestrator,
-    repositories,
-    tasks,
-)
+from moonmind.workflows.speckit_celery import models, orchestrator, repositories, tasks
 from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
 from moonmind.workflows.speckit_celery.serializers import (
     serialize_run,
@@ -830,7 +825,9 @@ async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monke
 
     def fake_github_client():
         class _Client:
-            def publish(self, *, feature_key, task_identifier, patch_path, artifacts_dir):
+            def publish(
+                self, *, feature_key, task_identifier, patch_path, artifacts_dir
+            ):
                 publish_calls.append(
                     {
                         "feature_key": feature_key,
