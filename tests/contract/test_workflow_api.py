@@ -505,7 +505,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         ) as client:
             response = await client.post(
                 "/api/workflows/speckit/runs",
-                json={"repository": TEST_REPOSITORY},
+                json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
             run_model = SpecWorkflowRunModel.model_validate(response.json())
@@ -649,6 +649,18 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    feature_key = "001-celery-chain-workflow"
+    specs_dir = tmp_path / "specs" / feature_key
+    specs_dir.mkdir(parents=True)
+    (specs_dir / "tasks.md").write_text(
+        """
+## Phase 3 – User Story 1
+- [ ] T050 Contract test task
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
     monkeypatch.setattr(
@@ -697,7 +709,7 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
         ) as client:
             response = await client.post(
                 "/api/workflows/speckit/runs",
-                json={"repository": TEST_REPOSITORY},
+                json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
             run_model = SpecWorkflowRunModel.model_validate(response.json())
