@@ -505,7 +505,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         ) as client:
             response = await client.post(
                 "/api/workflows/speckit/runs",
-                json={"repository": TEST_REPOSITORY},
+                json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
             run_model = SpecWorkflowRunModel.model_validate(response.json())
@@ -627,3 +627,120 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
         app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path):
+    """Retry should expose credential failures instead of restarting Codex submissions."""
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/workflow_api.db"
+    engine = create_async_engine(db_url, future=True)
+    async_session_maker = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    monkeypatch.setattr(db_base, "DATABASE_URL", db_url)
+    monkeypatch.setattr(db_base, "engine", engine)
+    monkeypatch.setattr(db_base, "async_session_maker", async_session_maker)
+    monkeypatch.setattr(
+        _get_repository, "__defaults__", (lambda: async_session_maker(),)
+    )
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    feature_key = "001-celery-chain-workflow"
+    specs_dir = tmp_path / "specs" / feature_key
+    specs_dir.mkdir(parents=True)
+    (specs_dir / "tasks.md").write_text(
+        """
+## Phase 3 – User Story 1
+- [ ] T050 Contract test task
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
+    monkeypatch.setattr(
+        settings.spec_workflow, "repo_root", str(tmp_path), raising=False
+    )
+    monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(
+        settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
+    )
+    monkeypatch.setattr(
+        settings.spec_workflow, "codex_volume_name", "codex_auth_0", raising=False
+    )
+    monkeypatch.setattr(settings.spec_workflow, "codex_shards", 1, raising=False)
+    monkeypatch.setitem(celery_app.conf, "task_always_eager", True)
+    monkeypatch.setitem(celery_app.conf, "task_eager_propagates", True)
+
+    def _failing_github_client():
+        class _Client:
+            def publish(self, **_kwargs):
+                raise RuntimeError("simulated publish failure")
+
+        return _Client()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.speckit_celery.tasks._build_github_client",
+        _failing_github_client,
+    )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.speckit_celery.tasks._run_codex_preflight_check",
+        lambda *_, **__: workflow_tasks.CodexPreflightResult(
+            status=workflow_models.CodexPreflightStatus.PASSED,
+            message="Codex login status check passed",
+            volume="codex_auth_0",
+        ),
+    )
+
+    app.state.settings = settings
+    test_user = SimpleNamespace(id=uuid4())
+    app.dependency_overrides[get_current_user] = lambda: test_user
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/api/workflows/speckit/runs",
+                json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
+            )
+            assert response.status_code == 202
+            run_model = SpecWorkflowRunModel.model_validate(response.json())
+            assert run_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
+
+            def _invalidate_credentials(*_args, **_kwargs):
+                audit = workflow_models.CredentialAuditResult(
+                    codex_status=workflow_models.CodexCredentialStatus.INVALID,
+                    github_status=workflow_models.GitHubCredentialStatus.INVALID,
+                    notes="GitHub token expired",
+                )
+                raise workflow_tasks.CredentialValidationError(
+                    audit, "Credential validation failed"
+                )
+
+            monkeypatch.setattr(
+                workflow_tasks, "_validate_credentials", _invalidate_credentials
+            )
+
+            retry_response = await client.post(
+                f"/api/workflows/speckit/runs/{run_model.id}/retry", json={}
+            )
+            assert retry_response.status_code == 202
+            retry_model = SpecWorkflowRunModel.model_validate(retry_response.json())
+            assert retry_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
+            assert any(
+                task.task_name == "apply_and_publish"
+                and task.status == workflow_models.SpecWorkflowTaskStatus.FAILED
+                and task.attempt == 2
+                for task in retry_model.tasks
+            )
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()

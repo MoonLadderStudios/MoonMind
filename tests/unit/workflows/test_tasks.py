@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
 from api_service.db.models import Base
-from moonmind.workflows.speckit_celery import models, repositories, tasks
+from moonmind.workflows.speckit_celery import models, orchestrator, repositories, tasks
 from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
 from moonmind.workflows.speckit_celery.serializers import (
     serialize_run,
@@ -744,6 +744,172 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
         publish_state.payload["applyOutputPath"]
         == artifacts_by_type[models.WorkflowArtifactType.APPLY_OUTPUT].path
     )
+
+
+@pytest.mark.asyncio
+async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monkeypatch):
+    """Retrying a failed publish should skip submission and reuse Codex outputs."""
+
+    monkeypatch.setitem(tasks.celery_app.conf, "task_always_eager", True)
+    monkeypatch.setitem(tasks.celery_app.conf, "task_eager_propagates", True)
+
+    artifacts_root = tmp_path / "artifacts"
+    workflow_settings = {
+        "test_mode": True,
+        "repo_root": str(tmp_path),
+        "tasks_root": "specs",
+        "artifacts_root": str(artifacts_root),
+        "github_repository": TEST_GITHUB_REPOSITORY,
+        "default_feature_key": TEST_FEATURE_KEY,
+        "codex_volume_name": TEST_CODEX_VOLUME,
+    }
+    for key, value in workflow_settings.items():
+        monkeypatch.setattr(tasks.settings.spec_workflow, key, value, raising=False)
+
+    specs_dir = tmp_path / "specs" / TEST_FEATURE_KEY
+    specs_dir.mkdir(parents=True)
+    (specs_dir / "tasks.md").write_text(
+        "\n".join(
+            [
+                "## Phase 3 – User Story 1",
+                "- [ ] T024 Validate retry orchestration",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        tasks,
+        "_run_codex_preflight_check",
+        lambda: tasks.CodexPreflightResult(
+            status=models.CodexPreflightStatus.SKIPPED,
+            message="preflight skipped in unit test",
+        ),
+    )
+
+    class DummyCodexClient:
+        def __init__(self) -> None:
+            self.submit_calls: list[dict[str, object]] = []
+
+        def submit(self, *, feature_key, task_identifier, task_summary, artifacts_dir):
+            logs_path = artifacts_dir / "codex.jsonl"
+            logs_path.write_text("{}\n", encoding="utf-8")
+            self.submit_calls.append(
+                {
+                    "feature_key": feature_key,
+                    "task_identifier": task_identifier,
+                    "task_summary": task_summary,
+                }
+            )
+            return tasks.CodexSubmissionResult(
+                task_id="codex-retry-123",
+                logs_path=logs_path,
+                summary="submitted",
+            )
+
+    codex_client = DummyCodexClient()
+    monkeypatch.setattr(tasks, "_build_codex_client", lambda: codex_client)
+
+    def fake_poll(*_, artifacts_dir, **__):
+        patch_path = artifacts_dir / "codex-retry-123.patch"
+        patch_path.write_text("patch data", encoding="utf-8")
+        return tasks.CodexDiffResult(
+            patch_path=patch_path,
+            description="diff ready",
+            has_changes=True,
+        )
+
+    monkeypatch.setattr(tasks, "_poll_for_codex_diff", fake_poll)
+
+    publish_calls: list[dict[str, object]] = []
+
+    def fake_github_client():
+        class _Client:
+            def publish(
+                self, *, feature_key, task_identifier, patch_path, artifacts_dir
+            ):
+                publish_calls.append(
+                    {
+                        "feature_key": feature_key,
+                        "task_identifier": task_identifier,
+                        "patch_path": patch_path,
+                        "artifacts_dir": artifacts_dir,
+                    }
+                )
+                if len(publish_calls) == 1:
+                    raise RuntimeError("temporary publish failure")
+
+                response_path = artifacts_dir / "pr_retry.json"
+                response_path.write_text("{}", encoding="utf-8")
+                return tasks.GitHubPublishResult(
+                    branch_name=f"{feature_key}/retry",
+                    pr_url=f"https://example.com/{feature_key}/retry",
+                    response_path=response_path,
+                )
+
+        return _Client()
+
+    monkeypatch.setattr(tasks, "_build_github_client", fake_github_client)
+
+    async with workflow_db(monkeypatch, tmp_path) as async_session_maker:
+        async with async_session_maker() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            run = await repo.create_run(
+                feature_key=TEST_FEATURE_KEY, repository=TEST_GITHUB_REPOSITORY
+            )
+            artifacts_dir = artifacts_root / str(run.id)
+            artifacts_dir.mkdir(parents=True)
+            await repo.update_run(run.id, artifacts_path=str(artifacts_dir))
+            await session.commit()
+
+        discovery_context = tasks.discover_next_phase.apply_async(
+            args=[str(run.id)], kwargs={"feature_key": TEST_FEATURE_KEY}
+        ).get()
+        submit_context = tasks.submit_codex_job.apply_async(
+            args=[dict(discovery_context)]
+        ).get()
+
+        with pytest.raises(RuntimeError):
+            tasks.apply_and_publish.apply_async(args=[dict(submit_context)]).get()
+
+        async with async_session_maker() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            failed_run = await repo.get_run(run.id, with_relations=True)
+            assert failed_run is not None
+            assert failed_run.status is models.SpecWorkflowRunStatus.FAILED
+            assert failed_run.codex_task_id == "codex-retry-123"
+            publish_attempts = [
+                state
+                for state in failed_run.task_states
+                if state.task_name == tasks.TASK_PUBLISH
+            ]
+            assert publish_attempts and publish_attempts[-1].attempt == 1
+
+        retried = await orchestrator.retry_spec_workflow_run(
+            run.id, notes="Retry after fixing credentials"
+        )
+        assert retried.run_id == run.id
+
+        async with async_session_maker() as session:
+            repo = repositories.SpecWorkflowRepository(session)
+            refreshed = await repo.get_run(run.id, with_relations=True)
+
+        assert refreshed is not None
+        assert refreshed.status is models.SpecWorkflowRunStatus.SUCCEEDED
+        assert refreshed.phase is models.SpecWorkflowRunPhase.COMPLETE
+        assert refreshed.codex_task_id == "codex-retry-123"
+
+        publish_attempts = [
+            state
+            for state in refreshed.task_states
+            if state.task_name == tasks.TASK_PUBLISH
+        ]
+        assert {state.attempt for state in publish_attempts} == {1, 2}
+        assert publish_attempts[-1].status is models.SpecWorkflowTaskStatus.SUCCEEDED
+
+        assert len(codex_client.submit_calls) == 1
+        assert len(publish_calls) == 2
+        assert refreshed.codex_logs_path is not None
 
 
 @pytest.mark.asyncio
