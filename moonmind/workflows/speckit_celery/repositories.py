@@ -792,6 +792,26 @@ class SpecWorkflowRepository:
         await self._session.flush()
         return artifact
 
+    async def latest_artifact(
+        self,
+        workflow_run_id: UUID,
+        artifact_type: models.WorkflowArtifactType,
+    ) -> Optional[models.WorkflowArtifact]:
+        """Return the most recent artifact of the requested type."""
+
+        artifact_type_enum = _coerce_artifact_type(artifact_type)
+        stmt = (
+            select(models.WorkflowArtifact)
+            .where(
+                models.WorkflowArtifact.workflow_run_id == workflow_run_id,
+                models.WorkflowArtifact.artifact_type == artifact_type_enum,
+            )
+            .order_by(models.WorkflowArtifact.created_at.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def add_artifacts(
         self,
         workflow_run_id: UUID,

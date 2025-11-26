@@ -380,6 +380,14 @@ jobs:
               per_page: 100
             });
 
+            // Get review bodies (not just inline comments) so P0/P1 findings in full reviews are detected
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number,
+              per_page: 100
+            });
+
             // Get all issue comments
             const { data: issueComments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -394,7 +402,29 @@ jobs:
               return commitIdLower && commitIdLower === headShaLower;
             });
 
-            const allComments = [...reviewCommentsOnHead, ...issueComments];
+            // Normalize review bodies to comment-like objects for downstream filtering
+            const reviewBodies = reviews
+              .filter(review => (review.body || '').trim())
+              .map(review => {
+                const createdAt =
+                  review.submitted_at ||
+                  review.submittedAt ||
+                  review.created_at ||
+                  review.createdAt ||
+                  review.updated_at ||
+                  review.updatedAt ||
+                  null;
+                return {
+                  ...review,
+                  created_at: createdAt,
+                  body: review.body,
+                };
+              })
+              .filter(review => review.created_at);
+
+            console.log(`Review bodies collected: ${reviewBodies.length}`);
+
+            const allComments = [...reviewCommentsOnHead, ...issueComments, ...reviewBodies];
 
             console.log(`Total comments (all time): ${allComments.length}`);
 

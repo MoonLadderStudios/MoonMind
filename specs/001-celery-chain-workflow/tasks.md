@@ -85,9 +85,9 @@
 
 ### Implementation
 - [x] T026 [US3] Implement retry orchestration helpers (`retry_spec_workflow_run`, guard rails) in `moonmind/workflows/__init__.py` to locate failing task outputs and enqueue resumes.
-- [ ] T027 [US3] Update `moonmind/workflows/speckit_celery/tasks.py` to accept resume tokens, skip completed tasks, and reload artifacts/logs as inputs.
-- [ ] T028 [US3] Add the retry endpoint + validation to `api_service/api/routers/workflows.py`, surfacing guidance when retries are unsafe.
-- [ ] T029 [US3] Persist retry metadata (attempt counters, operator notes, extra artifacts) in `moonmind/workflows/speckit_celery/repositories.py` and `moonmind/workflows/speckit_celery/storage.py`.
+- [x] T027 [US3] Update `moonmind/workflows/speckit_celery/tasks.py` to accept resume tokens, skip completed tasks, and reload artifacts/logs as inputs.
+- [x] T028 [US3] Add the retry endpoint + validation to `api_service/api/routers/workflows.py`, surfacing guidance when retries are unsafe.
+- [x] T029 [US3] Persist retry metadata (attempt counters, operator notes, extra artifacts) in `moonmind/workflows/speckit_celery/repositories.py` and `moonmind/workflows/speckit_celery/storage.py`.
 
 **Checkpoint**: Failed runs can be resumed safely with complete audit trails.
 
