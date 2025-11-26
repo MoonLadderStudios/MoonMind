@@ -87,6 +87,35 @@
    ```
    The API enqueues a new Celery chain from the failing task and returns the updated run with status `retrying`.
 
+## Validation snapshot (test mode)
+
+The flow below captures a representative run while `SPEC_WORKFLOW_TEST_MODE=1` is enabled. Use it as a template when validating the quickstart end-to-end without hitting Codex or GitHub:
+
+```bash
+export SPEC_WORKFLOW_TEST_MODE=1
+RUN_ID=$(\
+  curl -sS -X POST http://localhost:8000/api/workflows/speckit/runs \
+    -H 'Content-Type: application/json' \
+    -d '{"repository":"moonmind/spec-kit-reference","featureKey":"spec-42-refresh-docs"}' \
+    | jq -r '.id' \
+)
+echo "Run ID: ${RUN_ID}" && ls -1 var/artifacts/spec_workflows/${RUN_ID}
+```
+
+Example output (from a test-mode run):
+
+```
+Run ID: 20b866d5-8e43-4b70-9f79-7d7e5962f687
+apply_output.json
+codex_logs.jsonl
+patch.diff
+run_summary.json
+submit_codex_job.json
+```
+
+- The `submit_codex_job.json` artifact captures the Codex task submission payload; `codex_logs.jsonl` contains the Codex-side JSONL stream, and `run_summary.json` reflects the final branch/PR metadata produced during publish.
+- StatsD counters for the same run use tags `task=discover_next_phase|submit_codex_job|apply_and_publish` with `attempt=1`; verify they arrive in your collector to confirm instrumentation is wired before leaving test mode.
+
 ## Tips
 - Logs and patches land in `var/artifacts/spec_workflows/{run_id}`; ensure the directory exists and is writable by the Celery worker UID.
 - Set `SPEC_WORKFLOW_TEST_MODE=1` to stub Codex/GitHub for unit/integration testing.

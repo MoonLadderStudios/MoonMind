@@ -374,6 +374,19 @@ class _MetricsEmitter:
         if self._configured:
             self._address = (str(host), int(port))
             self._open_socket()
+            logger.info(
+                "Spec workflow StatsD emitter configured",
+                extra={"metrics_host": host, "metrics_prefix": self._prefix},
+            )
+        else:
+            logger.debug(
+                "Spec workflow StatsD emitter disabled (no host configured)",
+                extra={"metrics_prefix": self._prefix},
+            )
+
+    @property
+    def enabled(self) -> bool:
+        return self._configured and self._enabled
 
     def _open_socket(self) -> None:
         if not self._address:
@@ -441,7 +454,7 @@ class _MetricsEmitter:
     def increment(
         self, metric: str, *, value: int = 1, tags: Optional[Mapping[str, Any]] = None
     ) -> None:
-        if not self._enabled:
+        if not self.enabled:
             return
         formatted_tags = self._format_tags(tags)
         payload = f"{self._prefix}.{metric}:{value}|c{formatted_tags}"
@@ -450,7 +463,7 @@ class _MetricsEmitter:
     def observe(
         self, metric: str, *, value: float, tags: Optional[Mapping[str, Any]] = None
     ) -> None:
-        if not self._enabled:
+        if not self.enabled:
             return
         formatted_tags = self._format_tags(tags)
         payload = f"{self._prefix}.{metric}:{value * 1000:.6f}|ms{formatted_tags}"
@@ -474,6 +487,18 @@ class TaskObserver:
         self._metrics = metrics
         self._started_at: float | None = None
 
+    def _base_extra(self, **overrides: Any) -> dict[str, Any]:
+        payload = {
+            "run_id": self._run_id,
+            "task": self._task_name,
+            "attempt": self._attempt,
+            "metrics_enabled": self._metrics.enabled,
+        }
+        for key, value in overrides.items():
+            if value is not None:
+                payload[key] = value
+        return payload
+
     def _metric_tags(self, **extras: Any) -> dict[str, Any]:
         tags = {"task": self._task_name, "attempt": self._attempt}
         tags.update({key: value for key, value in extras.items() if value is not None})
@@ -486,12 +511,14 @@ class TaskObserver:
             "task_start",
             tags=self._metric_tags(status="running", retry=details.get("retry")),
         )
+        log_extra = self._base_extra(event="task_started", details=sanitized)
         logger.info(
             "Spec workflow task %s started for run %s (attempt %s) | details=%s",
             self._task_name,
             self._run_id,
             self._attempt,
             sanitized,
+            extra=log_extra,
         )
 
     def succeeded(self, summary: Optional[Mapping[str, Any]] = None) -> None:
@@ -503,6 +530,11 @@ class TaskObserver:
         if duration is not None:
             self._metrics.observe("task_duration", value=duration, tags=tags)
         sanitized_summary = _sanitize_for_log(summary) if summary is not None else {}
+        log_extra = self._base_extra(
+            event="task_succeeded",
+            duration_ms=duration * 1000 if duration is not None else None,
+            summary=sanitized_summary,
+        )
         if duration is not None:
             logger.info(
                 "Spec workflow task %s succeeded for run %s (attempt %s) in %.3fs | summary=%s",
@@ -511,6 +543,7 @@ class TaskObserver:
                 self._attempt,
                 duration,
                 sanitized_summary,
+                extra=log_extra,
             )
         else:
             logger.info(
@@ -519,6 +552,7 @@ class TaskObserver:
                 self._run_id,
                 self._attempt,
                 sanitized_summary,
+                extra=log_extra,
             )
 
     def failed(
@@ -537,6 +571,12 @@ class TaskObserver:
         }
         sanitized_error = _sanitize_for_log(error_details)
         sanitized_details = _sanitize_for_log(details) if details is not None else None
+        log_extra = self._base_extra(
+            event="task_failed",
+            duration_ms=duration * 1000 if duration is not None else None,
+            error=sanitized_error,
+            details=sanitized_details,
+        )
         if duration is not None:
             logger.error(
                 "Spec workflow task %s failed for run %s (attempt %s) after %.3fs | error=%s | details=%s",
@@ -546,6 +586,7 @@ class TaskObserver:
                 duration,
                 sanitized_error,
                 sanitized_details,
+                extra=log_extra,
             )
         else:
             logger.error(
@@ -555,6 +596,7 @@ class TaskObserver:
                 self._attempt,
                 sanitized_error,
                 sanitized_details,
+                extra=log_extra,
             )
 
 
