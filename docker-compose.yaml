@@ -201,6 +201,7 @@ services:
       - ./specs:/app/specs:ro
       - ./model_data:/app/model_data
       - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
+      - codex_auth_volume:/var/lib/codex-auth
       - speckit_workspaces:/work/runs
     depends_on:
       rabbitmq:
