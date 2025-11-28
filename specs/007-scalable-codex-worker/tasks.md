@@ -22,7 +22,7 @@ description: "Task list for Scalable Codex Worker feature"
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Verify feature branch `007-scalable-codex-worker` and context
+ - [x] T001 Verify feature branch `007-scalable-codex-worker` and context
 
 ---
 
