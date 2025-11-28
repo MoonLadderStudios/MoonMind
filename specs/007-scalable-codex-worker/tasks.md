@@ -32,10 +32,10 @@ description: "Task list for Scalable Codex Worker feature"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T002 Define `codex_auth_volume` in `docker-compose.yaml` volumes section
-- [ ] T003 Remove legacy `celery-codex-0` service from `docker-compose.yaml`
-- [ ] T004 Remove legacy `codex_auth_0`, `codex_auth_1`, `codex_auth_2` volumes from `docker-compose.yaml`
-- [ ] T005 [P] Remove legacy script `celery_worker/scripts/codex_login_proxy.py` (if exists)
+- [x] T002 Define `codex_auth_volume` in `docker-compose.yaml` volumes section
+- [x] T003 Remove legacy `celery-codex-0` service from `docker-compose.yaml`
+- [x] T004 Remove legacy `codex_auth_0`, `codex_auth_1`, `codex_auth_2` volumes from `docker-compose.yaml`
+- [x] T005 [P] Remove legacy script `celery_worker/scripts/codex_login_proxy.py` (if exists)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
