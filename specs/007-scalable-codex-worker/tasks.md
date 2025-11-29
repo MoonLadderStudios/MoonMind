@@ -49,10 +49,10 @@ description: "Task list for Scalable Codex Worker feature"
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Add `celery_codex_worker` service to `docker-compose.yaml` (use `celery-worker` as template)
-- [ ] T007 [US1] Configure `celery_codex_worker` environment in `docker-compose.yaml`: set `SPEC_WORKFLOW_CODEX_QUEUE=codex`
-- [ ] T008 [US1] Configure `celery_codex_worker` command in `docker-compose.yaml` to run `celery -A celery_worker.speckit_worker worker ... -Q codex`
-- [ ] T009 [US1] Manual Verification: Start service and check logs for queue subscription
+ - [x] T006 [US1] Add `celery_codex_worker` service to `docker-compose.yaml` (use `celery-worker` as template)
+ - [x] T007 [US1] Configure `celery_codex_worker` environment in `docker-compose.yaml`: set `SPEC_WORKFLOW_CODEX_QUEUE=codex`
+ - [x] T008 [US1] Configure `celery_codex_worker` command in `docker-compose.yaml` to run `celery -A celery_worker.speckit_worker worker ... -Q codex`
+ - [x] T009 [US1] Manual Verification: Start service and check logs for queue subscription
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently
 
