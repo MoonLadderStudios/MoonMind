@@ -66,9 +66,9 @@ description: "Task list for Scalable Codex Worker feature"
 
 ### Implementation for User Story 2
 
-- [ ] T010 [US2] Mount `codex_auth_volume` to `celery_codex_worker` at `/var/lib/codex-auth` in `docker-compose.yaml`
-- [ ] T011 [US2] Set `CODEX_VOLUME_NAME=codex_auth_volume` environment variable for `celery_codex_worker` in `docker-compose.yaml`
-- [ ] T012 [US2] Set `CODEX_VOLUME_PATH=/var/lib/codex-auth` environment variable for `celery_codex_worker` in `docker-compose.yaml`
+- [x] T010 [US2] Mount `codex_auth_volume` to `celery_codex_worker` at `/var/lib/codex-auth` in `docker-compose.yaml`
+- [x] T011 [US2] Set `CODEX_VOLUME_NAME=codex_auth_volume` environment variable for `celery_codex_worker` in `docker-compose.yaml`
+- [x] T012 [US2] Set `CODEX_VOLUME_PATH=/var/lib/codex-auth` environment variable for `celery_codex_worker` in `docker-compose.yaml`
 - [ ] T013 [US2] Manual Verification: Perform auth flow in container, restart, and verify persistence
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently

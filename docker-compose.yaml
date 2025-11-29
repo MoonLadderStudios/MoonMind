@@ -7,6 +7,8 @@ x-celery-worker-base: &celery-worker-base
     - PYTHONPATH=/app
     - LOG_LEVEL=${LOG_LEVEL:-INFO}
     - PYTHONUNBUFFERED=1
+    - CODEX_VOLUME_NAME=${CODEX_VOLUME_NAME:-codex_auth_volume}
+    - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/var/lib/codex-auth}
     - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
     - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
     - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -21,7 +23,7 @@ x-celery-worker-base: &celery-worker-base
     - ./specs:/app/specs:ro
     - ./model_data:/app/model_data
     - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
-    - codex_auth_volume:/var/lib/codex-auth
+    - ${CODEX_VOLUME_NAME:-codex_auth_volume}:${CODEX_VOLUME_PATH:-/var/lib/codex-auth}
     - speckit_workspaces:/work/runs
   depends_on:
     rabbitmq:
