@@ -221,6 +221,11 @@ services:
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=${SPEC_WORKFLOW_CODEX_QUEUE:-codex}
+    environment:
+      - CODEX_VOLUME_NAME=${CODEX_VOLUME_NAME:-codex_auth_volume}
+      - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/var/lib/codex-auth}
+    volumes:
+      - codex_auth_volume:/var/lib/codex-auth
 
   orchestrator:
     build:
