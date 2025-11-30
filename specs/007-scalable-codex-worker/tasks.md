@@ -95,8 +95,8 @@ description: "Task list for Scalable Codex Worker feature"
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T017 [P] Documentation updates in `docs/CodexCliWorkers.md` reflecting new architecture
-- [ ] T018 Clean up any unused environment variables in `docker-compose.yaml`
+- [x] T017 [P] Documentation updates in `docs/CodexCliWorkers.md` reflecting new architecture
+- [x] T018 Clean up any unused environment variables in `docker-compose.yaml`
 
 ---
 

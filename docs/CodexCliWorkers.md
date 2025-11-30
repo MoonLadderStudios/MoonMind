@@ -59,10 +59,10 @@ The **Codex worker group** is a set of Celery worker processes bound exclusively
 - **Codex Worker**: A Celery worker instance bound to the Codex queue and its corresponding auth volume; responsible for executing Codex phases of Spec runs.:contentReference[oaicite:16]{index=16}
 - Initial rollout assumes a **single Codex worker** is sufficient, with the ability to add more workers on the same queue later.:contentReference[oaicite:17]{index=17}
 
-Implementation entrypoints (planned):
+Implementation entrypoints:
 
 - `celery_worker/speckit_worker.py` – Celery worker bootstrap + Codex helpers.:contentReference[oaicite:18]{index=18}
-- `celery_worker/scripts/codex_login_proxy.py` – a helper for Codex CLI auth checks within worker pods/containers.:contentReference[oaicite:19]{index=19}
+- `docker-compose.yaml` – defines the `celery_codex_worker` service using the shared `x-celery-worker-base` image and a Codex-only queue (`SPEC_WORKFLOW_CODEX_QUEUE` defaulting to `codex`).:contentReference[oaicite:20]{index=20}
 
 ### 3.2 Scaling the Worker Group
 
@@ -76,6 +76,12 @@ Scaling strategies:
 
 - **Single instance (default)**: One Codex worker process listening on `codex` is sufficient for initial throughput.:contentReference[oaicite:21]{index=21}
 - **Multiple instances (future)**: Additional Codex workers can be added to the same `codex` queue. Each worker instance MUST have its own dedicated auth volume (see §4) to avoid token clobbering when OAuth artifacts are updated.:contentReference[oaicite:22]{index=22}
+
+Compose highlights:
+
+- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${SPEC_WORKFLOW_CODEX_QUEUE:-codex}` to bind strictly to the Codex queue.
+- The worker inherits the shared Celery image and mounts the Codex auth volume at `${CODEX_VOLUME_PATH:-/var/lib/codex-auth}` via `CODEX_VOLUME_NAME`.
+- The managed Codex config template lives at `/app/api_service/config.template.toml` and is exposed through `CODEX_TEMPLATE_PATH` for non-interactive runs.
 
 ---
 
@@ -96,7 +102,7 @@ Functional requirements:
 
 Within a **single Codex worker group**, we share a **named Docker volume** across all containers that need Codex credentials:
 
-- The Celery worker container mounts the volume at `CODEX_HOME` (e.g., `/home/app/.codex`).
+- The Celery worker container mounts the volume at `CODEX_HOME` (e.g., `/home/app/.codex`) or `/var/lib/codex-auth` when using `CODEX_VOLUME_PATH` defaults from `docker-compose.yaml`.
 - Any ephemeral **job container** launched by the worker for Spec runs also mounts **that same volume** at `CODEX_HOME` so Codex CLI sees the same OAuth state.:contentReference[oaicite:26]{index=26}
 
 This achieves:
@@ -115,7 +121,7 @@ A separate runbook will capture the exact commands; conceptually:
 
 1. **Create the volume** (e.g., `codex_auth_worker1`) and attach it to a temporary shell container using the same image as the Codex worker.
 2. **Run the Codex CLI login flow** inside that container so OAuth artifacts and `.codex/config.toml` are written into the volume.:contentReference[oaicite:30]{index=30}
-3. **Verify login** via the pre-flight check (Codex CLI or `codex_login_proxy.py`) before enabling the worker to accept jobs.:contentReference[oaicite:31]{index=31}
+3. **Verify login** via the pre-flight check (Codex CLI status or the worker’s own health probe) before enabling the worker to accept jobs.:contentReference[oaicite:31]{index=31}
 
 Once the volume is authenticated, all future Codex runs executed by that worker group should complete without interactive re-authentication.:contentReference[oaicite:32]{index=32}
 
@@ -132,7 +138,7 @@ The **automation runtime image** used by `api_service` and Celery workers is res
 
 The build must also provision a **managed Codex configuration profile**:
 
-- A `.codex/config.toml` under the worker user’s home directory containing `approval_policy = "never"`.:contentReference[oaicite:36]{index=36}:contentReference[oaicite:37]{index=37}
+- A `.codex/config.toml` under the worker user’s home directory containing `approval_policy = "never"`. In MoonMind’s Compose setup this is templated from `/app/api_service/config.template.toml` and written to the mounted auth volume path.:contentReference[oaicite:36]{index=36}:contentReference[oaicite:37]{index=37}
 - This keeps Codex runs **non-interactive**, preventing Celery jobs from stalling on approvals.:contentReference[oaicite:38]{index=38}
 
 Worker startup or health checks must verify:
