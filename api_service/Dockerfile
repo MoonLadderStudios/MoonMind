@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-ARG CODEX_CLI_VERSION=0.6.0
+ARG CODEX_CLI_VERSION=0.63.0
 ARG SPEC_KIT_VERSION=0.4.0
 # Default to skipping Codex/Spec Kit installs so CI and local builds do not
 # depend on external npm registry availability. Enable explicitly with
@@ -61,15 +61,17 @@ esac
 case "${GEMINI_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid GEMINI_CLI_VERSION: ${GEMINI_CLI_VERSION}" >&2; exit 1;;
 esac
-stub_codex_and_spec() {
-    mkdir -p /usr/local/lib/node_modules/@githubnext/codex-cli \
-             /usr/local/lib/node_modules/@githubnext/spec-kit
-    printf 'codex-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE
-    printf 'spec-kit stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
+stub_codex() {
+    mkdir -p /usr/local/lib/node_modules/@openai/codex
+    printf 'codex stub installed during fallback.\n' > /usr/local/lib/node_modules/@openai/codex/LICENSE
     printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"codex-cli stub: package unavailable during image build\" >&2" \
+                   "echo \"codex stub: package unavailable during image build\" >&2" \
                    "exit 0" > /usr/local/bin/codex
     chmod +x /usr/local/bin/codex
+}
+stub_speckit() {
+    mkdir -p /usr/local/lib/node_modules/@githubnext/spec-kit
+    printf 'spec-kit stub installed during fallback.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
     printf '%s\n' "#!/usr/bin/env bash" \
                    "echo \"spec-kit stub: package unavailable during image build\" >&2" \
                    "exit 0" > /usr/local/bin/speckit
@@ -86,28 +88,20 @@ stub_gemini() {
 
 if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
     echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2
-    stub_codex_and_spec
+    stub_codex
+    stub_speckit
     npm cache clean --force || true
 else
-    echo "@githubnext:registry=${GITHUBNEXT_NPM_REGISTRY}" > /root/.npmrc
-    npm config set @githubnext:registry "${GITHUBNEXT_NPM_REGISTRY}"
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        npm config set //npm.pkg.github.com/:_authToken "${GITHUB_TOKEN}"
-        npm config set always-auth true
-    elif [ -n "${NPM_TOKEN:-}" ]; then
-        npm config set //npm.pkg.github.com/:_authToken "${NPM_TOKEN}"
-        npm config set always-auth true
+    # Try installing Codex from public registry (OpenAI)
+    if ! npm install -g @openai/codex@"${CODEX_CLI_VERSION}"; then
+        echo "Warning: Failed to install @openai/codex; installing stub" >&2
+        stub_codex
     fi
 
-    if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${NPM_TOKEN:-}" ]; then
-        echo "No GitHub/NPM token provided; installing Codex/Spec Kit stubs" >&2
-        stub_codex_and_spec
-    elif ! npm install -g \
-        @githubnext/codex-cli@"${CODEX_CLI_VERSION}" \
-        @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then
-        INSTALL_STATUS=$?
-        echo "Warning: Failed to install Codex/Spec Kit from ${GITHUBNEXT_NPM_REGISTRY} (exit ${INSTALL_STATUS}); installing stub binaries" >&2
-        stub_codex_and_spec
+    # Try installing Spec Kit (Github Next) - might fail if private/no token
+    if ! npm install -g @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then
+        echo "Warning: Failed to install Spec Kit; installing stub" >&2
+        stub_speckit
     fi
 fi
 
@@ -160,7 +154,7 @@ COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modu
 
 RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit
 
-COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/codex-cli/LICENSE /usr/share/licenses/codex-cli/LICENSE
+COPY --from=tooling-builder /usr/local/lib/node_modules/@openai/codex/LICENSE /usr/share/licenses/codex-cli/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE /usr/share/licenses/spec-kit/LICENSE
 
 # Install system packages required by the Python service along with the
