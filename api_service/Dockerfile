@@ -40,6 +40,8 @@ RUN npm config set fund false \
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
+ARG GITHUB_TOKEN
+ARG NPM_TOKEN
 
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.

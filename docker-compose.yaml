@@ -219,6 +219,14 @@ services:
 
   celery_codex_worker:
     <<: *celery-worker-base
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "true"
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
+        NPM_TOKEN: ${NPM_TOKEN}
+    image: moonmind-codex-worker:latest
     command: >-
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
