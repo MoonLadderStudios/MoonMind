@@ -43,6 +43,10 @@ ARG INSTALL_GEMINI_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
+# Ensure vendor directory exists so CLIs (like Codex) that might install
+# binaries there can detect it during the npm install process.
+RUN mkdir -p /usr/local/vendor
+
 # Install Codex and Spec Kit CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # If the packages are unavailable (for example, when the registry is private or
@@ -114,12 +118,27 @@ elif ! npm install -g @google/gemini-cli@"${GEMINI_CLI_VERSION}"; then
     stub_gemini
 fi
 
+# Ensure LICENSE files exist so COPY instructions in the next stage do not fail.
+# Some npm packages might not include a LICENSE file, or it might be named differently.
+if [ ! -f /usr/local/lib/node_modules/@openai/codex/LICENSE ]; then
+    mkdir -p /usr/local/lib/node_modules/@openai/codex
+    touch /usr/local/lib/node_modules/@openai/codex/LICENSE
+fi
+if [ ! -f /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE ]; then
+    mkdir -p /usr/local/lib/node_modules/@githubnext/spec-kit
+    touch /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
+fi
+
 npm cache clean --force || true
 BASH
+
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
-RUN codex --version \
+RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
+        cp -r /usr/local/lib/node_modules/@openai/codex/vendor/* /usr/local/vendor/; \
+    fi \
+    && codex --version \
     && speckit --version \
     && gemini --version
 
@@ -151,6 +170,7 @@ COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/speckit /usr/local/bin/speckit
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
 RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit
 
