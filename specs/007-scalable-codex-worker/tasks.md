@@ -83,9 +83,9 @@ description: "Task list for Scalable Codex Worker feature"
 
 ### Implementation for User Story 3
 
-- [ ] T014 [US3] Set `CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml` environment variable for `celery_codex_worker` in `docker-compose.yaml`
-- [ ] T015 [US3] Verify `api_service/config.template.toml` contains `approval_policy = "never"` (should exist)
-- [ ] T016 [US3] Manual Verification: Trigger a task requiring approval and ensure it proceeds or fails without prompt
+- [x] T014 [US3] Set `CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml` environment variable for `celery_codex_worker` in `docker-compose.yaml`
+- [x] T015 [US3] Verify `api_service/config.template.toml` contains `approval_policy = "never"` (should exist)
+- [x] T016 [US3] Manual Verification: Trigger a task requiring approval and ensure it proceeds or fails without prompt
 
 **Checkpoint**: All user stories should now be independently functional
 
