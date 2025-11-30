@@ -133,7 +133,7 @@ Once the volume is authenticated, all future Codex runs executed by that worker 
 
 The **automation runtime image** used by `api_service` and Celery workers is responsible for bundling Codex tooling:​:contentReference[oaicite:33]{index=33}
 
-- **Codex CLI**: Installed at build time and available on the default `PATH` for the Celery service account.:contentReference[oaicite:34]{index=34}
+- **Codex CLI**: Installed at build time from the **public npm registry** (with fallback to stubs) and available on the default `PATH` for the Celery service account.:contentReference[oaicite:34]{index=34}
 - **GitHub Spec Kit CLI**: Installed alongside Codex so Spec Kit phases (discover, submit, publish) can run inside Celery tasks.:contentReference[oaicite:35]{index=35}
 
 The build must also provision a **managed Codex configuration profile**:
