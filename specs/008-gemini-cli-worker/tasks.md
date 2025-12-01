@@ -29,9 +29,9 @@
 
 **Goal**: Configure Docker services and build dependencies (serves US1, US2, US3).
 
-- [ ] T002 Update `api_service/Dockerfile` to include `INSTALL_GEMINI_CLI` build argument and install logic for `@google/gemini-cli`.
-- [ ] T003 Update `docker-compose.yaml` to define `celery_gemini_worker` service with `gemini_auth_volume` and proper environment variables (`GEMINI_API_KEY`, `GEMINI_HOME`, `SPEC_WORKFLOW_CODEX_QUEUE` analog `GEMINI_CELERY_QUEUE`).
-- [ ] T004 Create/Verify `api_service/config.template.toml` or ensure Gemini config strategy is defined (if needed for CLI defaults).
+- [x] T002 Update `api_service/Dockerfile` to include `INSTALL_GEMINI_CLI` build argument and install logic for `@google/gemini-cli`.
+- [x] T003 Update `docker-compose.yaml` to define `celery_gemini_worker` service with `gemini_auth_volume` and proper environment variables (`GEMINI_API_KEY`, `GEMINI_HOME`, `SPEC_WORKFLOW_CODEX_QUEUE` analog `GEMINI_CELERY_QUEUE`).
+- [x] T004 Create/Verify `api_service/config.template.toml` or ensure Gemini config strategy is defined (if needed for CLI defaults).
 
 ---
 
