@@ -6,7 +6,6 @@ import logging
 import os
 import re
 import subprocess
-from pathlib import Path
 
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
