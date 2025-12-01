@@ -1,4 +1,6 @@
+import os
 import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -57,15 +59,26 @@ def test_gemini_generate_success(mock_run, mock_verify, task_args, expected_cmd)
     mock_result.stdout = '{"response": "Hello world", "stats": {}}'
     mock_run.return_value = mock_result
 
-    # Execute task synchronously
-    result = gemini_generate.apply(args=task_args).get()
+    # Execute task synchronously with mocked environment
+    with patch.dict(
+        os.environ,
+        {"GEMINI_API_KEY": "test-key", "GEMINI_HOME": "/tmp/gemini"},
+        clear=True,
+    ):
+        result = gemini_generate.apply(args=task_args).get()
 
     assert result["status"] == "success"
     assert result["result"]["response"] == "Hello world"
 
     mock_run.assert_called_once()
-    called_args = mock_run.call_args[0][0]
-    assert called_args == expected_cmd
+    call_args = mock_run.call_args
+    assert call_args[0][0] == expected_cmd
+
+    # Verify environment injection
+    env_arg = call_args[1].get("env")
+    assert env_arg is not None
+    assert env_arg["GEMINI_API_KEY"] == "test-key"
+    assert env_arg["GEMINI_HOME"] == "/tmp/gemini"
 
 
 def test_gemini_generate_empty_prompt():
@@ -163,3 +176,53 @@ def test_gemini_process_response_failure():
 
     assert result["status"] == "skipped"
     assert result["reason"] == "Generation failed"
+
+def test_gemini_worker_preflight_missing_api_key():
+    """Verify worker fails to start if API key is missing."""
+    # Ensure module is unloaded so we can re-import it
+    if "celery_worker.gemini_worker" in sys.modules:
+        del sys.modules["celery_worker.gemini_worker"]
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch(
+            "moonmind.workflows.speckit_celery.utils.verify_cli_is_executable"
+        ) as mock_verify:
+            mock_verify.return_value = "/bin/gemini"
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value.stdout = "gemini version 1.0.0"
+                # Mock settings to avoid fallback
+                with patch("moonmind.config.settings.settings") as mock_settings:
+                    mock_settings.google.google_api_key = None
+
+                    with pytest.raises(RuntimeError, match="GEMINI_API_KEY is not set"):
+                        import celery_worker.gemini_worker
+
+    # Cleanup
+    if "celery_worker.gemini_worker" in sys.modules:
+        del sys.modules["celery_worker.gemini_worker"]
+
+
+def test_gemini_worker_preflight_invalid_gemini_home():
+    """Verify worker fails to start if GEMINI_HOME is invalid."""
+    if "celery_worker.gemini_worker" in sys.modules:
+        del sys.modules["celery_worker.gemini_worker"]
+
+    with patch.dict(
+        os.environ,
+        {"GEMINI_API_KEY": "fake-key", "GEMINI_HOME": "/non/existent/path"},
+        clear=True,
+    ):
+        with patch(
+            "moonmind.workflows.speckit_celery.utils.verify_cli_is_executable"
+        ) as mock_verify:
+            mock_verify.return_value = "/bin/gemini"
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value.stdout = "gemini version 1.0.0"
+
+                with pytest.raises(
+                    RuntimeError, match="GEMINI_HOME directory does not exist"
+                ):
+                    import celery_worker.gemini_worker
+
+    if "celery_worker.gemini_worker" in sys.modules:
+        del sys.modules["celery_worker.gemini_worker"]

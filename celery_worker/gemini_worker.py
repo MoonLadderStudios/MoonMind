@@ -90,6 +90,17 @@ def _run_gemini_preflight_check() -> None:
         logger.critical("GEMINI_API_KEY is not set.")
         raise RuntimeError("GEMINI_API_KEY is not set.")
 
+    gemini_home = os.environ.get("GEMINI_HOME")
+    if gemini_home:
+        if not os.path.isdir(gemini_home):
+            logger.critical(
+                "GEMINI_HOME is set to '%s' but it is not a directory.", gemini_home
+            )
+            raise RuntimeError(f"GEMINI_HOME directory does not exist: {gemini_home}")
+        logger.info("Gemini pre-flight check: GEMINI_HOME=%s", gemini_home)
+    else:
+        logger.warning("GEMINI_HOME is not set; persistent config may not be active.")
+
     logger.info("Gemini pre-flight check completed.")
 
 

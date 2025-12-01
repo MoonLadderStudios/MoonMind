@@ -9,6 +9,7 @@ from typing import Any
 
 from celery.utils.log import get_task_logger
 
+from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery.utils import (
     CliVerificationError,
@@ -39,6 +40,19 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
     if model:
         command.extend(["--model", model])
 
+    # Prepare environment with auth and config
+    env = os.environ.copy()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key and settings.google.google_api_key:
+        api_key = settings.google.google_api_key
+
+    if api_key:
+        env["GEMINI_API_KEY"] = api_key
+
+    gemini_home = os.environ.get("GEMINI_HOME")
+    if gemini_home:
+        env["GEMINI_HOME"] = gemini_home
+
     try:
         result = subprocess.run(
             command,
@@ -46,6 +60,7 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=300,
+            env=env,
         )
         logger.info("Gemini CLI execution successful")
 

@@ -51,9 +51,9 @@
 
 **Goal**: Ensure worker uses persistent volume for auth/config and fails fast if invalid.
 
-- [ ] T010 [US2] Add pre-flight check in `celery_worker/gemini_tasks.py` (or worker startup) to verify `gemini --version` and `GEMINI_API_KEY` validity.
-- [ ] T011 [US2] Ensure `gemini_generate` task uses `GEMINI_HOME` for configuration (via env var injection in subprocess).
-- [ ] T012 [US2] Update `tests/integration/test_gemini_worker.py` to include a test case for pre-flight check failure (mocking missing key/CLI).
+- [x] T010 [US2] Add pre-flight check in `celery_worker/gemini_tasks.py` (or worker startup) to verify `gemini --version` and `GEMINI_API_KEY` validity.
+- [x] T011 [US2] Ensure `gemini_generate` task uses `GEMINI_HOME` for configuration (via env var injection in subprocess).
+- [x] T012 [US2] Update `tests/integration/test_gemini_worker.py` to include a test case for pre-flight check failure (mocking missing key/CLI).
 
 ---
 
