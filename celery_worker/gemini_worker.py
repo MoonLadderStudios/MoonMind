@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 import logging
 import subprocess
+from importlib import import_module
 
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
