@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 import logging
 import subprocess
 
-# Register Gemini tasks
-import celery_worker.gemini_tasks  # noqa: F401
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
     CliVerificationError,
@@ -14,6 +13,9 @@ from moonmind.workflows.speckit_celery.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Register Gemini tasks via import side effect
+import_module("celery_worker.gemini_tasks")
 
 
 def _log_gemini_cli_version() -> None:

@@ -66,7 +66,7 @@ def test_gemini_generate_failure(mock_run, mock_verify):
     assert "Error generating content" in result["error"]
 
 
-def test_gemini_process_response():
+def test_gemini_process_response_success():
     """Verify gemini_process_response processes successful results."""
     input_data = {
         "status": "success",
@@ -78,3 +78,13 @@ def test_gemini_process_response():
     assert result["status"] == "processed"
     assert result["data"]["text"] == "Hello world"
     assert result["data"]["stats"]["tokens"] == 10
+
+
+def test_gemini_process_response_failure():
+    """Verify gemini_process_response handles failed generation results."""
+    input_data = {"status": "failed", "error": "Something went wrong"}
+
+    result = gemini_process_response.apply(args=(input_data,)).get()
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "Generation failed"

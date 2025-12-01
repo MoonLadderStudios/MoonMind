@@ -10,7 +10,10 @@ from typing import Any
 from celery.utils.log import get_task_logger
 
 from moonmind.workflows.speckit_celery import celery_app
-from moonmind.workflows.speckit_celery.utils import verify_cli_is_executable
+from moonmind.workflows.speckit_celery.utils import (
+    CliVerificationError,
+    verify_cli_is_executable,
+)
 
 logger = get_task_logger(__name__)
 
@@ -22,9 +25,13 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
     """Invoke Gemini CLI to generate content."""
     logger.info("Starting Gemini generation")
 
+    if not prompt:
+        logger.error("Prompt must not be empty")
+        return {"status": "failed", "error": "Prompt cannot be empty"}
+
     try:
         gemini_path = verify_cli_is_executable("gemini")
-    except Exception as exc:
+    except CliVerificationError as exc:
         logger.error("Gemini CLI verification failed: %s", exc)
         return {"status": "failed", "error": str(exc)}
 
@@ -38,6 +45,7 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
             check=True,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         logger.info("Gemini CLI execution successful")
 
@@ -54,6 +62,14 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
                 "stderr": result.stderr,
             }
 
+    except subprocess.TimeoutExpired as exc:
+        logger.error("Gemini CLI execution timed out: %s", exc)
+        return {
+            "status": "failed",
+            "error": "Gemini CLI timed out",
+            "stdout": exc.stdout.decode(errors="ignore") if exc.stdout else "",
+            "stderr": exc.stderr.decode(errors="ignore") if exc.stderr else "",
+        }
     except subprocess.CalledProcessError as exc:
         logger.error(
             "Gemini CLI execution failed with exit code %s: %s",
