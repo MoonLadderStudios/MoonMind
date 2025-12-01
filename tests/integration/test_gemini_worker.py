@@ -177,6 +177,7 @@ def test_gemini_process_response_failure():
     assert result["status"] == "skipped"
     assert result["reason"] == "Generation failed"
 
+
 def test_gemini_worker_preflight_missing_api_key():
     """Verify worker fails to start if API key is missing."""
     # Ensure module is unloaded so we can re-import it
@@ -195,7 +196,7 @@ def test_gemini_worker_preflight_missing_api_key():
                     mock_settings.google.google_api_key = None
 
                     with pytest.raises(RuntimeError, match="GEMINI_API_KEY is not set"):
-                        import celery_worker.gemini_worker
+                        pass
 
     # Cleanup
     if "celery_worker.gemini_worker" in sys.modules:
@@ -222,7 +223,7 @@ def test_gemini_worker_preflight_invalid_gemini_home():
                 with pytest.raises(
                     RuntimeError, match="GEMINI_HOME directory does not exist"
                 ):
-                    import celery_worker.gemini_worker
+                    pass
 
     if "celery_worker.gemini_worker" in sys.modules:
         del sys.modules["celery_worker.gemini_worker"]
