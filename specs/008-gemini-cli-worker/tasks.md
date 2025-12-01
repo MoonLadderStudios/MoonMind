@@ -21,7 +21,7 @@
 
 **Goal**: Initialize feature branch and verify prerequisites.
 
-- [ ] T001 Verify feature branch `008-gemini-cli-worker` is active and up-to-date
+- [x] T001 Verify feature branch `008-gemini-cli-worker` is active and up-to-date
 
 ---
 
