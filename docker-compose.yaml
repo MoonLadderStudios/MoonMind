@@ -248,7 +248,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
     command: >-
-      celery -A celery_worker.speckit_worker worker
+      celery -A celery_worker.gemini_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=${GEMINI_CELERY_QUEUE:-gemini}
     volumes:
