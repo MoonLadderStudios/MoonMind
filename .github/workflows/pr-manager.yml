@@ -94,9 +94,22 @@ jobs:
             }
 
             if (workflowRun) {
-              const associatedPRs = Array.isArray(workflowRun.pull_requests)
+              let associatedPRs = Array.isArray(workflowRun.pull_requests)
                 ? workflowRun.pull_requests
                 : [];
+
+              if (associatedPRs.length === 0) {
+                console.log('Workflow run payload has no PRs. Attempting to find PR by commit SHA...');
+                const runHeadSha = workflowRun.head_sha;
+                if (runHeadSha) {
+                  const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    commit_sha: runHeadSha,
+                  });
+                  associatedPRs = prs;
+                }
+              }
 
               if (associatedPRs.length === 0) {
                 console.log('Workflow run is not associated with a pull request. Skipping.');
