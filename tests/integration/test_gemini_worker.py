@@ -8,8 +8,8 @@ from celery_worker.gemini_tasks import (
     gemini_generate,
     gemini_process_response,
 )
-from moonmind.workflows.speckit_celery.utils import CliVerificationError
 from moonmind.workflows.speckit_celery import celery_app
+from moonmind.workflows.speckit_celery.utils import CliVerificationError
 
 
 @pytest.fixture(autouse=True)
@@ -127,7 +127,9 @@ def test_gemini_generate_invalid_json(mock_run, mock_verify):
         (ValueError("boom"), "boom"),
     ],
 )
-def test_gemini_generate_failure(mock_run, mock_verify, side_effect, expected_error_msg):
+def test_gemini_generate_failure(
+    mock_run, mock_verify, side_effect, expected_error_msg
+):
     """Verify gemini_generate handles CLI failures."""
     mock_verify.return_value = "/usr/local/bin/gemini"
 
