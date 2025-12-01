@@ -1,6 +1,8 @@
 name: PR Manager
 
 on:
+  pull_request:
+    types: [ready_for_review]
   workflow_run:
     workflows:
       # This repo uses "Run Pytest Unit Tests" instead of the older
