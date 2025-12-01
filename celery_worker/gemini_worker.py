@@ -24,6 +24,8 @@ def _log_gemini_cli_version() -> None:
         gemini_path = verify_cli_is_executable("gemini")
     except CliVerificationError as exc:
         logger.critical(str(exc), extra={"gemini_path": exc.cli_path})
+        # If the CLI is critical for this worker, we should raise.
+        # Given it is a gemini worker, it is critical.
         raise RuntimeError(str(exc)) from exc
 
     try:
@@ -88,6 +90,9 @@ def _run_gemini_preflight_check() -> None:
 
 
 celery_app = speckit_celery_app
+
+# Celery uses the module-level ``app`` attribute as the default application target
+# when running ``celery -A celery_worker.gemini_worker worker``.
 app = celery_app
 
 _log_gemini_cli_version()
