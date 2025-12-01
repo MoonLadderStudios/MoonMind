@@ -39,11 +39,11 @@
 
 **Goal**: A running Celery worker listening on the `gemini` queue.
 
-- [ ] T005 [US1] Create `celery_worker/gemini_tasks.py` module with `gemini_generate` task skeleton.
-- [ ] T006 [US1] Implement `gemini_generate` task logic in `celery_worker/gemini_tasks.py` to invoke Gemini CLI (using `subprocess` or library).
-- [ ] T007 [US1] Implement `gemini_process_response` task logic in `celery_worker/gemini_tasks.py`.
-- [ ] T008 [US1] Update `celery_worker/speckit_worker.py` (or `celery_app` config) to register `gemini_tasks` and route them to `gemini` queue.
-- [ ] T009 [US1] Create `tests/integration/test_gemini_worker.py` to verify worker picks up and executes tasks on `gemini` queue.
+- [x] T005 [US1] Create `celery_worker/gemini_tasks.py` module with `gemini_generate` task skeleton.
+- [x] T006 [US1] Implement `gemini_generate` task logic in `celery_worker/gemini_tasks.py` to invoke Gemini CLI (using `subprocess` or library).
+- [x] T007 [US1] Implement `gemini_process_response` task logic in `celery_worker/gemini_tasks.py`.
+- [x] T008 [US1] Update `celery_worker/speckit_worker.py` (or `celery_app` config) to register `gemini_tasks` and route them to `gemini` queue.
+- [x] T009 [US1] Create `tests/integration/test_gemini_worker.py` to verify worker picks up and executes tasks on `gemini` queue.
 
 ---
 

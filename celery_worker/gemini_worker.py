@@ -11,6 +11,9 @@ from moonmind.workflows.speckit_celery.utils import (
     verify_cli_is_executable,
 )
 
+# Register Gemini tasks
+import celery_worker.gemini_tasks  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 
