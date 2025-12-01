@@ -128,6 +128,10 @@ if [ ! -f /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE ]; then
     mkdir -p /usr/local/lib/node_modules/@githubnext/spec-kit
     touch /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
 fi
+if [ ! -f /usr/local/lib/node_modules/@google/gemini-cli/LICENSE ]; then
+    mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
+    touch /usr/local/lib/node_modules/@google/gemini-cli/LICENSE
+fi
 
 npm cache clean --force || true
 BASH
@@ -172,10 +176,11 @@ COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
-RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit
+RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit /usr/share/licenses/gemini-cli
 
 COPY --from=tooling-builder /usr/local/lib/node_modules/@openai/codex/LICENSE /usr/share/licenses/codex-cli/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE /usr/share/licenses/spec-kit/LICENSE
+COPY --from=tooling-builder /usr/local/lib/node_modules/@google/gemini-cli/LICENSE /usr/share/licenses/gemini-cli/LICENSE
 
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled Codex and Spec Kit binaries rely on.

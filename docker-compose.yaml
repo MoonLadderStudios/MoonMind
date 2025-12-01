@@ -232,6 +232,37 @@ services:
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=${SPEC_WORKFLOW_CODEX_QUEUE:-codex}
 
+  celery_gemini_worker:
+    <<: *celery-worker-base
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+      args:
+        INSTALL_GEMINI_CLI: "true"
+    image: moonmind-gemini-worker:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      - GEMINI_HOME=${GEMINI_HOME:-/var/lib/gemini-auth}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
+    command: >-
+      celery -A celery_worker.speckit_worker worker
+      --loglevel=${CELERY_LOG_LEVEL:-info}
+      --queues=${GEMINI_CELERY_QUEUE:-gemini}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./celery_worker:/app/celery_worker:ro
+      - ./specs:/app/specs:ro
+      - ./model_data:/app/model_data
+      - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
+      - ${CODEX_VOLUME_NAME:-codex_auth_volume}:${CODEX_VOLUME_PATH:-/var/lib/codex-auth}
+      - speckit_workspaces:/work/runs
+      - gemini_auth_volume:${GEMINI_HOME:-/var/lib/gemini-auth}
+
   orchestrator:
     build:
       context: .
@@ -363,6 +394,7 @@ volumes:
   rabbitmq-data:
   speckit_workspaces:
   codex_auth_volume:
+  gemini_auth_volume:
 
 networks:
   local-network:
