@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+from importlib import import_module
 
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
@@ -15,6 +16,9 @@ from moonmind.workflows.speckit_celery.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Register Gemini tasks via import side effect
+import_module("celery_worker.gemini_tasks")
 
 
 def _log_gemini_cli_version() -> None:
