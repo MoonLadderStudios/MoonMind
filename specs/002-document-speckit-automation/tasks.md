@@ -38,7 +38,7 @@
 
 ## Phase 3: User Story 1 - Launch Automated Spec Run (Priority: P1) 🎯 MVP
 
-**Goal**: Trigger a Spec Kit automation run that clones the repo, executes specify/plan/tasks in a job container, commits changes, and opens a draft PR.
+**Goal**: Trigger a Spec Kit automation run that clones the repo, executes specify/plan/tasks in a job container, commits changes, and opens a PR.
 
 **Independent Test**: Dispatch a Celery task for a staging repo and verify branch, PR URL, and artifacts are produced when changes exist, or “no changes” status otherwise.
 
@@ -48,7 +48,7 @@
 - [x] T009 [US1] Implement job container lifecycle (start/exec/stop) using Docker SDK in moonmind/workflows/speckit_celery/job_container.py
 - [x] T010 [US1] Add branch naming and workspace preparation utilities in moonmind/workflows/speckit_celery/workspace.py
 - [ ] T011 [US1] Orchestrate specify→plan→tasks execution with container phases in moonmind/workflows/speckit_celery/tasks.py
-- [ ] T012 [US1] Implement git commit/push and draft PR helpers for job container runs in moonmind/workflows/speckit_celery/tasks.py
+- [ ] T012 [US1] Implement git commit/push and PR helpers for job container runs in moonmind/workflows/speckit_celery/tasks.py
 - [ ] T013 [US1] Cover successful automation happy path with integration test in tests/integration/workflows/test_spec_automation_pipeline.py
 
 **Checkpoint**: Automation run can be triggered end-to-end and produces branch/PR metadata or a no-op result deterministically.

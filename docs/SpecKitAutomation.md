@@ -23,7 +23,7 @@ Key additions:
 
 1. Overview
 
-Spec Kit Automation runs the /speckit.specify, /speckit.plan, and /speckit.tasks prompts against a target repository and packages the results as a draft Pull Request. A Celery worker launches an ephemeral job container per run, ensuring the toolchain (git, gh, Codex CLI, prompts) executes in a predictable environment while repository metadata, artifacts, and metrics are recorded for operators.
+Spec Kit Automation runs the /speckit.specify, /speckit.plan, and /speckit.tasks prompts against a target repository and packages the results as a Pull Request. A Celery worker launches an ephemeral job container per run, ensuring the toolchain (git, gh, Codex CLI, prompts) executes in a predictable environment while repository metadata, artifacts, and metrics are recorded for operators.
 
 New in Option A: A small set of stateful Codex auth volumes is injected into each job container so Codex can reuse interactive ChatGPT authentication without re-logging every run.
 
