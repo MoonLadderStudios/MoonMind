@@ -68,7 +68,7 @@ Platform engineer ensures each run uses an ephemeral job environment with contro
 - **FR-004**: The job environment MUST clone the target repository using the configured base branch and create a feature branch that aligns with Spec Kit naming conventions.
 - **FR-005**: The automation MUST execute the specify, plan, and tasks phases sequentially, passing the provided text to the initial phase and recording outputs, exit codes, and durations for each phase.
 - **FR-006**: The system MUST detect whether repository changes were produced and, when changes exist, commit them with standardized messaging and push the feature branch to the remote.
-- **FR-007**: When a pushed branch contains changes, the automation MUST create or update a draft pull request with prescribed title, description, and labels, returning the PR URL to the caller.
+- **FR-007**: When a pushed branch contains changes, the automation MUST create or update a pull request with prescribed title, description, and labels, returning the PR URL to the caller.
 - **FR-008**: All phases MUST emit structured status updates and logs that are persisted as run artifacts (e.g., stdout, stderr, diff summary, commit status) accessible after completion or failure.
 - **FR-009**: The workflow MUST tear down the job environment after execution while retaining run artifacts and recording whether cleanup succeeded.
 - **FR-010**: Platform configuration MUST allow selecting the active agent adapter (e.g., Codex CLI by default) without modifying pipeline code, enabling future agent substitution.

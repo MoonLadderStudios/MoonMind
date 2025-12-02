@@ -7,7 +7,7 @@
 
 ## Summary
 
-Automate end-to-end execution of Spec Kit phases by having Celery workers spin up ephemeral job containers, run the `speckit.specify`, `speckit.plan`, and `speckit.tasks` prompts against a repository workspace, and publish results (branch + draft PR + artifacts) while keeping the agent backend swappable and the environment isolated per run. Research confirmed Docker-outside-of-Docker orchestration, env-var-only secret injection, optional StatsD hooks, and seven-day artifact retention as the baseline approach.
+Automate end-to-end execution of Spec Kit phases by having Celery workers spin up ephemeral job containers, run the `speckit.specify`, `speckit.plan`, and `speckit.tasks` prompts against a repository workspace, and publish results (branch + PR + artifacts) while keeping the agent backend swappable and the environment isolated per run. Research confirmed Docker-outside-of-Docker orchestration, env-var-only secret injection, optional StatsD hooks, and seven-day artifact retention as the baseline approach.
 
 ## Technical Context
 
