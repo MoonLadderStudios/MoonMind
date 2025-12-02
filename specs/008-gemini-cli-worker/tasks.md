@@ -61,8 +61,8 @@
 
 **Goal**: Verify public npm registry usage.
 
-- [ ] T013 [US3] Create verification script `scripts/verify_gemini_install.sh` to check `npm list -g @google/gemini-cli` and ensure it's installed.
-- [ ] T014 [US3] Manually verify Docker build logs show public registry fetch (no code task, process step).
+- [x] T013 [US3] Create verification script `scripts/verify_gemini_install.sh` to check `npm list -g @google/gemini-cli` and ensure it's installed.
+- [x] T014 [US3] Manually verify Docker build logs show public registry fetch (no code task, process step).
 
 ---
 

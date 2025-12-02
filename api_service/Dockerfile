@@ -116,6 +116,20 @@ elif ! npm install -g @google/gemini-cli@"${GEMINI_CLI_VERSION}"; then
     INSTALL_STATUS=$?
     echo "Warning: Failed to install Gemini CLI (exit ${INSTALL_STATUS}); installing stub binary" >&2
     stub_gemini
+else
+    # Resolve the symlink target created by npm install -g so we can replace it with a
+    # robust wrapper script. This is necessary because Docker COPY dereferences symlinks,
+    # breaking relative imports in the target file (e.g., imports from ../src/).
+    # By creating a wrapper that points to the absolute path in node_modules, we ensure
+    # the CLI works even after being copied to the runtime image.
+    GEMINI_LINK_TARGET=$(readlink -f /usr/local/bin/gemini)
+    echo "Resolving gemini symlink target: $GEMINI_LINK_TARGET"
+    rm /usr/local/bin/gemini
+    cat <<EOF > /usr/local/bin/gemini
+#!/bin/sh
+exec node "$GEMINI_LINK_TARGET" "\$@"
+EOF
+    chmod +x /usr/local/bin/gemini
 fi
 
 # Ensure LICENSE files exist so COPY instructions in the next stage do not fail.
