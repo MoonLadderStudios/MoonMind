@@ -70,8 +70,8 @@
 
 **Goal**: Final cleanup and documentation.
 
-- [ ] T015 Update `README.md` or `docs/GeminiCliWorkers.md` with final configuration details.
-- [ ] T016 Run full test suite `tests/integration/test_gemini_worker.py`.
+- [x] T015 Update `README.md` or `docs/GeminiCliWorkers.md` with final configuration details.
+- [x] T016 Run full test suite `tests/integration/test_gemini_worker.py`.
 
 ## Implementation Strategy
 
