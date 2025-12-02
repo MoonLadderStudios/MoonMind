@@ -70,7 +70,7 @@ This setup uses the main `docker-compose.yaml` file, which is configured for a p
 
 ### Spec-driven Celery automation
 
-MoonMind ships with a dedicated Celery worker for GitHub Spec Kit and Codex automation. The worker shares configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
+MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gemini automation. The workers share configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
 
 - `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://guest:guest@rabbitmq:5672//`).
 - `CELERY_RESULT_BACKEND` – SQLAlchemy URL for the PostgreSQL result backend (e.g., `db+postgresql://postgres:password@api-db:5432/moonmind`).
@@ -78,13 +78,26 @@ MoonMind ships with a dedicated Celery worker for GitHub Spec Kit and Codex auto
 - `CELERY_DEFAULT_EXCHANGE` – Exchange used for the Spec Kit queue (`speckit`).
 - `CELERY_DEFAULT_ROUTING_KEY` – Routing key for Spec Kit tasks (`speckit`).
 
-After configuring the environment, start the worker from the project root:
+**Gemini Automation:**
+
+The Gemini worker listens on the `gemini` queue and uses the `celery_worker.gemini_worker` entrypoint.
+
+- `GEMINI_CELERY_QUEUE` - Queue name for Gemini tasks (default: `gemini`).
+- `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration (default: `/app/gemini_home`).
+
+See [docs/GeminiCliWorkers.md](docs/GeminiCliWorkers.md) for detailed architecture and configuration.
+
+After configuring the environment, start the workers from the project root:
 
 ```bash
+# Spec Kit Worker
 poetry run celery -A celery_worker.speckit_worker worker -Q speckit --loglevel=info
+
+# Gemini Worker
+poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=info
 ```
 
-The worker entrypoint in `celery_worker/speckit_worker.py` loads `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment.
+The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment.
 
 The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:
 
@@ -580,7 +593,6 @@ Planned evolution:
 
 - **Richer memory tools** – long-lived project and user memories that Apps and agents can read/write, beyond vector search, to ground orchestrated workflows and approvals.
 - **Voice-driven orchestration** – a small voice gateway that turns spoken commands into orchestrator runs (e.g., “deploy the latest Spec to staging and run tests”) and streams status updates back.
-- **Gemini CLI automation** – first-class support for a Gemini-powered CLI in Celery tasks, alongside Codex and Spec Kit, so you can mix tools from different ecosystems in the same workflow.
 
 The north star is for MoonMind to act as a single, self-hosted hub where chat, memory, and automation all meet.
 

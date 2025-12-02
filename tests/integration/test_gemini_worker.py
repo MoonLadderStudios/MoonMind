@@ -196,7 +196,7 @@ def test_gemini_worker_preflight_missing_api_key():
                     mock_settings.google.google_api_key = None
 
                     with pytest.raises(RuntimeError, match="GEMINI_API_KEY is not set"):
-                        pass
+                        import celery_worker.gemini_worker  # noqa: F401
 
     # Cleanup
     if "celery_worker.gemini_worker" in sys.modules:
@@ -223,7 +223,7 @@ def test_gemini_worker_preflight_invalid_gemini_home():
                 with pytest.raises(
                     RuntimeError, match="GEMINI_HOME directory does not exist"
                 ):
-                    pass
+                    import celery_worker.gemini_worker  # noqa: F401
 
     if "celery_worker.gemini_worker" in sys.modules:
         del sys.modules["celery_worker.gemini_worker"]
