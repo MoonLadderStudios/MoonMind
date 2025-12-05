@@ -55,7 +55,7 @@ docker = "~=7.1.0"
 fastapi-keycloak = "~=1.1.0"
 "fastapi-users" = { version = "~=13.0.0", extras = ["sqlalchemy"] }
 "PyJWT" = { version = "~=2.8.0", extras = ["crypto"] }
-"python-jose" = { version = "~=3.3.0", extras = ["cryptography"] }
+"python-jose" = { version = "~=3.4.0", extras = ["cryptography"] }
 alembic = "~=1.16.2"
 sqlalchemy-utils = "~=0.41.2"
 cryptography = "~=45.0.4"
