@@ -42,6 +42,9 @@ jobs:
         with:
           context: . # Setting context to root, Dockerfile path will be relative to this
           file: ./api_service/Dockerfile
+          build-args: |
+            INSTALL_CODEX_CLI=true
+            INSTALL_GEMINI_CLI=true
           push: true
           tags: |
             ${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.version_tag }}

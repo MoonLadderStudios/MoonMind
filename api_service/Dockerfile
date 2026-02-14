@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=0.63.0
 ARG SPEC_KIT_VERSION=0.4.0
-# Default to skipping Codex/Spec Kit installs so CI and local builds do not
-# depend on external npm registry availability. Enable explicitly with
-# `--build-arg INSTALL_CODEX_CLI=true` when the CLIs are required.
-ARG INSTALL_CODEX_CLI=false
-ARG INSTALL_GEMINI_CLI=false
+# Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
+# the API, orchestrator, and Celery workers can run from the same image tag.
+# Disable selectively in test-only or constrained builds when needed.
+ARG INSTALL_CODEX_CLI=true
+ARG INSTALL_GEMINI_CLI=true
 ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
