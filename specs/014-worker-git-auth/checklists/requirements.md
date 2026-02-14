@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-02-14  
-**Feature**: `specs/001-worker-git-auth/spec.md`
+**Feature**: `specs/014-worker-git-auth/spec.md`
 
 ## Content Quality
 

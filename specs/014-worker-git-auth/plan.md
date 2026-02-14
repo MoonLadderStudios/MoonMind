@@ -1,7 +1,7 @@
 # Implementation Plan: Worker GitHub Token Authentication Fast Path
 
-**Branch**: `001-worker-git-auth` | **Date**: 2026-02-14 | **Spec**: `specs/001-worker-git-auth/spec.md`
-**Input**: Feature specification from `/specs/001-worker-git-auth/spec.md`
+**Branch**: `014-worker-git-auth` | **Date**: 2026-02-14 | **Spec**: `specs/014-worker-git-auth/spec.md`
+**Input**: Feature specification from `/specs/014-worker-git-auth/spec.md`
 
 ## Summary
 
@@ -33,7 +33,7 @@ Implement the WorkerGitAuth fast path by adding GitHub CLI authentication prefli
 ### Documentation (this feature)
 
 ```text
-specs/001-worker-git-auth/
+specs/014-worker-git-auth/
 ├── plan.md
 ├── research.md
 ├── data-model.md

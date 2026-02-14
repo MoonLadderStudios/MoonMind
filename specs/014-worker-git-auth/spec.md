@@ -1,6 +1,6 @@
 # Feature Specification: Worker GitHub Token Authentication Fast Path
 
-**Feature Branch**: `001-worker-git-auth`  
+**Feature Branch**: `014-worker-git-auth`  
 **Created**: 2026-02-14  
 **Status**: Draft  
 **Input**: User description: "Implement docs/WorkerGitAuth.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."

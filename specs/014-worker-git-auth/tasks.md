@@ -1,15 +1,15 @@
 # Tasks: Worker GitHub Token Authentication Fast Path
 
-**Input**: Design documents from `/specs/001-worker-git-auth/`  
+**Input**: Design documents from `/specs/014-worker-git-auth/`  
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`
 
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: Prepare feature branch artifacts and worker test surface for auth fast-path work.
 
-- [X] T001 Verify feature artifacts and contracts exist in `specs/001-worker-git-auth/`.
+- [X] T001 Verify feature artifacts and contracts exist in `specs/014-worker-git-auth/`.
 - [X] T002 Create/confirm GitHub auth test scaffolding in `tests/unit/agents/codex_worker/test_cli.py` and `tests/unit/agents/codex_worker/test_handlers.py`.
-- [X] T003 [P] Document runtime auth contract baseline in `specs/001-worker-git-auth/contracts/worker-github-auth-runtime.md` (DOC-REQ-002, DOC-REQ-010).
+- [X] T003 [P] Document runtime auth contract baseline in `specs/014-worker-git-auth/contracts/worker-github-auth-runtime.md` (DOC-REQ-002, DOC-REQ-010).
 
 ---
 
@@ -90,8 +90,8 @@
 
 **Purpose**: Final traceability reconciliation and feature-level validation command execution.
 
-- [X] T020 [P] Reconcile implemented changes with `specs/001-worker-git-auth/contracts/requirements-traceability.md` and update drift in `specs/001-worker-git-auth/contracts/requirements-traceability.md`.
-- [X] T021 [P] Validate quickstart/auth guidance against implemented behavior in `specs/001-worker-git-auth/quickstart.md` and `specs/001-worker-git-auth/contracts/worker-github-auth-runtime.md` (DOC-REQ-010).
+- [X] T020 [P] Reconcile implemented changes with `specs/014-worker-git-auth/contracts/requirements-traceability.md` and update drift in `specs/014-worker-git-auth/contracts/requirements-traceability.md`.
+- [X] T021 [P] Validate quickstart/auth guidance against implemented behavior in `specs/014-worker-git-auth/quickstart.md` and `specs/014-worker-git-auth/contracts/worker-github-auth-runtime.md` (DOC-REQ-010).
 - [X] T022 Run unit validation via `./tools/test_unit.sh` covering codex worker auth, handler safety, and policy-regression tests (DOC-REQ-009, DOC-REQ-010).
 
 ---
