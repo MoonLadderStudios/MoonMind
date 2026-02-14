@@ -41,6 +41,14 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     docker-compose up -d
     ```
     The `-d` flag runs the containers in detached mode, meaning they will run in the background.
+    To force-refresh remote images first, run:
+    ```bash
+    docker-compose pull && docker-compose up -d
+    ```
+    To build locally instead of pulling images, run:
+    ```bash
+    docker-compose up -d --build
+    ```
 
 3.  **Accessing the UI:** Once the services are up and running (this might take a few minutes the first time as images are downloaded and built), you can access the Open-WebUI by navigating to `http://localhost:8080` in your web browser.
 
