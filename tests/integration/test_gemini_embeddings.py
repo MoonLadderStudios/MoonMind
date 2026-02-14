@@ -27,9 +27,7 @@ def test_gemini_embeddings_generation(monkeypatch):
     _avoid_local_workflows_package_shadowing()
     from moonmind.factories.embed_model_factory import build_embed_model
 
-    monkeypatch.setattr(
-        settings, "default_embedding_provider", "google", raising=False
-    )
+    monkeypatch.setattr(settings, "default_embedding_provider", "google", raising=False)
     monkeypatch.setattr(settings.google, "google_api_key", api_key, raising=False)
     monkeypatch.setattr(
         settings.google,
@@ -39,9 +37,7 @@ def test_gemini_embeddings_generation(monkeypatch):
     )
 
     embed_model, configured_dimensions = build_embed_model(settings)
-    embedding = embed_model.get_text_embedding(
-        "MoonMind Gemini embedding test prompt."
-    )
+    embedding = embed_model.get_text_embedding("MoonMind Gemini embedding test prompt.")
 
     assert getattr(embed_model, "model_name", None) == "gemini-embedding-001"
     assert configured_dimensions == settings.google.google_embedding_dimensions
