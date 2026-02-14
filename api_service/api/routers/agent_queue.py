@@ -473,9 +473,7 @@ async def upload_artifact(
         max_bytes = max(1, int(settings.spec_workflow.agent_job_artifact_max_bytes))
         payload = await file.read(max_bytes + 1)
         if len(payload) > max_bytes:
-            raise AgentQueueValidationError(
-                f"artifact exceeds max bytes ({max_bytes})"
-            )
+            raise AgentQueueValidationError(f"artifact exceeds max bytes ({max_bytes})")
         artifact = await service.upload_artifact(
             job_id=job_id,
             name=name,

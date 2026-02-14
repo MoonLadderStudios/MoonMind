@@ -56,7 +56,9 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
 
     def fake_run(command, *args, **kwargs):
         calls.append((list(command), kwargs.get("input")))
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -94,7 +96,9 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
 
     def fake_run(command, *args, **kwargs):
         calls.append(list(command))
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -145,7 +149,9 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
                 stdout="",
                 stderr=f"token rejected: {token}",
             )
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)

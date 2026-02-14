@@ -57,7 +57,9 @@ async def test_to_clone_url_rejects_embedded_credentials(tmp_path: Path) -> None
         handler._to_clone_url("https://ghp-secret@github.com/moon/repo.git")
 
 
-async def test_run_command_redacts_sensitive_log_output(tmp_path: Path, monkeypatch) -> None:
+async def test_run_command_redacts_sensitive_log_output(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Command logs should redact configured sensitive values."""
 
     token = "ghp-sensitive"
