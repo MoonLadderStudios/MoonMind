@@ -258,6 +258,45 @@ async def test_claim_applies_repository_and_capability_filters(tmp_path):
     assert claimed.id == allowed.id
 
 
+async def test_claim_scans_past_first_batch_for_eligible_filtered_job(tmp_path):
+    """Claim should continue scanning when early batches are all ineligible."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            for index in range(205):
+                await _create_job(
+                    repo,
+                    priority=1000 - index,
+                    payload={
+                        "repository": "moon/blocked",
+                        "requiredCapabilities": ["codex"],
+                        "instruction": f"skip-{index}",
+                    },
+                )
+            eligible = await _create_job(
+                repo,
+                priority=1,
+                payload={
+                    "repository": "moon/allowed",
+                    "requiredCapabilities": ["codex"],
+                    "instruction": "run",
+                },
+            )
+            await repo.commit()
+
+            claimed = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                allowed_repositories=["moon/allowed"],
+                worker_capabilities=["codex"],
+            )
+            await repo.commit()
+
+    assert claimed is not None
+    assert claimed.id == eligible.id
+
+
 async def test_concurrent_claims_do_not_duplicate_jobs(tmp_path):
     """Concurrent claim attempts should not return the same queued job twice."""
 

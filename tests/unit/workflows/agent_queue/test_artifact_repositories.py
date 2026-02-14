@@ -17,6 +17,7 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentQueueRepository,
 )
 from moonmind.workflows.agent_queue.service import (
+    AgentQueueAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
 )
@@ -178,3 +179,33 @@ async def test_service_missing_job_does_not_write_file(tmp_path: Path) -> None:
                 )
 
     assert not artifact_root.exists()
+
+
+async def test_service_upload_requires_claimed_worker_ownership(tmp_path: Path) -> None:
+    """Worker-bound uploads should enforce active claim ownership."""
+
+    artifact_root = tmp_path / "artifacts"
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await repo.create_job(
+                job_type="codex_exec",
+                payload={"instruction": "upload"},
+            )
+            await repo.commit()
+            await repo.claim_job(worker_id="worker-1", lease_seconds=30)
+            await repo.commit()
+
+            service = AgentQueueService(
+                repo,
+                artifact_storage=AgentQueueArtifactStorage(artifact_root),
+                artifact_max_bytes=1024,
+            )
+
+            with pytest.raises(AgentQueueAuthorizationError):
+                await service.upload_artifact(
+                    job_id=job.id,
+                    name="logs/output.log",
+                    data=b"ok",
+                    worker_id="worker-2",
+                )

@@ -19,12 +19,16 @@ from api_service.api.routers.agent_queue import (
     router,
 )
 from api_service.auth_providers import get_current_user
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import (
     AgentJobOwnershipError,
     AgentJobStateError,
 )
-from moonmind.workflows.agent_queue.service import AgentQueueValidationError
+from moonmind.workflows.agent_queue.service import (
+    AgentQueueAuthenticationError,
+    AgentQueueValidationError,
+)
 
 
 def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
@@ -133,6 +137,48 @@ def test_claim_job_empty_queue_returns_null(
     assert response.status_code == 200
     assert response.json() == {"job": None}
     service.claim_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_require_worker_auth_accepts_worker_token_without_oidc_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker-token auth must not require user dependency when token is present."""
+
+    mock_service = AsyncMock()
+    mock_service.resolve_worker_token.return_value = SimpleNamespace(
+        auth_source="worker_token",
+        worker_id="worker-1",
+        allowed_repositories=("Moon/Mind",),
+        allowed_job_types=("codex_exec",),
+        capabilities=("codex",),
+    )
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+
+    resolved = await _require_worker_auth(
+        worker_token="mmwt_token",
+        service=mock_service,
+        user=None,
+    )
+
+    assert resolved.worker_id == "worker-1"
+    assert resolved.auth_source == "worker_token"
+    mock_service.resolve_worker_token.assert_awaited_once_with("mmwt_token")
+
+
+@pytest.mark.asyncio
+async def test_require_worker_auth_rejects_missing_credentials_when_oidc_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing worker token and missing OIDC user should fail authentication."""
+
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    with pytest.raises(AgentQueueAuthenticationError):
+        await _require_worker_auth(
+            worker_token=None,
+            service=AsyncMock(),
+            user=None,
+        )
 
 
 def test_claim_job_worker_mismatch_maps_403(

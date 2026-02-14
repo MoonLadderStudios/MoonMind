@@ -21,6 +21,7 @@ from api_service.api.routers.agent_queue import (
     router,
 )
 from api_service.auth_providers import get_current_user
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
     AgentArtifactNotFoundError,
@@ -102,6 +103,7 @@ def test_upload_artifact_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert body["jobId"] == str(job_id)
     assert body["name"] == "logs/output.log"
     service.upload_artifact.assert_awaited_once()
+    assert service.upload_artifact.await_args.kwargs["worker_id"] == "worker-1"
 
 
 def test_list_artifacts_success(client: tuple[TestClient, AsyncMock]) -> None:
@@ -178,6 +180,30 @@ def test_upload_artifact_too_large_maps_413(
 
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "artifact_too_large"
+
+
+def test_upload_artifact_limits_memory_before_service_dispatch(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Router should reject oversized uploads before invoking service layer."""
+
+    test_client, service = client
+    monkeypatch.setattr(
+        settings.spec_workflow,
+        "agent_job_artifact_max_bytes",
+        4,
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/artifacts/upload",
+        files={"file": ("big.bin", b"12345", "application/octet-stream")},
+        data={"workerId": "worker-1", "name": "logs/big.bin"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "artifact_too_large"
+    service.upload_artifact.assert_not_awaited()
 
 
 def test_download_artifact_job_mismatch_maps_409(

@@ -295,7 +295,6 @@ class CodexExecHandler:
             ],
             cwd=repo_dir,
             log_path=log_path,
-            check=False,
         )
         await self._run_command(
             [self._git_binary, "push", "-u", "origin", branch_name],

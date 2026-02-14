@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -21,7 +22,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
@@ -64,6 +65,7 @@ from moonmind.workflows.agent_queue.service import (
 )
 
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +110,7 @@ def _serialize_worker_token(token: models.AgentWorkerToken) -> WorkerTokenModel:
 async def _require_worker_auth(
     worker_token: Optional[str] = Header(None, alias="X-MoonMind-Worker-Token"),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> _WorkerRequestAuth:
     """Resolve worker auth from dedicated token or authenticated OIDC principal."""
 
@@ -178,7 +180,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "code": "worker_auth_failed",
-                "message": str(exc),
+                "message": "Worker authentication failed.",
             },
         )
     if isinstance(exc, AgentQueueAuthorizationError):
@@ -186,7 +188,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "worker_not_authorized",
-                "message": str(exc),
+                "message": "Worker is not authorized for this action.",
             },
         )
     if isinstance(exc, AgentJobNotFoundError):
@@ -194,7 +196,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "job_not_found",
-                "message": str(exc),
+                "message": "The requested job was not found.",
             },
         )
     if isinstance(exc, AgentJobOwnershipError):
@@ -202,7 +204,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "job_ownership_mismatch",
-                "message": str(exc),
+                "message": "The job is not owned by this worker.",
             },
         )
     if isinstance(exc, AgentJobStateError):
@@ -210,7 +212,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "job_state_conflict",
-                "message": str(exc),
+                "message": "The job state does not permit this action.",
             },
         )
     if isinstance(exc, AgentArtifactNotFoundError):
@@ -218,7 +220,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "artifact_not_found",
-                "message": str(exc),
+                "message": "The requested artifact was not found.",
             },
         )
     if isinstance(exc, AgentArtifactJobMismatchError):
@@ -226,7 +228,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "artifact_job_mismatch",
-                "message": str(exc),
+                "message": "The artifact does not belong to the requested job.",
             },
         )
     if isinstance(exc, AgentWorkerTokenNotFoundError):
@@ -234,26 +236,30 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "worker_token_not_found",
-                "message": str(exc),
+                "message": "The requested worker token was not found.",
             },
         )
     if isinstance(exc, AgentQueueValidationError):
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
         code = "invalid_queue_payload"
+        message = "Queue request payload is invalid."
         lowered = str(exc).lower()
         if "exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
+            message = "Artifact exceeds the maximum allowed size."
         elif "does not exist on disk" in lowered:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
+            message = "Artifact file is missing from storage."
         return HTTPException(
             status_code=status_code,
             detail={
                 "code": code,
-                "message": str(exc),
+                "message": message,
             },
         )
+    logger.exception("Unhandled agent queue exception")
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail={
@@ -464,13 +470,19 @@ async def upload_artifact(
 
     try:
         _ensure_worker_identity(worker_id, worker_auth)
-        payload = await file.read()
+        max_bytes = max(1, int(settings.spec_workflow.agent_job_artifact_max_bytes))
+        payload = await file.read(max_bytes + 1)
+        if len(payload) > max_bytes:
+            raise AgentQueueValidationError(
+                f"artifact exceeds max bytes ({max_bytes})"
+            )
         artifact = await service.upload_artifact(
             job_id=job_id,
             name=name,
             data=payload,
             content_type=content_type or file.content_type,
             digest=digest,
+            worker_id=worker_id,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc

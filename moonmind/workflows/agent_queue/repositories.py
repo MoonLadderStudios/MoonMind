@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.agent_queue import models
@@ -156,7 +156,7 @@ class AgentQueueRepository:
         now = datetime.now(UTC)
         await self._requeue_expired_jobs(now=now)
 
-        stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob).where(
+        base_stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob).where(
             models.AgentJob.status == models.AgentJobStatus.QUEUED,
             or_(
                 models.AgentJob.next_attempt_at.is_(None),
@@ -164,28 +164,66 @@ class AgentQueueRepository:
             ),
         )
         if allowed_types:
-            stmt = stmt.where(models.AgentJob.type.in_(allowed_types))
+            base_stmt = base_stmt.where(models.AgentJob.type.in_(allowed_types))
 
-        stmt = (
-            stmt.order_by(
-                models.AgentJob.priority.desc(),
-                models.AgentJob.created_at.asc(),
-                models.AgentJob.id.asc(),
-            )
-            .limit(200)
-            .with_for_update(skip_locked=True)
-        )
-        result = await self._session.execute(stmt)
-        queued_jobs = list(result.scalars().all())
+        batch_size = 200
+        cursor_priority: int | None = None
+        cursor_created_at: datetime | None = None
+        cursor_id: UUID | None = None
+        selected_job: models.AgentJob | None = None
 
-        selected_job = None
-        for candidate in queued_jobs:
-            if self._is_job_claim_eligible(
-                candidate,
-                allowed_repositories=allowed_repositories,
-                worker_capabilities=worker_capabilities,
+        while True:
+            stmt = base_stmt
+            if (
+                cursor_priority is not None
+                and cursor_created_at is not None
+                and cursor_id is not None
             ):
-                selected_job = candidate
+                stmt = stmt.where(
+                    or_(
+                        models.AgentJob.priority < cursor_priority,
+                        and_(
+                            models.AgentJob.priority == cursor_priority,
+                            models.AgentJob.created_at > cursor_created_at,
+                        ),
+                        and_(
+                            models.AgentJob.priority == cursor_priority,
+                            models.AgentJob.created_at == cursor_created_at,
+                            models.AgentJob.id > cursor_id,
+                        ),
+                    )
+                )
+
+            stmt = (
+                stmt.order_by(
+                    models.AgentJob.priority.desc(),
+                    models.AgentJob.created_at.asc(),
+                    models.AgentJob.id.asc(),
+                )
+                .limit(batch_size)
+                .with_for_update(skip_locked=True)
+            )
+            result = await self._session.execute(stmt)
+            queued_jobs = list(result.scalars().all())
+            if not queued_jobs:
+                break
+
+            for candidate in queued_jobs:
+                if self._is_job_claim_eligible(
+                    candidate,
+                    allowed_repositories=allowed_repositories,
+                    worker_capabilities=worker_capabilities,
+                ):
+                    selected_job = candidate
+                    break
+            if selected_job is not None:
+                break
+
+            last_candidate = queued_jobs[-1]
+            cursor_priority = last_candidate.priority
+            cursor_created_at = last_candidate.created_at
+            cursor_id = last_candidate.id
+            if len(queued_jobs) < batch_size:
                 break
 
         if selected_job is None:
@@ -361,12 +399,15 @@ class AgentQueueRepository:
         """Append one lifecycle/progress event for a queue job."""
 
         await self.require_job(job_id)
+        now = datetime.now(UTC)
         event = models.AgentJobEvent(
             id=uuid4(),
             job_id=job_id,
             level=level,
             message=message,
             payload=payload,
+            created_at=now,
+            updated_at=now,
         )
         self._session.add(event)
         await self._session.flush()

@@ -291,7 +291,7 @@ class QueueToolRegistry:
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
         )
-        return JobModel.model_validate(job).model_dump(by_alias=True)
+        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
 
     async def _handle_claim(
         self,
@@ -313,7 +313,7 @@ class QueueToolRegistry:
         response = ClaimJobResponse(
             job=JobModel.model_validate(job) if job is not None else None
         )
-        return response.model_dump(by_alias=True)
+        return response.model_dump(by_alias=True, mode="json")
 
     async def _handle_heartbeat(
         self,
@@ -331,7 +331,7 @@ class QueueToolRegistry:
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
         )
-        return JobModel.model_validate(job).model_dump(by_alias=True)
+        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
 
     async def _handle_complete(
         self,
@@ -349,7 +349,7 @@ class QueueToolRegistry:
             worker_id=payload.worker_id,
             result_summary=payload.result_summary,
         )
-        return JobModel.model_validate(job).model_dump(by_alias=True)
+        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
 
     async def _handle_fail(
         self,
@@ -368,7 +368,7 @@ class QueueToolRegistry:
             error_message=payload.error_message,
             retryable=payload.retryable,
         )
-        return JobModel.model_validate(job).model_dump(by_alias=True)
+        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
 
     async def _handle_get(
         self,
@@ -384,7 +384,7 @@ class QueueToolRegistry:
         job = await context.service.get_job(payload.job_id)
         if job is None:
             raise AgentJobNotFoundError(payload.job_id)
-        return JobModel.model_validate(job).model_dump(by_alias=True)
+        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
 
     async def _handle_list(
         self,
@@ -405,7 +405,7 @@ class QueueToolRegistry:
         response = JobListResponse(
             items=[JobModel.model_validate(item) for item in jobs]
         )
-        return response.model_dump(by_alias=True)
+        return response.model_dump(by_alias=True, mode="json")
 
     async def _handle_upload_artifact(
         self,
@@ -432,7 +432,10 @@ class QueueToolRegistry:
             content_type=payload.content_type,
             digest=payload.digest,
         )
-        return ArtifactModel.model_validate(artifact).model_dump(by_alias=True)
+        return ArtifactModel.model_validate(artifact).model_dump(
+            by_alias=True,
+            mode="json",
+        )
 
 
 __all__ = [

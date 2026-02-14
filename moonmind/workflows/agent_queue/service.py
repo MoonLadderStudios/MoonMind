@@ -122,7 +122,17 @@ class AgentQueueService:
             job_id=job.id,
             level=models.AgentJobEventLevel.INFO,
             message="Job queued",
-            payload={"type": candidate_type},
+            payload={
+                "type": candidate_type,
+                "createdByUserId": (
+                    str(created_by_user_id) if created_by_user_id is not None else None
+                ),
+                "requestedByUserId": (
+                    str(requested_by_user_id)
+                    if requested_by_user_id is not None
+                    else None
+                ),
+            },
         )
         await self._repository.commit()
         return job
@@ -308,6 +318,7 @@ class AgentQueueService:
         data: bytes,
         content_type: Optional[str] = None,
         digest: Optional[str] = None,
+        worker_id: Optional[str] = None,
     ) -> models.AgentJobArtifact:
         """Validate and persist an uploaded artifact for a job."""
 
@@ -323,7 +334,19 @@ class AgentQueueService:
 
         # Validate job existence before writing bytes so missing jobs do not
         # leave orphaned files on disk.
-        await self._repository.require_job(job_id)
+        job = await self._repository.require_job(job_id)
+
+        if worker_id is not None:
+            worker = worker_id.strip()
+            if not worker:
+                raise AgentQueueValidationError("workerId must be a non-empty string")
+            if (
+                job.status is not models.AgentJobStatus.RUNNING
+                or job.claimed_by != worker
+            ):
+                raise AgentQueueAuthorizationError(
+                    f"worker '{worker}' does not own an active claim for job {job_id}"
+                )
 
         try:
             _, storage_path = self._artifact_storage.write_artifact(

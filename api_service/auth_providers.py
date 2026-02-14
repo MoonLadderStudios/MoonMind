@@ -80,6 +80,21 @@ def get_current_user():
     return _current_user_fallback
 
 
+current_active_user_optional = fastapi_users.current_user(active=True, optional=True)
+
+
+def get_current_user_optional():
+    """Return an auth dependency that tolerates missing bearer credentials.
+
+    Worker-token authenticated endpoints use this helper so header-only workers
+    are not blocked by FastAPI resolving a strict bearer-auth dependency first.
+    """
+
+    if settings.oidc.AUTH_PROVIDER != "disabled":
+        return current_active_user_optional
+    return get_current_user()
+
+
 async def get_auth_manager(
     db: AsyncSession = Depends(get_async_session),
 ) -> AuthProviderManager:
