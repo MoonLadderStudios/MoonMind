@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from moonmind.agents.codex_worker.utils import verify_cli_is_executable
@@ -115,11 +117,17 @@ class CodexExecHandler:
         codex_binary: str = "codex",
         git_binary: str = "git",
         gh_binary: str = "gh",
+        redaction_values: tuple[str, ...] = (),
     ) -> None:
         self._workdir_root = Path(workdir_root)
         self._codex_binary = codex_binary
         self._git_binary = git_binary
         self._gh_binary = gh_binary
+        env_token = str(os.environ.get("GITHUB_TOKEN", "")).strip()
+        values = [value for value in redaction_values if value]
+        if env_token:
+            values.append(env_token)
+        self._redaction_values = tuple(dict.fromkeys(values))
 
     async def handle(
         self,
@@ -334,7 +342,7 @@ class CodexExecHandler:
         log_path: Path,
         check: bool = True,
     ) -> CommandResult:
-        self._append_log(log_path, f"$ {' '.join(command)}")
+        self._append_log(log_path, self._redact_text(f"$ {' '.join(command)}"))
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -352,9 +360,9 @@ class CodexExecHandler:
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 
         if stdout:
-            self._append_log(log_path, stdout.rstrip("\n"))
+            self._append_log(log_path, self._redact_text(stdout.rstrip("\n")))
         if stderr:
-            self._append_log(log_path, stderr.rstrip("\n"))
+            self._append_log(log_path, self._redact_text(stderr.rstrip("\n")))
 
         result = CommandResult(
             command=tuple(command),
@@ -371,10 +379,21 @@ class CodexExecHandler:
     @staticmethod
     def _to_clone_url(repository: str) -> str:
         if repository.startswith("http://") or repository.startswith("https://"):
+            parsed = urlsplit(repository)
+            if parsed.username is not None or parsed.password is not None:
+                raise CodexWorkerHandlerError(
+                    "repository URL must not include embedded credentials"
+                )
             return repository
         if repository.startswith("git@"):
             return repository
         return f"https://github.com/{repository}.git"
+
+    def _redact_text(self, text: str) -> str:
+        redacted = text
+        for value in self._redaction_values:
+            redacted = redacted.replace(value, "[REDACTED]")
+        return redacted
 
     @staticmethod
     def _append_log(path: Path, text: str) -> None:

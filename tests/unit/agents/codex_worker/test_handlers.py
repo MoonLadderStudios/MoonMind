@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,7 +19,7 @@ from moonmind.agents.codex_worker.handlers import (
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
 
-def test_codex_exec_payload_requires_repository_and_instruction() -> None:
+async def test_codex_exec_payload_requires_repository_and_instruction() -> None:
     """Required payload fields should be enforced."""
 
     with pytest.raises(CodexWorkerHandlerError):
@@ -26,6 +27,69 @@ def test_codex_exec_payload_requires_repository_and_instruction() -> None:
 
     with pytest.raises(CodexWorkerHandlerError):
         CodexExecPayload.from_payload({"repository": "MoonLadderStudios/MoonMind"})
+
+
+async def test_to_clone_url_accepts_slug_https_and_ssh(tmp_path: Path) -> None:
+    """Clone URL helper should preserve accepted token-free repository formats."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+
+    assert (
+        handler._to_clone_url("MoonLadderStudios/MoonMind")
+        == "https://github.com/MoonLadderStudios/MoonMind.git"
+    )
+    assert (
+        handler._to_clone_url("https://github.com/MoonLadderStudios/MoonMind.git")
+        == "https://github.com/MoonLadderStudios/MoonMind.git"
+    )
+    assert (
+        handler._to_clone_url("git@github.com:MoonLadderStudios/MoonMind.git")
+        == "git@github.com:MoonLadderStudios/MoonMind.git"
+    )
+
+
+async def test_to_clone_url_rejects_embedded_credentials(tmp_path: Path) -> None:
+    """Tokenized repository URLs must be rejected before clone execution."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+
+    with pytest.raises(CodexWorkerHandlerError, match="embedded credentials"):
+        handler._to_clone_url("https://ghp-secret@github.com/moon/repo.git")
+
+
+async def test_run_command_redacts_sensitive_log_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Command logs should redact configured sensitive values."""
+
+    token = "ghp-sensitive"
+    log_path = tmp_path / "log.txt"
+    handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (
+                f"stdout {token}".encode("utf-8"),
+                f"stderr {token}".encode("utf-8"),
+            )
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", token],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert token not in text
+    assert "[REDACTED]" in text
 
 
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
@@ -131,3 +195,22 @@ async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> 
 
     assert result.succeeded is False
     assert result.error_message is not None
+
+
+async def test_handler_rejects_tokenized_repository_url(tmp_path: Path) -> None:
+    """Credential-bearing repository URLs should fail without exposing token text."""
+
+    token = "ghp-inline-secret"
+    handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
+    result = await handler.handle(
+        job_id=uuid4(),
+        payload={
+            "repository": f"https://{token}@github.com/moon/repo.git",
+            "instruction": "run",
+        },
+    )
+
+    assert result.succeeded is False
+    assert result.error_message is not None
+    assert "embedded credentials" in result.error_message
+    assert token not in result.error_message

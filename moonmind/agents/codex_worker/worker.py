@@ -283,12 +283,7 @@ class CodexWorker:
     async def run_once(self) -> bool:
         """Claim and process one job if available."""
 
-        job = await self._queue_client.claim_job(
-            worker_id=self._config.worker_id,
-            lease_seconds=self._config.lease_seconds,
-            allowed_types=self._config.allowed_types,
-            worker_capabilities=self._config.worker_capabilities,
-        )
+        job = await self._claim_next_job()
         if job is None:
             return False
 
@@ -375,6 +370,18 @@ class CodexWorker:
                 await heartbeat_task
 
         return True
+
+    async def _claim_next_job(self) -> ClaimedJob | None:
+        """Claim next eligible job using policy-safe claim parameters."""
+
+        # Repository allowlist enforcement stays server-side; worker only forwards
+        # allowed job types and capabilities from its local runtime config.
+        return await self._queue_client.claim_job(
+            worker_id=self._config.worker_id,
+            lease_seconds=self._config.lease_seconds,
+            allowed_types=self._config.allowed_types,
+            worker_capabilities=self._config.worker_capabilities,
+        )
 
     async def _heartbeat_loop(self, *, job_id: UUID, stop_event: asyncio.Event) -> None:
         """Send lease renewals while a job is actively executing."""
