@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.agent_queue import models
@@ -170,8 +170,6 @@ class AgentQueueRepository:
         cursor_priority: int | None = None
         cursor_created_at: datetime | None = None
         cursor_id: UUID | None = None
-        selected_job: models.AgentJob | None = None
-
         while True:
             stmt = base_stmt
             if (
@@ -209,15 +207,38 @@ class AgentQueueRepository:
                 break
 
             for candidate in queued_jobs:
-                if self._is_job_claim_eligible(
+                if not self._is_job_claim_eligible(
                     candidate,
                     allowed_repositories=allowed_repositories,
                     worker_capabilities=worker_capabilities,
                 ):
-                    selected_job = candidate
-                    break
-            if selected_job is not None:
-                break
+                    continue
+
+                lease_expires_at = now + timedelta(seconds=lease_seconds)
+                claim_result = await self._session.execute(
+                    update(models.AgentJob)
+                    .where(
+                        models.AgentJob.id == candidate.id,
+                        models.AgentJob.status == models.AgentJobStatus.QUEUED,
+                        or_(
+                            models.AgentJob.next_attempt_at.is_(None),
+                            models.AgentJob.next_attempt_at <= now,
+                        ),
+                    )
+                    .values(
+                        status=models.AgentJobStatus.RUNNING,
+                        claimed_by=worker_id,
+                        lease_expires_at=lease_expires_at,
+                        next_attempt_at=None,
+                        started_at=func.coalesce(models.AgentJob.started_at, now),
+                        updated_at=now,
+                    )
+                )
+                if claim_result.rowcount == 1:
+                    # Bulk updates can expire ORM fields; refresh before returning.
+                    await self._session.flush()
+                    await self._session.refresh(candidate)
+                    return candidate
 
             last_candidate = queued_jobs[-1]
             cursor_priority = last_candidate.priority
@@ -226,18 +247,7 @@ class AgentQueueRepository:
             if len(queued_jobs) < batch_size:
                 break
 
-        if selected_job is None:
-            return None
-
-        selected_job.status = models.AgentJobStatus.RUNNING
-        selected_job.claimed_by = worker_id
-        selected_job.lease_expires_at = now + timedelta(seconds=lease_seconds)
-        selected_job.next_attempt_at = None
-        if selected_job.started_at is None:
-            selected_job.started_at = now
-        selected_job.updated_at = now
-        await self._session.flush()
-        return selected_job
+        return None
 
     async def heartbeat(
         self,
