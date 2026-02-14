@@ -16,7 +16,6 @@ from api_service.api.routers.mcp_tools import _get_service, router
 from api_service.auth_providers import get_current_user
 from moonmind.workflows.agent_queue import models
 
-
 pytestmark = [pytest.mark.speckit]
 
 

@@ -19,8 +19,12 @@ class AgentQueueArtifactStorage:
         job_relative = Path(str(job_id))
         if not job_relative.parts:
             raise ValueError("job_id must not be empty")
-        if job_relative.is_absolute() or any(part == ".." for part in job_relative.parts):
-            raise ValueError("job_id must be a relative path without traversal components")
+        if job_relative.is_absolute() or any(
+            part == ".." for part in job_relative.parts
+        ):
+            raise ValueError(
+                "job_id must be a relative path without traversal components"
+            )
 
         job_path = (self.artifact_root / job_relative).resolve()
         root_resolved = self.artifact_root.resolve()
@@ -28,7 +32,9 @@ class AgentQueueArtifactStorage:
             raise ValueError("job path resolves outside artifact root")
         return job_path
 
-    def resolve_artifact_path(self, job_id: Union[str, UUID], artifact_name: str) -> Path:
+    def resolve_artifact_path(
+        self, job_id: Union[str, UUID], artifact_name: str
+    ) -> Path:
         """Resolve artifact destination under the job directory with traversal checks."""
 
         artifact_relative = Path(artifact_name)
@@ -60,7 +66,9 @@ class AgentQueueArtifactStorage:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
 
-        storage_relative = destination.resolve().relative_to(self.artifact_root.resolve())
+        storage_relative = destination.resolve().relative_to(
+            self.artifact_root.resolve()
+        )
         return destination, storage_relative.as_posix()
 
     def resolve_storage_path(self, storage_path: str) -> Path:

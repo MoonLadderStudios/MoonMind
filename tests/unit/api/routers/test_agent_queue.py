@@ -13,9 +13,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.agent_queue import (
-    _WorkerRequestAuth,
     _get_service,
     _require_worker_auth,
+    _WorkerRequestAuth,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -117,7 +117,9 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     service.create_job.assert_awaited_once()
 
 
-def test_claim_job_empty_queue_returns_null(client: tuple[TestClient, AsyncMock]) -> None:
+def test_claim_job_empty_queue_returns_null(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
     """Claim should return null job when queue has no eligible entries."""
 
     test_client, service = client
@@ -133,7 +135,9 @@ def test_claim_job_empty_queue_returns_null(client: tuple[TestClient, AsyncMock]
     service.claim_job.assert_awaited_once()
 
 
-def test_claim_job_worker_mismatch_maps_403(client: tuple[TestClient, AsyncMock]) -> None:
+def test_claim_job_worker_mismatch_maps_403(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
     """Claim should reject worker ids that do not match token policy."""
 
     test_client, service = client
@@ -206,7 +210,9 @@ def test_list_jobs_rejects_invalid_status_filter(
     service.list_jobs.assert_not_awaited()
 
 
-def test_fail_job_validation_error_maps_422(client: tuple[TestClient, AsyncMock]) -> None:
+def test_fail_job_validation_error_maps_422(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
     """Fail endpoint should map validation failures to HTTP 422."""
 
     test_client, service = client

@@ -98,7 +98,9 @@ async def test_get_artifact_for_job_rejects_mismatch(tmp_path: Path) -> None:
             await repo.commit()
 
             with pytest.raises(AgentArtifactJobMismatchError):
-                await repo.get_artifact_for_job(job_id=job_b.id, artifact_id=artifact.id)
+                await repo.get_artifact_for_job(
+                    job_id=job_b.id, artifact_id=artifact.id
+                )
 
 
 async def test_service_rejects_oversized_upload(tmp_path: Path) -> None:

@@ -57,7 +57,9 @@ def upgrade() -> None:
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column(
             "payload",
-            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            sa.JSON().with_variant(
+                postgresql.JSONB(astext_type=sa.Text()), "postgresql"
+            ),
             nullable=True,
         ),
         sa.Column(
@@ -101,17 +103,23 @@ def upgrade() -> None:
         sa.Column("description", sa.String(length=512), nullable=True),
         sa.Column(
             "allowed_repositories",
-            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            sa.JSON().with_variant(
+                postgresql.JSONB(astext_type=sa.Text()), "postgresql"
+            ),
             nullable=True,
         ),
         sa.Column(
             "allowed_job_types",
-            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            sa.JSON().with_variant(
+                postgresql.JSONB(astext_type=sa.Text()), "postgresql"
+            ),
             nullable=True,
         ),
         sa.Column(
             "capabilities",
-            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            sa.JSON().with_variant(
+                postgresql.JSONB(astext_type=sa.Text()), "postgresql"
+            ),
             nullable=True,
         ),
         sa.Column(
@@ -164,7 +172,9 @@ def downgrade() -> None:
     op.drop_table("agent_worker_tokens")
 
     op.drop_index("ix_agent_job_events_level_created_at", table_name="agent_job_events")
-    op.drop_index("ix_agent_job_events_job_id_created_at", table_name="agent_job_events")
+    op.drop_index(
+        "ix_agent_job_events_job_id_created_at", table_name="agent_job_events"
+    )
     op.drop_table("agent_job_events")
 
     bind = op.get_bind()

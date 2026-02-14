@@ -7,7 +7,17 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -113,7 +123,10 @@ async def _require_worker_auth(
         )
 
     # OIDC/JWT path: require non-disabled provider and authenticated user id.
-    if settings.oidc.AUTH_PROVIDER != "disabled" and getattr(user, "id", None) is not None:
+    if (
+        settings.oidc.AUTH_PROVIDER != "disabled"
+        and getattr(user, "id", None) is not None
+    ):
         return _WorkerRequestAuth(
             auth_source="oidc",
             worker_id=None,
@@ -130,7 +143,11 @@ async def _require_worker_auth(
 def _ensure_worker_identity(worker_id: str, auth: _WorkerRequestAuth) -> None:
     """Enforce token-bound worker id match when token auth is used."""
 
-    if auth.auth_source == "worker_token" and auth.worker_id and worker_id != auth.worker_id:
+    if (
+        auth.auth_source == "worker_token"
+        and auth.worker_id
+        and worker_id != auth.worker_id
+    ):
         raise AgentQueueAuthorizationError(
             f"workerId '{worker_id}' does not match token worker '{auth.worker_id}'"
         )
@@ -589,7 +606,9 @@ async def list_worker_tokens(
         items = await service.list_worker_tokens(limit=limit)
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return WorkerTokenListResponse(items=[_serialize_worker_token(item) for item in items])
+    return WorkerTokenListResponse(
+        items=[_serialize_worker_token(item) for item in items]
+    )
 
 
 @router.post("/workers/tokens/{token_id}/revoke", response_model=WorkerTokenModel)

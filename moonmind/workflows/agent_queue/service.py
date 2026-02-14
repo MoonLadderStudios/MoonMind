@@ -280,7 +280,9 @@ class AgentQueueService:
             retry_delay_seconds=retry_delay_seconds,
         )
         event_level = (
-            models.AgentJobEventLevel.WARN if retryable else models.AgentJobEventLevel.ERROR
+            models.AgentJobEventLevel.WARN
+            if retryable
+            else models.AgentJobEventLevel.ERROR
         )
         await self._repository.append_event(
             job_id=job_id,
@@ -374,7 +376,9 @@ class AgentQueueService:
             artifact_id=artifact_id,
         )
         try:
-            file_path = self._artifact_storage.resolve_storage_path(artifact.storage_path)
+            file_path = self._artifact_storage.resolve_storage_path(
+                artifact.storage_path
+            )
         except ValueError as exc:
             raise AgentQueueValidationError(str(exc)) from exc
         if not file_path.exists():
@@ -418,7 +422,9 @@ class AgentQueueService:
             raise AgentQueueValidationError("limit must be between 1 and 500")
         if after is not None and after.tzinfo is None:
             after = after.replace(tzinfo=UTC)
-        return await self._repository.list_events(job_id=job_id, limit=limit, after=after)
+        return await self._repository.list_events(
+            job_id=job_id, limit=limit, after=after
+        )
 
     async def issue_worker_token(
         self,
@@ -449,7 +455,9 @@ class AgentQueueService:
         await self._repository.commit()
         return WorkerTokenIssueResult(token_record=token_record, raw_token=raw_token)
 
-    async def list_worker_tokens(self, *, limit: int = 200) -> list[models.AgentWorkerToken]:
+    async def list_worker_tokens(
+        self, *, limit: int = 200
+    ) -> list[models.AgentWorkerToken]:
         """List worker token metadata (without raw token values)."""
 
         if limit < 1 or limit > 500:
@@ -512,7 +520,9 @@ class AgentQueueService:
                 normalized.append(item)
         return tuple(dict.fromkeys(normalized))
 
-    def _normalize_required_capabilities(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_required_capabilities(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         required = payload.get("requiredCapabilities")
         if not isinstance(required, list):
             return payload

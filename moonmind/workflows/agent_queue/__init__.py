@@ -18,11 +18,11 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentWorkerTokenNotFoundError,
 )
 from moonmind.workflows.agent_queue.service import (
-    ArtifactDownload,
     AgentQueueAuthenticationError,
     AgentQueueAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
+    ArtifactDownload,
     WorkerAuthPolicy,
     WorkerTokenIssueResult,
 )

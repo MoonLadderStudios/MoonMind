@@ -15,9 +15,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.agent_queue import (
-    _WorkerRequestAuth,
     _get_service,
     _require_worker_auth,
+    _WorkerRequestAuth,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -160,7 +160,9 @@ def test_download_artifact_success(client: tuple[TestClient, AsyncMock]) -> None
     assert response.content == b"artifact-bytes"
 
 
-def test_upload_artifact_too_large_maps_413(client: tuple[TestClient, AsyncMock]) -> None:
+def test_upload_artifact_too_large_maps_413(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
     """Size validation errors should map to HTTP 413."""
 
     test_client, service = client

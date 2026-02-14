@@ -421,7 +421,9 @@ class QueueToolRegistry:
         try:
             file_bytes = base64.b64decode(payload.content_base64, validate=True)
         except ValueError as exc:
-            raise AgentQueueValidationError("contentBase64 must be valid base64") from exc
+            raise AgentQueueValidationError(
+                "contentBase64 must be valid base64"
+            ) from exc
 
         artifact = await context.service.upload_artifact(
             job_id=payload.job_id,

@@ -6,6 +6,7 @@ from moonmind.agents.codex_worker.handlers import (
     CodexWorkerHandlerError,
     WorkerExecutionResult,
 )
+from moonmind.agents.codex_worker.utils import CliVerificationError
 from moonmind.agents.codex_worker.worker import (
     ClaimedJob,
     CodexWorker,
@@ -13,7 +14,6 @@ from moonmind.agents.codex_worker.worker import (
     QueueApiClient,
     QueueClientError,
 )
-from moonmind.agents.codex_worker.utils import CliVerificationError
 
 __all__ = [
     "ArtifactUpload",

@@ -68,7 +68,9 @@ class AppendJobEventRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     worker_id: str = Field(..., alias="workerId")
-    level: models.AgentJobEventLevel = Field(models.AgentJobEventLevel.INFO, alias="level")
+    level: models.AgentJobEventLevel = Field(
+        models.AgentJobEventLevel.INFO, alias="level"
+    )
     message: str = Field(..., alias="message")
     payload: Optional[dict[str, Any]] = Field(None, alias="payload")
 

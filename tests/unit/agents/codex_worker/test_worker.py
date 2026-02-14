@@ -10,7 +10,11 @@ from uuid import uuid4
 import pytest
 
 from moonmind.agents.codex_worker.handlers import ArtifactUpload, WorkerExecutionResult
-from moonmind.agents.codex_worker.worker import ClaimedJob, CodexWorker, CodexWorkerConfig
+from moonmind.agents.codex_worker.worker import (
+    ClaimedJob,
+    CodexWorker,
+    CodexWorkerConfig,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -95,7 +99,11 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     artifact_path = tmp_path / "result.log"
     artifact_path.write_text("ok", encoding="utf-8")
 
-    job = ClaimedJob(id=uuid4(), type="codex_exec", payload={"repository": "a/b", "instruction": "run"})
+    job = ClaimedJob(
+        id=uuid4(),
+        type="codex_exec",
+        payload={"repository": "a/b", "instruction": "run"},
+    )
     queue = FakeQueueClient(jobs=[job])
     handler = FakeHandler(
         WorkerExecutionResult(
@@ -169,7 +177,9 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
     stop_event = asyncio.Event()
-    task = asyncio.create_task(worker._heartbeat_loop(job_id=uuid4(), stop_event=stop_event))
+    task = asyncio.create_task(
+        worker._heartbeat_loop(job_id=uuid4(), stop_event=stop_event)
+    )
     await asyncio.sleep(2.3)
     stop_event.set()
     task.cancel()

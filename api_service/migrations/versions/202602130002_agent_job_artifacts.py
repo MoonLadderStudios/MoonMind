@@ -63,7 +63,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop metadata table for queue job artifacts."""
 
-    op.drop_index("ix_agent_job_artifacts_job_id_name", table_name="agent_job_artifacts")
+    op.drop_index(
+        "ix_agent_job_artifacts_job_id_name", table_name="agent_job_artifacts"
+    )
     op.drop_index(
         "ix_agent_job_artifacts_job_id_created_at",
         table_name="agent_job_artifacts",

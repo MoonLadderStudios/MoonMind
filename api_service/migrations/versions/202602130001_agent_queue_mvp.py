@@ -41,10 +41,14 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'queued'::agentjobstatus"),
         ),
-        sa.Column("priority", sa.Integer(), nullable=False, server_default=sa.text("0")),
+        sa.Column(
+            "priority", sa.Integer(), nullable=False, server_default=sa.text("0")
+        ),
         sa.Column(
             "payload",
-            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            sa.JSON().with_variant(
+                postgresql.JSONB(astext_type=sa.Text()), "postgresql"
+            ),
             nullable=False,
         ),
         sa.Column("created_by_user_id", sa.Uuid(), nullable=True),

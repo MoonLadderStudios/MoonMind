@@ -254,7 +254,9 @@ class AgentQueueRepository:
         job.error_message = error_message
 
         if retryable and job.attempt < job.max_attempts:
-            delay_seconds = max(1, int(retry_delay_seconds or self._lease_retry_delay_seconds))
+            delay_seconds = max(
+                1, int(retry_delay_seconds or self._lease_retry_delay_seconds)
+            )
             job.status = models.AgentJobStatus.QUEUED
             job.attempt += 1
             job.claimed_by = None
@@ -442,7 +444,9 @@ class AgentQueueRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
-    async def list_worker_tokens(self, *, limit: int = 200) -> list[models.AgentWorkerToken]:
+    async def list_worker_tokens(
+        self, *, limit: int = 200
+    ) -> list[models.AgentWorkerToken]:
         """Return worker token metadata rows ordered by creation date."""
 
         if limit < 1:
@@ -543,7 +547,9 @@ class AgentQueueRepository:
 
         required_caps_raw = payload.get("requiredCapabilities")
         if isinstance(required_caps_raw, list):
-            required_caps = {str(item).strip() for item in required_caps_raw if str(item).strip()}
+            required_caps = {
+                str(item).strip() for item in required_caps_raw if str(item).strip()
+            }
         else:
             required_caps = set()
 

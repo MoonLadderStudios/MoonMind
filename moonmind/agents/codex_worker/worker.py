@@ -14,10 +14,7 @@ from uuid import UUID
 
 import httpx
 
-from moonmind.agents.codex_worker.handlers import (
-    ArtifactUpload,
-    CodexExecHandler,
-)
+from moonmind.agents.codex_worker.handlers import ArtifactUpload, CodexExecHandler
 
 
 class QueueClientError(RuntimeError):
@@ -52,9 +49,7 @@ class CodexWorkerConfig:
         poll_interval_ms = int(
             str(source.get("MOONMIND_POLL_INTERVAL_MS", "1500")).strip()
         )
-        lease_seconds = int(
-            str(source.get("MOONMIND_LEASE_SECONDS", "120")).strip()
-        )
+        lease_seconds = int(str(source.get("MOONMIND_LEASE_SECONDS", "120")).strip())
         if poll_interval_ms < 1:
             raise ValueError("MOONMIND_POLL_INTERVAL_MS must be >= 1")
         if lease_seconds < 1:
