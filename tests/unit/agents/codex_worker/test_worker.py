@@ -24,6 +24,7 @@ class FakeQueueClient:
 
     def __init__(self, jobs: list[ClaimedJob | None] | None = None) -> None:
         self.jobs = list(jobs or [])
+        self.claim_calls: list[dict[str, object]] = []
         self.heartbeats: list[str] = []
         self.completed: list[tuple[str, str | None]] = []
         self.failed: list[str] = []
@@ -38,6 +39,14 @@ class FakeQueueClient:
         allowed_types=None,
         worker_capabilities=None,
     ):
+        self.claim_calls.append(
+            {
+                "worker_id": worker_id,
+                "lease_seconds": lease_seconds,
+                "allowed_types": tuple(allowed_types or ()),
+                "worker_capabilities": tuple(worker_capabilities or ()),
+            }
+        )
         if not self.jobs:
             return None
         return self.jobs.pop(0)
@@ -229,3 +238,33 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.lease_seconds == 120
     assert str(config.workdir) == "var/worker"
     assert config.worker_capabilities == ()
+
+
+async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> None:
+    """Claim request should forward local policy hints without adding repo overrides."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-9",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=75,
+        workdir=tmp_path,
+        allowed_types=("codex_exec", "codex_skill"),
+        worker_capabilities=("codex", "git"),
+    )
+    queue = FakeQueueClient(jobs=[None])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is False
+    assert len(queue.claim_calls) == 1
+    claim = queue.claim_calls[0]
+    assert claim["worker_id"] == "worker-9"
+    assert claim["lease_seconds"] == 75
+    assert claim["allowed_types"] == ("codex_exec", "codex_skill")
+    assert claim["worker_capabilities"] == ("codex", "git")

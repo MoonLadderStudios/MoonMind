@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import subprocess
+from typing import Mapping, Sequence
 
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
 from moonmind.agents.codex_worker.utils import (
@@ -18,26 +20,83 @@ from moonmind.agents.codex_worker.worker import (
 )
 
 
-def run_preflight() -> None:
-    """Validate Codex CLI availability and authentication before daemon start."""
+def _redact_value(text: str, secrets: Sequence[str]) -> str:
+    redacted = text
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
+def _run_checked_command(
+    command: list[str],
+    *,
+    input_text: str | None = None,
+    redaction_values: Sequence[str] = (),
+) -> None:
+    result = subprocess.run(
+        command,
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return
+
+    message = (
+        result.stderr.strip()
+        or result.stdout.strip()
+        or f"command failed: {' '.join(command)}"
+    )
+    raise RuntimeError(_redact_value(message, redaction_values))
+
+
+def run_preflight(env: Mapping[str, str] | None = None) -> None:
+    """Validate CLI dependencies and auth state before daemon start."""
+
+    source = env if env is not None else os.environ
 
     try:
         codex_path = verify_cli_is_executable("codex")
     except CliVerificationError as exc:
         raise RuntimeError(str(exc)) from exc
 
-    result = subprocess.run(
+    github_token = str(source.get("GITHUB_TOKEN", "")).strip()
+    redaction_values = (github_token,) if github_token else ()
+
+    _run_checked_command(
         [codex_path, "login", "status"],
-        capture_output=True,
-        text=True,
+        redaction_values=redaction_values,
     )
-    if result.returncode != 0:
-        message = (
-            result.stderr.strip()
-            or result.stdout.strip()
-            or "unknown codex login status error"
-        )
-        raise RuntimeError(f"codex login status failed: {message}")
+
+    if not github_token:
+        return
+
+    try:
+        gh_path = verify_cli_is_executable("gh")
+    except CliVerificationError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    _run_checked_command(
+        [
+            gh_path,
+            "auth",
+            "login",
+            "--hostname",
+            "github.com",
+            "--with-token",
+        ],
+        input_text=github_token,
+        redaction_values=redaction_values,
+    )
+    _run_checked_command(
+        [gh_path, "auth", "setup-git"],
+        redaction_values=redaction_values,
+    )
+    _run_checked_command(
+        [gh_path, "auth", "status", "--hostname", "github.com"],
+        redaction_values=redaction_values,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
