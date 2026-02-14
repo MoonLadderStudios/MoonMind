@@ -665,3 +665,4 @@ manifest = Manifest.model_validate_yaml("samples/github_manifest.yaml")
 ```
 
 The JSON Schema can be exported with `export_schema("manifest.schema.json")`.
+
