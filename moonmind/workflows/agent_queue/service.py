@@ -1,0 +1,559 @@
+"""Service layer for Agent Queue operations."""
+
+from __future__ import annotations
+
+import hashlib
+import secrets
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Optional
+from uuid import UUID
+
+from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.repositories import (
+    AgentQueueRepository,
+    AgentWorkerTokenNotFoundError,
+)
+from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
+
+
+class AgentQueueValidationError(ValueError):
+    """Raised when client-supplied queue payloads are invalid."""
+
+
+class AgentQueueAuthenticationError(RuntimeError):
+    """Raised when worker authentication fails."""
+
+
+class AgentQueueAuthorizationError(RuntimeError):
+    """Raised when authenticated workers exceed allowed policy scope."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactDownload:
+    """Represents a download-ready artifact with file path and metadata."""
+
+    artifact: models.AgentJobArtifact
+    file_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAuthPolicy:
+    """Resolved worker identity and policy constraints."""
+
+    worker_id: str
+    auth_source: str
+    token_id: UUID | None
+    allowed_repositories: tuple[str, ...]
+    allowed_job_types: tuple[str, ...]
+    capabilities: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerTokenIssueResult:
+    """One-time worker token issuance payload."""
+
+    token_record: models.AgentWorkerToken
+    raw_token: str
+
+
+class AgentQueueService:
+    """Application service exposing validated queue operations."""
+
+    def __init__(
+        self,
+        repository: AgentQueueRepository,
+        *,
+        artifact_storage: AgentQueueArtifactStorage | None = None,
+        artifact_max_bytes: int | None = None,
+        retry_backoff_base_seconds: int = 15,
+        retry_backoff_max_seconds: int = 600,
+    ) -> None:
+        self._repository = repository
+        self._artifact_storage = artifact_storage or AgentQueueArtifactStorage(
+            settings.spec_workflow.agent_job_artifact_root
+        )
+        configured_limit = (
+            artifact_max_bytes
+            if artifact_max_bytes is not None
+            else settings.spec_workflow.agent_job_artifact_max_bytes
+        )
+        self._artifact_max_bytes = max(1, int(configured_limit))
+        self._retry_backoff_base_seconds = max(1, int(retry_backoff_base_seconds))
+        self._retry_backoff_max_seconds = max(
+            self._retry_backoff_base_seconds,
+            int(retry_backoff_max_seconds),
+        )
+
+    async def create_job(
+        self,
+        *,
+        job_type: str,
+        payload: dict[str, Any],
+        priority: int = 0,
+        created_by_user_id: Optional[UUID] = None,
+        requested_by_user_id: Optional[UUID] = None,
+        affinity_key: Optional[str] = None,
+        max_attempts: int = 3,
+    ) -> models.AgentJob:
+        """Create and persist a new queued job."""
+
+        candidate_type = job_type.strip()
+        if not candidate_type:
+            raise AgentQueueValidationError("type must be a non-empty string")
+        if max_attempts < 1:
+            raise AgentQueueValidationError("maxAttempts must be >= 1")
+
+        normalized_payload = dict(payload or {})
+        normalized_payload = self._normalize_required_capabilities(normalized_payload)
+
+        job = await self._repository.create_job(
+            job_type=candidate_type,
+            payload=normalized_payload,
+            priority=priority,
+            created_by_user_id=created_by_user_id,
+            requested_by_user_id=requested_by_user_id,
+            affinity_key=affinity_key.strip() if affinity_key else None,
+            max_attempts=max_attempts,
+        )
+        await self._repository.append_event(
+            job_id=job.id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Job queued",
+            payload={
+                "type": candidate_type,
+                "createdByUserId": (
+                    str(created_by_user_id) if created_by_user_id is not None else None
+                ),
+                "requestedByUserId": (
+                    str(requested_by_user_id)
+                    if requested_by_user_id is not None
+                    else None
+                ),
+            },
+        )
+        await self._repository.commit()
+        return job
+
+    async def get_job(self, job_id: UUID) -> Optional[models.AgentJob]:
+        """Fetch a single job by id."""
+
+        return await self._repository.get_job(job_id)
+
+    async def list_jobs(
+        self,
+        *,
+        status: Optional[models.AgentJobStatus] = None,
+        job_type: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[models.AgentJob]:
+        """List queue jobs with optional filters."""
+
+        if limit < 1 or limit > 200:
+            raise AgentQueueValidationError("limit must be between 1 and 200")
+
+        normalized_type = job_type.strip() if job_type else None
+        return await self._repository.list_jobs(
+            status=status,
+            job_type=normalized_type if normalized_type else None,
+            limit=limit,
+        )
+
+    async def claim_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+        allowed_types: Optional[list[str]] = None,
+        allowed_repositories: Optional[list[str]] = None,
+        worker_capabilities: Optional[list[str]] = None,
+    ) -> Optional[models.AgentJob]:
+        """Claim a queued job for a worker."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        if lease_seconds < 1:
+            raise AgentQueueValidationError("leaseSeconds must be >= 1")
+
+        normalized_types = self._normalize_str_list(allowed_types)
+        normalized_repositories = self._normalize_str_list(allowed_repositories)
+        normalized_capabilities = self._normalize_str_list(worker_capabilities)
+
+        job = await self._repository.claim_job(
+            worker_id=worker,
+            lease_seconds=lease_seconds,
+            allowed_types=list(normalized_types) if normalized_types else None,
+            allowed_repositories=(
+                list(normalized_repositories) if normalized_repositories else None
+            ),
+            worker_capabilities=(
+                list(normalized_capabilities) if normalized_capabilities else None
+            ),
+        )
+
+        if job is not None:
+            await self._repository.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="Job claimed",
+                payload={"workerId": worker},
+            )
+        await self._repository.commit()
+        return job
+
+    async def heartbeat(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> models.AgentJob:
+        """Extend the lease for a running job."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        if lease_seconds < 1:
+            raise AgentQueueValidationError("leaseSeconds must be >= 1")
+
+        job = await self._repository.heartbeat(
+            job_id=job_id,
+            worker_id=worker,
+            lease_seconds=lease_seconds,
+        )
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Heartbeat received",
+            payload={"workerId": worker, "leaseSeconds": lease_seconds},
+        )
+        await self._repository.commit()
+        return job
+
+    async def complete_job(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        result_summary: Optional[str] = None,
+    ) -> models.AgentJob:
+        """Mark a running job as completed."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+
+        job = await self._repository.complete_job(
+            job_id=job_id,
+            worker_id=worker,
+            result_summary=result_summary.strip() if result_summary else None,
+        )
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Job completed",
+            payload={"workerId": worker},
+        )
+        await self._repository.commit()
+        return job
+
+    async def fail_job(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        error_message: str,
+        retryable: bool = False,
+    ) -> models.AgentJob:
+        """Mark a running job as failed."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        detail = error_message.strip()
+        if not detail:
+            raise AgentQueueValidationError("errorMessage must be a non-empty string")
+
+        current_job = await self._repository.require_job(job_id)
+        retry_delay_seconds = None
+        if retryable and current_job.attempt < current_job.max_attempts:
+            retry_delay_seconds = self._compute_retry_delay_seconds(current_job.attempt)
+
+        job = await self._repository.fail_job(
+            job_id=job_id,
+            worker_id=worker,
+            error_message=detail,
+            retryable=retryable,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+        event_level = (
+            models.AgentJobEventLevel.WARN
+            if retryable
+            else models.AgentJobEventLevel.ERROR
+        )
+        await self._repository.append_event(
+            job_id=job_id,
+            level=event_level,
+            message="Job failed" if not retryable else "Job failed (retryable)",
+            payload={
+                "workerId": worker,
+                "retryable": retryable,
+                "status": job.status.value,
+                "nextAttemptAt": (
+                    job.next_attempt_at.isoformat() if job.next_attempt_at else None
+                ),
+            },
+        )
+        await self._repository.commit()
+        return job
+
+    async def upload_artifact(
+        self,
+        *,
+        job_id: UUID,
+        name: str,
+        data: bytes,
+        content_type: Optional[str] = None,
+        digest: Optional[str] = None,
+        worker_id: Optional[str] = None,
+    ) -> models.AgentJobArtifact:
+        """Validate and persist an uploaded artifact for a job."""
+
+        artifact_name = name.strip()
+        if not artifact_name:
+            raise AgentQueueValidationError("name must be a non-empty string")
+        if not data:
+            raise AgentQueueValidationError("file must not be empty")
+        if len(data) > self._artifact_max_bytes:
+            raise AgentQueueValidationError(
+                f"artifact exceeds max bytes ({self._artifact_max_bytes})"
+            )
+
+        # Validate job existence before writing bytes so missing jobs do not
+        # leave orphaned files on disk.
+        job = await self._repository.require_job(job_id)
+
+        if worker_id is not None:
+            worker = worker_id.strip()
+            if not worker:
+                raise AgentQueueValidationError("workerId must be a non-empty string")
+            if (
+                job.status is not models.AgentJobStatus.RUNNING
+                or job.claimed_by != worker
+            ):
+                raise AgentQueueAuthorizationError(
+                    f"worker '{worker}' does not own an active claim for job {job_id}"
+                )
+
+        try:
+            _, storage_path = self._artifact_storage.write_artifact(
+                job_id=job_id,
+                artifact_name=artifact_name,
+                data=data,
+            )
+        except ValueError as exc:
+            raise AgentQueueValidationError(str(exc)) from exc
+
+        artifact = await self._repository.create_artifact(
+            job_id=job_id,
+            name=artifact_name,
+            content_type=content_type.strip() if content_type else None,
+            digest=digest.strip() if digest else None,
+            size_bytes=len(data),
+            storage_path=storage_path,
+        )
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Artifact uploaded",
+            payload={"name": artifact_name, "sizeBytes": len(data)},
+        )
+        await self._repository.commit()
+        return artifact
+
+    async def list_artifacts(
+        self,
+        *,
+        job_id: UUID,
+        limit: int = 200,
+    ) -> list[models.AgentJobArtifact]:
+        """Return artifact metadata list for a job."""
+
+        if limit < 1 or limit > 500:
+            raise AgentQueueValidationError("limit must be between 1 and 500")
+        return await self._repository.list_artifacts(job_id=job_id, limit=limit)
+
+    async def get_artifact_download(
+        self,
+        *,
+        job_id: UUID,
+        artifact_id: UUID,
+    ) -> ArtifactDownload:
+        """Return artifact metadata and resolved file path for download."""
+
+        artifact = await self._repository.get_artifact_for_job(
+            job_id=job_id,
+            artifact_id=artifact_id,
+        )
+        try:
+            file_path = self._artifact_storage.resolve_storage_path(
+                artifact.storage_path
+            )
+        except ValueError as exc:
+            raise AgentQueueValidationError(str(exc)) from exc
+        if not file_path.exists():
+            raise AgentQueueValidationError(
+                f"artifact file does not exist on disk: {artifact.storage_path}"
+            )
+        return ArtifactDownload(artifact=artifact, file_path=file_path)
+
+    async def append_event(
+        self,
+        *,
+        job_id: UUID,
+        level: models.AgentJobEventLevel,
+        message: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> models.AgentJobEvent:
+        """Append one queue event with basic validation."""
+
+        detail = message.strip()
+        if not detail:
+            raise AgentQueueValidationError("message must be a non-empty string")
+        event = await self._repository.append_event(
+            job_id=job_id,
+            level=level,
+            message=detail,
+            payload=payload,
+        )
+        await self._repository.commit()
+        return event
+
+    async def list_events(
+        self,
+        *,
+        job_id: UUID,
+        limit: int = 200,
+        after: Optional[datetime] = None,
+    ) -> list[models.AgentJobEvent]:
+        """List queue events for one job."""
+
+        if limit < 1 or limit > 500:
+            raise AgentQueueValidationError("limit must be between 1 and 500")
+        if after is not None and after.tzinfo is None:
+            after = after.replace(tzinfo=UTC)
+        return await self._repository.list_events(
+            job_id=job_id, limit=limit, after=after
+        )
+
+    async def issue_worker_token(
+        self,
+        *,
+        worker_id: str,
+        description: Optional[str] = None,
+        allowed_repositories: Optional[list[str]] = None,
+        allowed_job_types: Optional[list[str]] = None,
+        capabilities: Optional[list[str]] = None,
+    ) -> WorkerTokenIssueResult:
+        """Create a worker token and return one-time raw token value."""
+
+        normalized_worker_id = worker_id.strip()
+        if not normalized_worker_id:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+
+        raw_token = f"mmwt_{secrets.token_hex(24)}"
+        token_hash = self._hash_token(raw_token)
+        token_record = await self._repository.create_worker_token(
+            worker_id=normalized_worker_id,
+            token_hash=token_hash,
+            description=description.strip() if description else None,
+            allowed_repositories=list(self._normalize_str_list(allowed_repositories))
+            or None,
+            allowed_job_types=list(self._normalize_str_list(allowed_job_types)) or None,
+            capabilities=list(self._normalize_str_list(capabilities)) or None,
+        )
+        await self._repository.commit()
+        return WorkerTokenIssueResult(token_record=token_record, raw_token=raw_token)
+
+    async def list_worker_tokens(
+        self, *, limit: int = 200
+    ) -> list[models.AgentWorkerToken]:
+        """List worker token metadata (without raw token values)."""
+
+        if limit < 1 or limit > 500:
+            raise AgentQueueValidationError("limit must be between 1 and 500")
+        return await self._repository.list_worker_tokens(limit=limit)
+
+    async def revoke_worker_token(self, *, token_id: UUID) -> models.AgentWorkerToken:
+        """Deactivate one worker token by id."""
+
+        token = await self._repository.revoke_worker_token(token_id=token_id)
+        await self._repository.commit()
+        return token
+
+    async def resolve_worker_token(self, raw_token: str) -> WorkerAuthPolicy:
+        """Resolve a raw worker token to enforced worker policy."""
+
+        candidate = raw_token.strip()
+        if not candidate:
+            raise AgentQueueAuthenticationError("worker token is required")
+
+        token_hash = self._hash_token(candidate)
+        token = await self._repository.get_worker_token_by_hash(token_hash)
+        if token is None:
+            raise AgentQueueAuthenticationError("invalid worker token")
+        if not token.is_active:
+            raise AgentQueueAuthenticationError("worker token is inactive")
+
+        return WorkerAuthPolicy(
+            worker_id=token.worker_id,
+            auth_source="worker_token",
+            token_id=token.id,
+            allowed_repositories=tuple(token.allowed_repositories or ()),
+            allowed_job_types=tuple(token.allowed_job_types or ()),
+            capabilities=tuple(token.capabilities or ()),
+        )
+
+    async def require_worker_token(self, token_id: UUID) -> models.AgentWorkerToken:
+        """Return worker token metadata by id or raise validation error."""
+
+        try:
+            return await self._repository.get_worker_token(token_id)
+        except AgentWorkerTokenNotFoundError as exc:
+            raise AgentQueueValidationError(str(exc)) from exc
+
+    def _compute_retry_delay_seconds(self, attempt: int) -> int:
+        """Compute exponential backoff delay for the next retry."""
+
+        power = max(0, attempt - 1)
+        raw_delay = self._retry_backoff_base_seconds * (2**power)
+        return min(self._retry_backoff_max_seconds, raw_delay)
+
+    @staticmethod
+    def _normalize_str_list(values: Optional[list[str]]) -> tuple[str, ...]:
+        if values is None:
+            return ()
+        normalized = []
+        for value in values:
+            item = str(value).strip()
+            if item:
+                normalized.append(item)
+        return tuple(dict.fromkeys(normalized))
+
+    def _normalize_required_capabilities(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        required = payload.get("requiredCapabilities")
+        if not isinstance(required, list):
+            return payload
+        normalized = list(self._normalize_str_list([str(item) for item in required]))
+        payload["requiredCapabilities"] = normalized
+        return payload
+
+    @staticmethod
+    def _hash_token(raw_token: str) -> str:
+        digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"

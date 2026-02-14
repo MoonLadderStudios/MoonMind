@@ -178,4 +178,13 @@ If credentials expire or the auth volume is misconfigured, the chain **halts ear
 - The **automation image** packages Codex CLI and Spec Kit CLI, making Codex phases a first-class part of the Celery chain workflow that moves Spec Kit tasks from plan to PR.:contentReference[oaicite:53]{index=53}:contentReference[oaicite:54]{index=54}
 
 This architecture allows MoonMind to scale Codex automation by adjusting Codex worker instances and their queues, without re-introducing manual authentication or ad-hoc CLI installs.
-```
+
+---
+
+## 8. Queue Hardening (Milestone 5)
+
+For the remote queue worker path (`/api/queue/*`), the worker daemon now supports:
+
+- `MOONMIND_WORKER_TOKEN` sent as `X-MoonMind-Worker-Token` for dedicated worker-token auth.
+- `MOONMIND_WORKER_CAPABILITIES` (comma-separated) forwarded in claim requests as `workerCapabilities`.
+- Lifecycle event emission to `POST /api/queue/jobs/{jobId}/events` for polling-based progress visibility.

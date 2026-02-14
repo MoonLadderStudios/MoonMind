@@ -8,6 +8,7 @@ from moonmind.config.settings import (
     OIDCSettings,
     OllamaSettings,
     OpenAISettings,
+    SpecWorkflowSettings,
 )
 
 
@@ -130,3 +131,30 @@ class TestOIDCSettings:
 
         monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
         monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
+
+
+class TestSpecWorkflowSettings:
+    def test_agent_job_artifact_defaults(self):
+        """Milestone 2 artifact settings should keep stable defaults."""
+
+        assert (
+            SpecWorkflowSettings.model_fields["agent_job_artifact_root"].default
+            == "var/artifacts/agent_jobs"
+        )
+        assert (
+            SpecWorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
+            == 10 * 1024 * 1024
+        )
+
+    def test_agent_job_artifact_env_overrides(self, monkeypatch):
+        """Environment variables should override queue artifact settings."""
+
+        monkeypatch.setenv("AGENT_JOB_ARTIFACT_ROOT", "/tmp/queue-artifacts")
+        monkeypatch.setenv("AGENT_JOB_ARTIFACT_MAX_BYTES", "2048")
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.agent_job_artifact_root == "/tmp/queue-artifacts"
+        assert settings.agent_job_artifact_max_bytes == 2048
+
+        monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ARTIFACT_MAX_BYTES", raising=False)

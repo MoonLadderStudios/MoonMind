@@ -1,0 +1,311 @@
+openapi: 3.0.3
+info:
+  title: MoonMind Agent Queue API (Milestone 1)
+  version: 0.1.0
+  description: REST endpoints for queueing and lifecycle management of agent jobs.
+servers:
+  - url: /api
+paths:
+  /queue/jobs:
+    post:
+      summary: Create a queue job
+      operationId: createQueueJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '201':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+    get:
+      summary: List queue jobs
+      operationId: listQueueJobs
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/JobStatus'
+        - in: query
+          name: type
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Jobs list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/JobModel'
+                required: [items]
+  /queue/jobs/claim:
+    post:
+      summary: Claim next eligible job
+      operationId: claimQueueJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimJobRequest'
+      responses:
+        '200':
+          description: Claim result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimJobResponse'
+  /queue/jobs/{jobId}:
+    get:
+      summary: Fetch a job by id
+      operationId: getQueueJob
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+        '404':
+          description: Job not found
+  /queue/jobs/{jobId}/heartbeat:
+    post:
+      summary: Extend lease on running job
+      operationId: heartbeatQueueJob
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+      responses:
+        '200':
+          description: Job lease extended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+  /queue/jobs/{jobId}/complete:
+    post:
+      summary: Mark running job succeeded
+      operationId: completeQueueJob
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteJobRequest'
+      responses:
+        '200':
+          description: Job completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+  /queue/jobs/{jobId}/fail:
+    post:
+      summary: Mark running job failed
+      operationId: failQueueJob
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailJobRequest'
+      responses:
+        '200':
+          description: Job failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+
+components:
+  schemas:
+    JobStatus:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled]
+    JobModel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        priority:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+        createdByUserId:
+          type: string
+          format: uuid
+          nullable: true
+        requestedByUserId:
+          type: string
+          format: uuid
+          nullable: true
+        affinityKey:
+          type: string
+          nullable: true
+        claimedBy:
+          type: string
+          nullable: true
+        leaseExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        attempt:
+          type: integer
+        maxAttempts:
+          type: integer
+        resultSummary:
+          type: string
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        artifactsPath:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - type
+        - status
+        - priority
+        - payload
+        - attempt
+        - maxAttempts
+        - createdAt
+        - updatedAt
+    CreateJobRequest:
+      type: object
+      properties:
+        type:
+          type: string
+        priority:
+          type: integer
+          default: 0
+        payload:
+          type: object
+          additionalProperties: true
+        affinityKey:
+          type: string
+          nullable: true
+        maxAttempts:
+          type: integer
+          minimum: 1
+          default: 3
+      required: [type, payload]
+    ClaimJobRequest:
+      type: object
+      properties:
+        workerId:
+          type: string
+        leaseSeconds:
+          type: integer
+          minimum: 1
+        allowedTypes:
+          type: array
+          items:
+            type: string
+      required: [workerId, leaseSeconds]
+    ClaimJobResponse:
+      type: object
+      properties:
+        job:
+          allOf:
+            - $ref: '#/components/schemas/JobModel'
+          nullable: true
+      required: [job]
+    HeartbeatRequest:
+      type: object
+      properties:
+        workerId:
+          type: string
+        leaseSeconds:
+          type: integer
+          minimum: 1
+      required: [workerId, leaseSeconds]
+    CompleteJobRequest:
+      type: object
+      properties:
+        workerId:
+          type: string
+        resultSummary:
+          type: string
+          nullable: true
+      required: [workerId]
+    FailJobRequest:
+      type: object
+      properties:
+        workerId:
+          type: string
+        errorMessage:
+          type: string
+        retryable:
+          type: boolean
+          default: false
+      required: [workerId, errorMessage]
