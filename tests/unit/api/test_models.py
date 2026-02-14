@@ -52,12 +52,12 @@ def mock_cached_models_data():
             },
         },
         {
-            "id": "models/gemini-embedding-exp-03-07",
+            "id": "models/gemini-embedding-001",
             "object": "model",
             "created": int(time.time()),
             "owned_by": "Google",
             "permission": [],
-            "root": "models/gemini-embedding-exp-03-07",
+            "root": "models/gemini-embedding-001",
             "parent": None,
             "context_window": 1024,
             "capabilities": {

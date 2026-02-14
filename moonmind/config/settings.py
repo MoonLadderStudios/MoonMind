@@ -314,7 +314,7 @@ class GoogleSettings(BaseSettings):
     google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
     google_chat_model: str = Field("gemini-2.5-flash", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
-        "models/gemini-embedding-exp-03-07", env="GOOGLE_EMBEDDING_MODEL"
+        "gemini-embedding-001", env="GOOGLE_EMBEDDING_MODEL"
     )
     google_embedding_dimensions: int = Field(3072, env="GOOGLE_EMBEDDING_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
