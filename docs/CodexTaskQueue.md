@@ -514,9 +514,20 @@ POST /api/queue/jobs/claim
 {
   "workerId": "executor-01",
   "leaseSeconds": 120,
-  "allowedTypes": ["codex_exec","codex_skill"]
+  "allowedTypes": ["codex_exec","codex_skill"],
+  "workerCapabilities": ["codex","git","gh"]
 }
 ```
+
+Worker-authenticated claim/mutation requests can use:
+
+- `X-MoonMind-Worker-Token: <token>` for dedicated worker tokens
+- `Authorization: Bearer <jwt>` for OIDC/JWT flows
+
+Incremental progress polling surface:
+
+- `POST /api/queue/jobs/{jobId}/events` (append lifecycle/log event)
+- `GET /api/queue/jobs/{jobId}/events?after=<iso8601>&limit=<n>` (streaming-ish poll)
 
 ### MCP tools (example conceptual)
 

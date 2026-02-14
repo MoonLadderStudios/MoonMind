@@ -72,6 +72,9 @@ pytest-asyncio = { version = "^0.23.7", optional = true }
 [tool.poetry.extras]
 tests = ["pytest", "pytest-mock", "pytest-asyncio"]
 
+[tool.poetry.scripts]
+moonmind-codex-worker = "moonmind.agents.codex_worker.cli:main"
+
 [tool.black]
 line-length = 88
 

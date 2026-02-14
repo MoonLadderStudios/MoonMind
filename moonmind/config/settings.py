@@ -113,6 +113,17 @@ class SpecWorkflowSettings(BaseSettings):
         env=("SPEC_WORKFLOW_ARTIFACT_ROOT", "SPEC_WORKFLOW_ARTIFACTS_ROOT"),
         description="Filesystem location where Spec workflow artifacts are persisted.",
     )
+    agent_job_artifact_root: str = Field(
+        "var/artifacts/agent_jobs",
+        env="AGENT_JOB_ARTIFACT_ROOT",
+        description="Filesystem location where agent queue artifacts are persisted.",
+    )
+    agent_job_artifact_max_bytes: int = Field(
+        10 * 1024 * 1024,
+        env="AGENT_JOB_ARTIFACT_MAX_BYTES",
+        description="Maximum allowed artifact upload size in bytes for queue jobs.",
+        gt=0,
+    )
     job_image: str = Field(
         "moonmind/spec-automation-job:latest",
         env="SPEC_AUTOMATION_JOB_IMAGE",

@@ -945,13 +945,14 @@ Index("ix_orchestrator_runs_target_service", OrchestratorRun.target_service)
 Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)
 
 
-def _register_celery_model_dependencies() -> None:
-    """Import Celery-side ORM models so string relationships can resolve."""
+def _register_workflow_model_dependencies() -> None:
+    """Import workflow ORM models so string relationships can resolve."""
 
     if TYPE_CHECKING:
         return
 
     import_module("moonmind.workflows.speckit_celery.models")
+    import_module("moonmind.workflows.agent_queue.models")
 
 
-_register_celery_model_dependencies()
+_register_workflow_model_dependencies()

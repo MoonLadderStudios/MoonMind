@@ -21,3 +21,4 @@ jobs/
 build/
 dist/
 *.egg-info/
+uv.lock

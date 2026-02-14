@@ -1,0 +1,140 @@
+openapi: 3.0.3
+info:
+  title: MoonMind Agent Queue Artifacts API (Milestone 2)
+  version: 0.1.0
+  description: Artifact upload, listing, and download APIs for queue jobs.
+servers:
+  - url: /api
+paths:
+  /queue/jobs/{jobId}/artifacts/upload:
+    post:
+      summary: Upload an artifact for a queue job
+      operationId: uploadQueueJobArtifact
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                name:
+                  type: string
+                contentType:
+                  type: string
+                digest:
+                  type: string
+              required: [file, name]
+      responses:
+        '201':
+          description: Artifact uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactModel'
+        '404':
+          description: Job not found
+        '413':
+          description: Upload exceeds configured size limit
+        '422':
+          description: Invalid artifact path or form payload
+
+  /queue/jobs/{jobId}/artifacts:
+    get:
+      summary: List artifacts for a queue job
+      operationId: listQueueJobArtifacts
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Artifact metadata list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ArtifactModel'
+                required: [items]
+        '404':
+          description: Job not found
+
+  /queue/jobs/{jobId}/artifacts/{artifactId}/download:
+    get:
+      summary: Download a specific artifact for a queue job
+      operationId: downloadQueueJobArtifact
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Artifact binary stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Job or artifact not found
+        '409':
+          description: Artifact does not belong to specified job
+
+components:
+  schemas:
+    ArtifactModel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        contentType:
+          type: string
+          nullable: true
+        sizeBytes:
+          type: integer
+        digest:
+          type: string
+          nullable: true
+        storagePath:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - jobId
+        - name
+        - sizeBytes
+        - storagePath
+        - createdAt
