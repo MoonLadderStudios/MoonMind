@@ -566,6 +566,14 @@ jobs:
             const hasReviewRequestSinceLastCommit = reviewRequestCommentsSinceLastCommit.length > 0;
             console.log(`Codex review requests since last commit: ${reviewRequestCommentsSinceLastCommit.length}`);
 
+            // Prevent posting additional review-round trigger comments on later commits.
+            const reviewRequestCommentsEver = issueComments.filter(comment => {
+              const body = (comment.body || '').toLowerCase();
+              return body.includes('@codex review');
+            });
+            const hasReviewRequestEver = reviewRequestCommentsEver.length > 0;
+            console.log(`Codex review requests on PR (all-time): ${reviewRequestCommentsEver.length}`);
+
             // Detect whether any review (Gemini or Codex) has occurred since the last commit
             const anyGeminiReviewSinceLastCommit = commentsAfterCutoff.some(comment => isGeminiComment(comment));
             const anyCodexReviewSinceLastCommit = commentsAfterCutoff.some(comment => isCodexComment(comment));
@@ -612,6 +620,7 @@ jobs:
               !buildFailed &&
               !hasUnresolvedBlockingReviewComments &&
               !hasReviewRequestSinceLastCommit &&
+              !hasReviewRequestEver &&
               needsInitialReview;
 
             console.log(`Build succeeded for this workflow_run: ${buildSucceededForThisRun}`);
