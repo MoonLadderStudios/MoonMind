@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,3 +85,56 @@ def validate_embedding_runtime_profile(
     )
 
     return profile
+
+
+def validate_shared_skills_mirror(
+    *,
+    worker_name: str,
+    mirror_root: str | None,
+    strict: bool,
+    logger: logging.Logger,
+) -> Path | None:
+    """Validate local shared-skills mirror settings when strict mode is enabled."""
+
+    if not strict:
+        return None
+
+    raw = (mirror_root or "").strip()
+    if not raw:
+        raise RuntimeError("Shared skills mirror root is required in strict mode.")
+
+    mirror_path = Path(raw).expanduser()
+    if not mirror_path.is_absolute():
+        mirror_path = (Path.cwd() / mirror_path).resolve()
+
+    if not mirror_path.exists():
+        raise RuntimeError(
+            f"Shared skills mirror root does not exist: {mirror_path}"
+        )
+    if not mirror_path.is_dir():
+        raise RuntimeError(
+            f"Shared skills mirror root is not a directory: {mirror_path}"
+        )
+
+    skill_dirs = [
+        child
+        for child in mirror_path.iterdir()
+        if child.is_dir() and (child / "SKILL.md").is_file()
+    ]
+    if not skill_dirs:
+        raise RuntimeError(
+            f"Shared skills mirror root contains no valid skills: {mirror_path}"
+        )
+
+    logger.info(
+        "Shared skills mirror validated for %s worker: %s (%d skills)",
+        worker_name,
+        mirror_path,
+        len(skill_dirs),
+        extra={
+            "worker_name": worker_name,
+            "skills_mirror_root": str(mirror_path),
+            "skills_mirror_count": len(skill_dirs),
+        },
+    )
+    return mirror_path

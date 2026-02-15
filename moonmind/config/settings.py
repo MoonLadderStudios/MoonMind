@@ -271,6 +271,41 @@ class SpecWorkflowSettings(BaseSettings):
         env="SPEC_WORKFLOW_ALLOWED_SKILLS",
         description="Allowlisted skills that can be selected for workflow stages.",
     )
+    skills_cache_root: str = Field(
+        "var/skill_cache",
+        env="SPEC_SKILLS_CACHE_ROOT",
+        description="Immutable cache root for verified skill artifacts.",
+    )
+    skills_workspace_root: str = Field(
+        "var/skills_workspaces",
+        env="SPEC_SKILLS_WORKSPACE_ROOT",
+        description="Workspace root for per-run active skills links.",
+    )
+    skills_registry_source: Optional[str] = Field(
+        None,
+        env="SPEC_SKILLS_REGISTRY_SOURCE",
+        description="Optional registry profile/URI for skill source resolution.",
+    )
+    skills_local_mirror_root: str = Field(
+        ".agents/skills/skills",
+        env="SPEC_SKILLS_LOCAL_MIRROR_ROOT",
+        description="Default local skill mirror directory used for source resolution.",
+    )
+    skills_legacy_mirror_root: str = Field(
+        ".codex/skills/skills",
+        env="SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+        description="Legacy local mirror fallback for backward compatibility.",
+    )
+    skills_verify_signatures: bool = Field(
+        False,
+        env="SPEC_SKILLS_VERIFY_SIGNATURES",
+        description="Require signature metadata for selected skills before activation.",
+    )
+    skills_validate_local_mirror: bool = Field(
+        False,
+        env="SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
+        description="Enable startup validation of the configured local skill mirror root.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="",
@@ -293,6 +328,7 @@ class SpecWorkflowSettings(BaseSettings):
         "discover_skill",
         "submit_skill",
         "publish_skill",
+        "skills_registry_source",
         mode="before",
     )
     @classmethod

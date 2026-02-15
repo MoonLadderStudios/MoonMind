@@ -1013,3 +1013,84 @@ async def test_upsert_credential_audit_loadable_via_repository():
             assert refreshed.credential_audit.notes == "GitHub token expired"
     finally:
         await engine.dispose()
+
+
+def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path):
+    """Shared skills materialization metadata should be persisted into context."""
+
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    run = models.SpecWorkflowRun(
+        id=run_id,
+        feature_key="016-shared-agent-skills",
+        status=models.SpecWorkflowRunStatus.PENDING,
+        phase=models.SpecWorkflowRunPhase.DISCOVER,
+        artifacts_path=str(tmp_path / "artifacts"),
+        created_at=now,
+        updated_at=now,
+    )
+
+    class DummySelection:
+        def __init__(self) -> None:
+            self.run_id = str(run_id)
+            self.selection_source = "global_default"
+            self.skills = ()
+
+    class DummyWorkspace:
+        def __init__(self, run_root):
+            self._run_root = run_root
+
+        def to_payload(self) -> dict[str, object]:
+            return {
+                "runId": str(run_id),
+                "selectionSource": "global_default",
+                "skillsActivePath": str(self._run_root / "skills_active"),
+                "agentsSkillsPath": str(self._run_root / ".agents" / "skills"),
+                "geminiSkillsPath": str(self._run_root / ".gemini" / "skills"),
+                "skills": [{"name": "speckit", "version": "local"}],
+            }
+
+    runs_root = tmp_path / "runs"
+    workspace_root = runs_root / str(run_id)
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "repo_root",
+        str(tmp_path),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "skills_workspace_root",
+        str(runs_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "skills_cache_root",
+        str(tmp_path / "cache"),
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        tasks,
+        "resolve_run_skill_selection",
+        lambda **_: DummySelection(),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "materialize_run_skill_workspace",
+        lambda **_: DummyWorkspace(workspace_root),
+    )
+
+    context: dict[str, object] = {}
+    tasks._ensure_shared_skills_workspace(run=run, context=context)
+
+    assert context["skills_selection_source"] == "global_default"
+    assert context["skills_active_path"] == str(workspace_root / "skills_active")
+    assert context["agents_skills_path"] == str(
+        workspace_root / ".agents" / "skills"
+    )
+    assert context["gemini_skills_path"] == str(
+        workspace_root / ".gemini" / "skills"
+    )
+    assert context["resolved_skills"] == [{"name": "speckit", "version": "local"}]

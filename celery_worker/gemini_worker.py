@@ -8,7 +8,10 @@ import re
 import subprocess
 from importlib import import_module
 
-from celery_worker.startup_checks import validate_embedding_runtime_profile
+from celery_worker.startup_checks import (
+    validate_embedding_runtime_profile,
+    validate_shared_skills_mirror,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
@@ -154,6 +157,17 @@ def _run_gemini_preflight_check() -> None:
     logger.info("Gemini pre-flight check completed.")
 
 
+def _validate_shared_skills_profile() -> None:
+    """Validate local shared-skills mirror when strict mode is configured."""
+
+    validate_shared_skills_mirror(
+        worker_name="gemini",
+        mirror_root=settings.spec_workflow.skills_local_mirror_root,
+        strict=settings.spec_workflow.skills_validate_local_mirror,
+        logger=logger,
+    )
+
+
 celery_app = speckit_celery_app
 
 # Celery uses the module-level ``app`` attribute as the default application target
@@ -164,6 +178,7 @@ _log_gemini_cli_version()
 _log_speckit_cli_version()
 _log_queue_configuration()
 _validate_embedding_profile()
+_validate_shared_skills_profile()
 _run_gemini_preflight_check()
 
 

@@ -35,20 +35,15 @@ def _run_checked_command(
     redaction_values: Sequence[str] = (),
     env: Mapping[str, str | None] | None = None,
 ) -> None:
-    run_env = dict(os.environ)
+    run_kwargs: dict[str, object] = {
+        "input": input_text,
+        "capture_output": True,
+        "text": True,
+    }
     if env is not None:
-        for key, value in env.items():
-            if value is None:
-                run_env.pop(key, None)
-            else:
-                run_env[key] = value
-    result = subprocess.run(
-        command,
-        input=input_text,
-        capture_output=True,
-        text=True,
-        env=run_env,
-    )
+        run_kwargs["env"] = dict(env)
+
+    result = subprocess.run(command, **run_kwargs)
     if result.returncode == 0:
         return
 
