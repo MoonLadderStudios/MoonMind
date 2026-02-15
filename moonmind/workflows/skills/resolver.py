@@ -77,8 +77,7 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
             str(raw.get("source_uri") or raw.get("sourceUri") or "").strip() or None
         )
         content_hash = (
-            str(raw.get("content_hash") or raw.get("contentHash") or "").strip()
-            or None
+            str(raw.get("content_hash") or raw.get("contentHash") or "").strip() or None
         )
         signature = str(raw.get("signature") or "").strip() or None
         return {
@@ -100,7 +99,9 @@ def _normalize_skill_selection(raw: object) -> list[dict[str, str | None]]:
         return [_normalize_skill_entry(item) for item in parts]
     if isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray, str)):
         return [_normalize_skill_entry(item) for item in raw]
-    raise SkillResolutionError("Skill selection must be a sequence or comma-delimited string")
+    raise SkillResolutionError(
+        "Skill selection must be a sequence or comma-delimited string"
+    )
 
 
 def _file_uri(path: Path) -> str:
@@ -208,7 +209,9 @@ def resolve_run_skill_selection(
             skill_name=skill_name,
             version=version,
             declared_source=entry.get("source_uri"),
-            source_overrides=source_overrides if isinstance(source_overrides, Mapping) else None,
+            source_overrides=(
+                source_overrides if isinstance(source_overrides, Mapping) else None
+            ),
         )
 
         # Basic URI sanity check so we fail fast on malformed values.

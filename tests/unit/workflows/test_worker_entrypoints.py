@@ -8,8 +8,8 @@ import pytest
 
 from celery_worker.startup_checks import (
     resolve_embedding_runtime_profile,
-    validate_shared_skills_mirror,
     validate_embedding_runtime_profile,
+    validate_shared_skills_mirror,
 )
 
 

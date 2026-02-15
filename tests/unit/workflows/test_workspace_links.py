@@ -22,7 +22,9 @@ def test_ensure_shared_skill_links_points_both_adapters_to_same_path(tmp_path):
     target.mkdir(parents=True)
     skill_dir.symlink_to(target)
 
-    links = ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
+    links = ensure_shared_skill_links(
+        run_root=run_root, skills_active_path=skills_active
+    )
 
     assert links.agents_skills_path.is_symlink()
     assert links.gemini_skills_path.is_symlink()
@@ -57,7 +59,9 @@ def test_validate_shared_skill_links_detects_target_drift(tmp_path):
     agents.symlink_to(Path("../other"))
     gemini.symlink_to(Path("../skills_active"))
 
-    links = ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
+    links = ensure_shared_skill_links(
+        run_root=run_root, skills_active_path=skills_active
+    )
     # Force drift after creation.
     agents.unlink()
     agents.symlink_to(Path("../other"))

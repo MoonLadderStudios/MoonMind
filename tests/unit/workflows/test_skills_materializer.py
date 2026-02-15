@@ -52,8 +52,14 @@ def test_materialize_run_skill_workspace_creates_cache_and_links(tmp_path):
     assert workspace.links.skills_active_path.is_dir()
     assert workspace.links.agents_skills_path.is_symlink()
     assert workspace.links.gemini_skills_path.is_symlink()
-    assert workspace.links.agents_skills_path.resolve() == workspace.links.skills_active_path.resolve()
-    assert workspace.links.gemini_skills_path.resolve() == workspace.links.skills_active_path.resolve()
+    assert (
+        workspace.links.agents_skills_path.resolve()
+        == workspace.links.skills_active_path.resolve()
+    )
+    assert (
+        workspace.links.gemini_skills_path.resolve()
+        == workspace.links.skills_active_path.resolve()
+    )
     assert workspace.skills[0].cache_path.is_dir()
     assert (workspace.skills[0].cache_path / "SKILL.md").is_file()
 

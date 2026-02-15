@@ -10,12 +10,15 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urlparse
 from urllib.request import urlretrieve
 
 from .resolver import ResolvedSkill, RunSkillSelection
-from .workspace_links import SkillWorkspaceLinks, SkillWorkspaceError, ensure_shared_skill_links
+from .workspace_links import (
+    SkillWorkspaceError,
+    SkillWorkspaceLinks,
+    ensure_shared_skill_links,
+)
 
 
 class SkillMaterializationError(RuntimeError):
@@ -96,7 +99,9 @@ def _parse_frontmatter_name(skill_md: Path) -> str | None:
 def _hash_skill_directory(skill_dir: Path) -> str:
     digest = hashlib.sha256()
 
-    for path in sorted(skill_dir.rglob("*"), key=lambda item: str(item.relative_to(skill_dir))):
+    for path in sorted(
+        skill_dir.rglob("*"), key=lambda item: str(item.relative_to(skill_dir))
+    ):
         rel = str(path.relative_to(skill_dir)).replace("\\", "/")
         digest.update(rel.encode("utf-8"))
         if path.is_symlink():
@@ -278,8 +283,12 @@ def _ensure_signature(entry: ResolvedSkill, *, verify_signatures: bool) -> None:
         )
 
 
-def _materialize_cache_entry(*, entry: ResolvedSkill, cache_root: Path) -> MaterializedSkill:
-    with tempfile.TemporaryDirectory(prefix=f"skill-{entry.skill_name}-") as temp_dir_str:
+def _materialize_cache_entry(
+    *, entry: ResolvedSkill, cache_root: Path
+) -> MaterializedSkill:
+    with tempfile.TemporaryDirectory(
+        prefix=f"skill-{entry.skill_name}-"
+    ) as temp_dir_str:
         temp_dir = Path(temp_dir_str)
         source_root = _resolve_source_root(entry, temp_dir)
         skill_dir = _find_skill_dir(source_root, skill_name=entry.skill_name)

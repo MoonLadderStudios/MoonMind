@@ -35,11 +35,11 @@ from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
     materialize_run_skill_workspace,
 )
+from moonmind.workflows.skills.registry import resolve_stage_execution
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     resolve_run_skill_selection,
 )
-from moonmind.workflows.skills.registry import resolve_stage_execution
 from moonmind.workflows.skills.runner import execute_stage
 from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.celeryconfig import (

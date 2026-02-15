@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
-from moonmind.workflows.skills.resolver import SkillResolutionError, resolve_run_skill_selection
+from moonmind.workflows.skills.resolver import (
+    SkillResolutionError,
+    resolve_run_skill_selection,
+)
 
 
 @pytest.fixture

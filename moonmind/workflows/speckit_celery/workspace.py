@@ -292,7 +292,13 @@ class SpecWorkspaceManager:
         ):
             self._assert_within_workspace(path)
 
-        for path in (run_root, repo_path, home_path, artifacts_path, skills_active_path):
+        for path in (
+            run_root,
+            repo_path,
+            home_path,
+            artifacts_path,
+            skills_active_path,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
         agents_skills_path.parent.mkdir(parents=True, exist_ok=True)

@@ -108,9 +108,7 @@ def validate_shared_skills_mirror(
         mirror_path = (Path.cwd() / mirror_path).resolve()
 
     if not mirror_path.exists():
-        raise RuntimeError(
-            f"Shared skills mirror root does not exist: {mirror_path}"
-        )
+        raise RuntimeError(f"Shared skills mirror root does not exist: {mirror_path}")
     if not mirror_path.is_dir():
         raise RuntimeError(
             f"Shared skills mirror root is not a directory: {mirror_path}"

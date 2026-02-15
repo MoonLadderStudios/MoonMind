@@ -1087,10 +1087,6 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
 
     assert context["skills_selection_source"] == "global_default"
     assert context["skills_active_path"] == str(workspace_root / "skills_active")
-    assert context["agents_skills_path"] == str(
-        workspace_root / ".agents" / "skills"
-    )
-    assert context["gemini_skills_path"] == str(
-        workspace_root / ".gemini" / "skills"
-    )
+    assert context["agents_skills_path"] == str(workspace_root / ".agents" / "skills")
+    assert context["gemini_skills_path"] == str(workspace_root / ".gemini" / "skills")
     assert context["resolved_skills"] == [{"name": "speckit", "version": "local"}]
