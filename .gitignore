@@ -22,3 +22,7 @@ build/
 dist/
 *.egg-info/
 uv.lock
+
+# Worker runtime scratch outputs
+var/worker/
+var/worker-relative/
