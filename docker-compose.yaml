@@ -10,8 +10,8 @@ x-celery-worker-base: &celery-worker-base
     CODEX_VOLUME_NAME: ${CODEX_VOLUME_NAME:-codex_auth_volume}
     CODEX_VOLUME_PATH: ${CODEX_VOLUME_PATH:-/home/app/.codex}
     CODEX_HOME: ${CODEX_HOME:-/home/app/.codex}
-    CODEX_CONFIG_HOME: ${CODEX_VOLUME_PATH:-/home/app/.codex}
-    CODEX_CONFIG_PATH: ${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
+    CODEX_CONFIG_HOME: ${CODEX_CONFIG_HOME:-/home/app/.codex}
+    CODEX_CONFIG_PATH: ${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
     CELERY_BROKER_URL: amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
     CODEX_TEMPLATE_PATH: /app/api_service/config.template.toml
     GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -253,6 +253,7 @@ services:
       context: .
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
+    user: app
     env_file:
       - .env
     environment:

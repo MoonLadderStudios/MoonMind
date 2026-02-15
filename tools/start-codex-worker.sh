@@ -95,7 +95,7 @@ for attempt in range(1, 61):
         print(token)
         sys.exit(0)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        _ = exc.read()
         if exc.code in (401, 403):
             print(
                 "MoonMind API rejected worker token bootstrap ("
@@ -103,13 +103,11 @@ for attempt in range(1, 61):
                 "provide MOONMIND_API_TOKEN for authenticated bootstrap.",
                 file=sys.stderr,
             )
-            if detail:
-                print(detail[:400], file=sys.stderr)
             sys.exit(1)
         if attempt == 60:
             print(
                 "Failed to bootstrap worker token after 60 attempts "
-                f"(HTTP {exc.code}). Last response: {detail[:400]}",
+                f"(HTTP {exc.code}).",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -126,7 +124,7 @@ PY
   )"
   export MOONMIND_WORKER_TOKEN="$worker_token"
   printf '%s\n' "$worker_token" >"$TOKEN_PATH"
-  chmod 600 "$TOKEN_PATH" || true
+  chmod 600 "$TOKEN_PATH"
   log "Persisted worker token to $TOKEN_PATH"
 fi
 
