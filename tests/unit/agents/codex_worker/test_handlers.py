@@ -77,7 +77,10 @@ async def test_codex_skill_payload_defaults_and_validation() -> None:
 
     with pytest.raises(CodexWorkerHandlerError, match="codex_skill workdirMode"):
         CodexSkillPayload.from_payload(
-            {"skillId": "speckit", "inputs": {"repo": "Moon/Mind", "workdirMode": "bad"}}
+            {
+                "skillId": "speckit",
+                "inputs": {"repo": "Moon/Mind", "workdirMode": "bad"},
+            }
         )
 
 
@@ -234,10 +237,7 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     assert "--model" in codex_cmd
     assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5-codex"
     assert "--config" in codex_cmd
-    assert (
-        codex_cmd[codex_cmd.index("--config") + 1]
-        == 'model_reasoning_effort="high"'
-    )
+    assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="high"'
 
 
 async def test_handler_falls_back_to_worker_default_codex_settings(
@@ -275,8 +275,7 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
     assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5-codex"
     assert "--config" in codex_cmd
     assert (
-        codex_cmd[codex_cmd.index("--config") + 1]
-        == 'model_reasoning_effort="medium"'
+        codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="medium"'
     )
 
 
@@ -339,7 +338,9 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in calls)
 
 
-async def test_handle_skill_maps_to_exec_payload_and_marks_summary(tmp_path: Path) -> None:
+async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
+    tmp_path: Path,
+) -> None:
     """Skill handling should map inputs to codex_exec execution payload."""
 
     handler = CodexExecHandler(workdir_root=tmp_path)

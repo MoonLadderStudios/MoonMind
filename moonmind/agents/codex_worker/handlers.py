@@ -597,7 +597,9 @@ class CodexExecHandler:
             handle.write(f"{text}\n")
 
 
-def _clean_optional_string(value: object, *, fallback: object | None = None) -> str | None:
+def _clean_optional_string(
+    value: object, *, fallback: object | None = None
+) -> str | None:
     """Normalize optional string values from payload/env sources."""
 
     candidate = value if value is not None else fallback

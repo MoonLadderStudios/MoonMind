@@ -364,7 +364,12 @@ class SpecWorkflowSettings(BaseSettings):
         )
         self.allowed_skills = tuple(dict.fromkeys(self.allowed_skills or ()))
 
-        for attr in ("default_skill", "discover_skill", "submit_skill", "publish_skill"):
+        for attr in (
+            "default_skill",
+            "discover_skill",
+            "submit_skill",
+            "publish_skill",
+        ):
             value = getattr(self, attr)
             if isinstance(value, str):
                 normalized = value.strip()

@@ -362,7 +362,9 @@ class CodexWorker:
             )
             return True
 
-        selected_skill = str(skill_meta.get("selectedSkill") or self._config.default_skill)
+        selected_skill = str(
+            skill_meta.get("selectedSkill") or self._config.default_skill
+        )
         if selected_skill not in self._config.allowed_skills:
             await self._emit_event(
                 job_id=job.id,
@@ -413,7 +415,11 @@ class CodexWorker:
                     job_id=job.id,
                     level="info",
                     message="Job completed",
-                    payload={"summary": result.summary, "jobType": job.type, **skill_meta},
+                    payload={
+                        "summary": result.summary,
+                        "jobType": job.type,
+                        **skill_meta,
+                    },
                 )
             else:
                 await self._queue_client.fail_job(
@@ -474,7 +480,9 @@ class CodexWorker:
         used_fallback = False
 
         if job.type == "codex_skill":
-            raw_skill = job.payload.get("skillId") if isinstance(job.payload, Mapping) else None
+            raw_skill = (
+                job.payload.get("skillId") if isinstance(job.payload, Mapping) else None
+            )
             candidate_skill = str(raw_skill).strip() if raw_skill is not None else ""
             selected_skill = candidate_skill or self._config.default_skill
             execution_path = "skill"

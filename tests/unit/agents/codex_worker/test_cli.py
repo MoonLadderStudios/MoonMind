@@ -31,6 +31,7 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
         "verify_cli_is_executable",
         lambda _name: "/usr/bin/codex",
     )
+
     def fake_run(command, *args, **kwargs):
         if command == ["/usr/bin/speckit", "--version"]:
             return subprocess.CompletedProcess(

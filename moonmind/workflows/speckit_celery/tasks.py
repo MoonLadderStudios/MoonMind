@@ -1171,7 +1171,9 @@ def _set_stage_execution_payload(
         }
 
 
-def _stage_execution_payload(context: Mapping[str, Any], stage_name: str) -> dict[str, Any]:
+def _stage_execution_payload(
+    context: Mapping[str, Any], stage_name: str
+) -> dict[str, Any]:
     """Return stage execution metadata for status payload decoration."""
 
     execution = context.get("skill_execution")

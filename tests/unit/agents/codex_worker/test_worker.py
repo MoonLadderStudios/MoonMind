@@ -155,7 +155,9 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     assert queue.failed == []
     assert any(event["message"] == "Worker claimed job" for event in queue.events)
     assert any(event["message"] == "Job completed" for event in queue.events)
-    claimed = next(event for event in queue.events if event["message"] == "Worker claimed job")
+    claimed = next(
+        event for event in queue.events if event["message"] == "Worker claimed job"
+    )
     payload = claimed["payload"]
     assert isinstance(payload, dict)
     assert payload["selectedSkill"] == "speckit"
@@ -261,7 +263,9 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
     assert processed is True
     assert len(queue.completed) == 1
     assert handler.calls == ["codex_skill:speckit:False"]
-    claimed = next(event for event in queue.events if event["message"] == "Worker claimed job")
+    claimed = next(
+        event for event in queue.events if event["message"] == "Worker claimed job"
+    )
     payload = claimed["payload"]
     assert isinstance(payload, dict)
     assert payload["executionPath"] == "skill"
