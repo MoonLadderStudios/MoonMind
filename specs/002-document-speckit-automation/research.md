@@ -1,36 +1,38 @@
-# Research: Spec Kit Automation Pipeline
+# Research: Skills-First Spec Automation Pipeline
 
-## Decision 1: Constitution Compliance Handling
-- **Decision**: Treat the placeholder constitution as having no enforceable principles for this feature while documenting the gap and requesting governance updates.
-- **Rationale**: The constitution file only contains template placeholders, so blocking delivery would provide no actionable guidance. Recording the gap keeps stakeholders informed and avoids inventing rules.
+## Decision 1: Preserve Legacy Phase Values, Normalize Skills Metadata
+- **Decision**: Keep existing persisted `speckit_*` phase values and add normalized skills metadata extraction in runtime/API layers.
+- **Rationale**: Avoids destructive schema migration while aligning behavior with umbrella 015 skills-first semantics.
 - **Alternatives Considered**:
-  - Infer likely principles from prior specs – rejected because speculation could introduce conflicting requirements.
-  - Pause planning until governance updates the constitution – rejected due to schedule pressure and the need to progress this automation feature.
+  - Replace all phase values with new generic values immediately: rejected due to migration risk and backward compatibility impact.
+  - Leave phase responses unchanged: rejected because it fails 015 metadata requirements.
 
-## Decision 2: Container Orchestration Pattern
-- **Decision**: Implement Docker-outside-of-Docker (DooD) where the Celery worker launches per-run job containers via the host Docker socket and mounts a shared `speckit_workspaces` volume.
-- **Rationale**: Matches the design in `docs/SpecKitAutomation.md`, avoids DinD overhead, enables artifact sharing, and keeps the worker image slim.
+## Decision 2: API-Level Skills Metadata Exposure
+- **Decision**: Expose `selected_skill`, `execution_path`, `used_skills`, `used_fallback`, and `shadow_mode_requested` in `SpecAutomationPhaseState`.
+- **Rationale**: Operators and clients can inspect stage policy outcomes directly without parsing free-form metadata payloads.
 - **Alternatives Considered**:
-  - Docker-in-Docker – rejected due to performance penalties and isolation complexity.
-  - Running Spec Kit directly inside the worker – rejected because it would bloat the worker image, complicate HOME isolation, and hinder future agent swaps.
+  - Keep metadata embedded-only: rejected because clients would need brittle metadata parsing.
 
-## Decision 3: Secrets Injection Strategy
-- **Decision**: Inject credentials (GitHub token, Codex API key, git identity) as environment variables when starting each job container; never persist them to files inside the shared volume.
-- **Rationale**: Aligns with security guidelines in the design doc, keeps secrets ephemeral, and integrates cleanly with Docker CLI/SDK `environment` parameters.
+## Decision 3: Legacy Defaults for Missing Metadata
+- **Decision**: When legacy `speckit_*` phases have no explicit metadata, default to `selectedSkill=speckit` and `executionPath=skill`.
+- **Rationale**: Preserves historical behavior while making skills-path semantics explicit.
 - **Alternatives Considered**:
-  - Mounting secret files into the container – rejected because shared volume retention risks credential leakage.
-  - Storing secrets within Celery task payloads – rejected since it complicates logging and persistence surfaces.
+  - Return null for missing values: rejected because it weakens observability and breaks deterministic interpretation.
 
-## Decision 4: Artifact Retention Approach
-- **Decision**: Persist per-phase logs, diff summaries, and commit status files in `/work/runs/{run_id}/artifacts` on the shared volume for at least seven days, with optional upload to external object storage.
-- **Rationale**: Supports auditability and troubleshooting as required by the spec and leverages the existing volume without adding new infrastructure.
+## Decision 4: Contract-Level Stage Coverage Expansion
+- **Decision**: Extend contract phase enum to include `speckit_analyze` and `speckit_implement` while preserving existing values.
+- **Rationale**: Aligns 002 contracts with umbrella stage coverage goals without forcing immediate runtime pipeline rewrites.
 - **Alternatives Considered**:
-  - Streaming artifacts directly to PostgreSQL – rejected because binary logs are poorly suited for relational storage.
-  - Requiring external object storage from day one – rejected to keep initial deployment lightweight; integration can follow when needed.
+  - Keep contract limited to specify/plan/tasks: rejected because it conflicts with 015 stage contract goals.
 
-## Decision 5: Observability & Metrics
-- **Decision**: Expose structured logs with `{run_id, repo, phase, container_id, branch}` fields and emit optional StatsD metrics when `STATSD_HOST/PORT` or `SPEC_WORKFLOW_METRICS_*` environment variables are provided.
-- **Rationale**: Mirrors the design doc’s recommendation, keeps logging consistent across Celery tasks, and allows incremental adoption of metrics without hard dependency.
+## Decision 5: Fast-Path Runtime Profile Alignment
+- **Decision**: Update quickstart/docs to standardize Codex volume auth + Google Gemini embedding defaults for automation contexts.
+- **Rationale**: Ensures operational guidance for 002 is consistent with umbrella 015 startup expectations.
 - **Alternatives Considered**:
-  - Embedding metrics directly into Celery result backend – rejected because numeric aggregation belongs in monitoring systems, not PostgreSQL.
-  - Deferring metrics until after launch – rejected to avoid rework; keeping optional hooks now is low effort.
+  - Leave 002 quickstart unchanged: rejected due to drift from umbrella requirements.
+
+## Decision 6: Scope Validation Script Availability
+- **Decision**: Treat missing `.specify/scripts/bash/validate-implementation-scope.sh` as an operational blocker to strict scope-gate automation; continue with explicit manual scope validation and reporting.
+- **Rationale**: The script is required by the orchestration workflow but currently absent in repository scripts.
+- **Alternatives Considered**:
+  - Halt all implementation work: rejected because user requested implementation progress now.

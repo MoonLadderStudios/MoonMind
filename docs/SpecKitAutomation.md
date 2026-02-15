@@ -154,7 +154,7 @@ entries include a `message` that should match the Celery exception output.
 
 | CLI | Where it is installed | Verification command(s) | When to rebuild |
 |-----|------------------------|-------------------------|-----------------|
-| Codex (`codex`) | `api_service/Dockerfile` Node builder stage via `npm install -g @githubnext/codex-cli@${CODEX_CLI_VERSION}`; binary copied into `/usr/local/bin/` during runtime stage assembly. | `docker compose run --rm cli-tooling-smoke` or `codex --version` inside the worker container; check Celery bootstrap logs for `Codex CLI version:`. | Version mismatch with pinned `CODEX_CLI_VERSION`, missing binary during smoke check, or CLI upgrade announcement. |
+| Codex (`codex`) | `api_service/Dockerfile` Node builder stage via `npm install -g @openai/codex@${CODEX_CLI_VERSION}`; binary copied into `/usr/local/bin/` during runtime stage assembly. | `docker compose run --rm cli-tooling-smoke` or `codex --version` inside the worker container; check Celery bootstrap logs for `Codex CLI version:`. | Version mismatch with pinned `CODEX_CLI_VERSION`, missing binary during smoke check, or CLI upgrade announcement. |
 | Spec Kit (`speckit`) | Same builder stage using `npm install -g @githubnext/spec-kit@${SPEC_KIT_VERSION}`; runtime layer copies binary and Node modules. | `docker compose run --rm cli-tooling-smoke` or `speckit --version`; verify worker startup logs emit `Spec Kit CLI detected`. | PATH resolution fails in health check, CLI emits upgrade warning, or npm audit flags vulnerabilities. |
 | Codex config merge script | `api_service/scripts/ensure_codex_config.py` invoked by runtime entrypoint to enforce `approval_policy = "never"`. | `docker run --rm moonmind/api-service:tooling bash -lc 'cat ~/.codex/config.toml'` (should show enforced policy); worker logs should not report config drift. | Policy deviates from "never", merge script errors during startup, or base image changes HOME layout. |
 
@@ -176,7 +176,7 @@ entries include a `message` that should match the Celery exception output.
 docker run --rm -it \
   -v codex_auth_0:/home/app/.codex \
   --entrypoint bash \
-  ${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest} -lc 'codex login && codex login status'
+  ${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest} -lc 'codex login --device-auth && codex login status'
 # Repeat for codex_auth_1 and codex_auth_2
 ```
 
@@ -202,7 +202,7 @@ docker run --rm -it \
      https://api.moonmind.local/api/workflows/speckit/runs/<run_id>/codex/preflight | jq
    ```
 
-   A `status: "passed"` response updates the run and marks the auth volume `ready`. If it returns `failed`, re-run `codex login` for the reported `volumeName` before retrying the workflow.
+   A `status: "passed"` response updates the run and marks the auth volume `ready`. If it returns `failed`, re-run `codex login --device-auth` for the reported `volumeName` before retrying the workflow.
 7. Cleanup – speckit_workspaces still prunes per TTL; Codex volumes persist and should not be removed unless you intend to re-authenticate.
 
 ⸻
@@ -345,7 +345,7 @@ def _assert_codex_logged_in():
     )
     exit_code = container.wait()["StatusCode"]
     if exit_code != 0:
-        raise RuntimeError("Codex CLI not authenticated for this worker (run `codex login`).")
+        raise RuntimeError("Codex CLI not authenticated for this worker (run `codex login --device-auth`).")
 ```
 
 Call `_assert_codex_logged_in()` at the start of your Codex submission phase.
@@ -433,7 +433,7 @@ def exec_plan(self, repo_path: str, plan_prompt: str):
 ⸻
 
 13. Failure Modes & Recovery
-- “Not authenticated” at runtime → Pre-flight raises; run codex login into the corresponding codex_auth_* volume and retry.
+- “Not authenticated” at runtime → Pre-flight raises; run `codex login --device-auth` in the corresponding codex_auth_* volume and retry.
 - Two workers refresh token simultaneously → With one volume per worker, collisions are avoided.
 - Permissions → Ensure job image runs as the same non-root UID that owns ~/.codex (1000:1000 recommended).
 

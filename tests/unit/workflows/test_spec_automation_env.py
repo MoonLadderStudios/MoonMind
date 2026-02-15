@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from moonmind.config.settings import settings
+from moonmind.workflows.speckit_celery import models
 from moonmind.workflows.speckit_celery.job_container import (
     JobContainerManager,
     _collect_secret_environment,
@@ -334,3 +335,54 @@ def test_job_container_start_injects_runtime_environment(monkeypatch):
     assert dummy_client.containers.environment["BASE"] == "1"
     assert dummy_client.containers.environment["SECRET"] == "value"
     assert dummy_client.containers.environment["CUSTOM"] == "value"
+
+
+def test_spec_automation_task_state_defaults_skill_metadata():
+    """Legacy Speckit phases should surface default skills metadata."""
+
+    state = models.SpecAutomationTaskState(
+        id=uuid4(),
+        run_id=uuid4(),
+        phase=models.SpecAutomationPhase.SPECKIT_TASKS,
+        status=models.SpecAutomationTaskStatus.SUCCEEDED,
+        attempt=1,
+    )
+
+    metadata = state.get_skill_execution_metadata()
+
+    assert metadata is not None
+    assert metadata["selectedSkill"] == "speckit"
+    assert metadata["executionPath"] == "skill"
+    assert metadata["usedSkills"] is True
+    assert metadata["usedFallback"] is False
+
+
+def test_spec_automation_task_state_honors_explicit_skill_metadata():
+    """Explicit skills metadata should be returned unchanged."""
+
+    state = models.SpecAutomationTaskState(
+        id=uuid4(),
+        run_id=uuid4(),
+        phase=models.SpecAutomationPhase.SPECKIT_PLAN,
+        status=models.SpecAutomationTaskStatus.SUCCEEDED,
+        attempt=1,
+    )
+    state.set_metadata(
+        {
+            "selectedSkill": "custom-skill",
+            "executionPath": "direct_fallback",
+            "usedSkills": True,
+            "usedFallback": True,
+            "shadowModeRequested": False,
+        }
+    )
+
+    metadata = state.get_skill_execution_metadata()
+
+    assert metadata == {
+        "selectedSkill": "custom-skill",
+        "executionPath": "direct_fallback",
+        "usedSkills": True,
+        "usedFallback": True,
+        "shadowModeRequested": False,
+    }

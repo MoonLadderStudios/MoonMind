@@ -8,6 +8,7 @@ import re
 import subprocess
 from importlib import import_module
 
+from celery_worker.startup_checks import validate_embedding_runtime_profile
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery.utils import (
@@ -58,6 +59,41 @@ def _log_gemini_cli_version() -> None:
     )
 
 
+def _log_speckit_cli_version() -> None:
+    """Emit a startup log confirming Speckit capability is available."""
+
+    try:
+        speckit_path = verify_cli_is_executable("speckit")
+    except CliVerificationError as exc:
+        logger.critical(str(exc), extra={"speckit_path": exc.cli_path})
+        raise RuntimeError(str(exc)) from exc
+
+    try:
+        result = subprocess.run(
+            [speckit_path, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        logger.critical(
+            "Failed to execute 'speckit --version': %s",
+            exc,
+            extra={"speckit_path": speckit_path},
+        )
+        raise RuntimeError("Spec Kit CLI health check failed") from exc
+
+    raw_output = result.stdout.strip() or result.stderr.strip()
+    version_match = re.search(r"\d+\.\d+\.\d+", raw_output)
+    version_output = version_match.group(0) if version_match else "unknown"
+    logger.info(
+        "Spec Kit CLI detected at %s (version: %s)",
+        speckit_path,
+        version_output,
+        extra={"speckit_path": speckit_path, "speckit_version": version_output},
+    )
+
+
 def _log_queue_configuration() -> tuple[str, ...]:
     """Emit a log describing the Celery queues/QoS bindings for this worker."""
 
@@ -76,6 +112,20 @@ def _log_queue_configuration() -> tuple[str, ...]:
         },
     )
     return queue_names
+
+
+def _validate_embedding_profile() -> None:
+    """Validate embedding startup prerequisites for the worker runtime."""
+
+    validate_embedding_runtime_profile(
+        worker_name="gemini",
+        default_provider=settings.default_embedding_provider,
+        default_model=settings.google.google_embedding_model,
+        google_api_key=os.environ.get("GOOGLE_API_KEY")
+        or settings.google.google_api_key,
+        gemini_api_key=os.environ.get("GEMINI_API_KEY"),
+        logger=logger,
+    )
 
 
 def _run_gemini_preflight_check() -> None:
@@ -111,7 +161,9 @@ celery_app = speckit_celery_app
 app = celery_app
 
 _log_gemini_cli_version()
+_log_speckit_cli_version()
 _log_queue_configuration()
+_validate_embedding_profile()
 _run_gemini_preflight_check()
 
 

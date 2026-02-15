@@ -1,104 +1,105 @@
-# Feature Specification: Spec Kit Automation Pipeline
+# Feature Specification: Skills-First Spec Automation Pipeline
 
 **Feature Branch**: `002-document-speckit-automation`  
 **Created**: 2025-11-03  
-**Status**: Draft  
-**Input**: User description: "Spec Kit Automation: Create a spec based on the contents of docsSpecKitAutomation.md"
+**Status**: Draft (Updated 2026-02-14 for 015 umbrella alignment)  
+**Input**: User description: "Update the 002 spec and implementation to align with the new 015 umbrella spec."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Launch Automated Spec Run (Priority: P1)
+### User Story 1 - Fast Worker Launch for Automation (Priority: P1)
 
-MoonMind operator or scheduler submits specification text and a target repository to the automation service and expects the system to produce the updated spec branch and pull request without manual shell access.
+As an operator, I want one deterministic startup path for Spec Automation workers so Codex authentication and Google Gemini embedding defaults are ready before automation runs are triggered.
 
-**Why this priority**: This is the core value proposition—turning a request into a ready-to-review spec branch and PR automatically.
+**Why this priority**: Every automation run depends on worker readiness, credential validation, and embedding defaults.
 
-**Independent Test**: Trigger a run with a staging repository and confirm the automation delivers a branch, PR link, and run metadata without human intervention.
-
-**Acceptance Scenarios**:
-
-1. **Given** valid specification text, repository access, and credentials, **When** the automation run starts, **Then** it clones the repo into an isolated workspace, runs the specify/plan/tasks phases in order, commits resulting files, pushes a feature branch, and returns the branch name, PR URL, and run identifier.
-2. **Given** valid inputs that do not produce repository changes, **When** the automation run completes, **Then** it reports a “no changes” status, preserves logs, and avoids creating or updating a pull request.
-
----
-
-### User Story 2 - Review Automation Outputs (Priority: P2)
-
-MoonMind operator reviews the status of an automation run to validate success, inspect per-phase results, and download artifacts needed for follow-up actions.
-
-**Why this priority**: Operators must be able to verify outcomes and troubleshoot failures quickly to trust the automation.
-
-**Independent Test**: Execute a run that encounters both success and retryable failures and confirm operators can view structured status updates and retrieve artifacts for each phase.
+**Independent Test**: From a clean `.env`, perform one-time Codex auth on the shared volume, start `rabbitmq`, `api`, `celery_codex_worker`, and `celery_gemini_worker`, then verify preflight and embedding defaults in logs/runtime.
 
 **Acceptance Scenarios**:
 
-1. **Given** a completed or failed run, **When** an operator retrieves run details through the monitoring interface, **Then** the system returns per-phase statuses with timestamps, highlights failure points, and links to stored stdout/stderr logs and commit summaries.
+1. **Given** `GOOGLE_API_KEY`, `DEFAULT_EMBEDDING_PROVIDER=google`, and `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`, **When** workers and API start, **Then** runtime embedding resolution uses Google Gemini defaults.
+2. **Given** Codex auth was completed once on the configured volume, **When** automation workers restart, **Then** startup preflight succeeds without interactive login prompts.
+3. **Given** worker startup checks run, **When** logs are inspected, **Then** Speckit capability is confirmed for both Codex and Gemini automation workers.
 
 ---
 
-### User Story 3 - Maintain Controlled Execution Environment (Priority: P3)
+### User Story 2 - Skills-First Automation Stages (Priority: P1)
 
-Platform engineer ensures each run uses an ephemeral job environment with controlled secret exposure and can swap the underlying agent implementation without redeploying code.
+As a platform engineer, I want automation phase telemetry and contracts to be skills-first so stage execution semantics are not hard-coded to a unique Speckit workflow while preserving Speckit default behavior.
 
-**Why this priority**: Isolation and configurability protect credentials and future-proof the automation as agent options evolve.
+**Why this priority**: The 015 umbrella requires a skills-first model with Speckit always available and backward compatibility.
 
-**Independent Test**: Execute sequential runs with different agent settings and confirm each run uses unique workspaces, cleans up containers afterward, and respects the configured agent backend.
+**Independent Test**: Serialize representative automation phase state payloads and verify selected skill/execution path metadata is present and normalized for legacy Speckit phases.
 
 **Acceptance Scenarios**:
 
-1. **Given** a completed run, **When** the job container is terminated, **Then** the system removes the container, retains only intended artifacts, and confirms no credentials persist outside the run-scoped workspace.
-2. **Given** a configuration change that selects an alternate agent adapter, **When** the next run executes, **Then** all Spec Kit phases use the new adapter without requiring pipeline code changes or container rebuilds.
+1. **Given** a legacy phase (`speckit_specify`, `speckit_plan`, `speckit_tasks`), **When** run detail is serialized, **Then** response metadata defaults to `selected_skill=speckit` and `execution_path=skill`.
+2. **Given** explicit skills metadata in phase state payload (`selectedSkill`, `executionPath`), **When** run detail is serialized, **Then** API responses expose the explicit values without loss.
+3. **Given** new stage aliases for analyze and implement, **When** phase contracts are documented, **Then** they remain backward compatible with existing persisted phase values.
 
 ---
+
+### User Story 3 - Review Automation Outputs and Isolation Controls (Priority: P2)
+
+As an operator, I want run detail and artifact endpoints to expose phase-level metadata and security-safe context so failures can be diagnosed without shell access.
+
+**Why this priority**: Operators must be able to audit execution path, artifacts, and environment behavior through API outputs.
+
+**Independent Test**: Trigger API serialization tests and verify run detail includes phase timeline, artifacts, and skills execution metadata while preserving existing endpoint behavior.
+
+**Acceptance Scenarios**:
+
+1. **Given** a completed run, **When** `/api/spec-automation/runs/{id}` is requested, **Then** per-phase metadata includes skill path fields alongside existing status and artifact references.
+2. **Given** artifacts are requested, **When** `/api/spec-automation/runs/{id}/artifacts/{artifact_id}` is called, **Then** existing artifact detail and download behavior remains unchanged.
 
 ### Edge Cases
 
-- Job container image unavailable or Docker socket unreachable: automation must fail fast and surface actionable remediation steps.
-- Git clone or push fails due to repository permissions: run should stop gracefully, capture the error output, and advise operators on missing access.
-- Spec Kit phases return no diff or clarification-needed output: workflow should note the outcome, skip branch updates, and expose the reason in artifacts.
-- Job container crashes mid-run: system should flag the run as failed, clean up partial resources, and leave artifacts needed for investigation.
+- Scope validation script is unavailable in the repository while orchestration requires tasks/diff scope gates.
+- Persisted legacy phase entries have no explicit skills metadata.
+- Explicit non-Speckit skill metadata is present but execution path fields are partially missing.
+- Worker startup succeeds for Codex but fails for Speckit capability checks.
+- Google embeddings are configured without required API credentials.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The automation MUST accept Celery tasks containing specification text, repository identifier, and optional flags required to scope the run.
-- **FR-002**: The worker MUST allocate a unique run workspace and HOME directory per execution so that Codex CLI and Spec Kit operations remain isolated.
-- **FR-003**: The worker MUST launch an ephemeral job environment with the required toolchain, injecting secrets only via runtime configuration restricted to that environment.
-- **FR-004**: The job environment MUST clone the target repository using the configured base branch and create a feature branch that aligns with Spec Kit naming conventions.
-- **FR-005**: The automation MUST execute the specify, plan, and tasks phases sequentially, passing the provided text to the initial phase and recording outputs, exit codes, and durations for each phase.
-- **FR-006**: The system MUST detect whether repository changes were produced and, when changes exist, commit them with standardized messaging and push the feature branch to the remote.
-- **FR-007**: When a pushed branch contains changes, the automation MUST create or update a pull request with prescribed title, description, and labels, returning the PR URL to the caller.
-- **FR-008**: All phases MUST emit structured status updates and logs that are persisted as run artifacts (e.g., stdout, stderr, diff summary, commit status) accessible after completion or failure.
-- **FR-009**: The workflow MUST tear down the job environment after execution while retaining run artifacts and recording whether cleanup succeeded.
-- **FR-010**: Platform configuration MUST allow selecting the active agent adapter (e.g., Codex CLI by default) without modifying pipeline code, enabling future agent substitution.
+- **FR-001**: Worker startup MUST verify Speckit capability for automation worker processes, independent of selected stage skill.
+- **FR-002**: Automation phase contracts MUST support skills-first metadata (`selectedSkill`, `executionPath`, fallback/shadow flags) while preserving backward compatibility with legacy phase values.
+- **FR-003**: Legacy Speckit phases MUST normalize to default skills metadata (`selectedSkill=speckit`, `executionPath=skill`) when explicit metadata is absent.
+- **FR-004**: API run detail responses for automation runs MUST expose normalized skills metadata fields per phase.
+- **FR-005**: Existing automation API routes and artifact download behavior MUST remain backward compatible.
+- **FR-006**: Automation data model and contracts MUST include stage aliases for analyze and implement to align with umbrella stage coverage goals.
+- **FR-007**: Quickstart and operator docs MUST include the fastest path for Codex-authenticated workers and Google Gemini embedding defaults.
+- **FR-008**: Startup checks MUST fail fast with actionable diagnostics when Speckit capability, Codex auth, or Google embedding credentials are missing.
+- **FR-009**: Runtime deliverables MUST include production code updates and validation tests; docs-only updates are insufficient.
 
 ### Key Entities *(include if feature involves data)*
 
-- **SpecAutomationRun**: Represents a single automation execution with fields for run identifier, repository, requested branch name, status timeline, and artifact references.
-- **SpecAutomationTaskState**: Captures per-phase metadata, including phase name, start/end timestamps, exit status, retry count, and associated artifact locations.
-- **AutomationArtifact**: Describes persisted outputs such as logs, diff summaries, and environment indicators, including storage path, retention policy, and access controls linked to the run.
-- **AgentConfiguration**: Defines the selected agent backend, version metadata, and any run-scoped overrides applied when invoking Spec Kit phases.
+- **SpecAutomationRun**: Lifecycle record for one automation run, including status, branch/PR references, and artifact links.
+- **SpecAutomationTaskState**: Per-phase execution record including status, attempt, logs, and normalized skills metadata.
+- **SpecAutomationArtifact**: Persisted run outputs with source phase and retention metadata.
+- **SpecAutomationAgentConfiguration**: Agent backend/version snapshot for run-level auditability.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: At least 95% of automation runs with valid inputs complete all three Spec Kit phases and publish results (branch + PR metadata) within 20 minutes.
-- **SC-002**: 100% of runs generate per-phase status updates and artifact links that remain accessible for a minimum of seven days after completion.
-- **SC-003**: In operator surveys or support reviews conducted after rollout, 90% of respondents report they can trigger and audit runs without manual shell access.
-- **SC-004**: For runs where Spec Kit produces no repository changes, the automation correctly suppresses branch and PR updates in at least 95% of cases while recording the rationale.
+- **SC-001**: Run detail responses expose phase-level skills metadata for 100% of serialized phase records.
+- **SC-002**: Legacy phase records without explicit skills metadata serialize with deterministic defaults (`speckit` / `skill`) in 100% of cases.
+- **SC-003**: Existing artifact metadata/detail/download API behavior remains unchanged for current clients.
+- **SC-004**: Fast-path worker startup guidance for Codex auth + Gemini embeddings is documented and testable.
+- **SC-005**: Validation command `./tools/test_unit.sh` is executed and reported for this implementation cycle.
 
 ## Assumptions & Dependencies
 
-- MoonMind operates Celery 5.4 with RabbitMQ 3.x as the broker and PostgreSQL as the result backend so task state and artifacts persist across worker restarts.
-- Deployment environment provides Docker (or equivalent container runtime) access plus a shared volume to store per-run workspaces and artifacts.
-- Valid credentials for Codex CLI, GitHub, and repository access are available via the platform’s secret store and can be injected at run time.
-- Network egress policies permit connections to Codex services and the organization’s Git provider during job execution.
-- StatsD endpoints or equivalent observability sinks are available when operators choose to emit optional metrics.
+- Existing `spec_automation_*` persistence tables remain in use; this alignment does not require destructive schema changes.
+- Legacy `speckit_*` phase values remain valid and should continue to deserialize in API responses.
+- Speckit skills are installed and mirrored in `.agents/skills` and `.codex/skills`.
+- Existing `/api/spec-automation/*` endpoints remain the compatibility surface during this migration.
 
 ### Scope Boundaries
 
-- Automation does not author specification text itself beyond running the predefined Spec Kit phases.
-- Manual PR review, clarification with stakeholders, and follow-on implementation tasks remain outside this feature.
-- Scaling policies, auto-retry tuning, and broader workflow management (e.g., scheduling UI) are handled by adjacent MoonMind services.
+- This update does not redesign unrelated queueing systems or the broader agent queue MVP.
+- This update does not require replacing legacy persisted phase values.
+- This update does not introduce mandatory external observability dependencies beyond existing optional metrics hooks.

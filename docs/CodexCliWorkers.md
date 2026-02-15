@@ -74,13 +74,13 @@ Workers are deployed as a dedicated service (e.g., `celery_codex_worker`) with:
 
 Scaling strategies:
 
-- **Single instance (default)**: One Codex worker process listening on `codex` is sufficient for initial throughput.:contentReference[oaicite:21]{index=21}
+- **Single instance (default)**: One Codex worker process listening on the configured Spec queues is sufficient for initial throughput.:contentReference[oaicite:21]{index=21}
 - **Multiple instances (future)**: Additional Codex workers can be added to the same `codex` queue. Each worker instance MUST have its own dedicated auth volume (see §4) to avoid token clobbering when OAuth artifacts are updated.:contentReference[oaicite:22]{index=22}
 
 Compose highlights:
 
-- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${SPEC_WORKFLOW_CODEX_QUEUE:-codex}` to bind strictly to the Codex queue.
-- The worker inherits the shared Celery image and mounts the Codex auth volume at `${CODEX_VOLUME_PATH:-/var/lib/codex-auth}` via `CODEX_VOLUME_NAME`.
+- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${CELERY_DEFAULT_QUEUE:-speckit},${SPEC_WORKFLOW_CODEX_QUEUE:-codex}` so discovery and Codex phases can execute on the same worker.
+- The worker inherits the shared Celery image and mounts the Codex auth volume at `${CODEX_VOLUME_PATH:-/home/app/.codex}` via `CODEX_VOLUME_NAME`.
 - The managed Codex config template lives at `/app/api_service/config.template.toml` and is exposed through `CODEX_TEMPLATE_PATH` for non-interactive runs.
 
 ---
@@ -102,7 +102,7 @@ Functional requirements:
 
 Within a **single Codex worker group**, we share a **named Docker volume** across all containers that need Codex credentials:
 
-- The Celery worker container mounts the volume at `CODEX_HOME` (e.g., `/home/app/.codex`) or `/var/lib/codex-auth` when using `CODEX_VOLUME_PATH` defaults from `docker-compose.yaml`.
+- The Celery worker container mounts the volume at `CODEX_HOME` (default `/home/app/.codex` from `CODEX_VOLUME_PATH` in `docker-compose.yaml`).
 - Any ephemeral **job container** launched by the worker for Spec runs also mounts **that same volume** at `CODEX_HOME` so Codex CLI sees the same OAuth state.:contentReference[oaicite:26]{index=26}
 
 This achieves:
@@ -188,3 +188,19 @@ For the remote queue worker path (`/api/queue/*`), the worker daemon now support
 - `MOONMIND_WORKER_TOKEN` sent as `X-MoonMind-Worker-Token` for dedicated worker-token auth.
 - `MOONMIND_WORKER_CAPABILITIES` (comma-separated) forwarded in claim requests as `workerCapabilities`.
 - Lifecycle event emission to `POST /api/queue/jobs/{jobId}/events` for polling-based progress visibility.
+- Task payload-level Codex runtime overrides via `payload.codex.model` and `payload.codex.effort`.
+
+## 9. Task-Level Codex Overrides
+
+Queue task payloads should be capable of specifying a per-task Codex runtime override object:
+
+- `payload.codex.model` (string, optional)
+- `payload.codex.effort` (string, optional)
+
+This contract applies to both `codex_exec` and `codex_skill` jobs and should use the following precedence:
+
+1. Task payload override (`payload.codex.*`)
+2. Worker defaults (`MOONMIND_CODEX_MODEL`/`MOONMIND_CODEX_EFFORT`, or `CODEX_MODEL`/`CODEX_MODEL_REASONING_EFFORT`)
+3. Codex CLI built-in defaults
+
+Overrides are scoped to one claimed task and must not mutate the worker's persistent default configuration.

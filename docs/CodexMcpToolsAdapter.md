@@ -25,7 +25,14 @@ curl -X POST "http://localhost:5000/mcp/tools/call" \
     "arguments": {
       "type": "codex_exec",
       "priority": 10,
-      "payload": {"instruction": "Run tests"},
+      "payload": {
+        "repository": "MoonLadderStudios/MoonMind",
+        "instruction": "Run tests",
+        "codex": {
+          "model": "gpt-5-codex",
+          "effort": "high"
+        }
+      },
       "maxAttempts": 3
     }
   }'
@@ -62,3 +69,4 @@ curl -X POST "http://localhost:5000/mcp/tools/call" \
 
 - Tool responses are wrapped as `{ "result": ... }` and preserve REST-equivalent queue payload fields.
 - Use `GET /mcp/tools` as the source of truth for required argument schemas.
+- Per-task Codex overrides are passed in `payload.codex.model` and `payload.codex.effort`; these override worker defaults for that task only.

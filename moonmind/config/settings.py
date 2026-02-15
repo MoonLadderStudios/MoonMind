@@ -31,6 +31,7 @@ class DatabaseSettings(BaseSettings):
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 
@@ -89,6 +90,7 @@ class CelerySettings(BaseSettings):
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     @field_validator("accept_content", "imports", mode="before")
@@ -222,11 +224,59 @@ class SpecWorkflowSettings(BaseSettings):
         env="SPEC_AUTOMATION_AGENT_RUNTIME_ENV_KEYS",
         description="Environment variable names forwarded to the agent runtime snapshot.",
     )
+    skills_enabled: bool = Field(
+        True,
+        env="SPEC_WORKFLOW_USE_SKILLS",
+        description="Enable skills-first orchestration policy for workflow stages.",
+    )
+    skills_shadow_mode: bool = Field(
+        False,
+        env="SPEC_WORKFLOW_SKILLS_SHADOW_MODE",
+        description="Enable shadow-mode telemetry for skills orchestration.",
+    )
+    skills_fallback_enabled: bool = Field(
+        True,
+        env="SPEC_WORKFLOW_SKILLS_FALLBACK_ENABLED",
+        description="Allow direct stage fallback when skill adapters fail.",
+    )
+    skills_canary_percent: int = Field(
+        100,
+        env="SPEC_WORKFLOW_SKILLS_CANARY_PERCENT",
+        description="Percentage of runs routed through skills-first policy (0-100).",
+        ge=0,
+        le=100,
+    )
+    default_skill: str = Field(
+        "speckit",
+        env="SPEC_WORKFLOW_DEFAULT_SKILL",
+        description="Default skill identifier for workflow stage execution.",
+    )
+    discover_skill: Optional[str] = Field(
+        None,
+        env="SPEC_WORKFLOW_DISCOVER_SKILL",
+        description="Optional skill override for discovery stage.",
+    )
+    submit_skill: Optional[str] = Field(
+        None,
+        env="SPEC_WORKFLOW_SUBMIT_SKILL",
+        description="Optional skill override for submit stage.",
+    )
+    publish_skill: Optional[str] = Field(
+        None,
+        env="SPEC_WORKFLOW_PUBLISH_SKILL",
+        description="Optional skill override for publish stage.",
+    )
+    allowed_skills: tuple[str, ...] = Field(
+        ("speckit",),
+        env="SPEC_WORKFLOW_ALLOWED_SKILLS",
+        description="Allowlisted skills that can be selected for workflow stages.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     @field_validator(
@@ -239,6 +289,10 @@ class SpecWorkflowSettings(BaseSettings):
         "codex_queue",
         "codex_volume_name",
         "codex_login_check_image",
+        "default_skill",
+        "discover_skill",
+        "submit_skill",
+        "publish_skill",
         mode="before",
     )
     @classmethod
@@ -274,6 +328,30 @@ class SpecWorkflowSettings(BaseSettings):
         # Preserve order while removing duplicates.
         return tuple(dict.fromkeys(items))
 
+    @field_validator("allowed_skills", mode="before")
+    @classmethod
+    def _split_allowed_skills(
+        cls, value: Optional[str | Sequence[str]]
+    ) -> tuple[str, ...]:
+        """Allow comma-delimited strings for skill allowlists."""
+
+        if value is None:
+            return ()
+
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            raw_items = (value,)
+
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+        if not items:
+            return ()
+        return tuple(dict.fromkeys(items))
+
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Validate agent backend selections after settings load."""
 
@@ -284,6 +362,21 @@ class SpecWorkflowSettings(BaseSettings):
         self.agent_runtime_env_keys = tuple(
             dict.fromkeys(self.agent_runtime_env_keys or ())
         )
+        self.allowed_skills = tuple(dict.fromkeys(self.allowed_skills or ()))
+
+        for attr in ("default_skill", "discover_skill", "submit_skill", "publish_skill"):
+            value = getattr(self, attr)
+            if isinstance(value, str):
+                normalized = value.strip()
+                setattr(self, attr, normalized or None)
+
+        if not self.default_skill:
+            self.default_skill = "speckit"
+        if self.default_skill and self.default_skill not in self.allowed_skills:
+            self.allowed_skills = tuple(
+                dict.fromkeys((*self.allowed_skills, self.default_skill))
+            )
+
         if allowed and self.agent_backend not in allowed:
             allowed_display = ", ".join(allowed)
             raise ValueError(
@@ -396,7 +489,7 @@ class ConfluenceSettings(BaseSettings):
     confluence_enabled: bool = Field(False, env="ATLASSIAN_CONFLUENCE_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
 
@@ -408,7 +501,7 @@ class JiraSettings(BaseSettings):
     jira_enabled: bool = Field(False, env="ATLASSIAN_JIRA_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
 
@@ -424,7 +517,7 @@ class AtlassianSettings(BaseSettings):
     jira: JiraSettings = Field(default_factory=JiraSettings)
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
     def __init__(self, **data):
@@ -585,6 +678,8 @@ class AppSettings(BaseSettings):
     )
 
     postgres_version: int = Field(14, env="POSTGRES_VERSION")
+    rabbitmq_user: Optional[str] = Field(None, env="RABBITMQ_USER")
+    rabbitmq_password: Optional[str] = Field(None, env="RABBITMQ_PASSWORD")
 
     # ------------------------------------------------------------------
     # Validators

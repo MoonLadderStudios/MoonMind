@@ -1,41 +1,32 @@
-# Implementation Plan: Scalable Codex Worker
+# Implementation Plan: Scalable Codex Worker (015-Aligned)
 
-**Branch**: `007-scalable-codex-worker` | **Date**: 2025-11-27 | **Spec**: [specs/007-scalable-codex-worker/spec.md](./spec.md)
+**Branch**: `007-scalable-codex-worker` | **Date**: 2026-02-14 | **Spec**: `specs/007-scalable-codex-worker/spec.md`
 **Input**: Feature specification from `/specs/007-scalable-codex-worker/spec.md`
-
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
-This feature implements a dedicated, scalable Celery worker service (`celery_codex_worker`) responsible for executing Codex-specific tasks (submission, polling, patch application). It uses a shared named Docker volume (`codex_auth_volume`) to persist OAuth credentials and configuration across container restarts and replicas, ensuring non-interactive operation via a pre-configured `approval_policy = "never"`.
+Align Codex worker runtime behavior to the 015 umbrella by keeping Speckit always available, preserving skills-first stage metadata semantics, and hardening startup checks for authenticated Codex execution plus Google Gemini embedding readiness.
 
 ## Technical Context
 
-<!--
-  ACTION REQUIRED: Replace the content in this section with the technical details
-  for the project. The structure here is presented in advisory capacity to guide
-  the iteration process.
--->
-
-**Language/Version**: Python 3.11
-**Primary Dependencies**: Celery (Work Queue), Docker (Containerization), Codex CLI (Tooling)
-**Storage**: Docker Volume (`codex_auth_volume`), Redis (Message Broker)
-**Testing**: Manual verification via `quickstart.md` flows; Integration tests for worker startup.
-**Target Platform**: Linux / Docker Compose
-**Project Type**: Backend Infrastructure
-**Performance Goals**: Horizontal scalability for Codex tasks; Zero interference with default queue.
-**Constraints**: Worker must fail fast if unauthenticated.
-**Scale/Scope**: Single shared volume, N worker replicas.
+**Language/Version**: Python 3.11  
+**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x, PostgreSQL result backend, Codex CLI, Speckit CLI, Gemini CLI, Pydantic settings  
+**Storage**: Docker volumes (`codex_auth_volume`, `gemini_auth_volume`), workflow artifacts under `var/artifacts/spec_workflows/<run_id>`  
+**Testing**: Unit tests via `./tools/test_unit.sh`  
+**Target Platform**: Docker Compose (API + Celery workers)  
+**Project Type**: Backend worker runtime + workflow orchestration compatibility + spec artifacts  
+**Performance Goals**: Preserve startup latency while ensuring fail-fast diagnostics for missing prerequisites  
+**Constraints**: Maintain queue/API compatibility (`speckit`, `codex`, `gemini`; `/api/workflows/speckit/*`) and non-interactive execution  
+**Scale/Scope**: Worker startup checks, skills metadata compatibility, compose/quickstart contract alignment
 
 ## Constitution Check
 
-*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+- `.specify/memory/constitution.md` is template-only and does not add enforceable MUST/SHOULD clauses.
+- Repository constraints from `AGENTS.md` are applied:
+  - Runtime implementation must include production code changes.
+  - Unit tests validated via `./tools/test_unit.sh`.
 
-- **Core Principles**:
-    - **Modularity**: Dedicated worker isolates Codex dependencies and load.
-    - **Simplicity**: Uses standard Docker volumes and Celery queues; no complex custom orchestration.
-    - **Testability**: Distinct startup behaviors (crash vs run) are verifiable.
-- **Note**: The constitution file provided is a template (`.specify/memory/constitution.md`), so strict specific gate checking against project-specific rules is bypassed, but general best practices are followed.
+**Gate Status**: PASS WITH NOTE.
 
 ## Project Structure
 
@@ -43,33 +34,60 @@ This feature implements a dedicated, scalable Celery worker service (`celery_cod
 
 ```text
 specs/007-scalable-codex-worker/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # N/A (No new API endpoints)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
+├── spec.md
+├── tasks.md
+└── checklists/
+    └── requirements.md
 ```
 
 ### Source Code (repository root)
 
 ```text
-# Infrastructure & Configuration
-docker-compose.yaml           # Add celery_codex_worker service & volume
 celery_worker/
-└── speckit_worker.py         # Ensure queue routing config support
+├── speckit_worker.py
+├── gemini_worker.py
+└── startup_checks.py            # shared startup profile + embedding preflight helper
 
-# Scripts
-tools/
-└── codex_worker_entrypoint.sh # (Optional) Pre-flight check script if complex
+moonmind/workflows/skills/
+├── contracts.py
+├── registry.py
+└── runner.py
+
+tests/unit/workflows/
+├── test_tasks.py
+├── test_skills_runner.py
+└── test_worker_entrypoints.py
 ```
 
-**Structure Decision**: Add a new service definition to `docker-compose.yaml` and potentially `docker-compose.override.yaml`. No new Python packages required, just configuration of the existing `celery_worker` module.
+**Structure Decision**: Keep existing workflow execution topology and API contracts. Add shared worker startup validation helper to avoid duplicated readiness logic and keep fail-fast behavior deterministic.
+
+## Phase 0: Research Plan
+
+1. Validate which 007 requirements conflict with 015 umbrella semantics.
+2. Confirm current runtime already emits skills metadata for discover/submit/publish task payloads.
+3. Define minimal startup checks required for Google embedding fast-path diagnostics.
+4. Define quickstart updates for one-time Codex auth and queue verification.
+
+## Phase 1: Design Outputs
+
+- `research.md`: documented reconciliation decisions between 007 and 015 umbrella semantics.
+- `data-model.md`: startup and stage metadata entities aligned with current runtime behavior.
+- `quickstart.md`: deterministic startup and verification path for codex+gemini workers.
+- `tasks.md`: completion-tracked runtime/docs work plan.
+
+## Post-Design Constitution Re-check
+
+- Runtime implementation and test expectations remain satisfied.
+- No constitution conflicts were introduced.
+
+**Gate Status**: PASS.
 
 ## Complexity Tracking
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
-
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| None | | |
+| None | N/A | N/A |

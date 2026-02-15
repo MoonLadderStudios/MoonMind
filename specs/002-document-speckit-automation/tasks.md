@@ -100,6 +100,19 @@
 
 ---
 
+## Phase 7: 015 Umbrella Alignment (Cross-Story)
+
+**Purpose**: Align 002 contracts/runtime with skills-first semantics and Speckit-always-on policy while preserving API compatibility.
+
+- [x] T026 [P] Add skills-first compatible stage aliases and metadata normalization helpers in `moonmind/workflows/speckit_celery/models.py`.
+- [x] T027 [P] Expose skills execution metadata fields in Spec Automation schemas in `moonmind/schemas/workflow_models.py`.
+- [x] T028 Wire normalized skills metadata into run-phase API serialization in `api_service/api/routers/spec_automation.py`.
+- [x] T029 Update API unit tests for default/explicit skills metadata serialization in `tests/unit/api/test_spec_automation.py`.
+- [x] T030 Add unit coverage for automation task-state skills metadata normalization in `tests/unit/workflows/test_spec_automation_env.py`.
+- [x] T031 Update 002 feature artifacts (`spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and contracts) to align with 015 umbrella requirements.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -109,6 +122,7 @@
 - **Phase 3 (US1)**: Begins once foundational tasks complete; delivers MVP slice.
 - **Phase 4 (US2)** and **Phase 5 (US3)**: Can start after Phase 3 establishes core run execution but remain independent; teams may proceed in parallel if resources allow.
 - **Phase 6**: Runs after targeted user stories reach acceptance.
+- **Phase 7**: Can execute after foundational/runtime surfaces exist and should complete before declaring 002 umbrella-aligned.
 
 ### User Story Dependencies
 
@@ -147,3 +161,4 @@ Deliver T012 and T013 once container execution and persistence logic are merged.
 2. Layer in operator observability via Phase 4 without blocking continued run execution.
 3. Harden environment controls and agent configuration via Phase 5, ensuring compliance and future flexibility.
 4. Finish with documentation and operational guidance in Phase 6 to ready the workflow for broader adoption.
+5. Execute Phase 7 alignment to converge 002 semantics with the 015 umbrella skills-first model.

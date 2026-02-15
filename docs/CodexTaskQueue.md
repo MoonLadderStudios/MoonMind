@@ -330,8 +330,12 @@ Environment variables:
 * `MOONMIND_POLL_INTERVAL_MS` (default 1500)
 * `MOONMIND_LEASE_SECONDS` (default 120)
 * `MOONMIND_WORKDIR` (local base dir for repo checkouts)
+* `MOONMIND_CODEX_MODEL` (optional worker default model; falls back to `CODEX_MODEL`)
+* `MOONMIND_CODEX_EFFORT` (optional worker default effort; falls back to `CODEX_MODEL_REASONING_EFFORT`)
 * `GITHUB_TOKEN` (optional for pushing PRs)
 * `CODEX_*` optional (if you want to force model/env)
+
+Worker-level Codex defaults are allowed, but per-task payload overrides should take precedence for that task.
 
 On startup:
 
@@ -352,14 +356,25 @@ Payload example:
   "ref": "main",
   "workdirMode": "fresh_clone",
   "instruction": "Implement X; run tests; produce a patch + summary",
+  "codex": {
+    "model": "gpt-5-codex",
+    "effort": "high"
+  },
   "publish": { "mode": "none|branch|pr", "baseBranch": "main" }
 }
 ```
 
+Override contract:
+
+* `codex.model` (optional)
+* `codex.effort` (optional)
+* precedence: `payload.codex.*` -> worker defaults -> Codex CLI defaults
+* scope: applies only to the claimed task
+
 Worker steps:
 
 1. checkout repo
-2. run `codex exec "<instruction>"` in repo
+2. run `codex exec` in repo with resolved model/effort for this task
 3. capture stdout/stderr to log file
 4. `git diff > patch`
 5. optionally `gh pr create`
@@ -373,6 +388,10 @@ Payload example:
 ```json
 {
   "skillId": "vertical_slice_gap_report",
+  "codex": {
+    "model": "gpt-5-codex",
+    "effort": "medium"
+  },
   "inputs": { "repo": "MoonLadderStudios/Tactics", "sliceDocId": "..." }
 }
 ```
@@ -380,7 +399,7 @@ Payload example:
 Worker steps:
 
 1. fetch skill definition from MoonMind (REST/MCP)
-2. execute its steps (likely codex exec + memory calls)
+2. execute its steps with resolved Codex model/effort for this task
 3. upload report artifact
 4. enqueue follow-up jobs (via REST/MCP from worker)
 
@@ -505,7 +524,14 @@ POST /api/queue/jobs
 {
   "type": "codex_exec",
   "priority": 10,
-  "payload": { ... }
+  "payload": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "instruction": "Run tests and summarize failures",
+    "codex": {
+      "model": "gpt-5-codex",
+      "effort": "high"
+    }
+  }
 }
 ```
 
@@ -532,7 +558,18 @@ Incremental progress polling surface:
 ### MCP tools (example conceptual)
 
 ```json
-{ "tool": "queue.enqueue", "arguments": { "type": "codex_exec", "priority": 10, "payload": { ... } } }
+{
+  "tool": "queue.enqueue",
+  "arguments": {
+    "type": "codex_exec",
+    "priority": 10,
+    "payload": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "instruction": "Run tests and summarize failures",
+      "codex": {"model": "gpt-5-codex", "effort": "high"}
+    }
+  }
+}
 ```
 
 ```json

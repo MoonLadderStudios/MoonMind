@@ -1,7 +1,7 @@
 # Agent Instructions
 
 ## Testing Instructions
-- **Unit Tests**: Always use `./tools/test_unit.sh` to run unit tests. This script is the single source of truth for CI and local development, ensuring consistent execution and proper exit codes. Do not run `pytest` directly or pipe to `tail` as this may mask failures.
+- **Unit Tests**: Always use `./tools/test_unit.sh` to run unit tests. This script is the single source of truth for CI and local development, ensuring consistent execution and proper exit codes. It automatically uses `python` and falls back to `python3` when `python` is unavailable. Do not run `pytest` directly or pipe to `tail` as this may mask failures.
 - **Integration Tests**: Orchestrator integration tests run via GitHub Actions on main branch pushes or manually. Locally, use `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`.
 
 ## Spec Numbering

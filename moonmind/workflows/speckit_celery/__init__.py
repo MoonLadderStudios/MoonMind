@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Iterable
 
 from celery import Celery
 
@@ -14,6 +15,24 @@ from moonmind.workflows.speckit_celery.celeryconfig import (
 
 CELERY_NAMESPACE = "moonmind.workflows.speckit_celery"
 _TASK_IMPORT = "moonmind.workflows.speckit_celery.tasks"
+_ORCHESTRATOR_EXPORTS = frozenset(
+    {
+        "TriggeredWorkflow",
+        "WorkflowConflictError",
+        "WorkflowRetryError",
+        "retry_spec_workflow_run",
+        "trigger_spec_workflow_run",
+    }
+)
+
+if TYPE_CHECKING:
+    from moonmind.workflows.speckit_celery.orchestrator import (
+        TriggeredWorkflow,
+        WorkflowConflictError,
+        WorkflowRetryError,
+        retry_spec_workflow_run,
+        trigger_spec_workflow_run,
+    )
 
 
 def _merge_imports(existing: Iterable[str]) -> list[str]:
@@ -57,16 +76,13 @@ def create_celery_app() -> Celery:
 celery_app = create_celery_app()
 
 
-# The orchestration helpers are imported after the Celery app is configured to
-# avoid circular imports. They expose the Celery chain entry points used by the
-# API and tests.
-from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: E402, F401
-    TriggeredWorkflow,
-    WorkflowConflictError,
-    WorkflowRetryError,
-    retry_spec_workflow_run,
-    trigger_spec_workflow_run,
-)
+def __getattr__(name: str) -> Any:
+    """Lazily load orchestrator helpers to avoid import-order cycles."""
+
+    if name in _ORCHESTRATOR_EXPORTS:
+        orchestrator = import_module("moonmind.workflows.speckit_celery.orchestrator")
+        return getattr(orchestrator, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Keep exports alphabetized for readability and easy scanning.
 __all__ = [

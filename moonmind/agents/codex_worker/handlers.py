@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -56,6 +57,8 @@ class CodexExecPayload:
     instruction: str
     ref: str | None
     workdir_mode: str
+    codex_model: str | None
+    codex_effort: str | None
     publish_mode: str
     publish_base_branch: str | None
 
@@ -82,6 +85,8 @@ class CodexExecPayload:
                 "workdirMode must be one of: fresh_clone, reuse"
             )
 
+        codex_model, codex_effort = _parse_codex_overrides(payload)
+
         publish_raw = payload.get("publish")
         publish_payload = publish_raw if isinstance(publish_raw, Mapping) else {}
         publish_mode = str(publish_payload.get("mode", "none")).strip() or "none"
@@ -102,6 +107,90 @@ class CodexExecPayload:
             instruction=instruction,
             ref=ref,
             workdir_mode=workdir_mode,
+            codex_model=codex_model,
+            codex_effort=codex_effort,
+            publish_mode=publish_mode,
+            publish_base_branch=publish_base_branch,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CodexSkillPayload:
+    """Validated `codex_skill` payload structure."""
+
+    skill_id: str
+    inputs: dict[str, Any]
+    repository: str | None
+    instruction: str | None
+    ref: str | None
+    workdir_mode: str
+    codex_model: str | None
+    codex_effort: str | None
+    publish_mode: str
+    publish_base_branch: str | None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "CodexSkillPayload":
+        """Parse and validate a queue payload for skills-first execution."""
+
+        skill_id = str(payload.get("skillId", "")).strip() or "speckit"
+        raw_inputs = payload.get("inputs")
+        inputs = dict(raw_inputs) if isinstance(raw_inputs, Mapping) else {}
+
+        repository = (
+            str(inputs.get("repo", "")).strip()
+            or str(inputs.get("repository", "")).strip()
+            or str(payload.get("repository", "")).strip()
+            or None
+        )
+        instruction = (
+            str(inputs.get("instruction", "")).strip()
+            or str(payload.get("instruction", "")).strip()
+            or None
+        )
+        ref = (
+            str(inputs.get("ref", "")).strip()
+            or str(payload.get("ref", "")).strip()
+            or None
+        )
+        workdir_mode = (
+            str(inputs.get("workdirMode", "")).strip()
+            or str(payload.get("workdirMode", "")).strip()
+            or "fresh_clone"
+        )
+        payload_codex_model, payload_codex_effort = _parse_codex_overrides(payload)
+        input_codex_model, input_codex_effort = _parse_codex_overrides(inputs)
+        codex_model = payload_codex_model or input_codex_model
+        codex_effort = payload_codex_effort or input_codex_effort
+        publish_mode = (
+            str(inputs.get("publishMode", "")).strip()
+            or str(payload.get("publishMode", "")).strip()
+            or "none"
+        )
+        publish_base_branch = (
+            str(inputs.get("publishBaseBranch", "")).strip()
+            or str(payload.get("publishBaseBranch", "")).strip()
+            or None
+        )
+
+        if workdir_mode not in {"fresh_clone", "reuse"}:
+            raise CodexWorkerHandlerError(
+                "codex_skill workdirMode must be one of: fresh_clone, reuse"
+            )
+        if publish_mode not in {"none", "branch", "pr"}:
+            raise CodexWorkerHandlerError(
+                "codex_skill publishMode must be one of: none, branch, pr"
+            )
+
+        return cls(
+            skill_id=skill_id,
+            inputs=inputs,
+            repository=repository,
+            instruction=instruction,
+            ref=ref,
+            workdir_mode=workdir_mode,
+            codex_model=codex_model,
+            codex_effort=codex_effort,
             publish_mode=publish_mode,
             publish_base_branch=publish_base_branch,
         )
@@ -117,12 +206,28 @@ class CodexExecHandler:
         codex_binary: str = "codex",
         git_binary: str = "git",
         gh_binary: str = "gh",
+        default_codex_model: str | None = None,
+        default_codex_effort: str | None = None,
         redaction_values: tuple[str, ...] = (),
     ) -> None:
-        self._workdir_root = Path(workdir_root)
+        # Normalize to an absolute path so subprocess cwd/path arguments remain
+        # stable regardless of the caller's current working directory.
+        self._workdir_root = Path(workdir_root).expanduser().resolve()
         self._codex_binary = codex_binary
         self._git_binary = git_binary
         self._gh_binary = gh_binary
+        self._codex_sandbox_mode = self._resolve_codex_sandbox_mode()
+        self._default_codex_model = _clean_optional_string(
+            default_codex_model,
+            fallback=os.environ.get("MOONMIND_CODEX_MODEL")
+            or os.environ.get("CODEX_MODEL"),
+        )
+        self._default_codex_effort = _clean_optional_string(
+            default_codex_effort,
+            fallback=os.environ.get("MOONMIND_CODEX_EFFORT")
+            or os.environ.get("CODEX_MODEL_REASONING_EFFORT")
+            or os.environ.get("MODEL_REASONING_EFFORT"),
+        )
         env_token = str(os.environ.get("GITHUB_TOKEN", "")).strip()
         values = [value for value in redaction_values if value]
         if env_token:
@@ -155,7 +260,7 @@ class CodexExecHandler:
             )
 
             await self._run_command(
-                [self._codex_binary, "exec", parsed.instruction],
+                self._build_codex_exec_command(parsed),
                 cwd=repo_dir,
                 log_path=log_path,
             )
@@ -222,6 +327,62 @@ class CodexExecHandler:
                 error_message=str(exc),
                 artifacts=tuple(artifacts),
             )
+
+    async def handle_skill(
+        self,
+        *,
+        job_id: UUID,
+        payload: Mapping[str, Any],
+        selected_skill: str,
+        fallback: bool = False,
+    ) -> WorkerExecutionResult:
+        """Process a `codex_skill` payload via skill-first compatibility mapping."""
+
+        parsed = CodexSkillPayload.from_payload(payload)
+        if parsed.repository is None:
+            raise CodexWorkerHandlerError(
+                "codex_skill payload requires 'inputs.repo' (or repository)"
+            )
+
+        instruction = parsed.instruction
+        if not instruction:
+            instruction = (
+                f"Execute skill '{selected_skill}' with inputs:\n"
+                + json.dumps(parsed.inputs, indent=2, sort_keys=True)
+            )
+
+        mapped_payload: dict[str, Any] = {
+            "repository": parsed.repository,
+            "instruction": instruction,
+            "workdirMode": parsed.workdir_mode,
+            "publish": {
+                "mode": parsed.publish_mode,
+                "baseBranch": parsed.publish_base_branch,
+            },
+        }
+        if parsed.ref:
+            mapped_payload["ref"] = parsed.ref
+        codex_overrides: dict[str, str] = {}
+        if parsed.codex_model:
+            codex_overrides["model"] = parsed.codex_model
+        if parsed.codex_effort:
+            codex_overrides["effort"] = parsed.codex_effort
+        if codex_overrides:
+            mapped_payload["codex"] = codex_overrides
+
+        result = await self.handle(job_id=job_id, payload=mapped_payload)
+        if not result.succeeded:
+            return result
+
+        mode = "direct_fallback" if fallback else "skill"
+        summary = result.summary or "codex_skill completed"
+        skill_summary = f"{summary}; skill={selected_skill}; executionPath={mode}"
+        return WorkerExecutionResult(
+            succeeded=True,
+            summary=skill_summary,
+            error_message=None,
+            artifacts=result.artifacts,
+        )
 
     async def _prepare_repository(
         self,
@@ -376,6 +537,31 @@ class CodexExecHandler:
             )
         return result
 
+    def _build_codex_exec_command(self, payload: CodexExecPayload) -> list[str]:
+        """Build codex execution command with task override -> worker defaults."""
+
+        resolved_model = payload.codex_model or self._default_codex_model
+        resolved_effort = payload.codex_effort or self._default_codex_effort
+
+        command = [
+            self._codex_binary,
+            "exec",
+            "--sandbox",
+            self._codex_sandbox_mode,
+        ]
+        if resolved_model:
+            command.extend(["--model", resolved_model])
+        if resolved_effort:
+            escaped_effort = resolved_effort.replace("\\", "\\\\").replace('"', '\\"')
+            command.extend(
+                [
+                    "--config",
+                    f'model_reasoning_effort="{escaped_effort}"',
+                ]
+            )
+        command.append(payload.instruction)
+        return command
+
     @staticmethod
     def _to_clone_url(repository: str) -> str:
         if repository.startswith("http://") or repository.startswith("https://"):
@@ -388,6 +574,15 @@ class CodexExecHandler:
         if repository.startswith("git@"):
             return repository
         return f"https://github.com/{repository}.git"
+
+    @staticmethod
+    def _resolve_codex_sandbox_mode() -> str:
+        configured = str(
+            os.environ.get("MOONMIND_CODEX_SANDBOX_MODE", "workspace-write")
+        ).strip()
+        if configured in {"read-only", "workspace-write", "danger-full-access"}:
+            return configured
+        return "workspace-write"
 
     def _redact_text(self, text: str) -> str:
         redacted = text
@@ -402,10 +597,36 @@ class CodexExecHandler:
             handle.write(f"{text}\n")
 
 
+def _clean_optional_string(value: object, *, fallback: object | None = None) -> str | None:
+    """Normalize optional string values from payload/env sources."""
+
+    candidate = value if value is not None else fallback
+    if candidate is None:
+        return None
+    cleaned = str(candidate).strip()
+    return cleaned or None
+
+
+def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """Extract optional codex model/effort overrides from payload mapping."""
+
+    raw = payload.get("codex")
+    if raw is None:
+        return (None, None)
+    if not isinstance(raw, Mapping):
+        raise CodexWorkerHandlerError(
+            "codex field must be an object containing optional model/effort"
+        )
+    model = _clean_optional_string(raw.get("model"))
+    effort = _clean_optional_string(raw.get("effort"))
+    return (model, effort)
+
+
 __all__ = [
     "ArtifactUpload",
     "CodexExecHandler",
     "CodexExecPayload",
+    "CodexSkillPayload",
     "CodexWorkerHandlerError",
     "WorkerExecutionResult",
 ]

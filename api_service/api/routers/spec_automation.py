@@ -47,6 +47,7 @@ def _phase_sort_key(state: models.SpecAutomationTaskState) -> tuple[datetime, st
 def _serialize_phase_state(
     state: models.SpecAutomationTaskState,
 ) -> SpecAutomationPhaseState:
+    skill_meta = state.get_skill_execution_metadata() or {}
     return SpecAutomationPhaseState(
         phase=state.phase,
         status=state.status,
@@ -56,6 +57,11 @@ def _serialize_phase_state(
         stdout_path=state.stdout_path,
         stderr_path=state.stderr_path,
         metadata=state.get_metadata(),
+        selected_skill=skill_meta.get("selectedSkill"),
+        execution_path=skill_meta.get("executionPath"),
+        used_skills=skill_meta.get("usedSkills"),
+        used_fallback=skill_meta.get("usedFallback"),
+        shadow_mode_requested=skill_meta.get("shadowModeRequested"),
     )
 
 

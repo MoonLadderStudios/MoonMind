@@ -26,7 +26,14 @@
   "arguments": {
     "type": "codex_exec",
     "priority": 10,
-    "payload": {"instruction": "Run tests"}
+    "payload": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "instruction": "Run tests",
+      "codex": {
+        "model": "gpt-5-codex",
+        "effort": "high"
+      }
+    }
   }
 }
 ```
@@ -42,6 +49,14 @@
   }
 }
 ```
+
+### Per-task Codex override contract
+
+For `codex_exec`/`codex_skill` payloads sent through MCP:
+
+- `payload.codex.model` is an optional per-task model override.
+- `payload.codex.effort` is an optional per-task effort override.
+- Precedence is `payload.codex.*` -> worker defaults (`MOONMIND_CODEX_*`/`CODEX_*`) -> Codex CLI defaults.
 
 ## Error Envelope
 

@@ -1,122 +1,106 @@
-# Quickstart: Celery Chain Workflow Integration
+# Quickstart: Celery Chain Workflow Integration (Skills-First Alignment)
+
+## Goal
+
+Start MoonMind workflow services on the fastest path so Celery stages run with:
+
+- persistent Codex authentication,
+- Speckit always available on workers,
+- Google Gemini embeddings as the vector default.
 
 ## Prerequisites
-- Python 3.11 + Poetry (matches MoonMind runtime)
-- RabbitMQ 3.x broker reachable at `amqp://guest:guest@localhost:5672//`
-- PostgreSQL with the MoonMind schema (serves both app DB + Celery backend)
-- Codex CLI logged in (`codex login`) and GitHub credentials with branch/PR rights
-- Docker (for Spec Kit job containers) and access to the target repository
 
-## Setup Steps
-1. **Install dependencies**
-   ```bash
-   poetry install
-   ```
-2. **Run database migrations**
-   ```bash
-   poetry run alembic upgrade head
-   ```
-3. **Configure environment**
-   ```dotenv
-   CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
-   CELERY_RESULT_BACKEND=db+postgresql://moonmind:***@localhost:5432/moonmind
-   SPEC_WORKFLOW_CODEX_QUEUE=codex
-   SPEC_WORKFLOW_ARTIFACT_ROOT=var/artifacts/spec_workflows
-   CODEX_ENV=prod
-   GH_TOKEN=ghp_xxx
-   ```
-4. **Start services**
-   ```bash
-   # Terminal 1 – MoonMind API
-   poetry run uvicorn api_service.main:app --reload
+- Docker and Docker Compose.
+- `.env` created from `.env-template`.
+- Required `.env` values:
+  - `GOOGLE_API_KEY=<your_google_api_key>`
+  - `DEFAULT_EMBEDDING_PROVIDER=google`
+  - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
+  - `CODEX_ENV=prod`
+  - `CODEX_MODEL=gpt-5-codex`
+  - `GITHUB_TOKEN=<token_with_repo_access>`
+  - `CODEX_VOLUME_NAME=codex_auth_volume` (or your override)
+- Optional skills policy overrides (defaults keep Speckit-first parity):
+  - `SPEC_WORKFLOW_USE_SKILLS=true`
+  - `SPEC_WORKFLOW_DEFAULT_SKILL=speckit`
+  - `SPEC_WORKFLOW_ALLOWED_SKILLS=speckit`
 
-   # Terminal 2 – Celery worker dedicated to Spec workflows
-   poetry run celery -A moonmind.workflows.speckit_celery.tasks worker \\
-     -Q codex --loglevel=info --hostname=codex@%h
-   ```
-   _Recommended Celery settings (`celeryconfig.py`):_
-   ```python
-   broker_url = "pyamqp://guest:guest@localhost:5672//"
-   result_backend = "db+postgresql://moonmind:***@localhost:5432/moonmind"
-   task_acks_late = True
-   task_reject_on_worker_lost = True
-   worker_prefetch_multiplier = 1
-   task_serializer = "json"
-   result_serializer = "json"
-   accept_content = ["json"]
-   ```
-5. **Verify credentials and toolchain**
+## Fastest Path (Docker Compose)
+
+1. **Authenticate Codex once on the shared volume**
    ```bash
-   poetry run python -m api_service.scripts.ensure_codex_config
-   poetry run speckit --version
-   poetry run codex --version
+   docker compose run --rm celery_codex_worker \
+     bash -lc 'codex login && codex login status'
    ```
-   Both commands must succeed before attempting a run; otherwise the submission task will halt with `credential_invalid`.
-6. **Trigger a workflow run**
+   This stores auth in `${CODEX_VOLUME_NAME:-codex_auth_volume}` so worker preflight can pass after restarts.
+
+2. **Start runtime services**
    ```bash
-   curl -X POST http://localhost:8000/api/workflows/speckit/runs \\
-     -H 'Content-Type: application/json' \\
+   docker compose up -d rabbitmq api qdrant celery_codex_worker celery_gemini_worker
+   ```
+
+3. **Verify Codex worker readiness**
+   ```bash
+   docker compose logs --tail=200 celery_codex_worker
+   ```
+   Expected signals:
+   - Spec Kit CLI detection logs are present.
+   - Codex preflight status is `passed`.
+   - Queue bindings include `speckit` and `codex`.
+
+4. **Verify Gemini worker readiness**
+   ```bash
+   docker compose logs --tail=200 celery_gemini_worker
+   ```
+   Expected signals:
+   - Gemini CLI and Spec Kit CLI detection logs are present.
+   - Queue binding includes `gemini`.
+   - No auth/credential startup failures.
+
+5. **Verify embedding defaults**
+   ```bash
+   docker compose exec api python - <<'PY'
+   from moonmind.config.settings import settings
+   print(settings.default_embedding_provider)
+   print(settings.google.google_embedding_model)
+   PY
+   ```
+   Expected output:
+   ```text
+   google
+   gemini-embedding-001
+   ```
+
+## Trigger and Observe a Workflow
+
+1. **Submit a run**
+   ```bash
+   curl -X POST http://localhost:5000/api/workflows/speckit/runs \
+     -H 'Content-Type: application/json' \
      -d '{
-           "repository": "moonmind/spec-kit-reference",
-           "featureKey": "spec-42-refresh-docs"
-         }'
+       "repository": "moonmind/spec-kit-reference",
+       "featureKey": "spec-42-refresh-docs"
+     }'
    ```
-   Response payloads follow `SpecWorkflowRun` in `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`. The API immediately returns HTTP `202` with the run record (status `pending` or `running`).
-7. **Monitor progress**
+
+2. **Watch task timeline**
    ```bash
-   # Run overview (includes latest task snapshot + artifact refs when include flags are true)
-   curl "http://localhost:8000/api/workflows/speckit/runs/{run_id}?includeTasks=true&includeArtifacts=true"
-
-   # Task timeline with status, message, timestamps, and artifactPaths
-   curl http://localhost:8000/api/workflows/speckit/runs/{run_id}/tasks | jq
-
-   # Downloadable artifacts (Codex logs, patches, PR payload)
-   curl http://localhost:8000/api/workflows/speckit/runs/{run_id}/artifacts | jq
+   curl http://localhost:5000/api/workflows/speckit/runs/{run_id}/tasks | jq
    ```
-   - Task payloads surface the current `status`, an operator-friendly `message`, and any Celery-produced paths under
-     `artifactPaths` (e.g., `codex_logs.jsonl`, `patch.diff`, `apply_output.json`).
-   - Celery workers log lifecycle messages such as `Spec workflow task submit_codex_job started...` and
-     `Spec workflow task apply_and_publish succeeded...`; watch these alongside API polling to confirm timestamps stay fresh.
-   - Poll `/api/workflows/speckit/runs?status=running` to watch multiple runs or use the task list endpoint to detect failures
-     early (`status: failed`, `message: <reason>`).
-8. **Retry a failed run**
+   Stage payloads should include:
+   - `selectedSkill` (default `speckit` unless overridden),
+   - `executionPath` (`skill`, `direct_fallback`, or `direct_only`).
+
+3. **Inspect artifacts**
    ```bash
-   curl -X POST http://localhost:8000/api/workflows/speckit/runs/{run_id}/retry \\
-     -H 'Content-Type: application/json' \\
-     -d '{"mode":"resume_failed_task","notes":"Credentials fixed; retry publish"}'
+   curl http://localhost:5000/api/workflows/speckit/runs/{run_id}/artifacts | jq
+   ls -la var/artifacts/spec_workflows/{run_id}
    ```
-   The API enqueues a new Celery chain from the failing task and returns the updated run with status `retrying`.
 
-## Validation snapshot (test mode)
+## Validation Gate
 
-The flow below captures a representative run while `SPEC_WORKFLOW_TEST_MODE=1` is enabled. Use it as a template when validating the quickstart end-to-end without hitting Codex or GitHub:
+Run required unit checks:
 
 ```bash
-export SPEC_WORKFLOW_TEST_MODE=1
-RUN_ID=$(\
-  curl -sS -X POST http://localhost:8000/api/workflows/speckit/runs \
-    -H 'Content-Type: application/json' \
-    -d '{"repository":"moonmind/spec-kit-reference","featureKey":"spec-42-refresh-docs"}' \
-    | jq -r '.id' \
-)
-echo "Run ID: ${RUN_ID}" && ls -1 var/artifacts/spec_workflows/${RUN_ID}
+./tools/test_unit.sh
 ```
-
-Example output (from a test-mode run):
-
-```
-Run ID: 20b866d5-8e43-4b70-9f79-7d7e5962f687
-apply_output.json
-codex_logs.jsonl
-patch.diff
-run_summary.json
-submit_codex_job.json
-```
-
-- The `submit_codex_job.json` artifact captures the Codex task submission payload; `codex_logs.jsonl` contains the Codex-side JSONL stream, and `run_summary.json` reflects the final branch/PR metadata produced during publish.
-- StatsD counters for the same run use tags `task=discover_next_phase|submit_codex_job|apply_and_publish` with `attempt=1`; verify they arrive in your collector to confirm instrumentation is wired before leaving test mode.
-
-## Tips
-- Logs and patches land in `var/artifacts/spec_workflows/{run_id}`; ensure the directory exists and is writable by the Celery worker UID.
-- Set `SPEC_WORKFLOW_TEST_MODE=1` to stub Codex/GitHub for unit/integration testing.
-- Use `celery -A ... worker -Q codex -B` to enable periodic cleanup tasks (e.g., stale artifact pruning) once implemented.

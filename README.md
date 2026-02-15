@@ -1,8 +1,6 @@
 # MoonMind
 
-**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Celery-based orchestrator that can run Spec-driven workflows across your code and infrastructure.**
-
-*AI orchestration hub for RAG, agents, and automated dev workflows.*
+**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Celery-based orchestrator that can run skills-based workflows across your code and infrastructure.**
 
 ## What is MoonMind?
 
@@ -10,7 +8,7 @@ MoonMind is an AI control plane you run yourself. It gives you:
 
 - **Model routing:** An OpenAI-compatible `/v1/chat/completions` and `/v1/models` API that fans out to Google Gemini, OpenAI, Anthropic, Ollama, and VLLM without redeploying. Models are discovered from all enabled providers and cached for fast listing and routing.
 - **Memory and retrieval:** A RAG pipeline powered by LlamaIndex, Qdrant, and configurable embeddings, with loaders for Confluence, GitHub, Google Drive, and more so agents and UIs can ground their reasoning in your real documents.
-- **Automation and orchestration:** A Celery-based automation layer and mm-orchestrator service that run Spec Kit / Codex workflows, execute task chains over RabbitMQ + PostgreSQL, emit StatsD metrics, and write artifacts under `var/artifacts/spec_workflows/<run_id>`.
+- **Automation and orchestration:** A Celery-based automation layer and mm-orchestrator service that run skills-based workflows, execute task chains over RabbitMQ + PostgreSQL, emit StatsD metrics, and write artifacts under `var/artifacts/spec_workflows/<run_id>`.
 
 MoonMind exposes all of this through:
 
@@ -30,13 +28,26 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     ```bash
     cp .env-template .env
     ```
-    Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc. For a basic local setup, default values might suffice for most fields other than an LLM provider API key.
-    The shared Docker image for the API, orchestrator, and Celery worker already bundles the Gemini CLI; set `GOOGLE_API_KEY` in `.env` so the CLI can authenticate during development (you can verify with `tools/verify-gemini.sh`).
+    Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc.
+    For the fastest Codex-worker + Gemini-embedding path, make sure these are set:
+    - `GOOGLE_API_KEY=<your_google_api_key>`
+    - `DEFAULT_EMBEDDING_PROVIDER=google`
+    - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
+    - `CODEX_ENV=prod`
+    - `CODEX_MODEL=gpt-5-codex`
+    - `GITHUB_TOKEN=<github_pat_with_repo_access>`
+    The shared Docker image for the API, orchestrator, and Celery workers already bundles the Gemini CLI; set `GOOGLE_API_KEY` in `.env` so the CLI can authenticate during development (you can verify with `tools/verify-gemini.sh`).
 
 **Running MoonMind:**
 
 1.  **Open a terminal** in the root directory of the MoonMind project.
-2.  **Start the services** using the following command:
+2.  **Authenticate the Codex worker volume (one-time per environment)** if you plan to run Codex automation:
+    ```bash
+    docker compose run --rm celery_codex_worker \
+      bash -lc 'codex login --device-auth && codex login status'
+    ```
+    This persists Codex auth in the `codex_auth_volume` so worker pre-flight checks pass.
+3.  **Start the services** using the following command:
     ```bash
     docker-compose up -d
     ```
@@ -50,10 +61,10 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     docker-compose up -d --build
     ```
 
-3.  **Accessing the UI:** Once the services are up and running (this might take a few minutes the first time as images are downloaded and built), you can access the Open-WebUI by navigating to `http://localhost:8080` in your web browser.
+4.  **Accessing the UI:** Once the services are up and running (this might take a few minutes the first time as images are downloaded and built), you can access the Open-WebUI by navigating to `http://localhost:8080` in your web browser.
 
-4.  **Manage API Keys:** When `AUTH_PROVIDER` is left as `disabled` (the default for local setups), any provider keys you place in `.env` are copied to the default user profile on startup. Visit `http://localhost:8080/settings` to view or change these values.
-5.  **Initializing the Vector Database (Optional but Recommended):**
+5.  **Manage API Keys:** When `AUTH_PROVIDER` is left as `disabled` (the default for local setups), any provider keys you place in `.env` are copied to the default user profile on startup. Visit `http://localhost:8080/settings` to view or change these values.
+6.  **Initializing the Vector Database (Optional but Recommended):**
     If you want to load initial data into the Qdrant vector database (e.g., from local files or other sources configured in `config.toml`), you can trigger the initialization process.
     Set the `INIT_DATABASE` variable in your `.env` file to `true`:
     ```env
@@ -63,7 +74,7 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     ```bash
     docker-compose down && docker-compose up -d
     ```
-    The `init-vector-db` service will run, attempt to load data, and then exit. You can check its logs using `docker-compose logs init-vector-db`. After initialization, you may want to set `INIT_DATABASE=false` again to prevent re-initialization on subsequent restarts.
+    The `init-db` service will run, attempt to load data, and then exit. You can check its logs using `docker-compose logs init-db`. After initialization, you may want to set `INIT_DATABASE=false` again to prevent re-initialization on subsequent restarts.
 
 **Stopping MoonMind:**
 
@@ -72,7 +83,7 @@ To stop all running services, execute the following command in the project root:
 docker-compose down
 ```
 
-This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration (e.g., without Qdrant or with different services), you might use `docker-compose.dev.yaml` or other specific compose files.
+This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration, you might use other specific compose files (for example `docker-compose.test.yaml`).
 
 ## Automation & Orchestrator
 
@@ -80,41 +91,49 @@ This setup uses the main `docker-compose.yaml` file, which is configured for a p
 
 MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gemini automation. The workers share configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
 
-- `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://guest:guest@rabbitmq:5672//`).
+- `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://moonmind:password@rabbitmq:5672//`).
 - `CELERY_RESULT_BACKEND` – SQLAlchemy URL for the PostgreSQL result backend (e.g., `db+postgresql://postgres:password@api-db:5432/moonmind`).
 - `CELERY_DEFAULT_QUEUE` – Default queue name for Spec Kit tasks (`speckit`).
 - `CELERY_DEFAULT_EXCHANGE` – Exchange used for the Spec Kit queue (`speckit`).
 - `CELERY_DEFAULT_ROUTING_KEY` – Routing key for Spec Kit tasks (`speckit`).
+- `SPEC_WORKFLOW_CODEX_QUEUE` – Codex queue name (default `codex`).
+- `SPEC_WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`).
+- `SPEC_WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`).
+- `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (default `speckit`).
+- `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
+- `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
+- `CODEX_ENV` and `CODEX_MODEL` – Required by credential validation before Codex phases execute.
+- `GITHUB_TOKEN` – Required for private repository clone/push/PR operations.
 
 **Gemini Automation:**
 
 The Gemini worker listens on the `gemini` queue and uses the `celery_worker.gemini_worker` entrypoint.
 
 - `GEMINI_CELERY_QUEUE` - Queue name for Gemini tasks (default: `gemini`).
-- `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration (default: `/app/gemini_home`).
+- `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration (default: `/var/lib/gemini-auth`).
 
 See [docs/GeminiCliWorkers.md](docs/GeminiCliWorkers.md) for detailed architecture and configuration.
 
 After configuring the environment, start the workers from the project root:
 
 ```bash
-# Spec Kit Worker
-poetry run celery -A celery_worker.speckit_worker worker -Q speckit --loglevel=info
+# Fastest path: one worker consumes both discovery (`speckit`) and Codex (`codex`) queues
+poetry run celery -A celery_worker.speckit_worker worker -Q speckit,codex --loglevel=info
 
 # Gemini Worker
 poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=info
 ```
 
-The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment.
+The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. The Spec Kit worker runs a Codex pre-flight (`codex login status`) and will fail fast if the configured auth volume is not authenticated.
 
 The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:
 
-- Build args set defaults: `CODEX_CLI_VERSION=0.6.0` and `SPEC_KIT_VERSION=0.4.0`.
+- Build args set defaults: `CODEX_CLI_VERSION=latest` and `SPEC_KIT_VERSION=0.4.0`.
 - Override the pins when building the image:
 
   ```bash
   docker build \
-    --build-arg CODEX_CLI_VERSION=0.6.1 \
+    --build-arg CODEX_CLI_VERSION=latest \
     --build-arg SPEC_KIT_VERSION=0.4.1 \
     -f api_service/Dockerfile .
   ```
@@ -485,6 +504,8 @@ The Model Context Protocol is exposed via the `/context` endpoint, which accepts
 ### Example Client
 
 An example client is provided in `/examples/context_protocol_client.py` to demonstrate how to interact with the Model Context Protocol endpoint:
+
+If your environment does not provide a `python` binary, use `python3` for these commands.
 
 ```bash
 # Run with default model (gemini-pro)

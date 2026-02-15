@@ -451,6 +451,11 @@ class SpecAutomationPhaseState(BaseModel):
     stdout_path: str | None = None
     stderr_path: str | None = None
     metadata: dict[str, Any] | None = None
+    selected_skill: str | None = None
+    execution_path: Literal["skill", "direct_fallback", "direct_only"] | None = None
+    used_skills: bool | None = None
+    used_fallback: bool | None = None
+    shadow_mode_requested: bool | None = None
 
 
 class SpecAutomationArtifactSummary(BaseModel):

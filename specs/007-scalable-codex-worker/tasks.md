@@ -1,137 +1,62 @@
 ---
-description: "Task list for Scalable Codex Worker feature"
+description: "Task list for Scalable Codex Worker (015-aligned)"
 ---
 
-# Tasks: Scalable Codex Worker
+# Tasks: Scalable Codex Worker (015-Aligned)
 
-**Input**: Design documents from `/specs/007-scalable-codex-worker/`
-**Prerequisites**: plan.md, spec.md, research.md
-**Tests**: Manual verification via `quickstart.md` flows; Integration tests for worker startup.
-
-**Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
+**Input**: Design documents from `/specs/007-scalable-codex-worker/`  
+**Prerequisites**: `spec.md`, `plan.md`, `research.md`, `data-model.md`  
+**Tests**: Unit validation via `./tools/test_unit.sh`
 
 ## Format: `[ID] [P?] [Story] Description`
 
-- **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
-- Include exact file paths in descriptions
+- **[P]**: Can run in parallel
+- **[Story]**: User story mapping (`US1`, `US2`, `US3`)
 
 ---
 
-## Phase 1: Setup (Shared Infrastructure)
+## Phase 1: Existing Foundation
 
-**Purpose**: Project initialization and basic structure
-
- - [x] T001 Verify feature branch `007-scalable-codex-worker` and context
-
----
-
-## Phase 2: Foundational (Blocking Prerequisites)
-
-**Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
-
-**⚠️ CRITICAL**: No user story work can begin until this phase is complete
-
-- [x] T002 Define `codex_auth_volume` in `docker-compose.yaml` volumes section
-- [x] T003 Remove legacy `celery-codex-0` service from `docker-compose.yaml`
-- [x] T004 Remove legacy `codex_auth_0`, `codex_auth_1`, `codex_auth_2` volumes from `docker-compose.yaml`
-- [x] T005 [P] Remove legacy script `celery_worker/scripts/codex_login_proxy.py` (if exists)
-
-**Checkpoint**: Foundation ready - user story implementation can now begin in parallel
+- [x] T001 [US1] Provision `celery_codex_worker` service and shared worker image in `docker-compose.yaml`.
+- [x] T002 [US1] Define persistent Codex auth volume (`CODEX_VOLUME_NAME`) and mount path (`CODEX_VOLUME_PATH`) in `docker-compose.yaml`.
+- [x] T003 [US1] Enforce non-interactive Codex config template wiring (`CODEX_TEMPLATE_PATH`) for worker startup.
 
 ---
 
-## Phase 3: User Story 1 - Deploy Dedicated Codex Worker (Priority: P1) 🎯 MVP
+## Phase 2: Skills-First Compatibility Baseline
 
-**Goal**: Deploy a dedicated, scalable worker service for Codex tasks.
-
-**Independent Test**: Verify `celery_codex_worker` starts and listens on `codex` queue.
-
-### Implementation for User Story 1
-
- - [x] T006 [US1] Add `celery_codex_worker` service to `docker-compose.yaml` (use `celery-worker` as template)
- - [x] T007 [US1] Configure `celery_codex_worker` environment in `docker-compose.yaml`: set `SPEC_WORKFLOW_CODEX_QUEUE=codex`
- - [x] T008 [US1] Configure `celery_codex_worker` command in `docker-compose.yaml` to run `celery -A celery_worker.speckit_worker worker ... -Q codex`
- - [x] T009 [US1] Manual Verification: Start service and check logs for queue subscription
-
-**Checkpoint**: At this point, User Story 1 should be fully functional and testable independently
+- [x] T004 [US2] Add skills-first execution contracts/runner/registry in `moonmind/workflows/skills/`.
+- [x] T005 [US2] Emit stage execution metadata in workflow task payloads for discover/submit/publish in `moonmind/workflows/speckit_celery/tasks.py`.
+- [x] T006 [US2] Add policy/metadata coverage tests in `tests/unit/workflows/test_skills_runner.py` and `tests/unit/workflows/test_tasks.py`.
 
 ---
 
-## Phase 4: User Story 2 - Persistent Authentication (Priority: P1)
+## Phase 3: 015 Umbrella Alignment for Worker Startup (Current)
 
-**Goal**: Ensure worker can authenticate once and persist credentials across restarts.
-
-**Independent Test**: Authenticate volume, restart worker, verify auth persists.
-
-### Implementation for User Story 2
-
-- [x] T010 [US2] Mount `codex_auth_volume` to `celery_codex_worker` at `/var/lib/codex-auth` in `docker-compose.yaml`
-- [x] T011 [US2] Set `CODEX_VOLUME_NAME=codex_auth_volume` environment variable for `celery_codex_worker` in `docker-compose.yaml`
-- [x] T012 [US2] Set `CODEX_VOLUME_PATH=/var/lib/codex-auth` environment variable for `celery_codex_worker` in `docker-compose.yaml`
-- [ ] T013 [US2] Manual Verification: Perform auth flow in container, restart, and verify persistence
-
-**Checkpoint**: At this point, User Stories 1 AND 2 should both work independently
+- [x] T007 [US1] Add shared startup validation helper for embedding runtime readiness in `celery_worker/startup_checks.py`.
+- [x] T008 [US1] Wire embedding readiness checks into `celery_worker/speckit_worker.py`.
+- [x] T009 [US1] Wire embedding readiness checks into `celery_worker/gemini_worker.py`.
+- [x] T010 [P] [US1] Add unit tests for worker startup checks in `tests/unit/workflows/test_worker_entrypoints.py`.
 
 ---
 
-## Phase 5: User Story 3 - Non-interactive Execution (Priority: P2)
+## Phase 4: Spec Artifact Alignment (Current)
 
-**Goal**: Prevent worker from hanging on interactive prompts.
-
-**Independent Test**: Verify worker fails fast or auto-approves instead of prompting.
-
-### Implementation for User Story 3
-
-- [x] T014 [US3] Set `CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml` environment variable for `celery_codex_worker` in `docker-compose.yaml`
-- [x] T015 [US3] Verify `api_service/config.template.toml` contains `approval_policy = "never"` (should exist)
-- [x] T016 [US3] Manual Verification: Trigger a task requiring approval and ensure it proceeds or fails without prompt
-
-**Checkpoint**: All user stories should now be independently functional
+- [x] T011 [US1] Update `specs/007-scalable-codex-worker/spec.md` for 015-aligned requirements and outcomes.
+- [x] T012 [US1] Update `specs/007-scalable-codex-worker/plan.md`, `research.md`, and `data-model.md` for runtime parity.
+- [x] T013 [US1] Update `specs/007-scalable-codex-worker/quickstart.md` for fastest Codex+Gemini worker launch path.
+- [x] T014 [US1] Update `specs/007-scalable-codex-worker/checklists/requirements.md` metadata and scope notes.
 
 ---
 
-## Phase 6: Polish & Cross-Cutting Concerns
+## Phase 5: Validation
 
-**Purpose**: Improvements that affect multiple user stories
-
-- [x] T017 [P] Documentation updates in `docs/CodexCliWorkers.md` reflecting new architecture
-- [x] T018 Clean up any unused environment variables in `docker-compose.yaml`
+- [x] T015 Run unit validation via `./tools/test_unit.sh` and record result.
 
 ---
 
 ## Dependencies & Execution Order
 
-### Phase Dependencies
-
-- **Setup (Phase 1)**: No dependencies
-- **Foundational (Phase 2)**: Depends on Setup
-- **User Stories (Phase 3+)**: All depend on Foundational
-- **Polish (Final Phase)**: Depends on all user stories
-
-### User Story Dependencies
-
-- **User Story 1 (P1)**: Independent after Foundational
-- **User Story 2 (P1)**: Conceptually depends on US1 (service existence) but tasks are grouped logically. Best executed after US1.
-- **User Story 3 (P2)**: Independent after Foundational, best executed after US1.
-
-### Parallel Opportunities
-
-- T005 (Script cleanup) can run parallel to Docker Compose edits.
-- Documentation (T017) can be done anytime.
-
----
-
-## Implementation Strategy
-
-### MVP First (User Story 1 Only)
-
-1. Complete Phase 1 & 2
-2. Implement `celery_codex_worker` service (US1)
-3. Verify queue connectivity
-
-### Incremental Delivery
-
-1. Add persistent auth volume (US2)
-2. Enforce non-interactive policy (US3)
-3. Polish and cleanup
+- Foundation -> skills compatibility -> startup hardening -> spec/doc alignment -> validation.
+- `T007` is required before `T008`/`T009`.
+- `T010` depends on `T007`.

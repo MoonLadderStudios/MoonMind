@@ -1,45 +1,36 @@
-# Research: Agent Queue Remote Worker Daemon (Milestone 3)
+# Research: Remote Worker Daemon (015 Alignment)
 
-## Decision 1: Use REST queue APIs from worker runtime
+## Decision 1: Startup preflight now enforces Speckit capability
 
-- **Decision**: Implement a lightweight queue API client in the worker package using `httpx` against `/api/queue/jobs/*` and artifact endpoints.
-- **Rationale**: The worker must run on remote machines outside API/Celery process boundaries, so direct repository/service imports are inappropriate.
-- **Alternatives considered**:
-  - Direct database access from worker: rejected due coupling, security risk, and bypassing API auth/validation.
-  - MCP-only transport: rejected for milestone scope; REST is already implemented and sufficient.
+- **Decision**: Extend daemon preflight to verify `speckit` executable and run `speckit --version` before claim loop start.
+- **Rationale**: 015 umbrella requires Speckit to be present across worker runtimes, not only Celery workers.
+- **Alternative rejected**: Deferred check after claim was rejected because it allows unready workers to claim jobs.
 
-## Decision 2: Worker preflight checks are hard startup gates
+## Decision 2: Embedding readiness check is part of startup gate
 
-- **Decision**: On startup, verify `codex` executable via `verify_cli_is_executable("codex")`, then run `codex login status`; abort startup on failure.
-- **Rationale**: Prevents workers from claiming jobs they cannot execute and matches the source-document fail-fast requirement.
-- **Alternatives considered**:
-  - Deferred checks after claim: rejected because it increases failed claims/noise and wastes lease windows.
+- **Decision**: Add an embedding profile check in preflight: if `DEFAULT_EMBEDDING_PROVIDER=google`, require `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
+- **Rationale**: Fast-path runtime should fail with actionable diagnostics when Google embedding prerequisites are absent.
+- **Alternative rejected**: Treating this as a warning was rejected because it delays failures into job execution.
 
-## Decision 3: Heartbeat runs in a background async task per claimed job
+## Decision 3: `codex_skill` adopts skills-first compatibility mapping
 
-- **Decision**: Start a heartbeat loop at interval `max(1s, lease_seconds / 3)` while a job executes; cancel loop on terminal state.
-- **Rationale**: Satisfies documented cadence and supports long-running commands without blocking execution.
-- **Alternatives considered**:
-  - Inline heartbeat only between execution phases: rejected because single long phase (`codex exec`) can exceed lease.
+- **Decision**: Remote worker now accepts `codex_skill` claims and maps them into deterministic `codex_exec` compatibility payloads via handler translation.
+- **Rationale**: Supports umbrella skills-first migration without requiring a full skill-definition execution engine in this milestone.
+- **Alternative rejected**: Keeping `codex_skill` unsupported was rejected because it conflicts with umbrella direction.
 
-## Decision 4: `codex_exec` handler produces deterministic local artifacts
+## Decision 4: Skill allowlist policy is local worker config
 
-- **Decision**: For each claimed `codex_exec` job, checkout repository, run `codex exec`, write stdout/stderr to log file, and capture `git diff` to patch artifact.
-- **Rationale**: Covers mandated milestone behavior and keeps artifacts consistent for upload/inspection.
-- **Alternatives considered**:
-  - Stream command output directly without local files: rejected because artifact upload endpoint expects file payloads and deterministic file references simplify retries.
+- **Decision**: Add `default_skill` and `allowed_skills` to worker config with env-driven defaults (`MOONMIND_DEFAULT_SKILL`, `MOONMIND_ALLOWED_SKILLS`, fallback to `SPEC_WORKFLOW_*`).
+- **Rationale**: Worker-level guardrails are needed so unsupported skills fail before execution.
+- **Alternative rejected**: Relying only on server-side policy was rejected because runtime observability loses local intent.
 
-## Decision 5: Publish mode support is explicit and bounded
+## Decision 5: Event payloads include execution metadata
 
-- **Decision**: Support `publish.mode` values `none`, `branch`, and `pr`; `none` is default, while `branch`/`pr` are best-effort subprocess steps and surfaced in execution summary.
-- **Rationale**: Aligns with payload contract while keeping milestone scope focused on core execution path.
-- **Alternatives considered**:
-  - Ignore publish block entirely: rejected due documented payload shape.
-  - Full workflow automation parity with orchestrator publish: rejected as out-of-scope for Milestone 3.
+- **Decision**: Emitted worker events include `selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`.
+- **Rationale**: Brings remote worker observability into parity with umbrella skills-first telemetry expectations.
+- **Alternative rejected**: Summary-only event text was rejected as insufficient for path diagnostics.
 
-## Decision 6: Scope excludes `codex_skill` execution
+## Validation Notes
 
-- **Decision**: Milestone implementation handles `codex_exec`; unsupported job types are failed with explicit error summary.
-- **Rationale**: Source milestone explicitly requires `codex_exec` end-to-end; `codex_skill` can be addressed later with dedicated planning.
-- **Alternatives considered**:
-  - Implement both job types now: rejected to preserve milestone focus and reduce risk.
+- Scope validation helper script `.specify/scripts/bash/validate-implementation-scope.sh` is not present in this repository.
+- Unit validation remains enforceable through `./tools/test_unit.sh`.

@@ -1,118 +1,88 @@
-# Quickstart: Spec Kit Automation Pipeline
+# Quickstart: Skills-First Spec Automation
 
-This guide demonstrates how to execute the Spec Kit automation workflow locally using the Docker Compose stack and inspect the resulting run metadata and artifacts.
+## Goal
 
----
+Run Spec Automation with umbrella-015 aligned defaults:
+
+- Codex auth persisted on a shared volume
+- Speckit capability verified on worker startup
+- Google Gemini embedding defaults active
+- API run detail exposing skills-path metadata per phase
 
 ## Prerequisites
 
-- Docker with Compose v2 and access to the host Docker socket (`/var/run/docker.sock`).
-- Python 3.11 with project dependencies installed (`poetry install` or `pip install -e .[dev]`).
-- Valid automation credentials:
-  - `GITHUB_TOKEN` scoped to clone/push/PR on the target repository (PAT or GitHub App token).
-  - `CODEX_API_KEY` for Codex CLI access (skip push by enabling test mode if unavailable).
-- Optional: StatsD endpoint reachable from the worker if metrics should be emitted.
+- Docker + Docker Compose
+- `.env` copied from `.env-template`
+- Required values:
+  - `GOOGLE_API_KEY`
+  - `DEFAULT_EMBEDDING_PROVIDER=google`
+  - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
+  - `CODEX_ENV=prod`
+  - `CODEX_MODEL=gpt-5-codex`
+  - `GITHUB_TOKEN`
+  - `CODEX_VOLUME_NAME` (defaults to `codex_auth_volume`)
 
-> **Tip:** For smoke tests that should not push commits or open PRs, export `SPEC_WORKFLOW_TEST_MODE=true`.
-
----
-
-## Step 1 – Install Dependencies
+## 1) One-time Codex auth for worker volume
 
 ```bash
-poetry install  # or: pip install -e .[dev]
+docker compose run --rm celery_codex_worker \
+  bash -lc 'codex login && codex login status'
 ```
 
-Ensure Docker is running and the current user can access the Docker socket. Create a `.env` file if you prefer loading secrets automatically when Compose starts.
-
----
-
-## Step 2 – Export Secrets & Configuration
+## 2) Start runtime services
 
 ```bash
-export GITHUB_TOKEN="<github-token>"
-export CODEX_API_KEY="<codex-token>"
-export SPEC_WORKFLOW_TEST_MODE=true                # optional dry-run mode
-export SPEC_WORKFLOW_METRICS_ENABLED=true          # optional
-export SPEC_WORKFLOW_METRICS_HOST=localhost        # optional
-export SPEC_WORKFLOW_METRICS_PORT=8125             # optional
-export GIT_AUTHOR_NAME="Spec Kit Bot"              # optional overrides
-export GIT_AUTHOR_EMAIL="speckit-bot@example.com"  # optional overrides
+docker compose up -d rabbitmq api celery_codex_worker celery_gemini_worker
 ```
 
-When `SPEC_WORKFLOW_TEST_MODE=true`, the publish phase records artifacts but skips git push and PR creation, making it safe for local validation without touching remote repositories.
-
----
-
-## Step 3 – Start Supporting Services
+## 3) Verify startup readiness
 
 ```bash
-docker compose up rabbitmq celery-worker api
+docker compose logs --tail=200 celery_codex_worker
+docker compose logs --tail=200 celery_gemini_worker
 ```
 
-* The API container runs database migrations during startup (`api_service/prestart.sh`).
-* The Celery worker mounts `/var/run/docker.sock` and the `speckit_workspaces` named volume; watch `docker compose logs -f celery-worker` for readiness messages such as `Spec workflow task discover_next_phase started`.
+Expected:
 
----
+- Speckit CLI checks pass on both workers.
+- Codex preflight passes on codex worker.
+- No interactive authentication prompts.
 
-## Step 4 – Trigger a Workflow Run
-
-Open a new terminal (Compose continues running) and execute:
+## 4) Verify embedding defaults
 
 ```bash
-python - <<'PY'
-import asyncio
-from moonmind.workflows.speckit_celery.orchestrator import trigger_spec_workflow_run
-
-async def main() -> None:
-    triggered = await trigger_spec_workflow_run(
-        feature_key="002-document-speckit-automation"
-    )
-    print("Run ID:", triggered.run_id)
-    print("Celery Chain ID:", triggered.celery_chain_id)
-
-asyncio.run(main())
+docker compose exec api python - <<'PY'
+from moonmind.config.settings import settings
+print(settings.default_embedding_provider)
+print(settings.google.google_embedding_model)
 PY
 ```
 
-The command returns the workflow run identifier and Celery chain task ID. Keep the Celery logs open to observe phase transitions (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`).
+Expected output:
 
----
-
-## Step 5 – Monitor Status
-
-1. **Celery logs** – `docker compose logs -f celery-worker` shows phase start/finish events, credential audit results, and any retries.
-2. **REST API** – Query run details and artifacts:
-
-   ```bash
-   curl http://localhost:8080/api/spec-automation/runs/<run_id>
-   ```
-
-   Replace `<run_id>` with the UUID printed in Step 4. The response includes agent configuration, phase timestamps, branch/PR metadata, and artifact IDs.
-3. **Database (optional)** – Inspect `spec_automation_runs` and `spec_automation_run_tasks` tables using `psql` or your preferred client to confirm persisted status transitions.
-
----
-
-## Step 6 – Review Artifacts
-
-Artifacts live under the shared workspace volume:
-
-```bash
-docker compose exec celery-worker ls /work/runs/<run_id>/artifacts
-docker compose exec celery-worker cat /work/runs/<run_id>/artifacts/diff-summary.txt
+```text
+google
+gemini-embedding-001
 ```
 
-Use `docker compose cp` to copy logs locally if needed. Artifacts include stdout/stderr for each phase, Codex diff patches, GitHub API responses, and credential audit reports (values redacted).
-
----
-
-## Step 7 – Cleanup
-
-When finished testing:
+## 5) Verify Spec Automation API telemetry shape
 
 ```bash
-docker compose down
-docker volume rm speckit_workspaces   # optional: remove cached workspaces
+curl http://localhost:5000/api/spec-automation/runs/<run_id>
 ```
 
-Removing the volume ensures subsequent runs start from a clean workspace.
+Each phase entry now includes skills metadata fields:
+
+- `selected_skill`
+- `execution_path`
+- `used_skills`
+- `used_fallback`
+- `shadow_mode_requested`
+
+Legacy Speckit phase records default to `selected_skill=speckit` and `execution_path=skill` when explicit metadata is absent.
+
+## 6) Validation gate
+
+```bash
+./tools/test_unit.sh
+```

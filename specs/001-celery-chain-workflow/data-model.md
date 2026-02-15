@@ -31,6 +31,8 @@
   - `task_name` (enum/string: `discover`, `submit`, `apply`, `publish`, `finalize`, `retry-hook`).
   - `state` (enum: `waiting`, `received`, `started`, `succeeded`, `failed`, `retrying`).
   - `message` (JSON / text) – structured payload describing result or failure context.
+  - `selected_skill` (derived from payload field `selectedSkill`) – selected skill identifier used for this stage attempt (default `speckit`).
+  - `execution_path` (derived from payload field `executionPath`) – stage path (`skill`, `direct_fallback`, `direct_only`).
   - `artifact_paths` (JSON array) – relative paths to artifacts produced by the task (e.g., Codex logs, patches).
   - `started_at`, `finished_at` (timestamps, nullable) – used for runtime charts.
   - `retry_count` (integer, default 0) – increments when Celery retries the task.
@@ -39,6 +41,23 @@
 - **Validation Rules**:
   - Each new `state` entry for a (`run_id`, `task_name`) must have `started_at` when entering `started` and `finished_at` when final states occur.
   - `retry_count` increments monotonically; `state=retrying` requires `retry_count > 0`.
+  - When `state` is terminal, payload should include `selectedSkill` and `executionPath` to support skills-path observability.
+
+## Entity: WorkflowExecutionPathRecord (logical)
+- **Purpose**: Logical per-stage metadata envelope used by the skills-first adapter and written into run/task artifacts.
+- **Primary Identifier**: (`run_id`, `task_name`, `attempt`) via `SpecWorkflowTaskState`.
+- **Key Attributes**:
+  - `selectedSkill` (string).
+  - `executionPath` (enum: `skill`, `direct_fallback`, `direct_only`).
+  - `usedSkills` (boolean).
+  - `usedFallback` (boolean).
+  - `shadowModeRequested` (boolean).
+- **Relationships**:
+  - Embedded into `SpecWorkflowTaskState.payload`.
+  - Aggregated under `run_summary.json` as `skillExecution`.
+- **Validation Rules**:
+  - `executionPath=direct_fallback` requires `usedFallback=true`.
+  - `executionPath=direct_only` requires `usedSkills=false`.
 
 ## Entity: WorkflowCredentialAudit
 - **Purpose**: Records which secrets (Codex, GitHub) were validated for a run and any problems encountered.

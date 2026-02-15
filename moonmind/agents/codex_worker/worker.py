@@ -31,7 +31,11 @@ class CodexWorkerConfig:
     poll_interval_ms: int
     lease_seconds: int
     workdir: Path
-    allowed_types: tuple[str, ...] = ("codex_exec",)
+    allowed_types: tuple[str, ...] = ("codex_exec", "codex_skill")
+    default_skill: str = "speckit"
+    allowed_skills: tuple[str, ...] = ("speckit",)
+    default_codex_model: str | None = None
+    default_codex_effort: str | None = None
     worker_capabilities: tuple[str, ...] = ()
 
     @classmethod
@@ -59,6 +63,50 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_WORKDIR", "var/worker")).strip() or "var/worker"
         )
         worker_token = str(source.get("MOONMIND_WORKER_TOKEN", "")).strip() or None
+
+        default_skill = (
+            str(
+                source.get(
+                    "MOONMIND_DEFAULT_SKILL",
+                    source.get("SPEC_WORKFLOW_DEFAULT_SKILL", "speckit"),
+                )
+            ).strip()
+            or "speckit"
+        )
+        allowed_skills_csv = str(
+            source.get(
+                "MOONMIND_ALLOWED_SKILLS",
+                source.get("SPEC_WORKFLOW_ALLOWED_SKILLS", default_skill),
+            )
+        ).strip()
+        allowed_skills_items = [
+            item.strip() for item in allowed_skills_csv.split(",") if item.strip()
+        ]
+        if default_skill not in allowed_skills_items:
+            allowed_skills_items.append(default_skill)
+        allowed_skills = tuple(dict.fromkeys(allowed_skills_items))
+
+        default_codex_model = (
+            str(
+                source.get(
+                    "MOONMIND_CODEX_MODEL",
+                    source.get("CODEX_MODEL", ""),
+                )
+            ).strip()
+            or None
+        )
+        default_codex_effort = (
+            str(
+                source.get(
+                    "MOONMIND_CODEX_EFFORT",
+                    source.get(
+                        "CODEX_MODEL_REASONING_EFFORT",
+                        source.get("MODEL_REASONING_EFFORT", ""),
+                    ),
+                )
+            ).strip()
+            or None
+        )
         capability_csv = str(source.get("MOONMIND_WORKER_CAPABILITIES", "")).strip()
         worker_capabilities = tuple(
             dict.fromkeys(
@@ -72,6 +120,10 @@ class CodexWorkerConfig:
             poll_interval_ms=poll_interval_ms,
             lease_seconds=lease_seconds,
             workdir=Path(workdir_raw),
+            default_skill=default_skill,
+            allowed_skills=allowed_skills,
+            default_codex_model=default_codex_model,
+            default_codex_effort=default_codex_effort,
             worker_capabilities=worker_capabilities,
         )
 
@@ -286,25 +338,42 @@ class CodexWorker:
         job = await self._claim_next_job()
         if job is None:
             return False
+        skill_meta = self._execution_metadata(job)
 
         await self._emit_event(
             job_id=job.id,
             level="info",
             message="Worker claimed job",
-            payload={"jobType": job.type},
+            payload={"jobType": job.type, **skill_meta},
         )
 
-        if job.type != "codex_exec":
+        if job.type not in {"codex_exec", "codex_skill"}:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
                 message="Unsupported job type",
-                payload={"jobType": job.type},
+                payload={"jobType": job.type, **skill_meta},
             )
             await self._queue_client.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
                 error_message=f"unsupported job type: {job.type}",
+                retryable=False,
+            )
+            return True
+
+        selected_skill = str(skill_meta.get("selectedSkill") or self._config.default_skill)
+        if selected_skill not in self._config.allowed_skills:
+            await self._emit_event(
+                job_id=job.id,
+                level="error",
+                message="Skill is not allowlisted for this worker",
+                payload={"jobType": job.type, **skill_meta},
+            )
+            await self._queue_client.fail_job(
+                job_id=job.id,
+                worker_id=self._config.worker_id,
+                error_message=f"skill not allowlisted: {selected_skill}",
                 retryable=False,
             )
             return True
@@ -318,12 +387,21 @@ class CodexWorker:
             await self._emit_event(
                 job_id=job.id,
                 level="info",
-                message="Starting codex_exec handler",
+                message=f"Starting {job.type} handler",
+                payload={"jobType": job.type, **skill_meta},
             )
-            result = await self._codex_exec_handler.handle(
-                job_id=job.id,
-                payload=job.payload,
-            )
+            if job.type == "codex_skill":
+                result = await self._codex_exec_handler.handle_skill(
+                    job_id=job.id,
+                    payload=job.payload,
+                    selected_skill=selected_skill,
+                    fallback=bool(skill_meta.get("usedFallback")),
+                )
+            else:
+                result = await self._codex_exec_handler.handle(
+                    job_id=job.id,
+                    payload=job.payload,
+                )
             await self._upload_artifacts(job_id=job.id, artifacts=result.artifacts)
             if result.succeeded:
                 await self._queue_client.complete_job(
@@ -335,7 +413,7 @@ class CodexWorker:
                     job_id=job.id,
                     level="info",
                     message="Job completed",
-                    payload={"summary": result.summary},
+                    payload={"summary": result.summary, "jobType": job.type, **skill_meta},
                 )
             else:
                 await self._queue_client.fail_job(
@@ -348,7 +426,11 @@ class CodexWorker:
                     job_id=job.id,
                     level="error",
                     message="Job failed",
-                    payload={"error": result.error_message or "codex_exec failed"},
+                    payload={
+                        "error": result.error_message or "codex_exec failed",
+                        "jobType": job.type,
+                        **skill_meta,
+                    },
                 )
         except Exception as exc:
             await self._queue_client.fail_job(
@@ -361,7 +443,7 @@ class CodexWorker:
                 job_id=job.id,
                 level="error",
                 message="Worker exception while executing job",
-                payload={"error": str(exc)},
+                payload={"error": str(exc), "jobType": job.type, **skill_meta},
             )
         finally:
             heartbeat_stop.set()
@@ -382,6 +464,32 @@ class CodexWorker:
             allowed_types=self._config.allowed_types,
             worker_capabilities=self._config.worker_capabilities,
         )
+
+    def _execution_metadata(self, job: ClaimedJob) -> dict[str, Any]:
+        """Return normalized skill execution metadata for job events."""
+
+        selected_skill = self._config.default_skill
+        execution_path = "direct_only"
+        used_skills = False
+        used_fallback = False
+
+        if job.type == "codex_skill":
+            raw_skill = job.payload.get("skillId") if isinstance(job.payload, Mapping) else None
+            candidate_skill = str(raw_skill).strip() if raw_skill is not None else ""
+            selected_skill = candidate_skill or self._config.default_skill
+            execution_path = "skill"
+            used_skills = True
+            if selected_skill != "speckit":
+                execution_path = "direct_fallback"
+                used_fallback = True
+
+        return {
+            "selectedSkill": selected_skill,
+            "executionPath": execution_path,
+            "usedSkills": used_skills,
+            "usedFallback": used_fallback,
+            "shadowModeRequested": False,
+        }
 
     async def _heartbeat_loop(self, *, job_id: UUID, stop_event: asyncio.Event) -> None:
         """Send lease renewals while a job is actively executing."""
@@ -408,6 +516,10 @@ class CodexWorker:
         artifacts: Sequence[ArtifactUpload],
     ) -> None:
         for artifact in artifacts:
+            if not artifact.path.exists():
+                continue
+            if artifact.path.stat().st_size == 0:
+                continue
             await self._queue_client.upload_artifact(
                 job_id=job_id,
                 worker_id=self._config.worker_id,

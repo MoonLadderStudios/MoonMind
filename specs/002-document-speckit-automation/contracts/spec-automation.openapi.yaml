@@ -3,12 +3,13 @@ info:
   title: Spec Automation API
   version: '0.1.0'
   description: >
-    Endpoints for triggering and monitoring Spec Kit automation runs that execute
-    specify/plan/tasks phases inside ephemeral job containers.
+    Endpoints for triggering and monitoring skills-first automation runs that
+    execute specification stages inside ephemeral job containers while preserving
+    Speckit as the default stage skill.
 servers:
   - url: https://moonmind.example.com/api
 paths:
-  /spec-automation/runs:
+  /api/spec-automation/runs:
     post:
       summary: Trigger a new Spec Kit automation run
       tags: [SpecAutomationRuns]
@@ -29,7 +30,7 @@ paths:
           description: Invalid request payload
         '401':
           description: Missing or invalid credentials
-  /spec-automation/runs/{run_id}:
+  /api/spec-automation/runs/{run_id}:
     get:
       summary: Fetch status and metadata for a run
       tags: [SpecAutomationRuns]
@@ -49,7 +50,7 @@ paths:
                 $ref: '#/components/schemas/RunDetail'
         '404':
           description: Run not found
-  /spec-automation/runs/{run_id}/artifacts/{artifact_id}:
+  /api/spec-automation/runs/{run_id}/artifacts/{artifact_id}:
     get:
       summary: Retrieve artifact metadata and download link
       tags: [SpecAutomationArtifacts]
@@ -75,6 +76,28 @@ paths:
                 $ref: '#/components/schemas/ArtifactDetail'
         '404':
           description: Artifact not found
+  /api/spec-automation/runs/{run_id}/artifacts/{artifact_id}/download:
+    get:
+      summary: Download artifact content by run/artifact identifier
+      tags: [SpecAutomationArtifacts]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: artifact_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Artifact file response
+        '404':
+          description: Artifact or run not found
 components:
   schemas:
     RunRequest:
@@ -168,6 +191,8 @@ components:
             - speckit_specify
             - speckit_plan
             - speckit_tasks
+            - speckit_analyze
+            - speckit_implement
             - commit_push
             - open_pr
             - cleanup
@@ -194,6 +219,23 @@ components:
         metadata:
           type: object
           additionalProperties: true
+        selected_skill:
+          type: string
+          nullable: true
+          description: Selected stage skill identifier (defaults to speckit for legacy phases).
+        execution_path:
+          type: string
+          nullable: true
+          enum: [skill, direct_fallback, direct_only]
+        used_skills:
+          type: boolean
+          nullable: true
+        used_fallback:
+          type: boolean
+          nullable: true
+        shadow_mode_requested:
+          type: boolean
+          nullable: true
     ArtifactSummary:
       type: object
       required:

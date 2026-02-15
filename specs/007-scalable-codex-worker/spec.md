@@ -1,93 +1,100 @@
-# Feature Specification: Scalable Codex Worker
+# Feature Specification: Scalable Codex Worker (015-Aligned)
 
 **Feature Branch**: `007-scalable-codex-worker`  
 **Created**: 2025-11-27  
-**Status**: Draft  
-**Input**: User description: "create a spec based on docs/CodexCliWorkers.md covering the functionality that has not been implemented yet, such as a shared volume for authentication and a single codex worker service that can be scaled. soec number should start with 007"
-
-## Clarifications
-
-### Session 2025-11-27
-- Q: How should the system handle volume access when multiple worker replicas are deployed? → A: **Share one volume** across all replicas (Simplest; relies on CLI file locking).
-- Q: How should the worker behave if the auth volume is unauthenticated (missing credentials) at startup? → A: **Crash/Exit container immediately** (Standard for dependencies; forces attention).
-- Q: Should the startup pre-flight check verify token validity (network call) or just file existence? → A: **Validation Check (Ping API)** (Slower startup, but guarantees readiness).
+**Status**: Draft (Updated 2026-02-14 for 015 umbrella alignment)  
+**Input**: User description: "Update the 007 spec and implementation to align with the new 015 umbrella spec."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Deploy Dedicated Codex Worker (Priority: P1)
+### User Story 1 - Fast Worker Launch with Persistent Codex Auth + Gemini Embedding Readiness (Priority: P1)
 
-As a System Operator, I want to deploy a dedicated worker service that handles only Codex-related tasks, so that resource-intensive or specialized Codex operations do not block general system tasks and can be scaled independently.
+As an operator, I want one deterministic startup path for Codex and Gemini workers so Codex auth is persistent and embedding defaults are validated before work is accepted.
 
-**Why this priority**: Critical for system stability and performance isolation as defined in the architecture.
+**Why this priority**: Startup readiness is a hard dependency for all workflow execution.
 
-**Independent Test**: Can be tested by inspecting the running services and verifying a worker is listening specifically on the `codex` queue and not processing default queue tasks (or vice versa).
+**Independent Test**: Authenticate the shared Codex volume once, start `rabbitmq`, `api`, `celery_codex_worker`, and `celery_gemini_worker`, and verify startup logs show queue bindings plus preflight readiness.
 
 **Acceptance Scenarios**:
 
-1. **Given** a configured MoonMind environment, **When** the system starts, **Then** a `celery_codex_worker` service is running.
-2. **Given** the `celery_codex_worker` is running, **When** inspected, **Then** it is listening on the `codex` queue.
-3. **Given** a task submitted to the `codex` queue, **When** the worker is active, **Then** it processes the task.
+1. **Given** Codex auth is stored in `codex_auth_volume`, **When** `celery_codex_worker` starts, **Then** Codex preflight passes with no interactive prompt.
+2. **Given** both workers start, **When** logs are inspected, **Then** each worker confirms Speckit CLI availability and queue configuration.
+3. **Given** `DEFAULT_EMBEDDING_PROVIDER=google`, **When** required embedding credentials are missing, **Then** worker startup fails fast with actionable diagnostics.
 
 ---
 
-### User Story 2 - Persistent Authentication (Priority: P1)
+### User Story 2 - Skills-First Routing with Speckit Always Available (Priority: P1)
 
-As a System Operator, I want to authenticate the Codex CLI once using a persistent volume, so that the worker can execute authenticated commands indefinitely without requiring manual login for each container restart.
+As a platform engineer, I want workflow stages to resolve through skills-first policy while preserving Speckit as default and always present on workers.
 
-**Why this priority**: Essential for automation; without it, the worker would fail or hang on auth prompts after every restart.
+**Why this priority**: 015 umbrella semantics require skills-based orchestration without losing existing Speckit behavior.
 
-**Independent Test**: Can be tested by manually authenticating the volume, restarting the worker container, and verifying it can still make authenticated API calls.
+**Independent Test**: Run workflow stages with default skill settings and explicit overrides, then verify task payload metadata records selected skill and execution path.
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh environment, **When** I create the `codex_auth_volume` and perform the login flow in a setup container, **Then** the credentials are saved to the volume.
-2. **Given** an authenticated `codex_auth_volume`, **When** the `celery_codex_worker` starts with this volume mounted, **Then** it passes the pre-flight auth check.
-3. **Given** a running worker with the auth volume, **When** a task invokes the Codex CLI, **Then** the CLI executes successfully without prompting for login.
+1. **Given** default settings, **When** workflow stages execute, **Then** they record `selectedSkill=speckit` and `executionPath=skill`.
+2. **Given** a stage override skill that is allowlisted, **When** stage execution starts, **Then** selection logic uses the override.
+3. **Given** skill execution fallback is enabled and adapter execution fails, **When** the stage recovers through direct logic, **Then** metadata records `executionPath=direct_fallback`.
 
 ---
 
-### User Story 3 - Non-interactive Execution (Priority: P2)
+### User Story 3 - Scaled Worker Group with Backward-Compatible Queues (Priority: P2)
 
-As a System Operator, I want the Codex worker to run with a configuration that strictly forbids interactive prompts, so that automation workflows never hang indefinitely waiting for user input.
+As a release owner, I want Codex workers to scale while preserving existing queue compatibility (`speckit`, `codex`, `gemini`) during rollout.
 
-**Why this priority**: Prevents "zombie" tasks that block the queue and require manual intervention.
+**Why this priority**: Capacity changes cannot break existing routing behavior.
 
-**Independent Test**: Can be tested by triggering a CLI command that would normally ask for confirmation (e.g., applying a large change) and ensuring it either proceeds (if policy allows) or fails fast, but never prompts.
+**Independent Test**: Scale `celery_codex_worker` replicas and verify runs keep executing while queue topology and API behavior remain backward compatible.
 
 **Acceptance Scenarios**:
 
-1. **Given** the `celery_codex_worker` environment, **When** the Codex CLI configuration is inspected, **Then** `approval_policy` is set to `"never"`.
-2. **Given** a task that requires approval, **When** it runs on the worker, **Then** it executes automatically (or fails if the operation is strictly blocked) without hanging.
+1. **Given** `celery_codex_worker` is scaled, **When** tasks are queued, **Then** workers continue consuming the configured `speckit` and `codex` queues.
+2. **Given** Codex preflight fails on a run, **When** submission stage executes, **Then** the run fails quickly with persisted remediation context.
+3. **Given** existing API consumers for `/api/workflows/speckit`, **When** skills metadata is emitted in task payloads, **Then** previous response fields remain available.
 
 ### Edge Cases
 
-- What happens if the `codex_auth_volume` is missing or empty? (System MUST crash immediately to signal configuration error).
-- What happens if the OAuth token expires? (The pre-flight check or the task should fail gracefully, alerting the operator).
-- What happens if multiple workers try to use the same volume? (Multiple workers will concurrently mount and read from the same `codex_auth_volume`, relying on underlying CLI/OS file locking for safety).
+- Codex auth volume is missing or mounted at the wrong path.
+- `DEFAULT_EMBEDDING_PROVIDER=google` but neither `GOOGLE_API_KEY` nor `GEMINI_API_KEY` is set.
+- Speckit CLI is missing in one worker image.
+- Skill override requests an identifier outside `SPEC_WORKFLOW_ALLOWED_SKILLS`.
+- Multiple codex workers read from shared queue bindings while a run is retried from failed stage state.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST define a `codex` Celery queue in the worker configuration and routing rules.
-- **FR-002**: The system MUST provision a persistent Docker volume named `codex_auth_volume` (or similar) for storing Codex credentials.
-- **FR-003**: The `celery_codex_worker` service MUST mount the `codex_auth_volume` to the `CODEX_HOME` directory (e.g., `/home/app/.codex`) inside the container.
-- **FR-004**: The `celery_codex_worker` service MUST use a container image that includes the Codex CLI and Spec Kit CLI.
-- **FR-005**: The worker environment MUST include a managed `.codex/config.toml` with `approval_policy = "never"` to ensure non-interactive mode.
-- **FR-006**: The worker startup process MUST perform a pre-flight check by attempting a minimal Codex API call (e.g., `codex whoami` or equivalent) to verify that valid authentication credentials exist and are active. If this check fails, the worker MUST exit with a non-zero status code.
-- **FR-007**: The system MUST allow the `celery_codex_worker` service to be scaled (e.g., via Docker Compose `scale` or Kubernetes replicas), though a single instance is the default. All replicas MUST share the same `codex_auth_volume`.
+- **FR-001**: The system MUST run a dedicated `celery_codex_worker` service that consumes the configured Codex queue and remains compatible with the shared `speckit` queue topology.
+- **FR-002**: The system MUST persist Codex authentication in a named Docker volume (`CODEX_VOLUME_NAME`) mounted at `CODEX_VOLUME_PATH`.
+- **FR-003**: Worker startup MUST enforce non-interactive Codex policy (`approval_policy = "never"`) and fail fast when policy enforcement fails.
+- **FR-004**: Worker startup MUST verify Speckit CLI capability for Codex and Gemini worker entrypoints.
+- **FR-005**: When `DEFAULT_EMBEDDING_PROVIDER=google`, worker startup MUST fail fast if neither `GOOGLE_API_KEY` nor `GEMINI_API_KEY` is available.
+- **FR-006**: Workflow stage routing MUST remain skills-first with Speckit default selection and allowlisted overrides.
+- **FR-007**: Workflow task payloads MUST include stage execution metadata (`selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`).
+- **FR-008**: Codex preflight failures MUST persist failure metadata and transition runs to failed state without hanging.
+- **FR-009**: Compose/runtime docs MUST describe the fastest path for authenticated Codex workers plus Gemini embedding defaults.
+- **FR-010**: Implementation deliverables MUST include runtime code changes and validation tests; docs-only updates are insufficient.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Codex Worker Service**: A specialized Celery worker instance dedicated to the `codex` queue.
-- **Codex Auth Volume**: A persistent storage volume holding OAuth tokens and CLI configuration.
-- **Codex Queue**: A logical job queue for routing Codex-specific tasks.
+- **CodexWorkerStartupProfile**: Captures queue bindings, Codex preflight result, Speckit capability status, and embedding readiness diagnostics.
+- **CodexAuthVolumeBinding**: Defines volume name/path contract for persisted Codex credentials across worker restarts.
+- **StageExecutionDecision**: Captures selected skill, execution path, fallback policy, and shadow mode for a workflow stage.
+- **WorkflowTaskStatePayload**: Serialized task payload including status and skills execution metadata.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: The `celery_codex_worker` successfully starts and connects *only* to the `codex` queue (verified by logs).
-- **SC-002**: Codex CLI commands executed by the worker succeed without user interaction 100% of the time when valid credentials are present.
-- **SC-003**: Authentication credentials persist across container restarts/re-deployments (tested by restarting the service and running a command).
-- **SC-004**: The worker fails to start (or enters an unhealthy state) within 30 seconds if the auth volume is unauthenticated or the token is invalid, logging a clear error.
+- **SC-001**: Operators can authenticate once and restart `celery_codex_worker` without interactive Codex login prompts.
+- **SC-002**: Worker startup logs always include Codex/Gemini CLI checks, Speckit capability checks, and queue binding diagnostics.
+- **SC-003**: When Google embeddings are configured without credentials, worker startup fails with actionable error text.
+- **SC-004**: Workflow runs include skill selection/execution-path metadata in task payloads for discover, submit, and publish stages.
+- **SC-005**: Validation command `./tools/test_unit.sh` passes for finalized implementation.
+
+## Assumptions
+
+- Existing `/api/workflows/speckit` API paths remain stable during umbrella migration.
+- Speckit remains installed in worker images and mirrored in skill directories.
+- RabbitMQ remains the Celery broker for workflow tasks in this deployment profile.
