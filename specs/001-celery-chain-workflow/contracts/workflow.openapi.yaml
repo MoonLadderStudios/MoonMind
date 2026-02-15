@@ -216,7 +216,7 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, running, succeeded, failed, cancelled]
+          enum: [pending, running, succeeded, failed, cancelled, no_work, retrying]
         phase:
           type: string
           enum: [discover, submit, apply, publish, complete]
@@ -307,7 +307,7 @@ components:
           type: integer
           minimum: 1
         payload:
-          type: object
+          $ref: '#/components/schemas/WorkflowTaskPayload'
         startedAt:
           type: string
           format: date-time
@@ -325,6 +325,38 @@ components:
           format: date-time
           nullable: true
       required: [taskName, status, attempt]
+    WorkflowTaskPayload:
+      type: object
+      description: |
+        Structured task payload emitted by Celery stages. Core workflow fields are
+        stage-specific; skills-first metadata fields are standardized.
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+          nullable: true
+        code:
+          type: string
+          nullable: true
+        selectedSkill:
+          type: string
+          nullable: true
+          description: Selected skill id for this stage attempt.
+        executionPath:
+          type: string
+          nullable: true
+          enum: [skill, direct_fallback, direct_only]
+        usedSkills:
+          type: boolean
+          nullable: true
+        usedFallback:
+          type: boolean
+          nullable: true
+        shadowModeRequested:
+          type: boolean
+          nullable: true
+      additionalProperties: true
 
     WorkflowTaskSummary:
       type: object

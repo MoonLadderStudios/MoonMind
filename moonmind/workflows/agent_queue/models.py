@@ -25,6 +25,12 @@ from sqlalchemy.sql import func
 from api_service.db.models import Base, mutable_json_dict, mutable_json_list
 
 
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
+    """Return enum values so SQLAlchemy persists lowercase labels, not names."""
+
+    return [member.value for member in enum_cls]
+
+
 class AgentJobStatus(str, enum.Enum):
     """Lifecycle states for queue jobs."""
 
@@ -67,6 +73,7 @@ class AgentJob(Base):
             name="agentjobstatus",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
         default=AgentJobStatus.QUEUED,
@@ -183,6 +190,7 @@ class AgentJobEvent(Base):
             name="agentjobeventlevel",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
         default=AgentJobEventLevel.INFO,

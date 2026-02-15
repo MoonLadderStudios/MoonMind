@@ -31,6 +31,8 @@ from moonmind.workflows.adapters import (
     GitHubClient,
     GitHubPublishResult,
 )
+from moonmind.workflows.skills.registry import resolve_stage_execution
+from moonmind.workflows.skills.runner import execute_stage
 from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.celeryconfig import (
     CODEX_AFFINITY_HEADER,
@@ -950,6 +952,7 @@ def _write_run_summary(artifacts_dir: Path, context: Mapping[str, Any]) -> Path:
         "task": context.get("task"),
         "codexTaskId": context.get("codex_task_id"),
         "codexQueue": context.get("codex_queue"),
+        "skillExecution": context.get("skill_execution"),
         "branch": context.get("branch_name"),
         "pullRequestUrl": context.get("pr_url"),
         "codexPatchPath": context.get("codex_patch_path"),
@@ -1073,7 +1076,7 @@ def _run_codex_preflight_check(
 
     remediation = (
         f"Codex login status failed for volume '{volume}'. "
-        "Re-authenticate this shard using `codex login` and retry."
+        "Re-authenticate this shard using `codex login --device-auth` and retry."
     )
     if summary:
         remediation = f"{remediation} Details: {summary}"
@@ -1143,6 +1146,49 @@ def _status_payload(
         if value is not None:
             payload[key] = value
     return payload
+
+
+def _set_stage_execution_payload(
+    context: dict[str, Any],
+    stage_name: str,
+    *,
+    selected_skill: str,
+    execution_path: str,
+    used_skills: bool,
+    used_fallback: bool,
+    shadow_mode_requested: bool,
+) -> None:
+    """Persist stage execution metadata into the workflow context."""
+
+    execution = context.setdefault("skill_execution", {})
+    if isinstance(execution, dict):
+        execution[stage_name] = {
+            "selectedSkill": selected_skill,
+            "executionPath": execution_path,
+            "usedSkills": used_skills,
+            "usedFallback": used_fallback,
+            "shadowModeRequested": shadow_mode_requested,
+        }
+
+
+def _stage_execution_payload(
+    context: Mapping[str, Any], stage_name: str
+) -> dict[str, Any]:
+    """Return stage execution metadata for status payload decoration."""
+
+    execution = context.get("skill_execution")
+    if not isinstance(execution, Mapping):
+        return {}
+    entry = execution.get(stage_name)
+    if not isinstance(entry, Mapping):
+        return {}
+    return {
+        "selectedSkill": entry.get("selectedSkill"),
+        "executionPath": entry.get("executionPath"),
+        "usedSkills": entry.get("usedSkills"),
+        "usedFallback": entry.get("usedFallback"),
+        "shadowModeRequested": entry.get("shadowModeRequested"),
+    }
 
 
 def _merge_notes(*notes: Optional[str]) -> Optional[str]:
@@ -1302,6 +1348,27 @@ def discover_next_phase(
 
     _log_spec_kit_cli_availability()
 
+    stage_context: dict[str, Any] = {
+        "feature_key": feature_key,
+        "force_phase": force_phase,
+        "attempt": attempt,
+        "retry": attempt > 1,
+    }
+    decision = resolve_stage_execution(
+        stage_name=TASK_DISCOVER,
+        run_id=run_id,
+        context=stage_context,
+    )
+    _set_stage_execution_payload(
+        stage_context,
+        TASK_DISCOVER,
+        selected_skill=decision.selected_skill,
+        execution_path=decision.execution_path,
+        used_skills=decision.use_skills,
+        used_fallback=False,
+        shadow_mode_requested=decision.shadow_mode,
+    )
+
     run_uuid = UUID(run_id)
     observer = TaskObserver(
         task_name=TASK_DISCOVER,
@@ -1314,6 +1381,8 @@ def discover_next_phase(
         force_phase=force_phase,
         retry_notes=bool(retry_notes),
         retry=attempt > 1,
+        selected_skill=decision.selected_skill,
+        execution_path=decision.execution_path,
     )
 
     async def _execute() -> dict[str, Any]:
@@ -1344,6 +1413,7 @@ def discover_next_phase(
                 payload=_status_payload(
                     models.SpecWorkflowTaskStatus.RUNNING,
                     message="Discovering next Spec Kit task",
+                    **_stage_execution_payload(stage_context, TASK_DISCOVER),
                 ),
                 started_at=_now(),
                 attempt=attempt,
@@ -1383,6 +1453,9 @@ def discover_next_phase(
             finished = _now()
             context = _base_context(run)
             context.update({"force_phase": force_phase, "attempt": attempt})
+            context["skill_execution"] = dict(
+                stage_context.get("skill_execution", {})  # type: ignore[arg-type]
+            )
             if retry_notes is not None:
                 context["retry_notes"] = retry_notes
             context["retry"] = attempt > 1
@@ -1398,6 +1471,7 @@ def discover_next_phase(
                         models.SpecWorkflowTaskStatus.SUCCEEDED,
                         message=message,
                         result="no_work",
+                        **_stage_execution_payload(context, TASK_DISCOVER),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1423,6 +1497,7 @@ def discover_next_phase(
                     models.SpecWorkflowTaskStatus.SUCCEEDED,
                     message="Discovered next task",
                     **payload,
+                    **_stage_execution_payload(context, TASK_DISCOVER),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -1433,7 +1508,13 @@ def discover_next_phase(
             return context
 
     try:
-        context = _run_coro(_execute())
+        outcome = execute_stage(
+            stage_name=TASK_DISCOVER,
+            run_id=run_id,
+            context=stage_context,
+            execute_direct=lambda: _run_coro(_execute()),
+        )
+        context = outcome.result
     except Exception as exc:
         observer.failed(
             exc,
@@ -1442,9 +1523,22 @@ def discover_next_phase(
                 "attempt": attempt,
                 "feature_key": feature_key,
                 "force_phase": force_phase,
+                "selected_skill": decision.selected_skill,
+                "execution_path": decision.execution_path,
             },
         )
         raise
+
+    if isinstance(context, dict):
+        _set_stage_execution_payload(
+            context,
+            TASK_DISCOVER,
+            selected_skill=outcome.selected_skill,
+            execution_path=outcome.execution_path,
+            used_skills=outcome.used_skills,
+            used_fallback=outcome.used_fallback,
+            shadow_mode_requested=outcome.shadow_mode_requested,
+        )
 
     summary: dict[str, Any] = {}
     if isinstance(context, dict):
@@ -1455,6 +1549,7 @@ def discover_next_phase(
                 "taskId": task_payload.get("taskId"),
                 "phase": task_payload.get("phase"),
             }
+        summary.update(_stage_execution_payload(context, TASK_DISCOVER))
     observer.succeeded(summary)
     return context
 
@@ -1469,6 +1564,20 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
 
     run_uuid = UUID(context["run_id"])
     attempt = _prepare_retry_context(context)
+    decision = resolve_stage_execution(
+        stage_name=TASK_SUBMIT,
+        run_id=context["run_id"],
+        context=context,
+    )
+    _set_stage_execution_payload(
+        context,
+        TASK_SUBMIT,
+        selected_skill=decision.selected_skill,
+        execution_path=decision.execution_path,
+        used_skills=decision.use_skills,
+        used_fallback=False,
+        shadow_mode_requested=decision.shadow_mode,
+    )
     observer = TaskObserver(
         task_name=TASK_SUBMIT,
         run_id=context["run_id"],
@@ -1481,6 +1590,8 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
         codex_task_id=context.get("codex_task_id"),
         codex_queue=context.get("codex_queue"),
         codex_volume=context.get("codex_volume"),
+        selected_skill=decision.selected_skill,
+        execution_path=decision.execution_path,
     )
 
     async def _execute() -> dict[str, Any]:
@@ -1515,6 +1626,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     githubCredentialStatus=context.get(
                         "credential_audit_status", {}
                     ).get("github"),
+                    **_stage_execution_payload(context, TASK_SUBMIT),
                 ),
                 started_at=_now(),
                 attempt=attempt,
@@ -1533,6 +1645,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         models.SpecWorkflowTaskStatus.SKIPPED,
                         message="Skipped because discovery found no remaining work",
                         reason="no_work",
+                        **_stage_execution_payload(context, TASK_SUBMIT),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1569,6 +1682,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         code="codex_preflight_failed",
                         codexPreflightStatus=preflight.status.value,
                         codexVolume=context.get("codex_volume"),
+                        **_stage_execution_payload(context, TASK_SUBMIT),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1659,6 +1773,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                     githubCredentialStatus=context.get(
                         "credential_audit_status", {}
                     ).get("github"),
+                    **_stage_execution_payload(context, TASK_SUBMIT),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -1669,10 +1784,27 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             return context
 
     try:
-        result = _run_coro(_execute())
+        outcome = execute_stage(
+            stage_name=TASK_SUBMIT,
+            run_id=context["run_id"],
+            context=context,
+            execute_direct=lambda: _run_coro(_execute()),
+        )
+        result = outcome.result
     except Exception as exc:
         observer.failed(exc, details=context)
         raise
+
+    if isinstance(result, dict):
+        _set_stage_execution_payload(
+            result,
+            TASK_SUBMIT,
+            selected_skill=outcome.selected_skill,
+            execution_path=outcome.execution_path,
+            used_skills=outcome.used_skills,
+            used_fallback=outcome.used_fallback,
+            shadow_mode_requested=outcome.shadow_mode_requested,
+        )
 
     summary: dict[str, Any] = {}
     if isinstance(result, dict):
@@ -1682,6 +1814,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
         summary["codex_queue"] = result.get("codex_queue")
         summary["codex_volume"] = result.get("codex_volume")
         summary["codex_preflight_status"] = result.get("codex_preflight_status")
+        summary.update(_stage_execution_payload(result, TASK_SUBMIT))
     observer.succeeded(summary)
     return result
 
@@ -1696,6 +1829,20 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
 
     run_uuid = UUID(context["run_id"])
     attempt = _prepare_retry_context(context)
+    decision = resolve_stage_execution(
+        stage_name=TASK_PUBLISH,
+        run_id=context["run_id"],
+        context=context,
+    )
+    _set_stage_execution_payload(
+        context,
+        TASK_PUBLISH,
+        selected_skill=decision.selected_skill,
+        execution_path=decision.execution_path,
+        used_skills=decision.use_skills,
+        used_fallback=False,
+        shadow_mode_requested=decision.shadow_mode,
+    )
     observer = TaskObserver(
         task_name=TASK_PUBLISH,
         run_id=context["run_id"],
@@ -1709,6 +1856,8 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
         no_work=context.get("no_work"),
         codex_queue=context.get("codex_queue"),
         codex_volume=context.get("codex_volume"),
+        selected_skill=decision.selected_skill,
+        execution_path=decision.execution_path,
     )
 
     async def _execute() -> dict[str, Any]:
@@ -1743,6 +1892,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     githubCredentialStatus=context.get(
                         "credential_audit_status", {}
                     ).get("github"),
+                    **_stage_execution_payload(context, TASK_PUBLISH),
                 ),
                 started_at=_now(),
                 attempt=attempt,
@@ -1770,6 +1920,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                         models.SpecWorkflowTaskStatus.SKIPPED,
                         message="Skipped publish because no work was required",
                         reason="no_work",
+                        **_stage_execution_payload(context, TASK_PUBLISH),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1902,6 +2053,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                         "credential_audit_status", {}
                     ).get("github"),
                     resumed=context.get("resume_token") is not None,
+                    **_stage_execution_payload(context, TASK_PUBLISH),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -1918,10 +2070,27 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             return context
 
     try:
-        result = _run_coro(_execute())
+        outcome = execute_stage(
+            stage_name=TASK_PUBLISH,
+            run_id=context["run_id"],
+            context=context,
+            execute_direct=lambda: _run_coro(_execute()),
+        )
+        result = outcome.result
     except Exception as exc:
         observer.failed(exc, details=context)
         raise
+
+    if isinstance(result, dict):
+        _set_stage_execution_payload(
+            result,
+            TASK_PUBLISH,
+            selected_skill=outcome.selected_skill,
+            execution_path=outcome.execution_path,
+            used_skills=outcome.used_skills,
+            used_fallback=outcome.used_fallback,
+            shadow_mode_requested=outcome.shadow_mode_requested,
+        )
 
     summary: dict[str, Any] = {}
     if isinstance(result, dict):
@@ -1931,6 +2100,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
         summary["codex_patch_path"] = result.get("codex_patch_path")
         summary["codex_queue"] = result.get("codex_queue")
         summary["codex_volume"] = result.get("codex_volume")
+        summary.update(_stage_execution_payload(result, TASK_PUBLISH))
     observer.succeeded(summary)
     return result
 

@@ -1,29 +1,41 @@
-# Research: Scalable Codex Worker
+# Research: Scalable Codex Worker (015 Alignment)
 
-**Feature**: Scalable Codex Worker (007)
-**Date**: 2025-11-27
+**Feature**: `007-scalable-codex-worker`  
+**Date**: 2026-02-14
 
 ## Decision Log
 
-### 1. Docker Volume for Authentication
-- **Decision**: Use a named Docker volume `codex_auth_volume` mounted to `/home/app/.codex` (or equivalent user home).
-- **Rationale**: Allows persistence of OAuth tokens across container restarts and sharing among scaled worker replicas.
-- **Implementation**: 
-  - Define `codex_auth_volume` in `docker-compose.yaml`.
-  - Mount to worker service: `volumes: - codex_auth_volume:/home/app/.codex`.
-  - Setup requires a one-off run: `docker compose run --rm celery_codex_worker /bin/bash`.
+### 1. Queue Compatibility vs Codex Isolation
 
-### 2. Celery Queue Isolation
-- **Decision**: Use the `-Q` flag to bind the worker exclusively to the `codex` queue.
-- **Rationale**: Prevents the Codex worker from consuming general tasks and prevents general workers from consuming Codex tasks (assuming general workers are configured with `-Q celery` or exclude `codex`).
-- **Implementation**: `command: celery -A celery_worker.speckit_worker worker -l info -Q codex -c 1` (concurrency 1 to start).
+- **Decision**: Keep `celery_codex_worker` bound to both `speckit` and `codex` queues in Compose for backward-compatible discovery + Codex stage handling.
+- **Rationale**: 015 umbrella requires preserving existing queue behavior while introducing skills-first semantics.
+- **Impact**: 007 language is updated from strict "codex-only" worker behavior to compatibility queue bindings.
 
-### 3. Pre-flight Auth Check
-- **Decision**: Implement a startup script that runs `codex whoami` (or equivalent API ping).
-- **Rationale**: Fails fast if the volume is unauthenticated, preventing "zombie" workers.
-- **Implementation**: Wrap the celery command in an entrypoint script or chain commands: `codex whoami && celery ...`.
+### 2. Speckit Always-On Capability
 
-### 4. Non-Interactive Configuration
-- **Decision**: Pre-provision `config.toml` with `approval_policy = "never"` in the image or via a setup script if not present.
-- **Rationale**: Ensures strict non-interactive mode for automation.
-- **Implementation**: The Spec Kit CLI or Codex CLI should respect this config. We will verify `~/.codex/config.toml` has this setting during the pre-flight check or enforce it via environment variables if supported (e.g., `CODEX_APPROVAL_POLICY=never`).
+- **Decision**: Treat Speckit CLI verification as a mandatory startup check for Codex and Gemini workers.
+- **Rationale**: 015 umbrella requires workers to always have Speckit capability regardless of selected skill policy.
+- **Impact**: Worker startup diagnostics explicitly surface Speckit availability before task processing.
+
+### 3. Startup Embedding Prerequisite Validation
+
+- **Decision**: Add shared worker startup validation for embedding runtime profile and fail fast when Google embeddings are configured without credentials.
+- **Rationale**: Fast-path operation requires deterministic failures for misconfigured credential state.
+- **Impact**: New startup helper validates `DEFAULT_EMBEDDING_PROVIDER` + key availability and emits structured log context.
+
+### 4. Skills-First Metadata in Workflow Tasks
+
+- **Decision**: Keep skills-first metadata attached to task payloads (`selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`) for discover/submit/publish stages.
+- **Rationale**: This preserves compatibility while satisfying umbrella telemetry needs.
+- **Impact**: API consumers retain existing fields and gain explicit stage-path diagnostics.
+
+### 5. Non-Speckit Skill Overrides
+
+- **Decision**: Preserve allowlist-driven skill selection (`SPEC_WORKFLOW_ALLOWED_SKILLS`) with Speckit as default.
+- **Rationale**: Umbrella policy requires skills-based orchestration without requiring separate Speckit-only mode.
+- **Impact**: Stage overrides remain policy-controlled and backward compatible.
+
+## Validation/Tooling Notes
+
+- `.specify/scripts/bash/validate-implementation-scope.sh` is not present in this repository, so the orchestrate scope gate cannot be executed directly.
+- Unit validation remains enforceable via `./tools/test_unit.sh` and is treated as the mandatory implementation gate.

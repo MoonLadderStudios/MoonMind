@@ -4,9 +4,9 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 
 ## Prerequisites
 
-1. **Runtime services** – Bring up RabbitMQ, the Spec Kit Celery worker, and the API service together; they share the automation queue, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
-   - Bind the worker to the Spec Workflow queue defined by `SPEC_WORKFLOW_CODEX_QUEUE` (default `codex`). The bundled `docker compose up rabbitmq celery-worker api` already uses this queue; when running a standalone worker, pass `-Q ${SPEC_WORKFLOW_CODEX_QUEUE}` to mirror production routing.
-2. **Credentials** – Export a GitHub token with `repo` scope and the Codex API key so the job container can clone, push, and execute Spec Kit prompts. Set `SPEC_WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
+1. **Runtime services** – Bring up RabbitMQ, the Codex-focused Celery worker, and the API service together; they share the automation queues, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
+   - Bind the worker to both Spec Workflow queues (`${CELERY_DEFAULT_QUEUE:-speckit}` and `${SPEC_WORKFLOW_CODEX_QUEUE:-codex}`), so discovery and Codex phases execute on the same worker process.
+2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`codex login`) so the pre-flight status check passes before jobs start. Set `SPEC_WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
 3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
 4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/spec-automation` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
     1. **Start Keycloak** – Run `docker compose --profile keycloak up keycloak keycloak-db -d` so the `moonmind` realm is available at `http://localhost:8085`. The default admin credentials are `admin/admin` unless you set `KC_ADMIN_PW`.
@@ -73,7 +73,7 @@ docker run --rm moonmind/api-service:tooling \
 When the Celery worker starts it now logs the detected Codex CLI path and version. Tail the worker logs to confirm the health check succeeds before triggering automation runs:
 
 ```bash
-docker compose logs -f celery-worker | grep -i "Codex CLI detected"
+docker compose logs -f celery_codex_worker | grep -i "Codex CLI detected"
 ```
 
 If either command fails, rebuild the image to restore the bundled CLI before accepting new jobs.
@@ -90,7 +90,7 @@ logs that the approval policy is incorrect, follow these steps:
    merged file:
 
    ```bash
-   docker compose exec celery-worker bash -lc 'cat ~/.codex/config.toml'
+   docker compose exec celery_codex_worker bash -lc 'cat ~/.codex/config.toml'
    ```
 
    The `approval_policy` value must be `"never"`. Any other value indicates
@@ -122,13 +122,18 @@ logs that the approval policy is incorrect, follow these steps:
 
 ## Step 1 – Start the automation stack
 
-From the repository root, start the supporting services in one terminal so the worker can accept automation jobs:
+From the repository root, authenticate the Codex volume once, then start supporting services so the worker can accept automation jobs:
 
 ```bash
-docker compose up rabbitmq celery-worker api
+docker compose run --rm celery_codex_worker \
+  bash -lc 'codex login && codex login status'
 ```
 
-Leave the stack running. The default `docker-compose.yaml` now mounts the host Docker socket and provisions a shared `speckit_workspaces` volume so the Celery worker can launch job containers while the API retains read-only access to generated artifacts. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docker-compose.yaml†L90-L198】【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
+```bash
+docker compose up rabbitmq celery_codex_worker api
+```
+
+Leave the stack running. The default `docker-compose.yaml` mounts the host Docker socket and provisions a shared `speckit_workspaces` volume so the Celery worker can launch job containers while the API retains read-only access to generated artifacts. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docker-compose.yaml†L90-L198】【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
 
 ## Step 2 – Prepare your run request
 
@@ -178,9 +183,9 @@ Ensure the Celery worker (or Compose stack) exports `SPEC_WORKFLOW_GITHUB_REPOSI
 
 ## Step 4 – Monitor progress
 
-1. **Worker logs** – Tail the Celery worker to see phase transitions and retry activity:
+1. **Worker logs** – Tail the Codex worker to see phase transitions and retry activity:
    ```bash
-   docker compose logs -f celery-worker
+   docker compose logs -f celery_codex_worker
    ```
 2. **Status API** – Poll run state (phases, branch, PR URL, artifacts) using the run identifier returned earlier:
    ```bash

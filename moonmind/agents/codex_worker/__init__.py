@@ -3,6 +3,7 @@
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
+    CodexSkillPayload,
     CodexWorkerHandlerError,
     WorkerExecutionResult,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "CliVerificationError",
     "ClaimedJob",
     "CodexExecHandler",
+    "CodexSkillPayload",
     "CodexWorker",
     "CodexWorkerConfig",
     "CodexWorkerHandlerError",

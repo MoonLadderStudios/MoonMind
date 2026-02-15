@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-ARG CODEX_CLI_VERSION=0.63.0
+ARG CODEX_CLI_VERSION=latest
 ARG SPEC_KIT_VERSION=0.4.0
 # Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
 # the API, orchestrator, and Celery workers can run from the same image tag.

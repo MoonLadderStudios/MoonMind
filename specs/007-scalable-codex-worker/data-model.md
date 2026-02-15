@@ -1,56 +1,83 @@
-# Data Model: Scalable Codex Worker
+# Data Model: Scalable Codex Worker (015-Aligned)
 
-**Feature**: Scalable Codex Worker (007)
-**Date**: 2025-11-27
+## Value Object: CodexWorkerStartupProfile
 
-## Conceptual Entities
+Captures startup readiness for the Codex worker process.
 
-### Infrastructure Components
+- **Fields**:
+  - `worker_name` (`codex`)
+  - `queues` (tuple[str, ...])
+  - `codex_preflight_status` (`passed` | `failed` | `skipped`)
+  - `speckit_cli_available` (bool)
+  - `embedding_provider` (str)
+  - `embedding_model` (str)
+  - `embedding_credential_source` (`google_api_key` | `gemini_api_key` | null)
+- **Validation rules**:
+  - if `embedding_provider=google`, credential source must be non-null.
+  - worker readiness requires successful Codex preflight.
 
-#### Codex Worker Service
-- **Type**: Service (Container)
-- **Role**: Executes tasks from the `codex` queue.
-- **Cardinality**: 1..N (Scalable)
-- **State**: Stateless (except for mounted volume).
-- **Configuration**:
-  - `CELERY_QUEUES`: `['codex']`
-  - `CODEX_HOME`: `/home/app/.codex` (Mounted Volume)
+## Value Object: GeminiWorkerStartupProfile
 
-#### Codex Auth Volume
-- **Type**: Persistent Storage (Docker Volume)
-- **Role**: Stores authentication state.
-- **Contents**:
-  - `credentials`: OAuth tokens.
-  - `config.toml`: CLI configuration (`approval_policy = "never"`).
-- **Cardinality**: 1 (Shared across all worker replicas).
+Captures startup readiness for the Gemini worker process.
 
-#### Codex Queue
-- **Type**: Message Queue (Redis/RabbitMQ)
-- **Role**: Buffers tasks destined for Codex processing.
-- **Task Types**: `submit_to_codex`, `poll_codex`, `apply_diff`.
+- **Fields**:
+  - `worker_name` (`gemini`)
+  - `queues` (tuple[str, ...])
+  - `gemini_cli_available` (bool)
+  - `speckit_cli_available` (bool)
+  - `embedding_provider` (str)
+  - `embedding_model` (str)
+  - `embedding_credential_source` (`google_api_key` | `gemini_api_key` | null)
+- **Validation rules**:
+  - if `embedding_provider=google`, credential source must be non-null.
+  - Gemini worker startup requires an API credential (`GEMINI_API_KEY` or `GOOGLE_API_KEY`).
 
-## Configuration Schemas
+## Value Object: StageExecutionDecision
 
-### Docker Compose Service Definition (Draft)
+Represents policy output before stage execution.
 
-```yaml
-services:
-  celery_codex_worker:
-    image: moonmind-api-service:latest
-    command: /bin/sh -c "codex whoami && celery -A celery_worker.speckit_worker worker -l info -Q codex"
-    volumes:
-      - codex_auth_volume:/home/app/.codex
-    depends_on:
-      - redis
-      - api_service
-    deploy:
-      replicas: 1
-```
+- **Fields**:
+  - `stage_name` (str)
+  - `selected_skill` (str)
+  - `execution_path` (`skill` | `direct_fallback` | `direct_only`)
+  - `use_skills` (bool)
+  - `fallback_enabled` (bool)
+  - `shadow_mode` (bool)
 
-### File System Layout (Inside Volume)
+## Value Object: StageExecutionOutcome
 
-```text
-/home/app/.codex/
-├── credentials      # JSON/Binary OAuth token store
-└── config.toml      # CLI Configuration
-```
+Represents stage execution result metadata.
+
+- **Fields**:
+  - `stage_name` (str)
+  - `selected_skill` (str)
+  - `execution_path` (`skill` | `direct_fallback` | `direct_only`)
+  - `used_skills` (bool)
+  - `used_fallback` (bool)
+  - `shadow_mode_requested` (bool)
+  - `result` (Any)
+
+## Persisted Payload Shape: WorkflowTaskStatePayload
+
+For discover/submit/publish task-state payloads.
+
+- **Fields**:
+  - `status`
+  - `message`
+  - stage-specific task fields (`taskId`, `logsPath`, `patchPath`, etc.)
+  - `selectedSkill`
+  - `executionPath`
+  - `usedSkills`
+  - `usedFallback`
+  - `shadowModeRequested`
+
+## State Transitions
+
+1. `queued` -> `running` when a stage task starts.
+2. `running` -> `succeeded` on successful completion.
+3. `running` -> `failed` on terminal failure.
+4. `running` -> `skipped` for no-op/no-work paths.
+5. During `running`, execution metadata path transitions can be:
+   - `skill`
+   - `direct_fallback` (when adapter fails and fallback is enabled)
+   - `direct_only` (skills policy bypassed)

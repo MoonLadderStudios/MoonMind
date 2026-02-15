@@ -102,8 +102,22 @@
 
 ---
 
+## Phase 7: 015 Skills-First Alignment (Cross-Story)
+**Purpose**: Align 001 runtime and docs to the 015 umbrella direction (Speckit always available + skills-first orchestration).
+
+- [x] T033 [P] Add skills-first runtime package scaffolding in `moonmind/workflows/skills/__init__.py`, `moonmind/workflows/skills/contracts.py`, `moonmind/workflows/skills/registry.py`, `moonmind/workflows/skills/runner.py`, and `moonmind/workflows/skills/speckit_adapter.py`.
+- [x] T034 Extend workflow settings with skills policy flags and per-stage overrides in `moonmind/config/settings.py`.
+- [x] T035 Integrate skills policy resolution + stage execution metadata into discover/submit/publish tasks in `moonmind/workflows/speckit_celery/tasks.py`.
+- [x] T036 Ensure Speckit capability checks run at startup for both `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py`.
+- [x] T037 Add unit coverage for skills runner decisions and fallback behavior in `tests/unit/workflows/test_skills_runner.py`.
+- [x] T038 Update existing task-flow tests to assert `selectedSkill` and `executionPath` payload fields in `tests/unit/workflows/test_tasks.py`.
+- [x] T039 Update 001 spec artifacts (`spec.md`, `plan.md`, `quickstart.md`, `tasks.md`) to explicitly reflect the 015 umbrella alignment contract.
+
+---
+
 ## Dependencies & Execution Order
 - Setup (Phase 1) → Foundational (Phase 2) → User Stories (Phases 3–5) → Polish (Phase 6).
+- Phase 7 alignment tasks can execute after Phase 2 and are required before calling 001 fully aligned with 015.
 - US1 is the MVP and must complete before US2/US3 finalize; US2 depends on US1 data emissions, while US3 depends on US1 artifacts and US2 repository helpers.
 - Tasks marked `[P]` can run concurrently; all others require prior tasks in the same phase to finish.
 
@@ -125,8 +139,8 @@
 4. Polish with documentation, logging, and quickstart validation.
 
 ## Task Summary & Validation
-- Total tasks: **32**
-- Per-story counts: **US1 – 7**, **US2 – 7**, **US3 – 6** (remaining tasks cover setup, foundational, and polish work)
+- Total tasks: **39**
+- Per-story counts: **US1 – 7**, **US2 – 7**, **US3 – 6** (remaining tasks cover setup, foundational, polish, and 015 alignment work)
 - Parallel opportunities: Highlighted above (e.g., T001/T003, T010/T011, T017/T018, T024/T025)
 - Independent test criteria: Listed per story and mirror spec expectations
 - Suggested MVP scope: Complete through Phase 3 (US1)

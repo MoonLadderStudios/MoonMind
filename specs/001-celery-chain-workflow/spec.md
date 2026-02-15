@@ -2,10 +2,24 @@
 
 **Feature Branch**: `001-celery-chain-workflow`  
 **Created**: 2025-11-02  
-**Status**: Draft  
+**Status**: Draft (Updated 2026-02-14 for 015 umbrella alignment)  
 **Input**: User description: "Awesome—MoonMind is a great place to centralize this. Below is a pragmatic blueprint to plug Codex CLI and GitHub Spec Kit into MoonMind so you can trigger, monitor, and land changes (branches/PRs) from Spec-driven tasks. I’ll also spell out the exact credentials you’ll need and where they live. Spec this out with Celery Chain handling the task chains."
 
 ## User Scenarios & Testing *(mandatory)*
+
+### User Story 0 - Fast Worker Launch with Skills-First Defaults (Priority: P1)
+
+MoonMind operator wants the shortest path to launch an authenticated Codex worker and Gemini embedding runtime, while keeping Speckit always available and skills-first stage execution enabled by default.
+
+**Why this priority**: Worker startup/auth determinism and embedding readiness are prerequisites for every workflow run.
+
+**Independent Test**: Perform one-time Codex auth on the shared worker volume, start `rabbitmq`, `api`, `celery_codex_worker`, and `celery_gemini_worker`, then verify startup logs and runtime settings show expected queue bindings, preflight status, and Google embedding defaults.
+
+**Acceptance Scenarios**:
+
+1. **Given** `DEFAULT_EMBEDDING_PROVIDER=google`, `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`, and `GOOGLE_API_KEY` are configured, **When** services start, **Then** embedding runtime resolves to Google Gemini without additional runtime overrides.
+2. **Given** Codex auth is performed once on `CODEX_VOLUME_NAME`, **When** `celery_codex_worker` restarts, **Then** startup preflight succeeds non-interactively and processing can begin immediately.
+3. **Given** a workflow stage executes under default policy, **When** task states are persisted, **Then** payloads include selected skill and execution path metadata (`selectedSkill`, `executionPath`) for observability.
 
 ### User Story 1 - Trigger Next Spec Phase (Priority: P1)
 
@@ -72,6 +86,12 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - **FR-008**: The workflow must enforce idempotency by deriving branch names from the feature identifier and reusing existing pull requests when repeats occur.
 - **FR-009**: The provider must expose retry semantics that resume the chain from the failing task when safe to do so, otherwise starting a new run with operator consent.
 - **FR-010**: Credential validation must occur before tasks that need them, with clear failure messaging when tokens or environment identifiers are missing or invalid.
+- **FR-011**: Workflow stage execution must resolve through a skills-first policy layer, with Speckit as the default skill for backward-compatible behavior.
+- **FR-012**: Speckit capability checks must execute at worker startup for Spec Kit and Gemini worker runtimes so Speckit remains always available.
+- **FR-013**: Stage task-state payloads and run artifacts must record selected skill and execution path (`skill`, `direct_fallback`, or `direct_only`) for each stage.
+- **FR-014**: Skills policy controls must support global enable/disable, canary percentage, fallback enablement, and per-stage skill overrides via configuration.
+- **FR-015**: Docker Compose and quickstart guidance must define a fastest startup path for authenticated Codex workers and Google Gemini embeddings.
+- **FR-016**: Missing startup prerequisites (Codex auth volume, Codex/GitHub credentials, Google API key when Google embeddings are selected) must fail fast with actionable remediation.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -88,6 +108,9 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - **SC-002**: 100% of Celery tasks emit structured status updates consumable by MoonMind with no missing state transitions in audit logs.
 - **SC-003**: Operators report (via post-run feedback or survey) that 90% of runs provide sufficient context to resolve failures without escalating to engineering.
 - **SC-004**: Automation reduces manual time spent per Spec Kit phase handoff by at least 70% compared to the prior semi-manual process over one release cycle.
+- **SC-005**: Startup quickstart from a clean `.env` produces ready `celery_codex_worker` and `celery_gemini_worker` processes without interactive prompts.
+- **SC-006**: 100% of discover/submit/publish task payloads include `selectedSkill` and `executionPath`.
+- **SC-007**: Validation gate `./tools/test_unit.sh` passes with skills-first runtime changes enabled by default.
 
 ## Assumptions & Dependencies
 
@@ -97,6 +120,9 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - Spec Kit task definitions are maintained in a repository-accessible location compatible with the discovery task parser.
 - Network egress from the execution environment to Codex Cloud and GitHub APIs is permitted within organizational policy.
 - Governance for branch naming conventions and PR review routing remains managed by existing MoonMind policies; this feature does not alter approval flows.
+- Speckit skill definitions are mirrored in `.codex/skills` and `.agents/skills`, and remain installed in worker images.
+- The initial skills-first implementation keeps existing `/api/workflows/speckit/*` API naming for compatibility, even when stage orchestration is generalized.
+- The fastest deployment profile uses Google Gemini embeddings (`gemini-embedding-001`) and authenticated Codex CLI volumes.
 
 ### Scope Boundaries
 

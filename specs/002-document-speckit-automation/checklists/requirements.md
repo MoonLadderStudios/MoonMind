@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Spec Kit Automation Pipeline
+# Specification Quality Checklist: Skills-First Spec Automation Pipeline
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2025-11-03  
-**Feature**: [Spec Kit Automation Pipeline](../spec.md)
+**Created**: 2026-02-14  
+**Feature**: [Skills-First Spec Automation Pipeline](../spec.md)
 
 ## Content Quality
 

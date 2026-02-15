@@ -716,6 +716,8 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     ), f"Discover task state '{tasks.TASK_DISCOVER}' not found."
     assert discover_state.payload is not None, "Discover task state has no payload."
     assert discover_state.payload["taskId"] == "T010"
+    assert discover_state.payload["selectedSkill"] == "speckit"
+    assert discover_state.payload["executionPath"] == "skill"
 
     submit_state = states_by_name.get(tasks.TASK_SUBMIT)
     assert (
@@ -726,6 +728,8 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
         submit_state.payload["logsPath"]
         == artifacts_by_type[models.WorkflowArtifactType.CODEX_LOGS].path
     )
+    assert submit_state.payload["selectedSkill"] == "speckit"
+    assert submit_state.payload["executionPath"] == "skill"
 
     publish_state = states_by_name.get(tasks.TASK_PUBLISH)
     assert (
@@ -744,6 +748,8 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
         publish_state.payload["applyOutputPath"]
         == artifacts_by_type[models.WorkflowArtifactType.APPLY_OUTPUT].path
     )
+    assert publish_state.payload["selectedSkill"] == "speckit"
+    assert publish_state.payload["executionPath"] == "skill"
 
 
 @pytest.mark.asyncio

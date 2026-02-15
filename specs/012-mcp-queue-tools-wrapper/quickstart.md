@@ -29,11 +29,20 @@ curl -X POST "http://localhost:5000/mcp/tools/call" \
     "arguments": {
       "type": "codex_exec",
       "priority": 10,
-      "payload": {"instruction": "Run lint"},
+      "payload": {
+        "repository": "MoonLadderStudios/MoonMind",
+        "instruction": "Run lint",
+        "codex": {
+          "model": "gpt-5-codex",
+          "effort": "medium"
+        }
+      },
       "maxAttempts": 3
     }
   }'
 ```
+
+Task payload `codex.model` and `codex.effort` override worker defaults for that job only.
 
 Capture `result.id` as `JOB_ID`.
 

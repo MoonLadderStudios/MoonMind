@@ -31,19 +31,26 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
         "verify_cli_is_executable",
         lambda _name: "/usr/bin/codex",
     )
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=args[0],
+
+    def fake_run(command, *args, **kwargs):
+        if command == ["/usr/bin/speckit", "--version"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="speckit 0.4.0",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=command,
             returncode=1,
             stdout="",
             stderr="not logged in",
-        ),
-    )
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError):
-        cli.run_preflight()
+        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
 
 def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> None:
@@ -63,10 +70,16 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    cli.run_preflight(env={"GITHUB_TOKEN": "ghp-test-token"})
+    cli.run_preflight(
+        env={
+            "GITHUB_TOKEN": "ghp-test-token",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
 
-    assert calls[0] == (["/usr/bin/codex", "login", "status"], None)
-    assert calls[1] == (
+    assert calls[0] == (["/usr/bin/speckit", "--version"], None)
+    assert calls[1] == (["/usr/bin/codex", "login", "status"], None)
+    assert calls[2] == (
         [
             "/usr/bin/gh",
             "auth",
@@ -77,8 +90,8 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         ],
         "ghp-test-token",
     )
-    assert calls[2] == (["/usr/bin/gh", "auth", "setup-git"], None)
-    assert calls[3] == (
+    assert calls[3] == (["/usr/bin/gh", "auth", "setup-git"], None)
+    assert calls[4] == (
         ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"],
         None,
     )
@@ -103,10 +116,13 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    cli.run_preflight(env={})
+    cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
-    assert verifications == ["codex"]
-    assert calls == [["/usr/bin/codex", "login", "status"]]
+    assert verifications == ["codex", "speckit"]
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/codex", "login", "status"],
+    ]
 
 
 def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None:
@@ -130,7 +146,12 @@ def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None
     )
 
     with pytest.raises(RuntimeError, match="missing gh"):
-        cli.run_preflight(env={"GITHUB_TOKEN": "ghp-test-token"})
+        cli.run_preflight(
+            env={
+                "GITHUB_TOKEN": "ghp-test-token",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
 
 
 def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
@@ -157,10 +178,115 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError) as exc_info:
-        cli.run_preflight(env={"GITHUB_TOKEN": token})
+        cli.run_preflight(
+            env={
+                "GITHUB_TOKEN": token,
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
 
     assert token not in str(exc_info.value)
     assert "[REDACTED]" in str(exc_info.value)
+
+
+def test_run_preflight_missing_speckit_raises(monkeypatch) -> None:
+    """Preflight should fail when speckit binary is unavailable."""
+
+    def fake_verify(name: str) -> str:
+        if name == "speckit":
+            raise CliVerificationError("missing speckit")
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+
+    with pytest.raises(RuntimeError, match="missing speckit"):
+        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+
+
+def test_run_preflight_speckit_version_fallback_to_help(monkeypatch) -> None:
+    """Preflight should accept speckit shims that only support --help."""
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        if command == ["/usr/bin/speckit", "--version"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=2,
+                stdout="Usage: specify",
+                stderr="No such option: --version",
+            )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="ok",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+
+    assert calls[:3] == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/speckit", "--help"],
+        ["/usr/bin/codex", "login", "status"],
+    ]
+
+
+def test_run_preflight_speckit_non_version_error_raises(monkeypatch) -> None:
+    """Fallback should not mask unrelated Speckit execution failures."""
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    def fake_run(command, *args, **kwargs):
+        if command == ["/usr/bin/speckit", "--version"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr="permission denied",
+            )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="permission denied"):
+        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+
+
+def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None:
+    """Google embedding profiles should fail fast when key material is absent."""
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    with pytest.raises(RuntimeError, match="GOOGLE_API_KEY or GEMINI_API_KEY"):
+        cli.run_preflight(
+            env={
+                "DEFAULT_EMBEDDING_PROVIDER": "google",
+                "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-001",
+            }
+        )
 
 
 def test_main_returns_error_when_run_fails(monkeypatch) -> None:

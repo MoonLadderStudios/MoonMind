@@ -1,81 +1,92 @@
-# Data Model: Agent Queue Remote Worker Daemon (Milestone 3)
+# Data Model: Remote Worker Daemon (015-Aligned)
 
-## Overview
+## Value Object: RemoteWorkerStartupProfile
 
-Milestone 3 introduces runtime worker-side models (not new database tables) used to process queue jobs safely and deterministically.
+Startup preflight diagnostics for standalone worker runtime.
 
-## Runtime Entities
+- `codex_cli_available` (bool)
+- `speckit_cli_available` (bool)
+- `codex_login_status` (`passed` | `failed`)
+- `embedding_provider` (str)
+- `embedding_model` (str)
+- `embedding_credentials_available` (bool)
 
-### CodexWorkerConfig
+Validation rules:
+- startup readiness requires `codex_cli_available=true`, `speckit_cli_available=true`, and `codex_login_status=passed`.
+- when `embedding_provider=google`, `embedding_credentials_available` must be true.
 
-Represents environment-driven daemon configuration.
+## Value Object: RemoteWorkerSkillPolicy
 
-- `moonmind_url` (str): Base URL for MoonMind API.
-- `worker_id` (str): Worker identity for claim/heartbeat/terminal updates.
-- `worker_token` (str | None): Optional bearer token for authenticated requests.
-- `poll_interval_ms` (int): Poll delay when no work is available (default 1500).
-- `lease_seconds` (int): Queue lease duration used for claim/heartbeat (default 120).
-- `workdir` (Path): Local root for checkout and temporary artifacts.
+Local skills policy resolved from environment.
 
-**Validation rules**:
-- `moonmind_url` must be non-empty and normalized.
-- `worker_id` must be non-empty.
-- `poll_interval_ms` and `lease_seconds` must be > 0.
+- `default_skill` (str)
+- `allowed_skills` (tuple[str, ...])
+- `allowed_types` (tuple[str, ...]) including `codex_exec` and `codex_skill`
 
-### QueueJobEnvelope
+Validation rules:
+- `default_skill` must always appear in `allowed_skills`.
+- claimed `codex_skill` requests must have `skillId` in `allowed_skills`.
 
-Represents job payload returned by claim endpoint.
+## Value Object: QueueExecutionMetadata
 
-- `id` (UUID)
-- `type` (str)
-- `payload` (dict[str, Any])
-- `attempt` (int)
-- `max_attempts` (int)
+Execution metadata emitted in worker events.
 
-**Validation rules**:
-- `type` must be recognized by worker dispatch (`codex_exec` for milestone scope).
+- `selectedSkill` (str)
+- `executionPath` (`skill` | `direct_fallback` | `direct_only`)
+- `usedSkills` (bool)
+- `usedFallback` (bool)
+- `shadowModeRequested` (bool)
 
-### CodexExecPayload
+## Value Object: CodexSkillCompatibilityRequest
 
-Structured representation of `codex_exec` job payload.
+Normalized compatibility mapping from `codex_skill` to `codex_exec`.
 
-- `repository` (str): Repository spec accepted by handler checkout strategy.
-- `ref` (str | None): Optional branch/ref override.
-- `workdir_mode` (str): `fresh_clone` or `reuse` behavior.
-- `instruction` (str): Codex execution instruction string.
-- `publish_mode` (str): `none`, `branch`, or `pr`.
-- `publish_base_branch` (str | None)
+- `skill_id` (str)
+- `inputs` (dict[str, Any])
+- `repository` (str)
+- `instruction` (str)
+- `ref` (str | null)
+- `workdir_mode` (`fresh_clone` | `reuse`)
+- `publish_mode` (`none` | `branch` | `pr`)
+- `publish_base_branch` (str | null)
 
-**Validation rules**:
-- `repository` and `instruction` are required non-empty strings.
-- `workdir_mode`/`publish_mode` must be within allowed value set.
+Validation rules:
+- repository context is required (`inputs.repo` or equivalent fallback field).
+- instruction may be synthesized from inputs when absent.
 
-### WorkerExecutionResult
+## Value Object: CodexRuntimeSelection
 
-Normalized handler output consumed by terminal queue updates.
+Resolved Codex runtime settings for one claimed task.
+
+- `task_model` (str | null)
+- `task_effort` (str | null)
+- `worker_default_model` (str | null)
+- `worker_default_effort` (str | null)
+- `resolved_model` (str | null)
+- `resolved_effort` (str | null)
+
+Validation rules:
+- If `task_model` exists, it overrides worker/default model selection for that task.
+- If `task_effort` exists, it overrides worker/default effort selection for that task.
+- If task fields are missing, resolved values fall back to worker defaults; if worker defaults are missing, Codex CLI defaults apply.
+
+## Existing Entity: WorkerExecutionResult
+
+Handler output used by daemon terminal transitions.
 
 - `succeeded` (bool)
-- `summary` (str | None)
-- `error_message` (str | None)
-- `artifact_paths` (list[Path])
-
-**Validation rules**:
-- If `succeeded` is `False`, `error_message` must be non-empty.
+- `summary` (str | null)
+- `error_message` (str | null)
+- `artifacts` (tuple[ArtifactUpload, ...])
 
 ## State Transitions
 
-1. Worker loop claims a queued job (`queued` -> `running`) via API.
-2. Handler returns `WorkerExecutionResult`.
-3. Worker uploads artifacts (if any).
-4. Worker posts terminal transition:
-   - success: `running` -> `succeeded`
-   - failure: `running` -> `failed`
-5. Heartbeat loop runs only while state remains `running`.
-
-## Artifact Outputs
-
-Per-job local worker artifact directory (`<workdir>/<job_id>/artifacts`) may contain:
-
-- `codex_exec.log` (stdout/stderr capture)
-- `changes.patch` (`git diff` output)
-- `execution_summary.json` (optional structured metadata)
+1. Job is claimed (`queued` -> `running`) with local execution metadata computed.
+2. Handler path is selected:
+   - `codex_exec` -> `direct_only`
+   - `codex_skill` + `skillId=speckit` -> `skill`
+   - `codex_skill` + allowlisted non-speckit -> `direct_fallback`
+3. Artifacts upload (best effort per artifact) while job remains running.
+4. Terminal transition:
+   - success -> `succeeded`
+   - failure -> `failed`

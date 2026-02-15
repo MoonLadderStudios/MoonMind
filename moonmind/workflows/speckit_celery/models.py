@@ -190,9 +190,17 @@ class SpecAutomationPhase(str, enum.Enum):
     PREPARE_JOB = "prepare_job"
     START_JOB_CONTAINER = "start_job_container"
     GIT_CLONE = "git_clone"
-    SPECKIT_SPECIFY = "speckit_specify"
-    SPECKIT_PLAN = "speckit_plan"
-    SPECKIT_TASKS = "speckit_tasks"
+    SPECIFY = "speckit_specify"
+    PLAN = "speckit_plan"
+    TASKS = "speckit_tasks"
+    ANALYZE = "speckit_analyze"
+    IMPLEMENT = "speckit_implement"
+    # Backward-compatible aliases for persisted values and legacy clients.
+    SPECKIT_SPECIFY = SPECIFY
+    SPECKIT_PLAN = PLAN
+    SPECKIT_TASKS = TASKS
+    SPECKIT_ANALYZE = ANALYZE
+    SPECKIT_IMPLEMENT = IMPLEMENT
     COMMIT_PUSH = "commit_push"
     OPEN_PR = "open_pr"
     CLEANUP = "cleanup"
@@ -363,6 +371,65 @@ class SpecAutomationTaskState(Base):
         """Assign the task metadata payload."""
 
         self.metadata_payload = value
+
+    def get_skill_execution_metadata(self) -> Optional[dict[str, Any]]:
+        """Return normalized skills execution metadata for this phase attempt."""
+
+        metadata = self.get_metadata()
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        selected_skill = metadata.get("selectedSkill")
+        execution_path = metadata.get("executionPath")
+        used_skills = metadata.get("usedSkills")
+        used_fallback = metadata.get("usedFallback")
+        shadow_mode_requested = metadata.get("shadowModeRequested")
+
+        if isinstance(selected_skill, str):
+            selected_skill = selected_skill.strip() or None
+        else:
+            selected_skill = None
+
+        if isinstance(execution_path, str):
+            execution_path = execution_path.strip() or None
+        else:
+            execution_path = None
+
+        if selected_skill is None and self.phase.value.startswith("speckit_"):
+            selected_skill = "speckit"
+        if execution_path is None and selected_skill == "speckit":
+            execution_path = "skill"
+
+        def _coerce_bool(value: Any) -> Optional[bool]:
+            if isinstance(value, bool):
+                return value
+            return None
+
+        used_skills_bool = _coerce_bool(used_skills)
+        used_fallback_bool = _coerce_bool(used_fallback)
+        shadow_mode_bool = _coerce_bool(shadow_mode_requested)
+
+        if used_skills_bool is None and execution_path is not None:
+            used_skills_bool = execution_path != "direct_only"
+        if used_fallback_bool is None and execution_path is not None:
+            used_fallback_bool = execution_path == "direct_fallback"
+
+        if (
+            selected_skill is None
+            and execution_path is None
+            and used_skills_bool is None
+            and used_fallback_bool is None
+            and shadow_mode_bool is None
+        ):
+            return None
+
+        return {
+            "selectedSkill": selected_skill,
+            "executionPath": execution_path,
+            "usedSkills": used_skills_bool,
+            "usedFallback": used_fallback_bool,
+            "shadowModeRequested": shadow_mode_bool,
+        }
 
 
 class SpecAutomationArtifact(Base):

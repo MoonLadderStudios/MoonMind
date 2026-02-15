@@ -51,6 +51,51 @@ def _run_checked_command(
     raise RuntimeError(_redact_value(message, redaction_values))
 
 
+def _verify_speckit_cli(
+    speckit_path: str,
+    *,
+    redaction_values: Sequence[str] = (),
+) -> None:
+    """Validate Speckit CLI across legacy and shimmed command variants."""
+
+    try:
+        _run_checked_command(
+            [speckit_path, "--version"],
+            redaction_values=redaction_values,
+        )
+        return
+    except RuntimeError as exc:
+        # Some environments ship `speckit` as a `specify` shim that does not
+        # expose `--version`. Fall back to `--help` to verify executability.
+        if "no such option: --version" not in str(exc).lower():
+            raise
+
+    _run_checked_command(
+        [speckit_path, "--help"],
+        redaction_values=redaction_values,
+    )
+
+
+def _validate_embedding_profile(env: Mapping[str, str]) -> None:
+    """Enforce embedding prerequisites for runtime profiles that use Google."""
+
+    provider = str(env.get("DEFAULT_EMBEDDING_PROVIDER", "google")).strip().lower()
+    if provider != "google":
+        return
+
+    google_key = str(env.get("GOOGLE_API_KEY", "")).strip()
+    gemini_key = str(env.get("GEMINI_API_KEY", "")).strip()
+    if google_key or gemini_key:
+        return
+
+    model = str(env.get("GOOGLE_EMBEDDING_MODEL", "gemini-embedding-001")).strip()
+    raise RuntimeError(
+        "Google embedding profile is configured "
+        f"(provider=google, model={model or 'unknown'}) but GOOGLE_API_KEY "
+        "or GEMINI_API_KEY is missing."
+    )
+
+
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
@@ -61,9 +106,20 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     except CliVerificationError as exc:
         raise RuntimeError(str(exc)) from exc
 
+    try:
+        speckit_path = verify_cli_is_executable("speckit")
+    except CliVerificationError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    _validate_embedding_profile(source)
+
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
+    _verify_speckit_cli(
+        speckit_path,
+        redaction_values=redaction_values,
+    )
     _run_checked_command(
         [codex_path, "login", "status"],
         redaction_values=redaction_values,
@@ -121,7 +177,11 @@ async def _run(args: argparse.Namespace) -> None:
         base_url=config.moonmind_url,
         worker_token=config.worker_token,
     )
-    handler = CodexExecHandler(workdir_root=config.workdir)
+    handler = CodexExecHandler(
+        workdir_root=config.workdir,
+        default_codex_model=config.default_codex_model,
+        default_codex_effort=config.default_codex_effort,
+    )
     worker = CodexWorker(
         config=config,
         queue_client=queue_client,

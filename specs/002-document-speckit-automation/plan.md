@@ -1,113 +1,90 @@
-# Implementation Plan: Spec Kit Automation Pipeline
+# Implementation Plan: Skills-First Spec Automation Pipeline
 
-**Branch**: `002-document-speckit-automation` | **Date**: 2025-11-03 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `002-document-speckit-automation` | **Date**: 2025-11-03 (updated 2026-02-14) | **Spec**: `specs/002-document-speckit-automation/spec.md`  
 **Input**: Feature specification from `/specs/002-document-speckit-automation/spec.md`
-
-**Note**: This plan follows the `/speckit.plan` workflow and stays aligned with research and design artifacts produced in Phases 0–1.
 
 ## Summary
 
-Automate end-to-end execution of Spec Kit phases by having Celery workers spin up ephemeral job containers, run the `speckit.specify`, `speckit.plan`, and `speckit.tasks` prompts against a repository workspace, and publish results (branch + PR + artifacts) while keeping the agent backend swappable and the environment isolated per run. Research confirmed Docker-outside-of-Docker orchestration, env-var-only secret injection, optional StatsD hooks, and seven-day artifact retention as the baseline approach.
+Align the Spec Automation feature with umbrella 015 by keeping legacy `speckit_*` phase compatibility while exposing skills-first execution metadata in runtime models and API responses. Preserve existing `/api/spec-automation/*` behavior, add deterministic metadata defaults for legacy phases, and update docs/contracts for Codex-authenticated worker startup plus Gemini embedding defaults.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 for workers and job environment shell tooling  
-**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x (broker), PostgreSQL result backend, Codex CLI, Git CLI/GitHub CLI, Docker client/SDK  
-**Storage**: PostgreSQL tables `spec_workflow_runs` and `spec_workflow_task_states`; artifacts persisted under named Docker volume `speckit_workspaces` (optionally mirrored to object storage)  
-**Testing**: pytest suites (unit/integration), Celery chain integration tests, docker-compose smoke tests  
-**Target Platform**: Containerized Linux services deployed via Docker Compose / Kubernetes nodes with Docker socket access  
-**Project Type**: Backend workflow automation (Celery worker plus orchestration library)  
-**Performance Goals**: ≥95% of runs complete Spec Kit phases and publish artifacts within 20 minutes; structured status emitted for 100% of tasks  
-**Constraints**: Secrets must remain ephemeral (env injection only), job containers cleaned after run, deterministic branch naming, retries with backoff, network egress limited to GitHub/Codex endpoints  
-**Scale/Scope**: Initial capacity sized for low concurrency (1–2 simultaneous runs) with roadmap to scale via worker count; supports per-run workspace isolation and artifact retention ≥7 days
+**Language/Version**: Python 3.11  
+**Primary Dependencies**: FastAPI, SQLAlchemy models, Pydantic schemas, Celery worker runtime, existing Spec Automation repositories  
+**Storage**: Existing `spec_automation_runs`, `spec_automation_task_states`, `spec_automation_artifacts`, `spec_automation_agent_configs` tables  
+**Testing**: `./tools/test_unit.sh` (required gate), plus focused unit tests for API serialization and model metadata normalization  
+**Target Platform**: Linux Docker Compose runtime (`api`, `rabbitmq`, `celery_codex_worker`, `celery_gemini_worker`)  
+**Project Type**: Backend workflow/runtime + API contract alignment  
+**Performance Goals**: Preserve existing API response latency while adding lightweight metadata normalization  
+**Constraints**: Maintain backward compatibility for legacy phase values and existing API routes; no destructive enum/database changes  
+**Scale/Scope**: Runtime model/schema/router updates, tests, and feature docs/contracts under `specs/002-*`
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- Constitution file contains placeholders only; no enforceable principles defined. Recorded governance gap in research and proceeding with default compliance stance.
-- Post-design review confirmed feature outputs (data model, contracts, quickstart) stay within the placeholder governance allowance.
+- `.specify/memory/constitution.md` remains placeholder-only with no enforceable principle text.
+- Repository guardrails still apply:
+  - runtime code changes are required (not docs-only),
+  - validation must use `./tools/test_unit.sh`.
+
+**Gate Status**: PASS WITH NOTE.
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/[###-feature]/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+specs/002-document-speckit-automation/
+├── spec.md
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
+├── contracts/
+│   └── spec-automation.openapi.yaml
+└── tasks.md
 ```
 
 ### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
 
 ```text
-celery_worker/
-├── speckit_worker.py         # Celery worker entrypoint/orchestration
-└── __init__.py
-
 moonmind/workflows/speckit_celery/
-├── orchestrator.py           # Workflow coordination + context handling
-├── tasks.py                  # Celery task definitions for phases
-├── repositories.py           # Persistence adapters
-├── models.py                 # Pydantic schemas for run/task state
-└── __init__.py
+├── models.py
+├── repositories.py
+└── tasks.py
 
-docs/
-└── SpecKitAutomation.md      # Technical design source material
+moonmind/schemas/
+└── workflow_models.py
 
-docker-compose.yaml           # Service orchestration (worker, rabbitmq, api)
-tools/
-└── get_action_status.py      # Operational utilities (unchanged but reference for monitoring)
+api_service/api/routers/
+└── spec_automation.py
+
+tests/unit/api/
+└── test_spec_automation.py
+
+tests/unit/workflows/
+└── test_spec_automation_env.py
 ```
 
-**Structure Decision**: Extend existing Celery worker and workflow orchestration modules under `celery_worker/` and `moonmind/workflows/speckit_celery/`, augmenting documentation and compose definitions without introducing new top-level packages.
+**Structure Decision**: Keep existing `spec_automation` runtime surfaces and update serialization/model contracts for skills-first metadata normalization without changing endpoint topology.
 
-## Operations Runbook (Phase 6)
+## Phase 0: Research Plan
 
-1. **Pre-flight checks**
-   - Confirm Docker daemon access and ensure the `speckit_workspaces` volume exists (created automatically by Compose if missing).
-   - Export runtime secrets: `GITHUB_TOKEN`, `CODEX_API_KEY`, and optional StatsD settings (`SPEC_WORKFLOW_METRICS_ENABLED`, `SPEC_WORKFLOW_METRICS_HOST`, `SPEC_WORKFLOW_METRICS_PORT`).
-   - Set `SPEC_WORKFLOW_TEST_MODE=true` for dry runs that should skip git push/PR while still generating artifacts.
-   - Override agent metadata via `SPEC_AUTOMATION_AGENT_VERSION` / `SPEC_AUTOMATION_PROMPT_PACK_VERSION` when coordinating prompt updates.
-2. **Launch services**
-   - `docker compose up rabbitmq celery-worker api` — API container applies Alembic migrations; Celery worker mounts `/var/run/docker.sock` and the shared workspace volume.
-   - Verify worker readiness in logs (look for `Spec workflow task discover_next_phase started`).
-3. **Trigger automation**
-   - Python REPL helper: `asyncio.run(trigger_spec_workflow_run(feature_key="002-document-speckit-automation"))`.
-   - REST helper: `POST /api/spec-automation/runs` (see contracts) to enqueue via FastAPI.
-4. **Monitor execution**
-   - Tail Celery logs: `docker compose logs -f celery-worker` to follow `discover_next_phase`, `submit_codex_job`, `apply_and_publish` progress.
-   - Observe StatsD metrics when enabled (prefix `spec_automation.*`) for phase durations, retries, cleanup timing.
-   - Query run status: `curl http://localhost:8080/api/spec-automation/runs/<run_id>` for branch/PR metadata, credential audit snapshot, and artifact IDs.
-5. **Review artifacts**
-   - Inspect `/work/runs/<run_id>/artifacts` via `docker compose exec celery-worker ls /work/runs/<run_id>/artifacts`.
-   - Retrieve diff summaries or logs with `docker compose cp` when attaching evidence to reviews/incidents.
-6. **Cleanup**
-   - `docker compose down` followed by `docker volume rm speckit_workspaces` (optional) resets cached workspaces between test cycles.
+1. Confirm compatibility boundaries for existing phase enum values and API contracts.
+2. Define normalized skills metadata behavior for legacy phase records with no explicit metadata.
+3. Define docs/quickstart alignment for Codex auth + Gemini embedding fast path.
 
-## Monitoring & Incident Response Notes
+## Phase 1: Design Outputs
 
-- **Metrics expectations**: `_MetricsEmitter` emits `task_start`, `task_success`, `task_failure`, and `task_duration` tagged with `{run_id, task, attempt}`. Alert on sustained `task_failure` increments or missing `task_success` for >15 minutes per run.
-- **Credential validation**: `CredentialValidationError` raises early if Codex/GitHub tokens are misconfigured. Review the `credential-audit.json` artifact and confirm env overrides via `settings.spec_workflow` or exported variables.
-- **Container lifecycle**: `JobContainerManager` tears down job containers. If orphaned `job-<run_id>` containers persist, remove manually and invoke `SpecWorkspaceManager.cleanup_expired_workspaces()` for workspace hygiene.
-- **Retry guidance**: Use `retry_spec_workflow_run(run_id, notes=...)` from the orchestrator when resuming failed runs; notes surface in the API payload for auditing.
-- **API availability**: Run detail endpoints live under `/api/spec-automation`; ensure the API container remains healthy so dashboards can retrieve status and artifacts.
+- `research.md`: rationale for skills-first compatibility strategy and fallback normalization.
+- `data-model.md`: normalized skills metadata representation for `SpecAutomationTaskState`.
+- `contracts/spec-automation.openapi.yaml`: phase metadata fields and expanded stage contract coverage.
+- `quickstart.md`: deterministic startup path and verification guidance aligned with umbrella 015.
 
-## Complexity Tracking
+## Post-Design Constitution Re-check
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
+- Runtime-first implementation and tests remain in scope.
+- No constitution-level blockers were identified beyond placeholder governance text.
 
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
-| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+**Gate Status**: PASS.

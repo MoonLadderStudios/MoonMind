@@ -1,34 +1,29 @@
-# Specification Quality Checklist: Agent Queue Remote Worker Daemon (Milestone 3)
+# Specification Quality Checklist: Remote Worker Daemon (015-Aligned)
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-02-13  
+**Purpose**: Validate specification completeness and quality before implementation sign-off  
+**Created**: 2026-02-14  
 **Feature**: `specs/011-remote-worker-daemon/spec.md`
 
 ## Content Quality
 
-- [X] No implementation details (languages, frameworks, APIs)
-- [X] Focused on user value and business needs
-- [X] Written for non-technical stakeholders
-- [X] All mandatory sections completed
+- [x] Focuses on operator outcomes, reliability, and backward-compatible runtime behavior.
+- [x] Includes all mandatory sections in the spec.
+- [x] Aligns terminology with 015 umbrella skills-first semantics.
+- [x] Uses implementation terms only where they are essential operational domain concepts.
 
 ## Requirement Completeness
 
-- [X] No [NEEDS CLARIFICATION] markers remain
-- [X] Requirements are testable and unambiguous
-- [X] Success criteria are measurable
-- [X] Success criteria are technology-agnostic (no implementation details)
-- [X] All acceptance scenarios are defined
-- [X] Edge cases are identified
-- [X] Scope is clearly bounded
-- [X] Dependencies and assumptions identified
+- [x] No `[NEEDS CLARIFICATION]` markers remain.
+- [x] Functional requirements are testable and mapped to runtime surfaces.
+- [x] Acceptance scenarios cover startup, execution, and failure behavior.
+- [x] Edge cases cover missing CLIs/credentials and skill policy violations.
 
 ## Feature Readiness
 
-- [X] All functional requirements have clear acceptance criteria
-- [X] User scenarios cover primary flows
-- [X] Feature meets measurable outcomes defined in Success Criteria
-- [X] No implementation details leak into specification
+- [x] Runtime implementation tasks are tracked and completed in `tasks.md`.
+- [x] Contracts and traceability documents align with updated requirements.
+- [x] Validation gate includes full unit suite (`./tools/test_unit.sh`).
 
 ## Notes
 
-- Spec includes `DOC-REQ-*` extraction for Milestone 3 and maps source requirements to functional requirements.
+- The scope-validation helper script referenced by orchestration policy is absent in this repository; this is tracked as a tooling blocker rather than a runtime feature gap.

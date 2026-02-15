@@ -64,32 +64,32 @@ class TestAtlassianSettings:
     def test_atlassian_url_correction(self, monkeypatch):
         # Test case 1: URL with "https://https://"
         monkeypatch.setenv("ATLASSIAN_URL", "https://https://example.atlassian.net")
-        settings = AtlassianSettings()
+        settings = AtlassianSettings(_env_file=None)
         assert settings.atlassian_url == "https://example.atlassian.net"
 
         # Test case 2: Correct HTTPS URL
         monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
-        settings2 = AtlassianSettings()
+        settings2 = AtlassianSettings(_env_file=None)
         assert settings2.atlassian_url == "https://example.atlassian.net"
 
         # Test case 3: HTTP URL (should remain unchanged)
         monkeypatch.setenv("ATLASSIAN_URL", "http://example.atlassian.net")
-        settings3 = AtlassianSettings()
+        settings3 = AtlassianSettings(_env_file=None)
         assert settings3.atlassian_url == "http://example.atlassian.net"
 
         # Test case 4: Empty URL (should remain None or empty)
         monkeypatch.delenv("ATLASSIAN_URL", raising=False)
-        settings4 = AtlassianSettings()
+        settings4 = AtlassianSettings(_env_file=None)
         assert settings4.atlassian_url is None
 
         # Test case 5: URL that only starts with "https://" once
         monkeypatch.setenv("ATLASSIAN_URL", "https://another.example.com")
-        settings5 = AtlassianSettings()
+        settings5 = AtlassianSettings(_env_file=None)
         assert settings5.atlassian_url == "https://another.example.com"
 
         # Test case 6: URL with no scheme
         monkeypatch.setenv("ATLASSIAN_URL", "example.atlassian.net")
-        settings6 = AtlassianSettings()
+        settings6 = AtlassianSettings(_env_file=None)
         assert settings6.atlassian_url == "example.atlassian.net"
 
         # Clean up environment variable
@@ -158,3 +158,42 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_MAX_BYTES", raising=False)
+
+    def test_skills_defaults(self):
+        """Skills-first settings should have stable defaults."""
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.skills_enabled is True
+        assert settings.skills_canary_percent == 100
+        assert settings.default_skill == "speckit"
+        assert settings.allowed_skills == ("speckit",)
+
+    def test_skills_overrides(self):
+        """Skill settings should accept explicit override values."""
+
+        settings = SpecWorkflowSettings(
+            _env_file=None,
+            skills_enabled=False,
+            skills_canary_percent=25,
+            default_skill="custom",
+            allowed_skills=("speckit", "custom"),
+            submit_skill="custom",
+        )
+
+        assert settings.skills_enabled is False
+        assert settings.skills_canary_percent == 25
+        assert settings.default_skill == "custom"
+        assert settings.allowed_skills == ("speckit", "custom")
+        assert settings.submit_skill == "custom"
+
+    def test_default_skill_is_added_to_allowlist(self):
+        """Configured default skill should always be allowlisted."""
+
+        settings = SpecWorkflowSettings(
+            _env_file=None,
+            default_skill="custom-default",
+            allowed_skills=("speckit",),
+        )
+
+        assert settings.default_skill == "custom-default"
+        assert settings.allowed_skills == ("speckit", "custom-default")

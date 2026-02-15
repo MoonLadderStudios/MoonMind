@@ -35,11 +35,19 @@ Body:
     "nextAttemptAt": null,
     "payload": {
       "repository": "MoonLadderStudios/MoonMind",
+      "codex": {
+        "model": "gpt-5-codex",
+        "effort": "high"
+      },
       "requiredCapabilities": ["git", "codex"]
     }
   }
 }
 ```
+
+Per-task Codex overrides are expressed via `payload.codex.model` and
+`payload.codex.effort`, and should take precedence over worker defaults for that
+job only.
 
 ## 2) Retry/dead-letter behavior
 

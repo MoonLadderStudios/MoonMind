@@ -49,3 +49,18 @@
 - Decision: Encapsulate GitHub interactions in dedicated utility functions/services that accept repository metadata from discovery outputs, authenticate via mounted credentials, and log responses for PR/audit updates.
 - Rationale: Provides a clean seam for retries and meets FR-006 logging requirements since every request/response can be captured centrally.
 - Alternatives considered: Embedding raw `gh` CLI calls throughout tasks, but that reduces observability and scatters credential handling.
+
+## 015 Umbrella Alignment: Skills-First Stage Routing
+- Decision: Add a skills policy layer (`moonmind/workflows/skills`) that resolves the selected stage skill, canary gating, and fallback behavior before invoking direct stage executors.
+- Rationale: Supports skills-first orchestration while preserving existing Speckit behavior and route compatibility.
+- Alternatives considered: Replacing direct stage code immediately with a brand-new executor model, but that would increase migration risk and break parity with existing runs.
+
+## 015 Umbrella Alignment: Speckit Always Available
+- Decision: Run `speckit --version` startup checks in both Codex and Gemini worker entrypoints, in addition to existing Codex/Gemini readiness checks.
+- Rationale: Enforces "workers always have Speckit" as an invariant independent of selected stage skill.
+- Alternatives considered: Checking Speckit only in Spec Kit task execution paths, but that would delay failures and create non-deterministic startup behavior.
+
+## 015 Umbrella Alignment: Fastest Path Runtime Profile
+- Decision: Document and test a compose-first startup path that uses one-time Codex auth volume login and Google Gemini embedding defaults (`DEFAULT_EMBEDDING_PROVIDER=google`, `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`).
+- Rationale: Operators need a deterministic bootstrap path for worker auth plus vector embedding readiness.
+- Alternatives considered: Local-only Poetry startup as the primary path, but it does not provide the shortest reproducible operator flow for this deployment profile.
