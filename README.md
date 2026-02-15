@@ -18,7 +18,7 @@ MoonMind exposes all of this through:
 
 ## Quick Start
 
-This section guides you through a one-click deployment of MoonMind using Docker Compose. This setup will start the necessary services: the User Interface (Open-WebUI), the API backend, and the Qdrant vector database.
+This section guides you through a one-click deployment of MoonMind using Docker Compose. The default stack includes the UI (Open-WebUI), API backend, Qdrant, RabbitMQ/Postgres dependencies, Celery/orchestrator services, and the `moonmind-codex-worker` daemon for `/api/queue` jobs.
 
 **Prerequisites:**
 
@@ -41,12 +41,12 @@ This section guides you through a one-click deployment of MoonMind using Docker 
 **Running MoonMind:**
 
 1.  **Open a terminal** in the root directory of the MoonMind project.
-2.  **Authenticate the Codex worker volume (one-time per environment)** if you plan to run Codex automation:
+2.  **Authenticate the Codex worker volume (one-time per environment)** before running Codex automation (Celery or `/api/queue` worker):
     ```bash
-    docker compose run --rm celery_codex_worker \
-      bash -lc 'codex login --device-auth && codex login status'
+    ./tools/auth-codex-volume.sh
     ```
-    This persists Codex auth in the `codex_auth_volume` so worker pre-flight checks pass.
+    This persists Codex auth in `codex_auth_volume` so worker pre-flight checks pass.
+    By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If Codex is not authenticated yet, the worker stays idle and retries until `codex login status` passes.
 3.  **Start the services** using the following command:
     ```bash
     docker-compose up -d
@@ -125,6 +125,27 @@ poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=inf
 ```
 
 The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. The Spec Kit worker runs a Codex pre-flight (`codex login status`) and will fail fast if the configured auth volume is not authenticated.
+
+### Agent queue Codex worker
+
+MoonMind also includes a standalone queue worker daemon for `/api/queue/*` jobs (`codex_exec` / `codex_skill`):
+
+- Compose service: `codex-worker` (started by default via `docker compose up -d`).
+- CLI entrypoint: `moonmind-codex-worker`.
+- Claim path: `POST /api/queue/jobs/claim` with `X-MoonMind-Worker-Token`.
+
+Run it manually outside Compose if needed:
+
+```bash
+poetry run moonmind-codex-worker
+```
+
+Quick checks:
+
+```bash
+docker compose logs -f codex-worker
+curl http://localhost:5000/api/queue/jobs/<job-id>
+```
 
 The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:
 
