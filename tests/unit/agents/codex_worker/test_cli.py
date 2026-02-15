@@ -56,13 +56,13 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
 def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> None:
     """Token-present startup should run gh auth login/setup/status in order."""
 
-    calls: list[tuple[list[str], str | None]] = []
+    calls: list[tuple[list[str], str | None, dict[str, str | None] | None]] = []
 
     def fake_verify(name: str) -> str:
         return f"/usr/bin/{name}"
 
     def fake_run(command, *args, **kwargs):
-        calls.append((list(command), kwargs.get("input")))
+        calls.append((list(command), kwargs.get("input"), kwargs.get("env")))
         return subprocess.CompletedProcess(
             args=command, returncode=0, stdout="", stderr=""
         )
@@ -77,8 +77,8 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         }
     )
 
-    assert calls[0] == (["/usr/bin/speckit", "--version"], None)
-    assert calls[1] == (["/usr/bin/codex", "login", "status"], None)
+    assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
+    assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
     assert calls[2] == (
         [
             "/usr/bin/gh",
@@ -89,11 +89,17 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
             "--with-token",
         ],
         "ghp-test-token",
+        {"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
-    assert calls[3] == (["/usr/bin/gh", "auth", "setup-git"], None)
+    assert calls[3] == (
+        ["/usr/bin/gh", "auth", "setup-git"],
+        None,
+        {"GITHUB_TOKEN": None, "GH_TOKEN": None},
+    )
     assert calls[4] == (
         ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"],
         None,
+        {"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
 
 

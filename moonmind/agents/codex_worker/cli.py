@@ -33,12 +33,21 @@ def _run_checked_command(
     *,
     input_text: str | None = None,
     redaction_values: Sequence[str] = (),
+    env: Mapping[str, str | None] | None = None,
 ) -> None:
+    run_env = dict(os.environ)
+    if env is not None:
+        for key, value in env.items():
+            if value is None:
+                run_env.pop(key, None)
+            else:
+                run_env[key] = value
     result = subprocess.run(
         command,
         input=input_text,
         capture_output=True,
         text=True,
+        env=run_env,
     )
     if result.returncode == 0:
         return
@@ -144,14 +153,17 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         ],
         input_text=github_token,
         redaction_values=redaction_values,
+        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
     _run_checked_command(
         [gh_path, "auth", "setup-git"],
         redaction_values=redaction_values,
+        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
     _run_checked_command(
         [gh_path, "auth", "status", "--hostname", "github.com"],
         redaction_values=redaction_values,
+        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
 
 
