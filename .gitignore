@@ -5,6 +5,7 @@ temp/
 data/
 prompts/
 jobs/
+agent_jobs/
 *.code-workspace
 .env
 .env-backup
