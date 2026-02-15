@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
-from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
 
