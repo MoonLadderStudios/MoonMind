@@ -20,7 +20,7 @@
      docker run --rm -it \
        -v codex_auth_${shard}:/home/app/.codex \
        "${JOB_IMAGE}" \
-       bash -lc 'codex login && codex login status'
+       bash -lc 'codex login --device-auth && codex login status'
    done
    ```
 3. Record the authentication timestamp for operations log.

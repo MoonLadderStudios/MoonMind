@@ -9,7 +9,7 @@ Represents the shared `api_service` container image that packages Codex CLI, Git
 |-------|------|-------------|------------|
 | `base_image` | string | Upstream image tag (e.g., `python:3.11-slim`) used before customizations | Must be an approved distro tag maintained by security team |
 | `node_version` | string | Node.js version installed in the build stage to support npm CLIs | Must be >= 18.x LTS |
-| `codex_cli_version` | string | Semver string injected via `CODEX_CLI_VERSION` build arg | Cannot be empty; must match `npm view @githubnext/codex-cli versions` |
+| `codex_cli_version` | string | Semver string injected via `CODEX_CLI_VERSION` build arg | Cannot be empty; must match `npm view @openai/codex versions` |
 | `spec_kit_version` | string | Semver string for `@githubnext/spec-kit` CLI | Same validation as above |
 | `codex_config_template_path` | path | Location of the baked template (e.g., `/etc/codex/config.toml`) | File must exist in final layer and be readable by worker UID |
 | `install_logs` | text array | Captured logs/hashes proving CLI install + checksum | Must include at least `codex --version` and `speckit --version` outputs |

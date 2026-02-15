@@ -13,7 +13,7 @@ Keys for model providers (e.g. Google and OpenAI) are read from this user's prof
 
 - **Services to run**: `docker compose up rabbitmq celery_codex_worker api` (RabbitMQ broker, Codex-focused Celery worker, and API service). Ensure PostgreSQL is reachable for the Celery result backend.
 - **Queue setup**: Confirm the Codex worker is bound to both Spec Workflow queues: `${CELERY_DEFAULT_QUEUE:-speckit}` for discovery and `${SPEC_WORKFLOW_CODEX_QUEUE:-codex}` for Codex phases.
-- **Codex auth volume**: Keep `CODEX_VOLUME_NAME`/`CODEX_VOLUME_PATH` aligned with the worker defaults (`codex_auth_volume` mounted at `/home/app/.codex`) and authenticate once with `codex login` before launching production runs.
+- **Codex auth volume**: Keep `CODEX_VOLUME_NAME`/`CODEX_VOLUME_PATH` aligned with the worker defaults (`codex_auth_volume` mounted at `/home/app/.codex`) and authenticate once with `codex login --device-auth` before launching production runs.
 - **Metrics**: The worker emits StatsD-compatible counters and timers (prefix `moonmind.spec_workflow`). Point `STATSD_HOST`/`STATSD_PORT` or `SPEC_WORKFLOW_METRICS_HOST`/`SPEC_WORKFLOW_METRICS_PORT` at your collector before triggering runs to capture observability data.
 - **Log review**: Look for `Spec workflow task …` entries in the worker logs to confirm each stage transitions through `running`, `success`, or `failure` with summarized payloads.
 - **Credential validation**: Failed runs often stem from missing Codex or GitHub credentials. The first task attempt records audit notes; resolve secrets and retry via `/api/workflows/speckit/runs/{id}/retry`.

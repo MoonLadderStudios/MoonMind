@@ -26,7 +26,7 @@ Bring up Codex + Gemini workers with:
 
 ```bash
 docker compose run --rm celery_codex_worker \
-  bash -lc 'codex login && codex login status'
+  bash -lc 'codex login --device-auth && codex login status'
 ```
 
 ## 2) Start runtime services
