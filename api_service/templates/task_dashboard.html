@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MoonMind Tasks</title>
+    <link rel="stylesheet" href="/static/task_dashboard/dashboard.css" />
+  </head>
+  <body>
+    <main class="dashboard-root">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">MoonMind Operations</p>
+          <h1>Tasks Dashboard</h1>
+          <p class="subhead">
+            Monitor active work and submit new queue, workflow, and orchestrator
+            runs.
+          </p>
+        </div>
+      </header>
+
+      <nav class="route-nav" aria-label="Task dashboard navigation">
+        <a href="/tasks" data-nav>Active</a>
+        <a href="/tasks/queue" data-nav>Queue</a>
+        <a href="/tasks/queue/new" data-nav>Queue Submit</a>
+        <a href="/tasks/speckit" data-nav>SpecKit</a>
+        <a href="/tasks/speckit/new" data-nav>SpecKit Submit</a>
+        <a href="/tasks/orchestrator" data-nav>Orchestrator</a>
+        <a href="/tasks/orchestrator/new" data-nav>Orchestrator Submit</a>
+      </nav>
+
+      <section class="panel" id="dashboard-content" aria-live="polite">
+        <p class="loading">Loading dashboard...</p>
+      </section>
+    </main>
+
+    <script id="task-dashboard-config" type="application/json">
+      {{ dashboard_config_json | safe }}
+    </script>
+    <script defer src="/static/task_dashboard/dashboard.js"></script>
+  </body>
+</html>
