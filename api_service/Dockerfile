@@ -154,7 +154,9 @@ BASH
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
 RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
-        cp -r /usr/local/lib/node_modules/@openai/codex/vendor/* /usr/local/vendor/; \
+        if [ -d /usr/local/lib/node_modules/@openai/codex/vendor ]; then \
+            cp -r /usr/local/lib/node_modules/@openai/codex/vendor/* /usr/local/vendor/; \
+        fi; \
     fi \
     && codex --version \
     && speckit --version \
@@ -207,6 +209,7 @@ RUN apt-get update && \
         tesseract-ocr \
         tesseract-ocr-eng \
         git \
+        gh \
         curl \
         gnupg \
         nodejs && \

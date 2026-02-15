@@ -326,7 +326,7 @@ Environment variables:
 
 * `MOONMIND_URL` (e.g., `http://moonmind-host:5000`)
 * `MOONMIND_WORKER_ID` (e.g., hostname)
-* `MOONMIND_WORKER_TOKEN` (if auth enabled)
+* `MOONMIND_WORKER_TOKEN` (required for `/api/queue/jobs/claim`; in local `AUTH_PROVIDER=disabled` mode you can bootstrap one via `POST /api/queue/workers/tokens`)
 * `MOONMIND_POLL_INTERVAL_MS` (default 1500)
 * `MOONMIND_LEASE_SECONDS` (default 120)
 * `MOONMIND_WORKDIR` (local base dir for repo checkouts)
