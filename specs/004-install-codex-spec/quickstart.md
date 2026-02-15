@@ -5,7 +5,7 @@ Follow these steps to build the updated `api_service` image, confirm Codex + Spe
 ## 1. Prerequisites
 
 - Docker Engine with access to the MoonMind repo root.
-- Network access (or cached artifacts) to fetch npm packages `@githubnext/codex-cli` and `@githubnext/spec-kit` during the build.
+- Network access (or cached artifacts) to fetch npm packages `@openai/codex` and `@githubnext/spec-kit` during the build.
 - ChatGPT/Codex credentials already stored in the worker’s persistent `~/.codex` volume (only needed for `codex login status`).
 - RabbitMQ, PostgreSQL, and Celery worker services available if you plan to run the full workflow (`docker compose up rabbitmq celery-worker api`).
 
@@ -13,14 +13,14 @@ Follow these steps to build the updated `api_service` image, confirm Codex + Spe
 
 ```bash
 # From the repo root
-CODEX_CLI_VERSION=0.6.0 SPEC_KIT_VERSION=0.4.0 \
+CODEX_CLI_VERSION=latest SPEC_KIT_VERSION=0.4.0 \
   docker build -t moonmind/api-service:tooling \
   --build-arg CODEX_CLI_VERSION \
   --build-arg SPEC_KIT_VERSION \
   -f api_service/Dockerfile .
 ```
 
-- The Dockerfile installs Node.js in a builder stage, runs `npm install -g @githubnext/codex-cli@${CODEX_CLI_VERSION}` and `@githubnext/spec-kit@${SPEC_KIT_VERSION}`, then copies the binaries into the final runtime layer.
+- The Dockerfile installs Node.js in a builder stage, runs `npm install -g @openai/codex@${CODEX_CLI_VERSION}` and `@githubnext/spec-kit@${SPEC_KIT_VERSION}`, then copies the binaries into the final runtime layer.
 - Build logs should show `codex --version` and `speckit --version` checks before the image finalizes.
 
 ## 3. Verify CLI availability in a container

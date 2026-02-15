@@ -1,7 +1,7 @@
 # Research: Codex & Spec Kit Tooling Availability
 
 ## Decision 1: Codex CLI install source & version pin
-- **Decision**: Install Codex CLI via the official npm package `@githubnext/codex-cli` during the Docker build, using a `CODEX_CLI_VERSION` build arg defaulting to a vetted semver tag (initially `0.6.x`) so releases can be bumped intentionally.
+- **Decision**: Install Codex CLI via the official npm package `@openai/codex` during the Docker build, using a `CODEX_CLI_VERSION` build arg defaulting to a vetted semver tag (initially `0.6.x`) so releases can be bumped intentionally.
 - **Rationale**: The npm distribution is the only widely documented delivery mechanism for the Codex CLI, keeps Node-based dependencies isolated, and allows deterministic builds by pinning versions. Installing during the Docker build means Celery workers inherit the binary without runtime downloads.
 - **Alternatives considered**:
   - *Download prebuilt tarballs from GitHub Releases*: rejected because no official release artifacts are published yet and maintaining manual URLs would be brittle.
@@ -44,9 +44,9 @@
 
 | Step | Command | Key Output |
 |------|---------|------------|
-| Build image with pinned CLIs | `CODEX_CLI_VERSION=0.6.0 SPEC_KIT_VERSION=0.4.0 docker build -t moonmind/api-service:tooling --build-arg CODEX_CLI_VERSION --build-arg SPEC_KIT_VERSION -f api_service/Dockerfile .` | `codex@0.6.0` and `@githubnext/spec-kit@0.4.0` install logs, followed by `codex --version` → `codex 0.6.0` and `speckit --version` → `0.4.0`. |
-| Smoke CLI versions via compose | `docker compose -f docker-compose.test.yaml run --rm cli-tooling-smoke` | `codex 0.6.0` newline `speckit 0.4.0`. |
+| Build image with pinned CLIs | `CODEX_CLI_VERSION=latest SPEC_KIT_VERSION=0.4.0 docker build -t moonmind/api-service:tooling --build-arg CODEX_CLI_VERSION --build-arg SPEC_KIT_VERSION -f api_service/Dockerfile .` | `codex@latest` and `@githubnext/spec-kit@0.4.0` install logs, followed by `codex --version` → `codex latest` and `speckit --version` → `0.4.0`. |
+| Smoke CLI versions via compose | `docker compose -f docker-compose.test.yaml run --rm cli-tooling-smoke` | `codex latest` newline `speckit 0.4.0`. |
 | Validate approval policy merge | `docker run --rm -e HOME=/home/app moonmind/api-service:tooling bash -lc 'cat ~/.codex/config.toml'` | TOML snippet containing `approval_policy = "never"`. |
-| Worker smoke test | `docker compose run --rm celery-worker bash -lc 'speckit --version && codex login status'` | `speckit 0.4.0` followed by `Login status: authenticated` and Celery bootstrap log `Codex CLI version: 0.6.0`. |
+| Worker smoke test | `docker compose run --rm celery-worker bash -lc 'speckit --version && codex login status'` | `speckit 0.4.0` followed by `Login status: authenticated` and Celery bootstrap log `Codex CLI version: latest`. |
 
 > **Note**: Commands executed on a workstation with Docker Engine 24.0 and docker compose v2.27. Logs above capture successful end-to-end quickstart validation for the bundled CLIs and Codex config policy enforcement.

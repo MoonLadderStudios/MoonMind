@@ -12,7 +12,7 @@ Package Codex CLI and GitHub Spec Kit CLI directly into `api_service/Dockerfile`
 ## Technical Context
 
 **Language/Version**: Python 3.11 (per AGENTS.md)  
-**Primary Dependencies**: FastAPI API service, Celery 5.4 worker, Codex CLI (npm package `@githubnext/codex-cli`), GitHub Spec Kit CLI (npm package `@githubnext/spec-kit`)  
+**Primary Dependencies**: FastAPI API service, Celery 5.4 worker, Codex CLI (npm package `@openai/codex`), GitHub Spec Kit CLI (npm package `@githubnext/spec-kit`)  
 **Storage**: PostgreSQL result backend, RabbitMQ broker, local filesystem volumes for artifacts  
 **Testing**: pytest + docker-compose smoke tests; need container-level verification of packaged CLIs  
 **Target Platform**: Containerized Linux (api_service + Celery workers share Docker image)  

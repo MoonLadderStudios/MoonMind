@@ -28,7 +28,7 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 - [x] T003 Create `api_service/docker/README.md` entry describing multi-stage build flow and new build args
 - [x] T004 [P] Add `CODEX_CLI_VERSION` and `SPEC_KIT_VERSION` build arguments with defaults to `api_service/Dockerfile`
-- [x] T005 [P] Add multi-stage Node builder that installs `@githubnext/codex-cli` and `@githubnext/spec-kit` via npm in `api_service/Dockerfile`
+- [x] T005 [P] Add multi-stage Node builder that installs `@openai/codex` and `@githubnext/spec-kit` via npm in `api_service/Dockerfile`
 - [x] T006 [P] Copy Codex & Spec Kit binaries plus licenses from builder stage into the runtime layer in `api_service/Dockerfile`
 - [x] T007 Update `README.md` tooling section to mention bundled CLIs and version pin strategy
 - [x] T008 Extend `docs/SpecKitAutomation.md` with health-check expectations for bundled CLIs

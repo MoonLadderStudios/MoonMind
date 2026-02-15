@@ -21,7 +21,7 @@
 - Documented fast-reference troubleshooting guidance and quickstart verification outputs for operations.
 
 ### Bundled CLI Versions
-- `@githubnext/codex-cli` (`codex`) – **0.6.0** (controlled via `CODEX_CLI_VERSION` build arg).
+- `@openai/codex` (`codex`) – **latest** (controlled via `CODEX_CLI_VERSION` build arg).
 - `@githubnext/spec-kit` (`speckit`) – **0.4.0** (controlled via `SPEC_KIT_VERSION` build arg).
 
 ### Upgrade Guidance

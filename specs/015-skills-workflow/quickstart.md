@@ -16,7 +16,7 @@
 
 ```bash
 docker compose run --rm celery_codex_worker \
-  bash -lc 'codex login && codex login status'
+  bash -lc 'codex login --device-auth && codex login status'
 ```
 
 This stores auth in `${CODEX_VOLUME_NAME:-codex_auth_volume}`.
