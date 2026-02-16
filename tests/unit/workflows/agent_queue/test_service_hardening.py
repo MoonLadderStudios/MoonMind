@@ -252,7 +252,10 @@ async def test_create_job_rejects_unsupported_job_type(tmp_path: Path) -> None:
             ):
                 await service.create_job(
                     job_type="unsupported_type",
-                    payload={"repository": "Moon/Mind", "task": {"instructions": "Run"}},
+                    payload={
+                        "repository": "Moon/Mind",
+                        "task": {"instructions": "Run"},
+                    },
                 )
 
 
@@ -374,9 +377,12 @@ async def test_extract_publish_mode_defaults_to_none_when_absent() -> None:
     """Telemetry parser should not count missing publish metadata as requested."""
 
     assert AgentQueueService._extract_publish_mode({}) == "none"
-    assert AgentQueueService._extract_publish_mode(
-        {"task": {"publish": {"mode": "branch"}}}
-    ) == "branch"
+    assert (
+        AgentQueueService._extract_publish_mode(
+            {"task": {"publish": {"mode": "branch"}}}
+        )
+        == "branch"
+    )
 
 
 async def test_load_events_by_job_sets_truncation_flag(tmp_path: Path) -> None:

@@ -250,7 +250,9 @@ async def test_run_once_exception_still_records_terminal_failure_when_upload_fai
     assert queue.completed == []
 
 
-async def test_run_once_redacts_task_context_payload(tmp_path: Path, monkeypatch) -> None:
+async def test_run_once_redacts_task_context_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
     """task_context.json should redact secret values from job-derived payloads."""
 
     secret_value = "super-secret-token-value"
