@@ -33,13 +33,15 @@ def _run_checked_command(
     *,
     input_text: str | None = None,
     redaction_values: Sequence[str] = (),
-    env: Mapping[str, str | None] | None = None,
+    env_overrides: Mapping[str, str] | None = None,
+    unset_env_keys: Sequence[str] = (),
 ) -> None:
     run_kwargs: dict[str, object] = {
         "input": input_text,
         "capture_output": True,
         "text": True,
     }
+<<<<<<< HEAD
     if env is not None:
         merged_env = dict(os.environ)
         for key, value in env.items():
@@ -48,6 +50,15 @@ def _run_checked_command(
                 continue
             merged_env[key] = value
         run_kwargs["env"] = merged_env
+=======
+    if env_overrides or unset_env_keys:
+        process_env = os.environ.copy()
+        if env_overrides:
+            process_env.update(env_overrides)
+        for key in unset_env_keys:
+            process_env.pop(key, None)
+        run_kwargs["env"] = process_env
+>>>>>>> origin/main
 
     result = subprocess.run(command, **run_kwargs)
     if result.returncode == 0:
@@ -154,17 +165,17 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         ],
         input_text=github_token,
         redaction_values=redaction_values,
-        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
     _run_checked_command(
         [gh_path, "auth", "setup-git"],
         redaction_values=redaction_values,
-        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
     _run_checked_command(
         [gh_path, "auth", "status", "--hostname", "github.com"],
         redaction_values=redaction_values,
-        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
 
 

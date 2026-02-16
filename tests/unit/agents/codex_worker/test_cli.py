@@ -57,6 +57,10 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     """Token-present startup should run gh auth login/setup/status in order."""
 
     calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
+<<<<<<< HEAD
+=======
+    monkeypatch.setenv("MOONMIND_TEST_ENV", "preserved")
+>>>>>>> origin/main
 
     def fake_verify(name: str) -> str:
         return f"/usr/bin/{name}"
@@ -79,6 +83,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
 
     assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
     assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
+<<<<<<< HEAD
     assert calls[2][:2] == (
         [
             "/usr/bin/gh",
@@ -95,6 +100,33 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"],
         None,
     )
+=======
+    assert calls[2][0] == [
+        "/usr/bin/gh",
+        "auth",
+        "login",
+        "--hostname",
+        "github.com",
+        "--with-token",
+    ]
+    assert calls[2][1] == "ghp-test-token"
+    assert calls[2][2] is not None
+    assert calls[2][2].get("MOONMIND_TEST_ENV") == "preserved"
+    assert "GITHUB_TOKEN" not in calls[2][2]
+    assert "GH_TOKEN" not in calls[2][2]
+    assert calls[3][0] == ["/usr/bin/gh", "auth", "setup-git"]
+    assert calls[3][1] is None
+    assert calls[3][2] is not None
+    assert calls[3][2].get("MOONMIND_TEST_ENV") == "preserved"
+    assert "GITHUB_TOKEN" not in calls[3][2]
+    assert "GH_TOKEN" not in calls[3][2]
+    assert calls[4][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
+    assert calls[4][1] is None
+    assert calls[4][2] is not None
+    assert calls[4][2].get("MOONMIND_TEST_ENV") == "preserved"
+    assert "GITHUB_TOKEN" not in calls[4][2]
+    assert "GH_TOKEN" not in calls[4][2]
+>>>>>>> origin/main
 
     for idx in (2, 3, 4):
         env = calls[idx][2]

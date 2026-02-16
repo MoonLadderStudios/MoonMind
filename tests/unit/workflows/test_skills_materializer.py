@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 import io
 import subprocess
 import tarfile
 import zipfile
+=======
+import socket
+import subprocess
+import tarfile
+import zipfile
+from io import BytesIO
+>>>>>>> origin/main
 from pathlib import Path
 
 import pytest
@@ -13,6 +21,9 @@ import pytest
 from moonmind.workflows.skills import materializer as skill_materializer
 from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
+    _extract_archive,
+    _resolve_source_root,
+    _validate_public_remote_host,
     materialize_run_skill_workspace,
 )
 from moonmind.workflows.skills.resolver import ResolvedSkill, RunSkillSelection
@@ -180,6 +191,7 @@ def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_
     assert not global_codex_config.exists()
 
 
+<<<<<<< HEAD
 def test_materialize_run_skill_workspace_rejects_zip_path_traversal(tmp_path):
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "zip-slip"
@@ -327,3 +339,73 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
         )
 
     assert exc.value.code == "cache_entry_incomplete"
+=======
+def test_extract_archive_rejects_zip_path_traversal(tmp_path):
+    archive = tmp_path / "malicious.zip"
+    destination = tmp_path / "extract"
+    destination.mkdir(parents=True)
+    with zipfile.ZipFile(archive, mode="w") as bundle:
+        bundle.writestr("../evil.txt", "pwnd")
+
+    with pytest.raises(SkillMaterializationError, match="not allowed") as exc:
+        _extract_archive(archive, destination)
+
+    assert exc.value.code == "unsafe_bundle_member"
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_extract_archive_rejects_tar_path_traversal(tmp_path):
+    archive = tmp_path / "malicious.tar"
+    destination = tmp_path / "extract"
+    destination.mkdir(parents=True)
+    with tarfile.open(archive, mode="w") as bundle:
+        info = tarfile.TarInfo(name="../evil.txt")
+        info.size = len(b"pwnd")
+        bundle.addfile(info, fileobj=BytesIO(b"pwnd"))
+
+    with pytest.raises(SkillMaterializationError, match="not allowed") as exc:
+        _extract_archive(archive, destination)
+
+    assert exc.value.code == "unsafe_bundle_member"
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_validate_public_remote_host_rejects_private_ip(monkeypatch):
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))
+        ],
+    )
+
+    with pytest.raises(SkillMaterializationError, match="non-public address") as exc:
+        _validate_public_remote_host("https://example.com/skill.zip")
+
+    assert exc.value.code == "bundle_fetch_failed"
+
+
+def test_resolve_source_root_uses_git_clone_end_of_options_separator(
+    tmp_path, monkeypatch
+):
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(args=command, returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer.subprocess.run",
+        fake_run,
+    )
+
+    entry = ResolvedSkill(
+        skill_name="speckit",
+        version="1.0.0",
+        source_uri="git+https://github.com/example/repo.git",
+    )
+
+    _resolve_source_root(entry, tmp_path)
+
+    assert calls
+    assert calls[0][:5] == ["git", "clone", "--depth", "1", "--"]
+>>>>>>> origin/main
