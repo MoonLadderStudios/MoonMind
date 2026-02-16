@@ -28,3 +28,5 @@ var/worker/
 var/worker-relative/
 var/skill_cache/
 var/skills_workspaces/
+var/security/
+agent_jobs/
