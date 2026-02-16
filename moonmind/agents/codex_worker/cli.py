@@ -41,16 +41,6 @@ def _run_checked_command(
         "capture_output": True,
         "text": True,
     }
-<<<<<<< HEAD
-    if env is not None:
-        merged_env = dict(os.environ)
-        for key, value in env.items():
-            if value is None:
-                merged_env.pop(key, None)
-                continue
-            merged_env[key] = value
-        run_kwargs["env"] = merged_env
-=======
     if env_overrides or unset_env_keys:
         process_env = os.environ.copy()
         if env_overrides:
@@ -58,7 +48,6 @@ def _run_checked_command(
         for key in unset_env_keys:
             process_env.pop(key, None)
         run_kwargs["env"] = process_env
->>>>>>> origin/main
 
     result = subprocess.run(command, **run_kwargs)
     if result.returncode == 0:

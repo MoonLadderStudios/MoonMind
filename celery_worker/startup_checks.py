@@ -91,6 +91,7 @@ def validate_shared_skills_mirror(
     *,
     worker_name: str,
     mirror_root: str | None,
+    repo_root: str | None = None,
     strict: bool,
     logger: logging.Logger,
 ) -> Path | None:
@@ -105,7 +106,14 @@ def validate_shared_skills_mirror(
 
     mirror_path = Path(raw).expanduser()
     if not mirror_path.is_absolute():
-        mirror_path = (Path.cwd() / mirror_path).resolve()
+        base_path = Path.cwd().resolve()
+        repo_raw = (repo_root or "").strip()
+        if repo_raw:
+            repo_path = Path(repo_raw).expanduser()
+            if not repo_path.is_absolute():
+                repo_path = (Path.cwd() / repo_path).resolve()
+            base_path = repo_path.resolve()
+        mirror_path = (base_path / mirror_path).resolve()
 
     if not mirror_path.exists():
         raise RuntimeError(f"Shared skills mirror root does not exist: {mirror_path}")

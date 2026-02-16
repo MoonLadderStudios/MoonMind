@@ -57,10 +57,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     """Token-present startup should run gh auth login/setup/status in order."""
 
     calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
-<<<<<<< HEAD
-=======
     monkeypatch.setenv("MOONMIND_TEST_ENV", "preserved")
->>>>>>> origin/main
 
     def fake_verify(name: str) -> str:
         return f"/usr/bin/{name}"
@@ -83,24 +80,6 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
 
     assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
     assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
-<<<<<<< HEAD
-    assert calls[2][:2] == (
-        [
-            "/usr/bin/gh",
-            "auth",
-            "login",
-            "--hostname",
-            "github.com",
-            "--with-token",
-        ],
-        "ghp-test-token",
-    )
-    assert calls[3][:2] == (["/usr/bin/gh", "auth", "setup-git"], None)
-    assert calls[4][:2] == (
-        ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"],
-        None,
-    )
-=======
     assert calls[2][0] == [
         "/usr/bin/gh",
         "auth",
@@ -126,7 +105,6 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     assert calls[4][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[4][2]
     assert "GH_TOKEN" not in calls[4][2]
->>>>>>> origin/main
 
     for idx in (2, 3, 4):
         env = calls[idx][2]
@@ -229,7 +207,7 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
 
 
 def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
-    """Subprocess env overrides should preserve base vars while removing None values."""
+    """Subprocess env overrides should preserve base vars while removing keys."""
 
     observed_env: dict[str, str] | None = None
 
@@ -246,7 +224,8 @@ def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
 
     cli._run_checked_command(
         ["/usr/bin/echo", "ok"],
-        env={"MM_KEEP_VAR": "overridden", "MM_REMOVE_VAR": None, "MM_NEW_VAR": "new"},
+        env_overrides={"MM_KEEP_VAR": "overridden", "MM_NEW_VAR": "new"},
+        unset_env_keys=("MM_REMOVE_VAR",),
     )
 
     assert observed_env is not None

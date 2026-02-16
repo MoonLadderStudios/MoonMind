@@ -108,3 +108,32 @@ def test_validate_shared_skills_mirror_non_strict_skips_checks():
     )
 
     assert resolved is None
+
+
+def test_validate_shared_skills_mirror_strict_resolves_relative_to_repo_root(
+    tmp_path, monkeypatch
+):
+    logger = logging.getLogger("worker-startup-test")
+
+    repo_root = tmp_path / "repo"
+    mirror_root = repo_root / ".agents" / "skills" / "skills"
+    skill = mirror_root / "speckit"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: speckit\ndescription: test\n---\n",
+        encoding="utf-8",
+    )
+
+    unrelated_cwd = tmp_path / "unrelated"
+    unrelated_cwd.mkdir(parents=True)
+    monkeypatch.chdir(unrelated_cwd)
+
+    resolved = validate_shared_skills_mirror(
+        worker_name="codex",
+        mirror_root=".agents/skills/skills",
+        repo_root=str(repo_root),
+        strict=True,
+        logger=logger,
+    )
+
+    assert resolved == mirror_root.resolve()

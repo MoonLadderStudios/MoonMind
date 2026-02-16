@@ -121,12 +121,3 @@ def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
             run_id="run-5",
             context={"skill_selection": ["missing:1.0.0"]},
         )
-
-
-@pytest.mark.parametrize("invalid_name", ["../escape", "bad/name", "bad name"])
-def test_resolve_run_skill_selection_rejects_unsafe_names(skills_mirror, invalid_name):
-    with pytest.raises(SkillResolutionError, match="Skill name"):
-        resolve_run_skill_selection(
-            run_id="run-unsafe",
-            context={"skill_selection": [f"{invalid_name}:1.0.0"]},
-        )

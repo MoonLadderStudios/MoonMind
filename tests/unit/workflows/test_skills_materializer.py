@@ -2,25 +2,15 @@
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-import io
-import subprocess
-import tarfile
-import zipfile
-
-=======
 import socket
 import subprocess
 import tarfile
 import zipfile
 from io import BytesIO
-
->>>>>>> origin/main
 from pathlib import Path
 
 import pytest
 
-from moonmind.workflows.skills import materializer as skill_materializer
 from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
     _extract_archive,
@@ -193,134 +183,26 @@ def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_
     assert not global_codex_config.exists()
 
 
-<<<<<<< HEAD
-def test_materialize_run_skill_workspace_rejects_zip_path_traversal(tmp_path):
-    cache_root = tmp_path / "cache"
-    run_root = tmp_path / "runs" / "zip-slip"
-    bundle = tmp_path / "bundle.zip"
-    with zipfile.ZipFile(bundle, mode="w") as handle:
-        handle.writestr("../escape.txt", "bad")
-        handle.writestr("speckit/SKILL.md", "---\nname: speckit\n---\n")
-
-    selection = RunSkillSelection(
-        run_id="zip-slip",
-        selection_source="job_override",
-        skills=(
-            ResolvedSkill(
-                skill_name="speckit",
-                version="1.0.0",
-                source_uri=bundle.resolve().as_uri(),
-            ),
-        ),
-    )
-
-    with pytest.raises(
-        SkillMaterializationError, match="Archive member escapes destination"
-    ) as exc:
-        materialize_run_skill_workspace(
-            selection=selection,
-            run_root=run_root,
-            cache_root=cache_root,
-        )
-    assert exc.value.code == "unsafe_archive_member"
-
-
-def test_materialize_run_skill_workspace_rejects_tar_path_traversal(tmp_path):
-    cache_root = tmp_path / "cache"
-    run_root = tmp_path / "runs" / "tar-slip"
-    bundle = tmp_path / "bundle.tar"
-    with tarfile.open(bundle, mode="w") as handle:
-        good = tarfile.TarInfo("speckit/SKILL.md")
-        good_data = b"---\nname: speckit\n---\n"
-        good.size = len(good_data)
-        handle.addfile(good, fileobj=io.BytesIO(good_data))
-
-        bad = tarfile.TarInfo("../../escape.txt")
-        bad_data = b"bad"
-        bad.size = len(bad_data)
-        handle.addfile(bad, fileobj=io.BytesIO(bad_data))
-
-    selection = RunSkillSelection(
-        run_id="tar-slip",
-        selection_source="job_override",
-        skills=(
-            ResolvedSkill(
-                skill_name="speckit",
-                version="1.0.0",
-                source_uri=bundle.resolve().as_uri(),
-            ),
-        ),
-    )
-
-    with pytest.raises(
-        SkillMaterializationError, match="Archive member escapes destination"
-    ) as exc:
-        materialize_run_skill_workspace(
-            selection=selection,
-            run_root=run_root,
-            cache_root=cache_root,
-        )
-    assert exc.value.code == "unsafe_archive_member"
-
-
-def test_materialize_run_skill_workspace_uses_git_option_separator(
-    tmp_path, monkeypatch
-):
-    cache_root = tmp_path / "cache"
-    run_root = tmp_path / "runs" / "git"
-    commands: list[list[str]] = []
-
-    def fake_run(command, **_kwargs):
-        commands.append(list(command))
-        destination = Path(command[-1])
-        _make_skill(destination, "speckit")
-        return subprocess.CompletedProcess(
-            args=command, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(skill_materializer.subprocess, "run", fake_run)
-
-    selection = RunSkillSelection(
-        run_id="git",
-        selection_source="job_override",
-        skills=(
-            ResolvedSkill(
-                skill_name="speckit",
-                version="1.0.0",
-                source_uri="git+--upload-pack=evil",
-            ),
-        ),
-    )
-
-    materialize_run_skill_workspace(
-        selection=selection,
-        run_root=run_root,
-        cache_root=cache_root,
-    )
-
-    assert commands
-    assert commands[0][:5] == ["git", "clone", "--depth", "1", "--"]
-
-
 def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
     tmp_path, monkeypatch
 ):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
-    run_root = tmp_path / "runs" / "cache-wait"
+    run_root = tmp_path / "runs" / "cache-incomplete"
     _make_skill(source_root, "speckit")
-    (cache_root / "fixedhash").mkdir(parents=True)
+
+    digest_root = cache_root / "fixedhash"
+    incomplete_skill_dir = digest_root / "speckit"
+    incomplete_skill_dir.mkdir(parents=True)
+    (incomplete_skill_dir / "steps.md").write_text("partial", encoding="utf-8")
 
     monkeypatch.setattr(
-        skill_materializer,
-        "_hash_skill_directory",
+        "moonmind.workflows.skills.materializer._hash_skill_directory",
         lambda *_args, **_kwargs: "fixedhash",
     )
-    monkeypatch.setattr(skill_materializer, "_CACHE_READY_TIMEOUT_SECONDS", 0.02)
-    monkeypatch.setattr(skill_materializer, "_CACHE_READY_POLL_INTERVAL_SECONDS", 0.005)
 
     selection = RunSkillSelection(
-        run_id="cache-wait",
+        run_id="cache-incomplete",
         selection_source="job_override",
         skills=(
             ResolvedSkill(
@@ -331,9 +213,7 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
         ),
     )
 
-    with pytest.raises(
-        SkillMaterializationError, match="did not become ready in time"
-    ) as exc:
+    with pytest.raises(SkillMaterializationError, match="is incomplete") as exc:
         materialize_run_skill_workspace(
             selection=selection,
             run_root=run_root,
@@ -341,7 +221,8 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
         )
 
     assert exc.value.code == "cache_entry_incomplete"
-=======
+
+
 def test_extract_archive_rejects_zip_path_traversal(tmp_path):
     archive = tmp_path / "malicious.zip"
     destination = tmp_path / "extract"
@@ -410,4 +291,3 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
 
     assert calls
     assert calls[0][:5] == ["git", "clone", "--depth", "1", "--"]
->>>>>>> origin/main
