@@ -152,6 +152,9 @@ class RunWorkspacePaths:
     repo_path: Path
     home_path: Path
     artifacts_path: Path
+    skills_active_path: Path
+    agents_skills_path: Path
+    gemini_skills_path: Path
 
 
 class SpecWorkspaceManager:
@@ -174,6 +177,7 @@ class SpecWorkspaceManager:
     _REPO_SUBDIR = "repo"
     _HOME_SUBDIR = "home"
     _ARTIFACTS_SUBDIR = "artifacts"
+    _SKILLS_ACTIVE_SUBDIR = "skills_active"
 
     def __init__(
         self, workspace_root: Path | str, *, runs_dirname: Optional[str] = None
@@ -236,6 +240,21 @@ class SpecWorkspaceManager:
 
         return self.run_root(run_id) / self._ARTIFACTS_SUBDIR
 
+    def skills_active_path(self, run_id: UUID | str) -> Path:
+        """Path to the run-scoped active skills directory."""
+
+        return self.run_root(run_id) / self._SKILLS_ACTIVE_SUBDIR
+
+    def agents_skills_path(self, run_id: UUID | str) -> Path:
+        """Path to the Codex Agent Skills adapter link."""
+
+        return self.run_root(run_id) / ".agents" / "skills"
+
+    def gemini_skills_path(self, run_id: UUID | str) -> Path:
+        """Path to the Gemini Agent Skills adapter link."""
+
+        return self.run_root(run_id) / ".gemini" / "skills"
+
     # ------------------------------------------------------------------
     # Directory management
     # ------------------------------------------------------------------
@@ -258,18 +277,41 @@ class SpecWorkspaceManager:
         repo_path = self.repo_path(run_id)
         home_path = self.home_path(run_id)
         artifacts_path = self.artifacts_path(run_id)
+        skills_active_path = self.skills_active_path(run_id)
+        agents_skills_path = self.agents_skills_path(run_id)
+        gemini_skills_path = self.gemini_skills_path(run_id)
 
-        for path in (run_root, repo_path, home_path, artifacts_path):
+        for path in (
+            run_root,
+            repo_path,
+            home_path,
+            artifacts_path,
+            skills_active_path,
+            agents_skills_path,
+            gemini_skills_path,
+        ):
             self._assert_within_workspace(path)
 
-        for path in (run_root, repo_path, home_path, artifacts_path):
+        for path in (
+            run_root,
+            repo_path,
+            home_path,
+            artifacts_path,
+            skills_active_path,
+        ):
             path.mkdir(parents=True, exist_ok=True)
+
+        agents_skills_path.parent.mkdir(parents=True, exist_ok=True)
+        gemini_skills_path.parent.mkdir(parents=True, exist_ok=True)
 
         return RunWorkspacePaths(
             run_root=run_root,
             repo_path=repo_path,
             home_path=home_path,
             artifacts_path=artifacts_path,
+            skills_active_path=skills_active_path,
+            agents_skills_path=agents_skills_path,
+            gemini_skills_path=gemini_skills_path,
         )
 
     # ------------------------------------------------------------------

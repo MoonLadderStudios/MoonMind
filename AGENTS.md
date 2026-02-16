@@ -23,6 +23,11 @@ When creating a new spec folder/feature ID:
 - 005-orchestrator-architecture: Documented mm-orchestrator container responsibilities (plan/patch/build/restart/verify/rollback), StatsD instrumentation hooks, approval enforcement, and sequential worker processing against the shared Docker daemon
 - 006-add-gemini-cli: Added Gemini CLI to Docker environment for Orchestrator and Celery Worker to enable natural language processing capabilities
 
+## Shared Skills Runtime
+- MoonMind now materializes one per-run active skill set and exposes it to both CLIs through adapter links.
+- Expected adapter layout per run: `.agents/skills -> ../skills_active` and `.gemini/skills -> ../skills_active`.
+- Prefer configuring `SPEC_SKILLS_WORKSPACE_ROOT` and `SPEC_SKILLS_CACHE_ROOT` for writable runtime paths in local and CI environments.
+
 ## Spec Workflow Verification Checklist
 - Bring up RabbitMQ and the dedicated Celery worker alongside the API service when validating the Spec Kit workflow: `docker compose up rabbitmq celery-worker api`.
 - Confirm the worker logs include `Spec workflow task ...` entries for discover, submit, and publish steps; these messages include per-task summaries and should align with repository state transitions.

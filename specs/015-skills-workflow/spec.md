@@ -100,6 +100,6 @@ As a release owner, I want staged rollout controls and parity checks so skills-f
 
 ## Assumptions
 
-- Speckit skills remain installed and mirrored in both `.codex/skills` and `.agents/skills`.
+- Speckit skills remain installed and are exposed through shared adapters at `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` can remain for compatibility).
 - Existing `/api/workflows/speckit` routes remain in place during this umbrella migration; naming generalization can be layered without breaking clients.
 - Google Gemini (`gemini-embedding-001`) remains the default embedding model for the fastest-path deployment profile.

@@ -31,7 +31,15 @@ from moonmind.workflows.adapters import (
     GitHubClient,
     GitHubPublishResult,
 )
+from moonmind.workflows.skills.materializer import (
+    SkillMaterializationError,
+    materialize_run_skill_workspace,
+)
 from moonmind.workflows.skills.registry import resolve_stage_execution
+from moonmind.workflows.skills.resolver import (
+    SkillResolutionError,
+    resolve_run_skill_selection,
+)
 from moonmind.workflows.skills.runner import execute_stage
 from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.celeryconfig import (
@@ -1130,6 +1138,65 @@ def _base_context(run: models.SpecWorkflowRun) -> dict[str, Any]:
     return context
 
 
+def _skills_workspace_payload(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Return serialized shared-skill workspace metadata for status payloads."""
+
+    workspace = context.get("skills_workspace")
+    if not isinstance(workspace, Mapping):
+        return {}
+    return {
+        "skillsWorkspace": {
+            "selectionSource": workspace.get("selectionSource"),
+            "skillsActivePath": workspace.get("skillsActivePath"),
+            "agentsSkillsPath": workspace.get("agentsSkillsPath"),
+            "geminiSkillsPath": workspace.get("geminiSkillsPath"),
+            "skills": workspace.get("skills"),
+        }
+    }
+
+
+def _ensure_shared_skills_workspace(
+    *,
+    run: models.SpecWorkflowRun,
+    context: dict[str, Any],
+) -> None:
+    """Resolve and materialize the run-scoped shared skills workspace once."""
+
+    workspace_payload = context.get("skills_workspace")
+    if isinstance(workspace_payload, Mapping) and workspace_payload.get(
+        "skillsActivePath"
+    ):
+        return
+
+    selection = resolve_run_skill_selection(run_id=str(run.id), context=context)
+    repo_root = Path(settings.spec_workflow.repo_root).expanduser()
+    if not repo_root.is_absolute():
+        repo_root = (Path.cwd() / repo_root).resolve()
+
+    runs_root = Path(settings.spec_workflow.skills_workspace_root).expanduser()
+    if not runs_root.is_absolute():
+        runs_root = (repo_root / runs_root).resolve()
+    run_root = runs_root / str(run.id)
+    run_root.mkdir(parents=True, exist_ok=True)
+    cache_root = Path(settings.spec_workflow.skills_cache_root).expanduser()
+    if not cache_root.is_absolute():
+        cache_root = (repo_root / cache_root).resolve()
+
+    materialized = materialize_run_skill_workspace(
+        selection=selection,
+        run_root=run_root,
+        cache_root=cache_root,
+        verify_signatures=settings.spec_workflow.skills_verify_signatures,
+    )
+    payload = materialized.to_payload()
+    context["skills_workspace"] = payload
+    context["skills_selection_source"] = payload.get("selectionSource")
+    context["skills_active_path"] = payload.get("skillsActivePath")
+    context["agents_skills_path"] = payload.get("agentsSkillsPath")
+    context["gemini_skills_path"] = payload.get("geminiSkillsPath")
+    context["resolved_skills"] = payload.get("skills", [])
+
+
 def _status_payload(
     status: models.SpecWorkflowTaskStatus,
     *,
@@ -1422,9 +1489,23 @@ def discover_next_phase(
             await session.commit()
 
             try:
+                _ensure_shared_skills_workspace(run=run, context=stage_context)
                 effective_feature = feature_key or run.feature_key
                 tasks_file = _resolve_tasks_file(effective_feature)
                 discovered = _parse_next_task(tasks_file)
+            except (SkillResolutionError, SkillMaterializationError) as exc:
+                logger.warning(
+                    "Shared skill workspace setup failed for run %s: %s", run_id, exc
+                )
+                await _persist_failure(
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_DISCOVER,
+                    message=str(exc),
+                    attempt=attempt,
+                )
+                await session.commit()
+                raise
             except FileNotFoundError as exc:
                 logger.warning("Discovery task failed for run %s: %s", run_id, exc)
                 await _persist_failure(
@@ -1456,6 +1537,17 @@ def discover_next_phase(
             context["skill_execution"] = dict(
                 stage_context.get("skill_execution", {})  # type: ignore[arg-type]
             )
+            if stage_context.get("skills_workspace"):
+                context["skills_workspace"] = stage_context["skills_workspace"]
+                context["skills_selection_source"] = stage_context.get(
+                    "skills_selection_source"
+                )
+                context["skills_active_path"] = stage_context.get("skills_active_path")
+                context["agents_skills_path"] = stage_context.get("agents_skills_path")
+                context["gemini_skills_path"] = stage_context.get("gemini_skills_path")
+                context["resolved_skills"] = list(
+                    stage_context.get("resolved_skills", [])
+                )
             if retry_notes is not None:
                 context["retry_notes"] = retry_notes
             context["retry"] = attempt > 1
@@ -1472,6 +1564,7 @@ def discover_next_phase(
                         message=message,
                         result="no_work",
                         **_stage_execution_payload(context, TASK_DISCOVER),
+                        **_skills_workspace_payload(context),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1498,6 +1591,7 @@ def discover_next_phase(
                     message="Discovered next task",
                     **payload,
                     **_stage_execution_payload(context, TASK_DISCOVER),
+                    **_skills_workspace_payload(context),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -1550,6 +1644,7 @@ def discover_next_phase(
                 "phase": task_payload.get("phase"),
             }
         summary.update(_stage_execution_payload(context, TASK_DISCOVER))
+        summary.update(_skills_workspace_payload(context))
     observer.succeeded(summary)
     return context
 
@@ -1627,12 +1722,26 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         "credential_audit_status", {}
                     ).get("github"),
                     **_stage_execution_payload(context, TASK_SUBMIT),
+                    **_skills_workspace_payload(context),
                 ),
                 started_at=_now(),
                 attempt=attempt,
                 message="Submitting task to Codex",
             )
             await session.commit()
+
+            try:
+                _ensure_shared_skills_workspace(run=run, context=context)
+            except (SkillResolutionError, SkillMaterializationError) as exc:
+                await _persist_failure(
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_SUBMIT,
+                    message=str(exc),
+                    attempt=attempt,
+                )
+                await session.commit()
+                raise
 
             if context.get("no_work"):
                 finished = _now()
@@ -1646,6 +1755,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         message="Skipped because discovery found no remaining work",
                         reason="no_work",
                         **_stage_execution_payload(context, TASK_SUBMIT),
+                        **_skills_workspace_payload(context),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1683,6 +1793,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         codexPreflightStatus=preflight.status.value,
                         codexVolume=context.get("codex_volume"),
                         **_stage_execution_payload(context, TASK_SUBMIT),
+                        **_skills_workspace_payload(context),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -1774,6 +1885,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
                         "credential_audit_status", {}
                     ).get("github"),
                     **_stage_execution_payload(context, TASK_SUBMIT),
+                    **_skills_workspace_payload(context),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -1815,6 +1927,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
         summary["codex_volume"] = result.get("codex_volume")
         summary["codex_preflight_status"] = result.get("codex_preflight_status")
         summary.update(_stage_execution_payload(result, TASK_SUBMIT))
+        summary.update(_skills_workspace_payload(result))
     observer.succeeded(summary)
     return result
 
@@ -1893,12 +2006,26 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                         "credential_audit_status", {}
                     ).get("github"),
                     **_stage_execution_payload(context, TASK_PUBLISH),
+                    **_skills_workspace_payload(context),
                 ),
                 started_at=_now(),
                 attempt=attempt,
                 message="Retrieving Codex diff and publishing to GitHub",
             )
             await session.commit()
+
+            try:
+                _ensure_shared_skills_workspace(run=run, context=context)
+            except (SkillResolutionError, SkillMaterializationError) as exc:
+                await _persist_failure(
+                    repo,
+                    run_id=run_uuid,
+                    task_name=TASK_PUBLISH,
+                    message=str(exc),
+                    attempt=attempt,
+                )
+                await session.commit()
+                raise
 
             artifacts_dir = _resolve_artifacts_dir(run)
             _apply_resume_token(context, artifacts_dir=artifacts_dir)
@@ -1921,6 +2048,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                         message="Skipped publish because no work was required",
                         reason="no_work",
                         **_stage_execution_payload(context, TASK_PUBLISH),
+                        **_skills_workspace_payload(context),
                     ),
                     finished_at=finished,
                     attempt=attempt,
@@ -2054,6 +2182,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                     ).get("github"),
                     resumed=context.get("resume_token") is not None,
                     **_stage_execution_payload(context, TASK_PUBLISH),
+                    **_skills_workspace_payload(context),
                 ),
                 finished_at=finished,
                 attempt=attempt,
@@ -2101,6 +2230,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
         summary["codex_queue"] = result.get("codex_queue")
         summary["codex_volume"] = result.get("codex_volume")
         summary.update(_stage_execution_payload(result, TASK_PUBLISH))
+        summary.update(_skills_workspace_payload(result))
     observer.succeeded(summary)
     return result
 

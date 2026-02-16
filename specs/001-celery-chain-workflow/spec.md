@@ -120,7 +120,7 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - Spec Kit task definitions are maintained in a repository-accessible location compatible with the discovery task parser.
 - Network egress from the execution environment to Codex Cloud and GitHub APIs is permitted within organizational policy.
 - Governance for branch naming conventions and PR review routing remains managed by existing MoonMind policies; this feature does not alter approval flows.
-- Speckit skill definitions are mirrored in `.codex/skills` and `.agents/skills`, and remain installed in worker images.
+- Speckit skill definitions are exposed through run-local shared adapters at `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` remains optional compatibility fallback).
 - The initial skills-first implementation keeps existing `/api/workflows/speckit/*` API naming for compatibility, even when stage orchestration is generalized.
 - The fastest deployment profile uses Google Gemini embeddings (`gemini-embedding-001`) and authenticated Codex CLI volumes.
 

@@ -100,10 +100,22 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `SPEC_WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`).
 - `SPEC_WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`).
 - `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (default `speckit`).
+- `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace root used to create shared skill adapters (default `var/skills_workspaces`).
+- `SPEC_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`).
+- `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/skills`).
+- `SPEC_SKILLS_LEGACY_MIRROR_ROOT` – Legacy mirror fallback for compatibility (default `.codex/skills/skills`).
+- `SPEC_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (default `false`).
+- `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
 - `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
 - `CODEX_ENV` and `CODEX_MODEL` – Required by credential validation before Codex phases execute.
 - `GITHUB_TOKEN` – Required for private repository clone/push/PR operations.
+
+During workflow execution, MoonMind materializes a per-run shared skill directory and links both adapters to the same active set:
+
+- `<run_root>/skills_active/`
+- `<run_root>/.agents/skills -> ../skills_active`
+- `<run_root>/.gemini/skills -> ../skills_active`
 
 **Gemini Automation:**
 
