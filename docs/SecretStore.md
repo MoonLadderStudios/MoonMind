@@ -1,82 +1,95 @@
-# Secret Store Design (HashiCorp Vault for Worker Secrets)
+# Secret Store Design (HashiCorp Vault for Task Workers)
 
-## Purpose
+Status: Proposed  
+Owners: MoonMind Engineering  
+Last Updated: 2026-02-16
 
-This document defines how MoonMind workers should use HashiCorp Vault for sensitive values, especially repository credentials referenced by queue payloads (for example `repoAuthRef`).
+## 1. Purpose
 
-It also covers how Vault can improve Codex CLI authentication operations.
+Define how MoonMind workers use HashiCorp Vault for sensitive values while executing canonical Task queue jobs (`type="task"`).
 
-## Goals
+## 2. Goals
 
-1. Keep raw secrets out of queue payloads, DB rows, and worker logs.
+1. Keep raw secrets out of queue payloads, DB rows, and logs.
 2. Let jobs reference secrets indirectly by stable IDs (for example `repoAuthRef`).
 3. Enforce least privilege per worker and per repository.
-4. Support secret rotation without changing queued jobs.
+4. Support rotation without changing queued jobs.
 
-## Non-goals for initial rollout
+## 3. Non-Goals (Initial Rollout)
 
 1. Replacing all existing worker auth in one release.
-2. Storing every large runtime artifact in Vault.
-3. Rewriting the queue API surface beyond targeted fields.
+2. Storing large runtime artifacts in Vault.
+3. Reworking queue APIs beyond targeted auth reference fields.
 
-## High-level model
+## 4. High-Level Model
 
-Producer submits a job with a secret reference, not a token value:
+Producer submits a Task job with a secret reference (not a token):
 
 ```json
 {
-  "type": "codex_exec",
+  "type": "task",
   "payload": {
     "repository": "MoonLadderStudios/MoonMind",
-    "repoAuthRef": "vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token",
-    "instruction": "Implement the assigned task"
+    "requiredCapabilities": ["git", "codex"],
+    "targetRuntime": "codex",
+    "auth": {
+      "repoAuthRef": "vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token",
+      "publishAuthRef": null
+    },
+    "task": {
+      "instructions": "Implement the assigned task",
+      "skill": { "id": "auto", "args": {} },
+      "runtime": { "mode": "codex", "model": null, "effort": null },
+      "git": { "startingBranch": null, "newBranch": null },
+      "publish": { "mode": "branch", "prBaseBranch": null, "commitMessage": null, "prTitle": null, "prBody": null }
+    }
   }
 }
 ```
 
-Worker execution flow:
+Worker flow:
 
 1. Claim job.
-2. Resolve `repoAuthRef` from Vault.
-3. Configure transient git auth in-process.
-4. Clone/fetch/push as needed.
+2. Resolve `auth.repoAuthRef` from Vault when present.
+3. Configure transient git auth.
+4. Run task stages.
 5. Clear in-memory secret material.
-6. Complete/fail job with no raw secret exposure.
+6. Complete/fail with non-secret summaries.
 
-## Vault architecture
+## 5. Vault Architecture
 
-## 1) Secrets engine
+### 5.1 Secrets engine
 
-Use KV v2 mount (example: `kv/`) for static credential values.
+Use KV v2 mount (example: `kv/`) for static credentials.
 
 Example paths:
 
 - `kv/data/moonmind/repos/<owner>/<repo>`
 - `kv/data/moonmind/workers/<worker-id>/github`
-- `kv/data/moonmind/codex/<shard-or-env>`
+- `kv/data/moonmind/runtime/<env>/<runtime>`
 
-## 2) Worker authentication to Vault
+### 5.2 Worker auth to Vault
 
-Recommended in order:
+Recommended order:
 
-1. Kubernetes auth (if running in k8s).
-2. AppRole with short-lived SecretID (if running via Compose/VM).
-3. Vault Agent auto-auth and local sink file for token delivery.
+1. Kubernetes auth (k8s deployment)
+2. AppRole with short-lived SecretID (Compose/VM)
+3. Vault Agent auto-auth with local sink token file
 
-Avoid long-lived root or broad-scope Vault tokens in environment variables.
+Avoid long-lived broad-scope Vault tokens in environment variables.
 
-## 3) Token lifecycle
+### 5.3 Token lifecycle
 
-- Worker obtains short-lived Vault token at startup.
-- Renew periodically while worker is healthy.
-- Re-authenticate on renewal failure.
-- Fail secure if Vault is unavailable and required secrets are missing.
+- obtain short-lived token at startup
+- renew while healthy
+- re-authenticate on renewal failure
+- fail secure when required secret cannot be resolved
 
-## Data contract for `repoAuthRef`
+## 6. Secret Reference Contract
 
-## URI format
+### 6.1 URI format
 
-Use an explicit URI-like convention:
+Use:
 
 - `vault://<mount>/<path>#<field>`
 
@@ -85,194 +98,148 @@ Examples:
 - `vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token`
 - `vault://kv/moonmind/workers/executor-01/github#token`
 
-## Validation rules
+### 6.2 Validation rules
 
 1. `mount`, `path`, and `field` are required.
-2. Reject path traversal patterns.
+2. Reject traversal patterns.
 3. Allow only approved mounts.
-4. Enforce max length.
+4. Enforce max length and character constraints.
 
-## Secret shape examples
+### 6.3 Secret shape examples
 
-Repo-scoped PAT:
+Repo token:
 
 ```json
 {
-  "github_token": "ghp_xxx",
+  "github_token": "<github-token>",
   "username": "x-access-token",
   "host": "github.com"
 }
 ```
 
-Worker default credential:
+Worker default token:
 
 ```json
 {
-  "token": "ghp_xxx",
+  "token": "<github-token>",
   "host": "github.com"
 }
 ```
 
-## Worker integration details
+## 7. Worker Integration Details
 
-## 1) Queue payload changes
+### 7.1 Payload extension
 
-Add optional fields to `codex_exec` payload:
+Canonical Task payload remains unchanged except optional `auth` extension:
 
-- `repoAuthRef` (string, optional)
-- `publishAuthRef` (string, optional, defaults to `repoAuthRef` if omitted)
+- `auth.repoAuthRef` (string, optional)
+- `auth.publishAuthRef` (string, optional, defaults to `repoAuthRef`)
 
-Keep existing `repository`, `ref`, `publish` behavior unchanged.
+### 7.2 Runtime behavior
 
-## 2) Runtime behavior
+At prepare/publish boundary:
 
-At repository prep time:
+1. If `auth.repoAuthRef` exists, resolve it before clone/fetch.
+2. If publish enabled, resolve `auth.publishAuthRef` or fallback.
+3. Configure `gh auth`/git credentials without token-in-URL patterns.
 
-1. If `repoAuthRef` exists, resolve secret from Vault.
-2. Configure git credential flow without placing token in command args.
-3. Run clone/fetch/checkout.
-4. If `publish.mode != none`, use `publishAuthRef` or fallback.
-
-## 3) Preferred git credential setup
+### 7.3 Credential setup preference
 
 Preferred:
 
-- Use `gh auth login --with-token` and `gh auth setup-git` with token from Vault.
+- `gh auth login --with-token`
+- `gh auth setup-git`
 
 Alternative:
 
-- Use a custom credential helper script that reads token from a temporary file with strict permissions.
+- strict-permission temporary credential helper file
 
 Never:
 
-- Append token to repository URLs.
-- Persist token to queue payload, artifacts, or plain logs.
+- place tokens in repository URLs
+- persist token strings to queue payloads/events/artifacts
 
-## Authorization and policy alignment
+## 8. Authorization Alignment
 
-Vault access must align with existing worker authorization controls.
+### 8.1 Queue policy
 
-## 1) Queue policy (already present)
+Worker token policy should enforce:
 
-- Worker tokens can enforce allowed repositories and allowed job types.
+- allowed repositories
+- allowed job types
+- capability scope
 
-## 2) Vault policy (new)
+### 8.2 Vault policy
 
-- Worker identity should only read paths for repositories it is allowed to process.
+Worker identity should only read allowed repository paths.
 
-Example policy (conceptual):
+Conceptual policy:
 
 ```hcl
 path "kv/data/moonmind/repos/MoonLadderStudios/MoonMind" {
   capabilities = ["read"]
 }
-path "kv/data/moonmind/repos/MoonLadderStudios/*" {
-  capabilities = ["list"]
-}
 ```
 
-## 3) Defense in depth
+### 8.3 Defense in depth
 
 Require both:
 
-1. Queue claim eligibility for repository.
-2. Vault read permission for `repoAuthRef`.
+1. queue claim eligibility for repository
+2. Vault read permission for `repoAuthRef`
 
-If either fails, fail the job with a clear non-secret error.
+If either fails, fail job with non-secret reason.
 
-## Codex CLI OAuth improvements with Vault
+## 9. Implementation Plan
 
-Current pattern uses persistent OAuth volumes for Codex CLI login. Vault can improve this in two practical ways.
+### Phase 1: Vault foundation
 
-## Option A (recommended first): protect OAuth operational data, not raw session state
+1. deploy Vault with KV v2 and audit logs
+2. configure worker auth method
+3. create least-privilege policies
 
-1. Keep the current persistent `.codex` volume model for runtime compatibility.
-2. Store metadata in Vault:
-- shard ownership
-- last preflight status
-- credential refresh timestamps
-3. Encrypt/backup `.codex` volume snapshots using Vault Transit keys before off-host storage.
+### Phase 2: Task auth refs
 
-Benefits:
+1. extend Task payload model with optional `auth` object
+2. add Vault client abstraction in worker runtime
+3. resolve/apply credentials during prepare/publish stages
+4. redact secret-like strings in logging paths
 
-- Better disaster recovery and auditability.
-- No need to force Codex CLI into an unsupported auth path.
+### Phase 3: Observability and resilience
 
-## Option B (if supported by your Codex CLI mode): Vault-injected API key auth
+1. add metrics for secret resolution success/failure/latency
+2. correlate queue job ID with Vault request IDs (without secret values)
+3. add integration tests for denied/expired/rotated credentials
 
-1. Store `CODEX_API_KEY` in Vault.
-2. Inject short-lived key material at startup via Vault Agent template or runtime fetch.
-3. Eliminate long-lived OAuth session artifacts where feasible.
+### Phase 4: Remove temporary bridge
 
-Benefits:
+1. migrate private repo jobs away from plain `GITHUB_TOKEN`
+2. keep env-token path only for local fallback and break-glass operations
 
-- Easier rotation.
-- Lower risk of stale OAuth cache state.
-
-Tradeoff:
-
-- Depends on CLI auth mode support and feature parity.
-
-## What to avoid for Codex auth
-
-1. Writing OAuth refresh tokens directly into queue payloads.
-2. Logging Codex auth files or their contents.
-3. Sharing a single Codex auth volume between multiple workers.
-
-## Implementation plan
-
-## Phase 1: Vault foundation
-
-1. Deploy Vault and enable KV v2 + audit logs.
-2. Configure worker auth method (Kubernetes auth or AppRole).
-3. Create least-privilege policies per worker identity.
-
-## Phase 2: `repoAuthRef` support
-
-1. Extend `codex_exec` payload schema with `repoAuthRef`.
-2. Add Vault client abstraction in worker runtime.
-3. Resolve and apply credentials during repository preparation.
-4. Add redaction for any secret-like strings in exception/log pipelines.
-
-## Phase 3: policy and observability hardening
-
-1. Add metrics for secret resolution success/failure and latency.
-2. Correlate queue job ID with Vault request IDs (without exposing secret values).
-3. Add integration tests for:
-- valid ref resolution
-- denied path access
-- expired Vault token
-- secret rotation while jobs are queued
-
-## Phase 4: Codex auth improvements
-
-1. Add Vault-backed metadata and backup encryption for Codex auth volumes.
-2. Evaluate API key mode migration where available.
-
-## Operational runbook
+## 10. Operational Runbook
 
 When `repoAuthRef` resolution fails:
 
-1. Check Vault auth status for the worker identity.
-2. Verify policy allows `read` on the target path.
-3. Verify field exists in the secret document.
-4. Re-run job after remediation.
+1. validate worker Vault auth
+2. validate policy for target path
+3. validate referenced field exists
+4. retry job after remediation
 
 When Vault is degraded:
 
-1. Stop claiming new jobs requiring secret resolution.
-2. Keep processing jobs that do not require Vault-resolved credentials.
-3. Alert operators with job IDs and non-secret failure reasons.
+1. stop claiming jobs that require Vault refs
+2. continue jobs that do not need Vault refs
+3. alert operators with non-secret failure metadata
 
-## Security checklist
+## 11. Security Checklist
 
-1. No raw PAT/OAuth material in job payloads.
-2. No token-in-URL clone style.
-3. Vault tokens are short-lived and renewable.
-4. Vault audit logs enabled.
-5. Worker logs redact known secret patterns.
-6. Secret rotation playbook tested.
+1. no raw PAT/OAuth material in payloads/events/artifacts
+2. no token-in-URL clone style
+3. short-lived renewable Vault tokens
+4. Vault audit logs enabled
+5. log redaction enabled and tested
+6. rotation playbook validated
 
-## Summary
+## 12. Summary
 
-Use `repoAuthRef` + Vault to decouple job orchestration from secret material. Keep the current fast PAT path only as a temporary bridge (`WorkerGitAuth.md`), then migrate private repo credentials to Vault-backed references and align Vault policies with existing worker repository authorization rules.
+Use optional `auth.repoAuthRef`/`auth.publishAuthRef` in canonical Task jobs to decouple orchestration from secret material. Keep env-token auth (`docs/WorkerGitAuth.md`) as temporary bridge, then migrate private repo credentials to Vault-backed references with aligned queue/Vault policy.

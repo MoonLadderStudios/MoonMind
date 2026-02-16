@@ -20,6 +20,15 @@ from moonmind.agents.codex_worker.worker import (
 )
 
 
+def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
+    runtime = str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
+    allowed = {"codex", "gemini", "claude", "universal"}
+    if runtime not in allowed:
+        supported = ", ".join(sorted(allowed))
+        raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
+    return runtime
+
+
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
     redacted = text
     for secret in secrets:
@@ -110,11 +119,32 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
     source = env if env is not None else os.environ
+    runtime = _resolve_worker_runtime(source)
 
-    try:
-        codex_path = verify_cli_is_executable("codex")
-    except CliVerificationError as exc:
-        raise RuntimeError(str(exc)) from exc
+    codex_path: str | None = None
+    if runtime in {"codex", "universal"}:
+        try:
+            codex_path = verify_cli_is_executable("codex")
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    gemini_path: str | None = None
+    if runtime in {"gemini", "universal"}:
+        try:
+            gemini_path = verify_cli_is_executable(
+                str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
+            )
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    claude_path: str | None = None
+    if runtime in {"claude", "universal"}:
+        try:
+            claude_path = verify_cli_is_executable(
+                str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
+            )
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     try:
         speckit_path = verify_cli_is_executable("speckit")
@@ -130,10 +160,21 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         speckit_path,
         redaction_values=redaction_values,
     )
-    _run_checked_command(
-        [codex_path, "login", "status"],
-        redaction_values=redaction_values,
-    )
+    if codex_path is not None:
+        _run_checked_command(
+            [codex_path, "login", "status"],
+            redaction_values=redaction_values,
+        )
+    if gemini_path is not None:
+        _run_checked_command(
+            [gemini_path, "--version"],
+            redaction_values=redaction_values,
+        )
+    if claude_path is not None:
+        _run_checked_command(
+            [claude_path, "--version"],
+            redaction_values=redaction_values,
+        )
 
     if not github_token:
         return

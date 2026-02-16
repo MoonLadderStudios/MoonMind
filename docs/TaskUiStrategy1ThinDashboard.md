@@ -2,55 +2,47 @@
 
 Status: Proposed  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-15
+Last Updated: 2026-02-16
 
 ## 1. Decision
 
 ### Selected Strategy
 
-Use **Strategy 1: Thin Dashboard UI over existing REST endpoints**.
+Use Strategy 1: Thin Dashboard UI over existing REST endpoints.
 
 ### Why this is best for current project goals
 
-This project’s primary goals are:
-
 - Show currently running tasks.
-- Submit new tasks.
+- Submit new tasks through typed forms.
 - Minimize backend changes.
 - Ship quickly with low operational risk.
 
-Strategy 1 is the best fit because MoonMind already has complete submit/list/detail primitives for:
+MoonMind already has submit/list/detail primitives for:
 
 - Agent Queue (`/api/queue/*`)
 - SpecKit workflows (`/api/workflows/speckit/*`)
 - Orchestrator runs (`/orchestrator/*`)
 
-No new core workflow APIs are required for MVP.
-
 ## 2. Scope
 
 ### In Scope
 
-- A dedicated dashboard web app for task operations.
+- Dedicated dashboard web app for task operations.
 - Views for running, queued, and historical work.
-- Submit forms for Agent Queue jobs, SpecKit runs, and Orchestrator runs.
+- Typed submit forms for Agent Queue Tasks, SpecKit runs, and Orchestrator runs.
 - Detail pages with logs/events and artifacts.
-- Polling-based refresh (no real-time sockets in MVP).
+- Polling-based refresh.
 
 ### Out of Scope
 
-- SSE/WebSocket implementation.
+- SSE/WebSocket implementation in MVP.
 - Unified backend `runs` table.
-- Worker/fleet heartbeat model.
+- Worker/fleet heartbeat model redesign.
 - Open-WebUI plugin internals.
 
 ## 3. Backend Contract Reuse
 
-This design directly uses existing routes.
-
 ### 3.1 Agent Queue
-
-From `api_service/api/routers/agent_queue.py`:
 
 - `POST /api/queue/jobs`
 - `GET /api/queue/jobs?status=&type=&limit=`
@@ -61,8 +53,6 @@ From `api_service/api/routers/agent_queue.py`:
 
 ### 3.2 SpecKit
 
-From `api_service/api/routers/workflows.py`:
-
 - `POST /api/workflows/speckit/runs`
 - `GET /api/workflows/speckit/runs?status=&limit=&cursor=`
 - `GET /api/workflows/speckit/runs/{run_id}`
@@ -71,8 +61,6 @@ From `api_service/api/routers/workflows.py`:
 - `POST /api/workflows/speckit/runs/{run_id}/retry`
 
 ### 3.3 Orchestrator
-
-From `api_service/api/routers/orchestrator.py`:
 
 - `POST /orchestrator/runs`
 - `GET /orchestrator/runs?status=&service=&limit=&offset=`
@@ -85,11 +73,9 @@ From `api_service/api/routers/orchestrator.py`:
 
 ### 4.1 App Structure
 
-A standalone dashboard app (React/Next.js or equivalent) with these routes:
-
 - `/tasks` consolidated running and queued view.
 - `/tasks/queue` Agent Queue list.
-- `/tasks/queue/new` create queue job.
+- `/tasks/queue/new` create queue Task job (`type="task"`).
 - `/tasks/queue/:jobId` queue job details.
 - `/tasks/speckit` SpecKit run list.
 - `/tasks/speckit/new` create SpecKit run.
@@ -100,15 +86,13 @@ A standalone dashboard app (React/Next.js or equivalent) with these routes:
 
 ### 4.2 Shared UI Modules
 
-- `RunStatusBadge`: source-native and normalized status labels.
-- `RunTable`: list display with source, status, age, duration.
-- `ArtifactList`: metadata and download links.
-- `EventTimeline`: queue event stream via polling.
-- `SubmitPanels`: typed forms for each system.
+- `RunStatusBadge`
+- `RunTable`
+- `ArtifactList`
+- `EventTimeline`
+- `TaskSubmitPanel` (typed fields; no free-form payload textarea in default flow)
 
 ## 5. Data Model in the UI
-
-The dashboard uses a frontend-normalized list model for aggregated pages:
 
 ```ts
 export type DashboardRun = {
@@ -123,12 +107,6 @@ export type DashboardRun = {
   link: string;
 };
 ```
-
-Normalization rules:
-
-- Queue: `queued -> queued`, `running -> running`, `succeeded -> succeeded`, `failed|dead_letter -> failed`, `cancelled -> cancelled`.
-- SpecKit: `pending|retrying -> queued`, `running -> running`, `succeeded|no_work -> succeeded`, `failed -> failed`, `cancelled -> cancelled`.
-- Orchestrator: `pending -> queued`, `running -> running`, `awaiting_approval -> awaiting_action`, `succeeded|rolled_back -> succeeded`, `failed -> failed`.
 
 ## 6. Page-Level API Contracts
 
@@ -147,15 +125,52 @@ Client fan-out with parallel fetches:
 
 ### 6.2 Queue Submit (`/tasks/queue/new`)
 
-POST body shape (from `CreateJobRequest`):
+UI submits typed Task values, then emits `CreateJobRequest`:
 
-- `type: string`
-- `payload: object`
+- `type: "task"`
+- `payload: CanonicalTaskPayload`
 - `priority: number` (default `0`)
 - `affinityKey?: string`
 - `maxAttempts?: number` (default `3`)
 
-Endpoint: `POST /api/queue/jobs`
+Typed UI fields (only `instructions` required):
+
+- `instructions`
+- `skill` (default `auto`)
+- `runtime` (default deployment runtime)
+- `model`
+- `effort`
+- `repository`
+- `startingBranch`
+- `newBranch`
+- `publishMode`
+
+Example payload:
+
+```json
+{
+  "repository": "owner/repo",
+  "requiredCapabilities": ["git", "codex"],
+  "targetRuntime": "codex",
+  "auth": { "repoAuthRef": null, "publishAuthRef": null },
+  "task": {
+    "instructions": "Run tests and fix failures",
+    "skill": { "id": "auto", "args": {} },
+    "runtime": { "mode": "codex", "model": null, "effort": null },
+    "git": { "startingBranch": null, "newBranch": null },
+    "publish": {
+      "mode": "branch",
+      "prBaseBranch": null,
+      "commitMessage": null,
+      "prTitle": null,
+      "prBody": null
+    }
+  }
+}
+```
+
+The form remains token-free. Optional auth references are backend-governed and
+must never carry raw token values.
 
 ### 6.3 Queue Detail (`/tasks/queue/:jobId`)
 
@@ -165,124 +180,56 @@ Endpoint: `POST /api/queue/jobs`
 
 ### 6.4 SpecKit Submit (`/tasks/speckit/new`)
 
-POST body shape (from `CreateWorkflowRunRequest`):
-
 - `repository: owner/repo`
 - `featureKey?: string`
 - `forcePhase?: discover|submit|apply|publish`
 - `notes?: string`
 
-Endpoint: `POST /api/workflows/speckit/runs`
-
-### 6.5 SpecKit Detail (`/tasks/speckit/:runId`)
-
-- `GET /api/workflows/speckit/runs/{run_id}`
-- `GET /api/workflows/speckit/runs/{run_id}/tasks`
-- `GET /api/workflows/speckit/runs/{run_id}/artifacts`
-
-### 6.6 Orchestrator Submit (`/tasks/orchestrator/new`)
-
-POST body shape (from `OrchestratorCreateRunRequest`):
+### 6.5 Orchestrator Submit (`/tasks/orchestrator/new`)
 
 - `instruction: string`
 - `targetService: string`
 - `approvalToken?: string`
 - `priority?: normal|high`
 
-Endpoint: `POST /orchestrator/runs`
-
-### 6.7 Orchestrator Detail (`/tasks/orchestrator/:runId`)
-
-- `GET /orchestrator/runs/{run_id}`
-- `GET /orchestrator/runs/{run_id}/artifacts`
-- `POST /orchestrator/runs/{run_id}/approvals`
-- `POST /orchestrator/runs/{run_id}/retry`
-
 ## 7. Polling and Refresh Model
-
-Polling is the only runtime update mechanism in this strategy.
 
 - Aggregated/list pages: poll every 5 seconds.
 - Detail pages: poll every 2 seconds.
 - Queue events: poll every 1 second with `after` cursor.
 - Suspend polling when tab is hidden.
-- Apply exponential backoff on HTTP 429/5xx.
-
-This gives near-live UX without backend protocol changes.
+- Apply exponential backoff on `429`/`5xx`.
 
 ## 8. Authentication Model
 
 ### 8.1 UI-to-API auth
 
-UI uses user authentication context for submit/list/detail calls.
-
-- `AUTH_PROVIDER=disabled`: existing default-user behavior.
-- OIDC: bearer/cookie pass-through.
+UI uses end-user auth context for submit/list/detail calls.
 
 ### 8.2 Worker token separation
 
-Do not use `X-MoonMind-Worker-Token` in dashboard requests. Worker tokens remain for worker-only mutation endpoints.
+Do not use `X-MoonMind-Worker-Token` in dashboard requests.
 
 ### 8.3 Security note
 
-`/orchestrator` routes currently do not use `get_current_user()` dependencies. Before broad deployment, align orchestrator auth enforcement with queue/workflow routes.
+`/orchestrator` routes currently do not use `get_current_user()` dependencies. Align with queue/workflow routes before broad deployment.
 
-## 9. Deployment
-
-### 9.1 Preferred deployment pattern
-
-Run dashboard as an additional service and link from existing Open-WebUI.
-
-- One operational UI entry point for users.
-- Minimal changes to existing `ui` service behavior.
-
-### 9.2 Environment
-
-- `MOONMIND_DASHBOARD_API_BASE_URL` (or framework equivalent) -> `http://api:5000`
-
-## 10. Implementation Plan
+## 9. Implementation Plan
 
 ### Phase 1 (MVP)
 
 - Build all list/detail/submit pages.
 - Implement status normalization and consolidated `/tasks`.
-- Implement polling and error states.
+- Implement typed queue Task submit.
 
 ### Phase 2 (Usability)
 
 - Add saved filters and table presets.
-- Add JSON payload editors with templates for common queue job types.
+- Add validation/help text for runtime/skill/publish controls.
 - Add per-page quick actions (retry, approve, copy IDs).
 
-## 11. Risks and Mitigations
+## 10. References
 
-- Polling load growth with many active users.
-- Mitigation: visibility pause, adaptive backoff, small limits.
-
-- Inconsistent field naming across APIs.
-- Mitigation: strict adapter layer with typed transforms.
-
-- Orchestrator auth parity gap.
-- Mitigation: add route dependency enforcement before external exposure.
-
-## 12. Acceptance Criteria
-
-- Users can submit all three run/job types from the UI.
-- Users can view running and queued work in one consolidated page.
-- Users can inspect queue events and artifacts from detail pages.
-- Dashboard runs without requiring any new backend endpoint for MVP.
-
-## 13. Implementation Status (2026-02-15)
-
-Initial Strategy 1 implementation is now present in the API service:
-
-- Router: `api_service/api/routers/task_dashboard.py`
-- View-model/status normalization helper: `api_service/api/routers/task_dashboard_view_model.py`
-- Template shell: `api_service/templates/task_dashboard.html`
-- Static client assets:
-  - `api_service/static/task_dashboard/dashboard.js`
-  - `api_service/static/task_dashboard/dashboard.css`
-- App wiring: `api_service/main.py` includes the dashboard router.
-- Unit coverage:
-  - `tests/unit/api/routers/test_task_dashboard.py`
-  - `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- `docs/TaskArchitecture.md`
+- `docs/TaskUiArchitecture.md`
+- `docs/CodexTaskQueue.md`

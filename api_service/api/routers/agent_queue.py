@@ -41,6 +41,7 @@ from moonmind.schemas.agent_queue_models import (
     JobEventModel,
     JobListResponse,
     JobModel,
+    MigrationTelemetryResponse,
     WorkerTokenCreateResponse,
     WorkerTokenListResponse,
     WorkerTokenModel,
@@ -60,6 +61,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueAuthorizationError,
     AgentQueueService,
+    QueueMigrationTelemetry,
     AgentQueueValidationError,
     WorkerAuthPolicy,
 )
@@ -330,6 +332,35 @@ async def list_jobs(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return JobListResponse(items=[_serialize_job(job) for job in jobs])
+
+
+@router.get("/telemetry/migration", response_model=MigrationTelemetryResponse)
+async def migration_telemetry(
+    *,
+    window_hours: int = Query(168, alias="windowHours", ge=1, le=24 * 365),
+    limit: int = Query(5000, ge=1, le=20000),
+    service: AgentQueueService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> MigrationTelemetryResponse:
+    """Return migration telemetry for mixed-fleet and legacy deprecation rollout."""
+
+    try:
+        snapshot: QueueMigrationTelemetry = await service.get_migration_telemetry(
+            window_hours=window_hours,
+            limit=limit,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    return MigrationTelemetryResponse(
+        generatedAt=snapshot.generated_at,
+        windowHours=snapshot.window_hours,
+        totalJobs=snapshot.total_jobs,
+        legacyJobSubmissions=snapshot.legacy_job_submissions,
+        jobVolumeByType=snapshot.job_volume_by_type,
+        failureCountsByRuntimeStage=snapshot.failure_counts_by_runtime_stage,
+        publishOutcomes=snapshot.publish_outcomes,
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobModel)

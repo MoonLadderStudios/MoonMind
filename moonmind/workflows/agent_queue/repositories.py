@@ -449,6 +449,54 @@ class AgentQueueRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_jobs_for_telemetry(
+        self,
+        *,
+        since: Optional[datetime] = None,
+        limit: int = 5000,
+    ) -> list[models.AgentJob]:
+        """Return recently created jobs for migration telemetry snapshots."""
+
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob)
+        if since is not None:
+            stmt = stmt.where(models.AgentJob.created_at >= since)
+        stmt = stmt.order_by(
+            models.AgentJob.created_at.desc(),
+            models.AgentJob.id.desc(),
+        ).limit(limit)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_events_for_jobs(
+        self,
+        *,
+        job_ids: list[UUID],
+        since: Optional[datetime] = None,
+        limit: int = 100000,
+    ) -> list[models.AgentJobEvent]:
+        """Return events for a set of jobs ordered by job and event time."""
+
+        if not job_ids:
+            return []
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        stmt: Select[tuple[models.AgentJobEvent]] = select(models.AgentJobEvent).where(
+            models.AgentJobEvent.job_id.in_(job_ids)
+        )
+        if since is not None:
+            stmt = stmt.where(models.AgentJobEvent.created_at >= since)
+        stmt = stmt.order_by(
+            models.AgentJobEvent.job_id.asc(),
+            models.AgentJobEvent.created_at.asc(),
+            models.AgentJobEvent.id.asc(),
+        ).limit(limit)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def create_worker_token(
         self,
         *,
@@ -599,18 +647,22 @@ class AgentQueueRepository:
         required_caps_raw = payload.get("requiredCapabilities")
         if isinstance(required_caps_raw, list):
             required_caps = {
-                str(item).strip() for item in required_caps_raw if str(item).strip()
+                str(item).strip().lower()
+                for item in required_caps_raw
+                if str(item).strip()
             }
         else:
             required_caps = set()
 
-        if required_caps:
-            available_caps = {
-                str(item).strip()
-                for item in (worker_capabilities or [])
-                if str(item).strip()
-            }
-            if not required_caps.issubset(available_caps):
-                return False
+        if not required_caps:
+            return False
+
+        available_caps = {
+            str(item).strip().lower()
+            for item in (worker_capabilities or [])
+            if str(item).strip()
+        }
+        if not required_caps.issubset(available_caps):
+            return False
 
         return True

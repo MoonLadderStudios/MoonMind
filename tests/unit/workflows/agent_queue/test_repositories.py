@@ -48,7 +48,11 @@ async def _create_job(
     payload: dict | None = None,
     max_attempts: int = 3,
 ):
-    payload = payload or {"instruction": "run"}
+    payload = payload or {
+        "repository": "moon/default",
+        "requiredCapabilities": ["codex", "git"],
+        "instruction": "run",
+    }
     return await repo.create_job(
         job_type=job_type,
         payload=payload,
@@ -88,9 +92,17 @@ async def test_claim_prioritizes_highest_priority_then_oldest(tmp_path):
             high = await _create_job(repo, priority=9)
             await repo.commit()
 
-            first = await repo.claim_job(worker_id="worker-1", lease_seconds=30)
+            first = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
-            second = await repo.claim_job(worker_id="worker-2", lease_seconds=30)
+            second = await repo.claim_job(
+                worker_id="worker-2",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
 
     assert first is not None
@@ -111,7 +123,11 @@ async def test_heartbeat_requires_owner_and_running_state(tmp_path):
             job = await _create_job(repo)
             await repo.commit()
 
-            await repo.claim_job(worker_id="owner", lease_seconds=60)
+            await repo.claim_job(
+                worker_id="owner",
+                lease_seconds=60,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
 
             with pytest.raises(AgentJobOwnershipError):
@@ -147,7 +163,11 @@ async def test_fail_retryable_requeues_until_attempt_limit(tmp_path):
             job = await _create_job(repo, max_attempts=2)
             await repo.commit()
 
-            await repo.claim_job(worker_id="worker-1", lease_seconds=30)
+            await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
             requeued = await repo.fail_job(
                 job_id=job.id,
@@ -162,7 +182,11 @@ async def test_fail_retryable_requeues_until_attempt_limit(tmp_path):
             requeued.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
             await repo.commit()
 
-            await repo.claim_job(worker_id="worker-2", lease_seconds=30)
+            await repo.claim_job(
+                worker_id="worker-2",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
             failed = await repo.fail_job(
                 job_id=job.id,
@@ -187,12 +211,20 @@ async def test_claim_requeues_expired_lease_before_selecting_job(tmp_path):
             ready = await _create_job(repo, priority=1)
             await repo.commit()
 
-            await repo.claim_job(worker_id="old-worker", lease_seconds=30)
+            await repo.claim_job(
+                worker_id="old-worker",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             expired.lease_expires_at = datetime.now(UTC) - timedelta(seconds=5)
             expired.updated_at = datetime.now(UTC) - timedelta(seconds=5)
             await repo.commit()
 
-            claimed = await repo.claim_job(worker_id="new-worker", lease_seconds=30)
+            claimed = await repo.claim_job(
+                worker_id="new-worker",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
 
     assert claimed is not None
@@ -213,7 +245,11 @@ async def test_claim_skips_jobs_waiting_for_retry_window(tmp_path):
             delayed.next_attempt_at = datetime.now(UTC) + timedelta(minutes=5)
             await repo.commit()
 
-            claimed = await repo.claim_job(worker_id="worker-1", lease_seconds=30)
+            claimed = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
 
     assert claimed is not None
@@ -256,6 +292,31 @@ async def test_claim_applies_repository_and_capability_filters(tmp_path):
 
     assert claimed is not None
     assert claimed.id == allowed.id
+
+
+async def test_claim_denies_jobs_without_required_capabilities(tmp_path):
+    """Deny-by-default claim path should skip jobs missing capability requirements."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            await _create_job(
+                repo,
+                payload={
+                    "repository": "moon/allowed",
+                    "instruction": "run",
+                },
+            )
+            await repo.commit()
+
+            claimed = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+    assert claimed is None
 
 
 async def test_claim_scans_past_first_batch_for_eligible_filtered_job(tmp_path):
@@ -310,7 +371,11 @@ async def test_concurrent_claims_do_not_duplicate_jobs(tmp_path):
         async def claim(worker: str):
             async with session_maker() as claim_session:
                 claim_repo = AgentQueueRepository(claim_session)
-                job = await claim_repo.claim_job(worker_id=worker, lease_seconds=45)
+                job = await claim_repo.claim_job(
+                    worker_id=worker,
+                    lease_seconds=45,
+                    worker_capabilities=["codex", "git"],
+                )
                 await claim_repo.commit()
                 return job.id if job else None
 
@@ -319,3 +384,39 @@ async def test_concurrent_claims_do_not_duplicate_jobs(tmp_path):
     assert claimed_ids[0] is not None
     assert claimed_ids[1] is not None
     assert claimed_ids[0] != claimed_ids[1]
+
+
+async def test_list_jobs_for_telemetry_and_events_for_jobs(tmp_path):
+    """Telemetry helpers should return bounded recent jobs and related events."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            older = await _create_job(repo, job_type="task")
+            await repo.append_event(
+                job_id=older.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="older",
+            )
+            await repo.commit()
+
+            newer = await _create_job(repo, job_type="codex_exec")
+            await repo.append_event(
+                job_id=newer.id,
+                level=models.AgentJobEventLevel.ERROR,
+                message="newer",
+            )
+            await repo.commit()
+
+            since = datetime.now(UTC) - timedelta(minutes=5)
+            jobs = await repo.list_jobs_for_telemetry(since=since, limit=10)
+            events = await repo.list_events_for_jobs(
+                job_ids=[job.id for job in jobs],
+                since=since,
+                limit=100,
+            )
+
+    assert len(jobs) == 2
+    assert {job.id for job in jobs} == {older.id, newer.id}
+    assert len(events) == 2
+    assert {event.message for event in events} == {"older", "newer"}

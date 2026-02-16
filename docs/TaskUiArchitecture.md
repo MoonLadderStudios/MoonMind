@@ -2,37 +2,37 @@
 
 Status: Proposed  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-15
+Last Updated: 2026-02-16
 
 ## 1. Purpose
 
 Define a web UI architecture for MoonMind that lets users:
 
-- Submit new tasks.
+- Submit new Tasks with typed controls.
 - See currently running and queued work.
 - Inspect logs/events and artifacts per execution.
 - Monitor Agent Queue jobs, SpecKit workflow runs, and Orchestrator runs from one UI surface.
 
-The design prioritizes minimal backend changes by reusing existing APIs.
+Execution semantics are defined by `docs/TaskArchitecture.md`; this document defines how the UI maps to those contracts.
 
 ## 2. Goals and Non-Goals
 
 ### Goals
 
 - Deliver a production-usable MVP quickly using existing REST endpoints.
-- Provide a clear path from polling to real-time updates.
+- Provide typed Task submission fields with safe defaults.
 - Keep authentication aligned with current MoonMind auth provider behavior.
-- Avoid coupling UI implementation to one worker system.
+- Avoid coupling UI implementation to one runtime.
 
 ### Non-Goals
 
 - Replacing Open-WebUI.
 - Rewriting existing workflow/orchestrator backends.
-- Defining new worker execution semantics.
+- Redefining worker execution semantics outside `docs/TaskArchitecture.md`.
 
 ## 3. Existing Backend Capabilities
 
-As of 2026-02-15, MoonMind already exposes submit plus monitor primitives for all three systems.
+As of 2026-02-16, MoonMind already exposes submit plus monitor primitives for all three systems.
 
 ### 3.1 Agent Queue (`/api/queue`)
 
@@ -45,7 +45,7 @@ Implemented in `api_service/api/routers/agent_queue.py`.
 - `GET /api/queue/jobs/{job_id}/artifacts` lists artifacts.
 - `GET /api/queue/jobs/{job_id}/artifacts/{artifact_id}/download` downloads artifact bytes.
 
-Status model already supports dashboard needs: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `dead_letter`.
+Status model supports dashboard needs: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `dead_letter`.
 
 ### 3.2 SpecKit Workflows (`/api/workflows/speckit`)
 
@@ -58,8 +58,6 @@ Implemented in `api_service/api/routers/workflows.py`.
 - `GET /api/workflows/speckit/runs/{run_id}/artifacts` returns artifacts.
 - `POST /api/workflows/speckit/runs/{run_id}/retry` retries failed runs.
 
-Status model: `pending`, `running`, `succeeded`, `failed`, `no_work`, `cancelled`, `retrying`.
-
 ### 3.3 Orchestrator (`/orchestrator`)
 
 Implemented in `api_service/api/routers/orchestrator.py`.
@@ -70,8 +68,6 @@ Implemented in `api_service/api/routers/orchestrator.py`.
 - `GET /orchestrator/runs/{run_id}/artifacts` lists artifacts.
 - `POST /orchestrator/runs/{run_id}/approvals` grants approvals.
 - `POST /orchestrator/runs/{run_id}/retry` retries runs.
-
-Status model: `pending`, `running`, `awaiting_approval`, `succeeded`, `failed`, `rolled_back`.
 
 ## 4. Recommended Architecture
 
@@ -85,9 +81,9 @@ Prepare for Strategy 3 and Strategy 5 by implementing a frontend normalization l
 
 ### 4.2 Why this approach
 
-- Fastest path to usable UI with near-zero backend work.
-- Leaves backend ownership boundaries unchanged.
-- Keeps future upgrades incremental: polling to SSE, per-system lists to unified runs.
+- Fast path to typed Task UX with near-zero backend rework.
+- Keeps backend ownership boundaries unchanged.
+- Supports incremental upgrades (polling to SSE, client fan-out to unified runs endpoint).
 
 ## 5. UI Information Architecture
 
@@ -97,7 +93,7 @@ Use a dedicated dashboard app with route groups:
 
 - `/tasks` unified running view (aggregated client-side from all three systems).
 - `/tasks/queue` list of Agent Queue jobs.
-- `/tasks/queue/new` submit Agent Queue job.
+- `/tasks/queue/new` submit typed Task job (`type="task"`).
 - `/tasks/queue/:jobId` job detail with events and artifacts.
 - `/tasks/speckit` list of SpecKit runs.
 - `/tasks/speckit/new` submit SpecKit run.
@@ -112,13 +108,66 @@ Use a dedicated dashboard app with route groups:
 - `StatusBadge` for normalized and source-native status display.
 - `EventLogPanel` with incremental loading for queue events.
 - `ArtifactList` with size/type and download actions.
-- `SubmitFormRegistry` keyed by job/run type to avoid permanent raw JSON forms.
+- `TaskSubmitForm` for typed fields from `docs/TaskArchitecture.md`.
 
-## 6. API-to-Page Contract
+## 6. Task Submit Contract (UI -> Queue)
 
-### 6.1 Running View (`/tasks`)
+Queue submit is a typed Task form, not a raw payload editor.
 
-The UI performs parallel fetches and merges rows client-side.
+### 6.1 Fields Presented to Users
+
+- `instructions` (required)
+- `skill` (optional, default `auto`)
+- `runtime` (optional, default system runtime)
+- `model` (optional)
+- `effort` (optional)
+- `repository` (optional, default system repo)
+- `startingBranch` (optional, default repo default branch at execution)
+- `newBranch` (optional)
+- `publishMode` (optional, default `branch`)
+
+### 6.2 Request Envelope
+
+UI submits `CreateJobRequest`:
+
+- `type: "task"`
+- `payload: CanonicalTaskPayload`
+- `priority: number` (default `0`)
+- `affinityKey?: string`
+- `maxAttempts?: number` (default `3`)
+
+### 6.3 Payload Emitted by UI
+
+```json
+{
+  "repository": "owner/repo",
+  "requiredCapabilities": ["git", "codex"],
+  "targetRuntime": "codex",
+  "auth": { "repoAuthRef": null, "publishAuthRef": null },
+  "task": {
+    "instructions": "Implement feature X",
+    "skill": { "id": "auto", "args": {} },
+    "runtime": { "mode": "codex", "model": null, "effort": null },
+    "git": { "startingBranch": null, "newBranch": null },
+    "publish": {
+      "mode": "branch",
+      "prBaseBranch": null,
+      "commitMessage": null,
+      "prTitle": null,
+      "prBody": null
+    }
+  }
+}
+```
+
+Defaults that depend on repository state (for example default branch) are resolved by worker Pre stage at execution time.
+The Task UI remains token-free: it does not collect or submit raw credential values.
+
+## 7. API-to-Page Contract
+
+### 7.1 Running View (`/tasks`)
+
+UI performs parallel fetches and merges rows client-side.
 
 - Queue running: `GET /api/queue/jobs?status=running&limit=200`
 - Queue queued: `GET /api/queue/jobs?status=queued&limit=200`
@@ -127,28 +176,13 @@ The UI performs parallel fetches and merges rows client-side.
 - Orchestrator running: `GET /orchestrator/runs?status=running&limit=100`
 - Orchestrator pending approval: `GET /orchestrator/runs?status=awaiting_approval&limit=100`
 
-### 6.2 Queue Detail (`/tasks/queue/:jobId`)
+### 7.2 Queue Detail (`/tasks/queue/:jobId`)
 
 - Primary data: `GET /api/queue/jobs/{job_id}`
 - Event timeline: `GET /api/queue/jobs/{job_id}/events?after=<timestamp>`
 - Artifacts: `GET /api/queue/jobs/{job_id}/artifacts`
 
-### 6.3 SpecKit Detail (`/tasks/speckit/:runId`)
-
-- Run detail: `GET /api/workflows/speckit/runs/{run_id}`
-- Task timeline: `GET /api/workflows/speckit/runs/{run_id}/tasks`
-- Artifacts: `GET /api/workflows/speckit/runs/{run_id}/artifacts`
-
-### 6.4 Orchestrator Detail (`/tasks/orchestrator/:runId`)
-
-- Run detail: `GET /orchestrator/runs/{run_id}`
-- Artifacts: `GET /orchestrator/runs/{run_id}/artifacts`
-- Approval action: `POST /orchestrator/runs/{run_id}/approvals`
-- Retry action: `POST /orchestrator/runs/{run_id}/retry`
-
-## 7. Frontend Data Normalization
-
-Define a shared view model so one table can show all systems:
+## 8. Frontend Data Normalization
 
 ```ts
 export type UnifiedRun = {
@@ -171,122 +205,56 @@ Normalization rules:
 - SpecKit `pending|retrying -> queued`, `running -> running`, `succeeded|no_work -> succeeded`, `failed -> failed`, `cancelled -> cancelled`.
 - Orchestrator `pending -> queued`, `running -> running`, `awaiting_approval -> awaiting_action`, `succeeded|rolled_back -> succeeded`, `failed -> failed`.
 
-## 8. Realtime Strategy
+## 9. Realtime Strategy
 
-### 8.1 MVP Polling
+### 9.1 MVP Polling
 
 - List pages poll every 5 seconds.
 - Detail pages poll every 2 seconds.
 - Queue events use incremental polling via `after` cursor every 1 second.
 - Pause polling when document is hidden.
 
-### 8.2 Upgrade Path
+### 9.2 Upgrade Path
 
 Add SSE endpoint for queue events first:
 
 - `GET /api/queue/jobs/{job_id}/events/stream`
 
-Implementation can start with DB polling loop and later move to Postgres `LISTEN/NOTIFY`.
+## 10. Authentication and Authorization
 
-WebSockets are optional and only needed if bidirectional messaging is introduced.
-
-## 9. Authentication and Authorization
-
-### 9.1 User actions
+### 10.1 User actions
 
 UI calls submit/list/detail endpoints using end-user auth context.
 
-- `AUTH_PROVIDER=disabled`: default local user behavior remains intact.
-- OIDC mode: bearer/cookie auth should be forwarded by the UI.
-
-### 9.2 Worker actions
+### 10.2 Worker actions
 
 Queue mutation endpoints used by workers (`claim`, `heartbeat`, `complete`, `fail`, event append, artifact upload) require worker auth via `X-MoonMind-Worker-Token` or OIDC worker identity.
 
-The dashboard must not use worker tokens for user pages.
+### 10.3 Current gap
 
-### 9.3 Current gap
-
-`/orchestrator/*` routes currently do not enforce `get_current_user()` dependencies, unlike queue/workflow routes. For multi-user deployments, add auth dependency parity before exposing the dashboard outside trusted networks.
-
-## 10. Deployment Topology
-
-### 10.1 Preferred
-
-Run a dedicated dashboard container and link it from Open-WebUI.
-
-- Keep Open-WebUI unchanged.
-- Expose dashboard at `/tasks` (reverse-proxy path) or separate port.
-- Configure dashboard API base URL to MoonMind API service (`http://api:5000`).
-
-### 10.2 Compose shape (conceptual)
-
-```yaml
-moonmind-dashboard:
-  build: ./services/dashboard
-  environment:
-    - NEXT_PUBLIC_MOONMIND_API_BASE_URL=http://api:5000
-  ports:
-    - "8090:3000"
-  depends_on:
-    - api
-  networks:
-    - local-network
-```
+`/orchestrator/*` routes currently do not enforce `get_current_user()` dependencies, unlike queue/workflow routes. Align this before broad multi-user deployment.
 
 ## 11. Delivery Plan
 
 ### Phase 1: Thin dashboard MVP
 
 - Implement route groups and submit/detail/list pages.
-- Implement polling and unified running page.
-- No new backend endpoints required.
+- Implement typed Task submit form and unified running page.
+- No new backend endpoints required for baseline submission and monitoring.
 
 ### Phase 2: UX hardening
 
-- Add submit form registry for typed payloads.
+- Add contextual validation/help for skill/runtime/publish options.
 - Add filters and saved views.
 - Add explicit empty/error states and retry UX.
 
 ### Phase 3: Live logs
 
 - Add SSE for queue events.
-- Replace event polling in detail page with `EventSource`.
+- Replace detail-page event polling with `EventSource`.
 
-### Phase 4: Optional unified backend model
+## 12. Related
 
-- If query fan-out becomes expensive, add a server-side unified `runs` projection table and a single `GET /api/runs` endpoint.
-
-## 12. Risks and Mitigations
-
-- API inconsistency across systems can fragment UI behavior.
-- Mitigation: normalize in frontend adapter layer now.
-
-- Polling load can grow with active users.
-- Mitigation: short-term polling backoff and visibility pause; mid-term SSE.
-
-- Auth mismatch can leak orchestrator data in shared environments.
-- Mitigation: add auth dependency parity on orchestrator routes.
-
-## 13. Acceptance Criteria
-
-- User can submit Agent Queue, SpecKit, and Orchestrator runs from UI.
-- User can see running and queued work across all three systems in one screen.
-- User can open a detail page and view progress plus artifacts.
-- Queue event logs update within 2 seconds in MVP polling mode.
-- UI works with both `AUTH_PROVIDER=disabled` and OIDC deployments.
-
-## 14. Implementation Status (2026-02-15)
-
-The Strategy 1 MVP implementation is now available via API-served dashboard routes:
-
-- Runtime router: `api_service/api/routers/task_dashboard.py`
-- Runtime status normalization: `api_service/api/routers/task_dashboard_view_model.py`
-- Template and static assets:
-  - `api_service/templates/task_dashboard.html`
-  - `api_service/static/task_dashboard/dashboard.js`
-  - `api_service/static/task_dashboard/dashboard.css`
-- Main app integration: `api_service/main.py`
-- Unit tests:
-  - `tests/unit/api/routers/test_task_dashboard.py`
-  - `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- `docs/TaskArchitecture.md`
+- `docs/TaskUiStrategy1ThinDashboard.md`
+- `docs/CodexTaskQueue.md`

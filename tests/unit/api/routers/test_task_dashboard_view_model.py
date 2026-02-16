@@ -40,9 +40,22 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["initialPath"] == "/tasks"
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["queue"]["list"] == "/api/queue/jobs"
+    assert (
+        config["sources"]["queue"]["migrationTelemetry"]
+        == "/api/queue/telemetry/migration"
+    )
     assert config["sources"]["speckit"]["create"] == "/api/workflows/speckit/runs"
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]
+    assert "defaultRepository" in config["system"]
+    assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini", "claude")
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
+
+
+def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini")
+    config = build_runtime_config("/tasks")
+    assert config["system"]["defaultTaskRuntime"] == "gemini"

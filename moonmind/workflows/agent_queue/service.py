@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
@@ -17,6 +18,14 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentWorkerTokenNotFoundError,
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
+from moonmind.workflows.agent_queue.task_contract import (
+    LEGACY_TASK_JOB_TYPES,
+    SUPPORTED_EXECUTION_RUNTIMES,
+    TaskContractError,
+    normalize_queue_job_payload,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class AgentQueueValidationError(ValueError):
@@ -57,6 +66,19 @@ class WorkerTokenIssueResult:
 
     token_record: models.AgentWorkerToken
     raw_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class QueueMigrationTelemetry:
+    """Aggregated migration telemetry snapshot for queue rollout tracking."""
+
+    generated_at: datetime
+    window_hours: int
+    total_jobs: int
+    job_volume_by_type: dict[str, int]
+    failure_counts_by_runtime_stage: list[dict[str, Any]]
+    publish_outcomes: dict[str, Any]
+    legacy_job_submissions: int
 
 
 class AgentQueueService:
@@ -107,7 +129,13 @@ class AgentQueueService:
             raise AgentQueueValidationError("maxAttempts must be >= 1")
 
         normalized_payload = dict(payload or {})
-        normalized_payload = self._normalize_required_capabilities(normalized_payload)
+        try:
+            normalized_payload = normalize_queue_job_payload(
+                job_type=candidate_type,
+                payload=normalized_payload,
+            )
+        except TaskContractError as exc:
+            raise AgentQueueValidationError(str(exc)) from exc
 
         job = await self._repository.create_job(
             job_type=candidate_type,
@@ -134,6 +162,23 @@ class AgentQueueService:
                 ),
             },
         )
+        if candidate_type in LEGACY_TASK_JOB_TYPES:
+            warning_payload = {
+                "jobType": candidate_type,
+                "recommendedType": "task",
+                "migrationPhase": "phase4",
+            }
+            await self._repository.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.WARN,
+                message="Legacy job type submitted",
+                payload=warning_payload,
+            )
+            logger.warning(
+                "Legacy agent queue job submission detected: job_id=%s type=%s",
+                job.id,
+                candidate_type,
+            )
         await self._repository.commit()
         return job
 
@@ -517,6 +562,93 @@ class AgentQueueService:
             capabilities=tuple(token.capabilities or ()),
         )
 
+    async def get_migration_telemetry(
+        self,
+        *,
+        window_hours: int = 168,
+        limit: int = 5000,
+    ) -> QueueMigrationTelemetry:
+        """Return aggregate telemetry for task migration and mixed-fleet rollout."""
+
+        if window_hours < 1 or window_hours > 24 * 365:
+            raise AgentQueueValidationError("windowHours must be between 1 and 8760")
+        if limit < 1 or limit > 20000:
+            raise AgentQueueValidationError("limit must be between 1 and 20000")
+
+        generated_at = datetime.now(UTC)
+        since = generated_at - timedelta(hours=window_hours)
+        jobs = await self._repository.list_jobs_for_telemetry(since=since, limit=limit)
+
+        job_volume_by_type: dict[str, int] = {}
+        legacy_job_submissions = 0
+        for job in jobs:
+            job_volume_by_type[job.type] = job_volume_by_type.get(job.type, 0) + 1
+            if job.type in LEGACY_TASK_JOB_TYPES:
+                legacy_job_submissions += 1
+
+        events_by_job = await self._load_events_by_job(jobs=jobs, since=since)
+
+        failure_counts: dict[tuple[str, str], int] = {}
+        publish_requested = 0
+        publish_published = 0
+        publish_skipped = 0
+        publish_failed = 0
+        publish_unknown = 0
+
+        for job in jobs:
+            runtime = self._extract_runtime(job.payload)
+            publish_mode = self._extract_publish_mode(job.payload)
+            job_events = events_by_job.get(job.id, [])
+
+            if job.status in {
+                models.AgentJobStatus.FAILED,
+                models.AgentJobStatus.DEAD_LETTER,
+            }:
+                failed_stage = self._extract_failed_stage(job_events)
+                key = (runtime, failed_stage)
+                failure_counts[key] = failure_counts.get(key, 0) + 1
+
+            if publish_mode != "none":
+                publish_requested += 1
+                outcome = self._extract_publish_outcome(job_events)
+                if outcome == "published":
+                    publish_published += 1
+                elif outcome == "skipped":
+                    publish_skipped += 1
+                elif outcome == "failed":
+                    publish_failed += 1
+                else:
+                    publish_unknown += 1
+
+        failure_counts_by_runtime_stage = [
+            {"runtime": runtime, "stage": stage, "count": count}
+            for (runtime, stage), count in sorted(
+                failure_counts.items(),
+                key=lambda item: (-item[1], item[0][0], item[0][1]),
+            )
+        ]
+        publish_denominator = publish_requested if publish_requested > 0 else 1
+        publish_outcomes = {
+            "requested": publish_requested,
+            "published": publish_published,
+            "skipped": publish_skipped,
+            "failed": publish_failed,
+            "unknown": publish_unknown,
+            "publishedRate": round(publish_published / publish_denominator, 4),
+            "skippedRate": round(publish_skipped / publish_denominator, 4),
+            "failedRate": round(publish_failed / publish_denominator, 4),
+        }
+
+        return QueueMigrationTelemetry(
+            generated_at=generated_at,
+            window_hours=window_hours,
+            total_jobs=len(jobs),
+            job_volume_by_type=job_volume_by_type,
+            failure_counts_by_runtime_stage=failure_counts_by_runtime_stage,
+            publish_outcomes=publish_outcomes,
+            legacy_job_submissions=legacy_job_submissions,
+        )
+
     async def require_worker_token(self, token_id: UUID) -> models.AgentWorkerToken:
         """Return worker token metadata by id or raise validation error."""
 
@@ -543,17 +675,104 @@ class AgentQueueService:
                 normalized.append(item)
         return tuple(dict.fromkeys(normalized))
 
-    def _normalize_required_capabilities(
-        self, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        required = payload.get("requiredCapabilities")
-        if not isinstance(required, list):
-            return payload
-        normalized = list(self._normalize_str_list([str(item) for item in required]))
-        payload["requiredCapabilities"] = normalized
-        return payload
-
     @staticmethod
     def _hash_token(raw_token: str) -> str:
         digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         return f"sha256:{digest}"
+
+    async def _load_events_by_job(
+        self,
+        *,
+        jobs: list[models.AgentJob],
+        since: datetime,
+    ) -> dict[UUID, list[models.AgentJobEvent]]:
+        if not jobs:
+            return {}
+        events = await self._repository.list_events_for_jobs(
+            job_ids=[job.id for job in jobs],
+            since=since,
+            limit=100000,
+        )
+        grouped: dict[UUID, list[models.AgentJobEvent]] = {}
+        for event in events:
+            grouped.setdefault(event.job_id, []).append(event)
+        return grouped
+
+    @staticmethod
+    def _extract_runtime(payload: dict[str, Any] | None) -> str:
+        source = payload if isinstance(payload, dict) else {}
+        task_node = source.get("task")
+        task = task_node if isinstance(task_node, dict) else {}
+        runtime_node = task.get("runtime")
+        runtime = runtime_node if isinstance(runtime_node, dict) else {}
+        runtime = (
+            source.get("targetRuntime")
+            or source.get("target_runtime")
+            or runtime.get("mode")
+            or source.get("runtime")
+            or "unknown"
+        )
+        normalized = str(runtime).strip().lower()
+        if normalized in SUPPORTED_EXECUTION_RUNTIMES:
+            return normalized
+        return "unknown"
+
+    @staticmethod
+    def _extract_publish_mode(payload: dict[str, Any] | None) -> str:
+        source = payload if isinstance(payload, dict) else {}
+        task_node = source.get("task")
+        task = task_node if isinstance(task_node, dict) else {}
+        task_publish_node = task.get("publish")
+        task_publish = task_publish_node if isinstance(task_publish_node, dict) else {}
+        publish_node = source.get("publish")
+        publish = publish_node if isinstance(publish_node, dict) else {}
+        publish = (
+            task_publish.get("mode")
+            or publish.get("mode")
+            or source.get("publishMode")
+            or "branch"
+        )
+        mode = str(publish).strip().lower()
+        if mode in {"none", "branch", "pr"}:
+            return mode
+        return "branch"
+
+    @staticmethod
+    def _event_stage_marker(event: models.AgentJobEvent) -> str:
+        payload = event.payload or {}
+        stage = str(payload.get("stage") or "").strip()
+        if stage:
+            return stage
+        return str(event.message or "").strip()
+
+    @classmethod
+    def _extract_failed_stage(cls, events: list[models.AgentJobEvent]) -> str:
+        for event in reversed(events):
+            marker = cls._event_stage_marker(event)
+            payload = event.payload or {}
+            status = str(payload.get("status") or "").strip().lower()
+            is_failed = event.level is models.AgentJobEventLevel.ERROR or status == "failed"
+            if not is_failed:
+                continue
+            if marker.startswith("moonmind.task.prepare"):
+                return "prepare"
+            if marker.startswith("moonmind.task.execute"):
+                return "execute"
+            if marker.startswith("moonmind.task.publish"):
+                return "publish"
+        return "unknown"
+
+    @classmethod
+    def _extract_publish_outcome(cls, events: list[models.AgentJobEvent]) -> str:
+        for event in reversed(events):
+            marker = cls._event_stage_marker(event)
+            payload = event.payload or {}
+            if marker == "moonmind.task.publish":
+                status = str(payload.get("status") or "").strip().lower()
+                if status in {"published", "skipped"}:
+                    return status
+            if marker.startswith("moonmind.task.publish"):
+                stage_status = str(payload.get("status") or "").strip().lower()
+                if event.level is models.AgentJobEventLevel.ERROR or stage_status == "failed":
+                    return "failed"
+        return "unknown"

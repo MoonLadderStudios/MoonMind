@@ -190,10 +190,18 @@ async def test_service_upload_requires_claimed_worker_ownership(tmp_path: Path) 
             repo = AgentQueueRepository(session)
             job = await repo.create_job(
                 job_type="codex_exec",
-                payload={"instruction": "upload"},
+                payload={
+                    "repository": "moon/allowed",
+                    "requiredCapabilities": ["codex", "git"],
+                    "instruction": "upload",
+                },
             )
             await repo.commit()
-            await repo.claim_job(worker_id="worker-1", lease_seconds=30)
+            await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             await repo.commit()
 
             service = AgentQueueService(
