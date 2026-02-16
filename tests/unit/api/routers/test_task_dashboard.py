@@ -45,6 +45,8 @@ def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("unknown")
     assert not _is_allowed_path("queue/new/extra")
     assert not _is_allowed_path("queue//")
+    assert not _is_allowed_path("queue/<script>alert(1)</script>")
+    assert not _is_allowed_path("queue/not allowed")
 
 
 def test_root_route_renders_dashboard_shell(client: TestClient) -> None:

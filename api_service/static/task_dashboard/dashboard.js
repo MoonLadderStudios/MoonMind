@@ -316,12 +316,18 @@
         if (result.status === "fulfilled") {
           rows.push(...request.transform(result.value));
         } else {
-          errors.push(`${request.source}: ${result.reason?.message || "request failed"}`);
+          console.error("active page data source failed", request.source, result.reason);
+          errors.push(request.source);
         }
       });
 
       const notices = errors
-        .map((error) => `<div class="notice error">${escapeHtml(error)}</div>`)
+        .map(
+          (source) =>
+            `<div class="notice error">${escapeHtml(
+              `Unable to load ${source} data source.`,
+            )}</div>`,
+        )
         .join("");
 
       root.querySelector(".panel")?.remove();
@@ -461,8 +467,9 @@
         });
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
+        console.error("queue submit failed", error);
         message.className = "notice error";
-        message.textContent = error.message || "Failed to create queue job.";
+        message.textContent = "Failed to create queue job.";
       }
     });
   }
@@ -537,8 +544,9 @@
         });
         window.location.href = `/tasks/speckit/${encodeURIComponent(created.id)}`;
       } catch (error) {
+        console.error("speckit submit failed", error);
         message.className = "notice error";
-        message.textContent = error.message || "Failed to create SpecKit run.";
+        message.textContent = "Failed to create SpecKit run.";
       }
     });
   }
@@ -606,8 +614,9 @@
           created.runId,
         )}`;
       } catch (error) {
+        console.error("orchestrator submit failed", error);
         message.className = "notice error";
-        message.textContent = error.message || "Failed to create orchestrator run.";
+        message.textContent = "Failed to create orchestrator run.";
       }
     });
   }
@@ -715,7 +724,8 @@
         ]);
         render(job, artifactsPayload?.items || [], state.events, null);
       } catch (error) {
-        render(null, [], state.events, error.message || "Failed to load queue detail.");
+        console.error("queue detail load failed", error);
+        render(null, [], state.events, "Failed to load queue detail.");
       }
     };
 
@@ -851,12 +861,11 @@
           `,
         );
       } catch (error) {
+        console.error("speckit detail load failed", error);
         setView(
           "SpecKit Run Detail",
           `Run ${runId}`,
-          `<div class="notice error">${escapeHtml(
-            error.message || "Failed to load run detail.",
-          )}</div>`,
+          "<div class='notice error'>Failed to load run detail.</div>",
         );
       }
     };
@@ -933,12 +942,11 @@
           `,
         );
       } catch (error) {
+        console.error("orchestrator detail load failed", error);
         setView(
           "Orchestrator Run Detail",
           `Run ${runId}`,
-          `<div class="notice error">${escapeHtml(
-            error.message || "Failed to load run detail.",
-          )}</div>`,
+          "<div class='notice error'>Failed to load run detail.</div>",
         );
       }
     };
@@ -1016,7 +1024,7 @@
     setView(
       "Dashboard Error",
       "Unexpected rendering failure.",
-      `<div class="notice error">${escapeHtml(error.message || "Unknown error")}</div>`,
+      "<div class='notice error'>Unexpected dashboard rendering failure.</div>",
     );
   });
 })();

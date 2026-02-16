@@ -35,7 +35,7 @@
     </main>
 
     <script id="task-dashboard-config" type="application/json">
-      {{ dashboard_config_json | safe }}
+      {{ dashboard_config | tojson }}
     </script>
     <script defer src="/static/task_dashboard/dashboard.js"></script>
   </body>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -12,6 +13,9 @@ from moonmind.config.settings import settings
 
 class SkillResolutionError(ValueError):
     """Raised when a run skill selection cannot be resolved."""
+
+
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,23 @@ class RunSkillSelection:
         }
 
 
+def validate_skill_name(skill_name: str) -> str:
+    """Validate and normalize a skill name for filesystem-safe use."""
+
+    normalized = skill_name.strip()
+    if not normalized:
+        raise SkillResolutionError("Skill name cannot be blank")
+    if "/" in normalized or "\\" in normalized or ".." in normalized:
+        raise SkillResolutionError(
+            f"Invalid skill name '{skill_name}': path separators and '..' are not allowed"
+        )
+    if _SKILL_NAME_RE.fullmatch(normalized) is None:
+        raise SkillResolutionError(
+            f"Invalid skill name '{skill_name}': only letters, digits, underscores, and dashes are allowed"
+        )
+    return normalized
+
+
 def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
     if isinstance(raw, str):
         text = raw.strip()
@@ -61,7 +82,7 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
         else:
             skill_name, version = text, "local"
         return {
-            "skill_name": skill_name.strip(),
+            "skill_name": validate_skill_name(skill_name),
             "version": version.strip() or "local",
             "source_uri": None,
             "content_hash": None,
@@ -69,8 +90,8 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
         }
 
     if isinstance(raw, Mapping):
-        skill_name = str(raw.get("skill_name") or raw.get("name") or "").strip()
-        if not skill_name:
+        skill_name = str(raw.get("skill_name") or raw.get("name") or "")
+        if not skill_name.strip():
             raise SkillResolutionError("Skill entry is missing skill_name")
         version = str(raw.get("version") or "local").strip() or "local"
         source_uri = (
@@ -81,7 +102,7 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
         )
         signature = str(raw.get("signature") or "").strip() or None
         return {
-            "skill_name": skill_name,
+            "skill_name": validate_skill_name(skill_name),
             "version": version,
             "source_uri": source_uri,
             "content_hash": content_hash,
@@ -196,10 +217,8 @@ def resolve_run_skill_selection(
     seen_names: set[str] = set()
 
     for entry in normalized:
-        skill_name = str(entry["skill_name"] or "").strip()
+        skill_name = validate_skill_name(str(entry["skill_name"] or ""))
         version = str(entry["version"] or "local").strip() or "local"
-        if not skill_name:
-            raise SkillResolutionError("Skill name cannot be blank")
         if skill_name in seen_names:
             raise SkillResolutionError(
                 f"Duplicate skill name '{skill_name}' in resolved selection"

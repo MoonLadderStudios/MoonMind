@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
-import os
+import re
 from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -16,11 +16,10 @@ from api_service.db.models import User
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
 
-TEMPLATES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "templates",
-)
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+_SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 _STATIC_PATHS = {
     "queue",
@@ -37,9 +36,18 @@ def _is_dynamic_detail(path: str, source: str) -> bool:
     return (
         len(parts) == 2
         and parts[0] == source
-        and bool(parts[1].strip())
-        and parts[1].strip().lower() != "new"
+        and _is_safe_detail_segment(parts[1])
+        and parts[1].lower() != "new"
     )
+
+
+def _is_safe_detail_segment(segment: str) -> bool:
+    text = segment.strip()
+    if not text:
+        return False
+    if text in {".", ".."}:
+        return False
+    return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
 
 
 def _is_allowed_path(path: str) -> bool:
@@ -77,14 +85,12 @@ def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
 
 def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     config = build_runtime_config(current_path)
-    config_json = json.dumps(config)
     return templates.TemplateResponse(
         request,
         "task_dashboard.html",
         {
             "request": request,
             "dashboard_config": config,
-            "dashboard_config_json": config_json,
             "current_path": current_path,
         },
     )
