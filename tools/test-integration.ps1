@@ -13,11 +13,13 @@ Write-Host ""
 # Run integration tests
 $test_file = $args[0]
 
-if ($test_file) {
-    $env:TEST_TYPE = "integration/$test_file"
-} else {
-    $env:TEST_TYPE = "integration"
+if (!(Test-Path ".env")) {
+    Copy-Item ".env-template" ".env"
 }
 
-docker-compose -f docker-compose.test.yaml build
-docker-compose -f docker-compose.test.yaml up --abort-on-container-exit
+if ($test_file) {
+    docker-compose -f docker-compose.test.yaml run --rm -e TEST_TYPE="integration/$test_file" pytest
+} else {
+    docker-compose -f docker-compose.test.yaml build orchestrator-tests
+    docker-compose -f docker-compose.test.yaml run --rm orchestrator-tests
+}
