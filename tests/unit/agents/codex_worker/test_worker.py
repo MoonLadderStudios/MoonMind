@@ -342,7 +342,10 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
             "targetRuntime": "codex",
             "task": {
                 "instructions": "run",
-                "skill": {"id": "speckit", "args": {"repo": "MoonLadderStudios/MoonMind"}},
+                "skill": {
+                    "id": "speckit",
+                    "args": {"repo": "MoonLadderStudios/MoonMind"},
+                },
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "develop", "newBranch": None},
                 "publish": {"mode": "none"},
@@ -351,7 +354,9 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
     )
     queue = FakeQueueClient(jobs=[job])
     handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="task skill ok", error_message=None)
+        WorkerExecutionResult(
+            succeeded=True, summary="task skill ok", error_message=None
+        )
     )
     config = CodexWorkerConfig(
         moonmind_url="http://localhost:5000",
@@ -658,7 +663,9 @@ async def test_config_from_env_disables_legacy_job_types_when_flag_is_off(
     assert config.allowed_types == ("task",)
 
 
-async def test_config_from_env_loads_vault_settings(monkeypatch, tmp_path: Path) -> None:
+async def test_config_from_env_loads_vault_settings(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Vault settings should parse from environment for secret-ref resolution."""
 
     token_file = tmp_path / "vault.token"

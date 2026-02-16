@@ -61,8 +61,8 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueAuthorizationError,
     AgentQueueService,
-    QueueMigrationTelemetry,
     AgentQueueValidationError,
+    QueueMigrationTelemetry,
     WorkerAuthPolicy,
 )
 

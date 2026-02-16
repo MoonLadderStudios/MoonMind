@@ -89,7 +89,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower()
     )
     default_task_runtime = (
-        configured_runtime if configured_runtime in _SUPPORTED_TASK_RUNTIMES else "codex"
+        configured_runtime
+        if configured_runtime in _SUPPORTED_TASK_RUNTIMES
+        else "codex"
     )
 
     return {

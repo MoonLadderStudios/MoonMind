@@ -17,7 +17,6 @@ from pydantic import (
     model_validator,
 )
 
-
 DEFAULT_TASK_RUNTIME = "codex"
 CANONICAL_TASK_JOB_TYPE = "task"
 LEGACY_TASK_JOB_TYPES = {"codex_exec", "codex_skill"}
@@ -130,9 +129,7 @@ class TaskSkillSelection(BaseModel):
 
     @field_validator("required_capabilities", mode="before")
     @classmethod
-    def _normalize_required_capabilities(
-        cls, value: object
-    ) -> list[str] | None:
+    def _normalize_required_capabilities(cls, value: object) -> list[str] | None:
         if value is None:
             return None
         if not isinstance(value, list):
@@ -317,9 +314,7 @@ class CanonicalTaskPayload(BaseModel):
 
     @field_validator("required_capabilities", mode="before")
     @classmethod
-    def _normalize_required_capabilities(
-        cls, value: object
-    ) -> list[str] | None:
+    def _normalize_required_capabilities(cls, value: object) -> list[str] | None:
         if value is None:
             return None
         if not isinstance(value, list):
@@ -350,8 +345,8 @@ class CanonicalTaskPayload(BaseModel):
         else:
             task_node = dict(task_node)
             if not task_node.get("instructions"):
-                lifted_instruction = (
-                    payload.get("instructions") or payload.get("instruction")
+                lifted_instruction = payload.get("instructions") or payload.get(
+                    "instruction"
                 )
                 if lifted_instruction:
                     task_node["instructions"] = lifted_instruction
@@ -434,7 +429,9 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         or _clean_optional_str(payload.get("publishBaseBranch"))
         or None
     )
-    ref = _clean_optional_str(inputs.get("ref")) or _clean_optional_str(payload.get("ref"))
+    ref = _clean_optional_str(inputs.get("ref")) or _clean_optional_str(
+        payload.get("ref")
+    )
 
     task = {
         "instructions": instruction,
@@ -523,7 +520,11 @@ def build_canonical_task_view(
                 "instructions": _clean_optional_str(source.get("instruction"))
                 or "Queue job",
                 "skill": {"id": "auto", "args": {}},
-                "runtime": {"mode": resolved_default_runtime, "model": None, "effort": None},
+                "runtime": {
+                    "mode": resolved_default_runtime,
+                    "model": None,
+                    "effort": None,
+                },
                 "git": {"startingBranch": None, "newBranch": None},
                 "publish": {
                     "mode": "none",
@@ -536,7 +537,9 @@ def build_canonical_task_view(
         }
 
     target_runtime = (
-        _normalize_runtime_value(canonical.get("targetRuntime"), field_name="targetRuntime")
+        _normalize_runtime_value(
+            canonical.get("targetRuntime"), field_name="targetRuntime"
+        )
         or _normalize_runtime_value(
             ((canonical.get("task") or {}).get("runtime") or {}).get("mode"),
             field_name="task.runtime.mode",
@@ -565,14 +568,13 @@ def build_canonical_task_view(
     required.append("git")
 
     publish_mode = _normalize_publish_mode(
-        (((canonical.get("task") or {}).get("publish") or {}).get("mode")
-        or "branch")
+        (((canonical.get("task") or {}).get("publish") or {}).get("mode") or "branch")
     )
     canonical["task"]["publish"]["mode"] = publish_mode
     if publish_mode == "pr":
         required.append("gh")
 
-    skill_node = ((canonical.get("task") or {}).get("skill") or {})
+    skill_node = (canonical.get("task") or {}).get("skill") or {}
     skill_caps = skill_node.get("requiredCapabilities")
     if isinstance(skill_caps, list):
         required.extend(skill_caps)

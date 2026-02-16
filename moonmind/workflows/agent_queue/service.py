@@ -751,7 +751,9 @@ class AgentQueueService:
             marker = cls._event_stage_marker(event)
             payload = event.payload or {}
             status = str(payload.get("status") or "").strip().lower()
-            is_failed = event.level is models.AgentJobEventLevel.ERROR or status == "failed"
+            is_failed = (
+                event.level is models.AgentJobEventLevel.ERROR or status == "failed"
+            )
             if not is_failed:
                 continue
             if marker.startswith("moonmind.task.prepare"):
@@ -773,6 +775,9 @@ class AgentQueueService:
                     return status
             if marker.startswith("moonmind.task.publish"):
                 stage_status = str(payload.get("status") or "").strip().lower()
-                if event.level is models.AgentJobEventLevel.ERROR or stage_status == "failed":
+                if (
+                    event.level is models.AgentJobEventLevel.ERROR
+                    or stage_status == "failed"
+                ):
                     return "failed"
         return "unknown"

@@ -21,7 +21,9 @@ from moonmind.agents.codex_worker.worker import (
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
-    runtime = str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
+    runtime = (
+        str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
+    )
     allowed = {"codex", "gemini", "claude", "universal"}
     if runtime not in allowed:
         supported = ", ".join(sorted(allowed))

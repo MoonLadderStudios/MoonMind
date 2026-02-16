@@ -346,7 +346,9 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
 
     def fake_run(command, *args, **kwargs):
         calls.append(list(command))
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)

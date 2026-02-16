@@ -17,7 +17,6 @@ from uuid import UUID
 
 import httpx
 
-from moonmind.config.settings import settings
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
@@ -29,6 +28,7 @@ from moonmind.agents.codex_worker.secret_refs import (
     VaultSecretResolver,
     load_vault_token,
 )
+from moonmind.config.settings import settings
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
@@ -113,9 +113,9 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_WORKDIR", "var/worker")).strip() or "var/worker"
         )
         worker_token = str(source.get("MOONMIND_WORKER_TOKEN", "")).strip() or None
-        legacy_enabled_raw = str(
-            source.get("MOONMIND_ENABLE_LEGACY_JOB_TYPES", "true")
-        ).strip().lower()
+        legacy_enabled_raw = (
+            str(source.get("MOONMIND_ENABLE_LEGACY_JOB_TYPES", "true")).strip().lower()
+        )
         legacy_job_types_enabled = legacy_enabled_raw not in {
             "0",
             "false",
@@ -238,9 +238,7 @@ class CodexWorkerConfig:
                 worker_capabilities = (worker_runtime, "git")
 
         vault_address = str(source.get("MOONMIND_VAULT_ADDR", "")).strip() or None
-        vault_token_file_raw = str(
-            source.get("MOONMIND_VAULT_TOKEN_FILE", "")
-        ).strip()
+        vault_token_file_raw = str(source.get("MOONMIND_VAULT_TOKEN_FILE", "")).strip()
         vault_token_file = Path(vault_token_file_raw) if vault_token_file_raw else None
         vault_token: str | None = None
         if vault_address:
@@ -516,9 +514,7 @@ class CodexWorker:
         self._config = config
         self._queue_client = queue_client
         self._codex_exec_handler = codex_exec_handler
-        self._secret_redactor = SecretRedactor.from_environ(
-            placeholder="[REDACTED]"
-        )
+        self._secret_redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
         self._dynamic_redaction_values: set[str] = set()
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
@@ -609,7 +605,9 @@ class CodexWorker:
             )
             return True
 
-        runtime_mode = str(canonical_payload.get("targetRuntime") or "codex").strip().lower()
+        runtime_mode = (
+            str(canonical_payload.get("targetRuntime") or "codex").strip().lower()
+        )
         if runtime_mode not in SUPPORTED_EXECUTION_RUNTIMES:
             await self._emit_event(
                 job_id=job.id,
@@ -839,7 +837,9 @@ class CodexWorker:
             worker_capabilities=self._config.worker_capabilities,
         )
 
-    def _execution_metadata(self, canonical_payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _execution_metadata(
+        self, canonical_payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
         """Return normalized skill execution metadata for job events."""
 
         task_node = canonical_payload.get("task")
@@ -909,7 +909,8 @@ class CodexWorker:
         payload: dict[str, Any] = {
             "repository": canonical_payload.get("repository"),
             "instruction": task.get("instructions"),
-            "workdirMode": workdir_mode_override or self._safe_workdir_mode(source_payload),
+            "workdirMode": workdir_mode_override
+            or self._safe_workdir_mode(source_payload),
             "publish": {
                 "mode": publish_mode_override or publish.get("mode") or "branch",
                 "baseBranch": (
@@ -919,7 +920,9 @@ class CodexWorker:
                 ),
             },
         }
-        selected_ref = ref_override if ref_override is not None else git.get("startingBranch")
+        selected_ref = (
+            ref_override if ref_override is not None else git.get("startingBranch")
+        )
         if include_ref and selected_ref:
             payload["ref"] = selected_ref
 
@@ -986,10 +989,7 @@ class CodexWorker:
                     materialized_skill_payload = materialized_workspace.to_payload()
                     self._append_stage_log(
                         prepare_log_path,
-                        (
-                            "materialized selected skill workspace: "
-                            f"{selected_skill}"
-                        ),
+                        ("materialized selected skill workspace: " f"{selected_skill}"),
                     )
                 except (SkillResolutionError, SkillMaterializationError) as exc:
                     raise RuntimeError(f"skill materialization failed: {exc}") from exc
@@ -1010,7 +1010,9 @@ class CodexWorker:
             git = git_node if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
-            publish_mode = str(publish.get("mode") or "branch").strip().lower() or "branch"
+            publish_mode = (
+                str(publish.get("mode") or "branch").strip().lower() or "branch"
+            )
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -1052,7 +1054,12 @@ class CodexWorker:
                 if not repo_dir.exists():
                     job_root.mkdir(parents=True, exist_ok=True)
                     await self._run_stage_command(
-                        ["git", "clone", self._resolve_clone_url(repository), str(repo_dir)],
+                        [
+                            "git",
+                            "clone",
+                            self._resolve_clone_url(repository),
+                            str(repo_dir),
+                        ],
                         cwd=job_root,
                         log_path=prepare_log_path,
                         env=auth_context.repo_command_env,
@@ -1217,7 +1224,11 @@ class CodexWorker:
                 job_id=job_id,
                 level="info",
                 message="moonmind.task.publish",
-                payload={"status": "skipped", "reason": "publish mode is none", **dict(skill_meta)},
+                payload={
+                    "status": "skipped",
+                    "reason": "publish mode is none",
+                    **dict(skill_meta),
+                },
             )
             return None
 
@@ -1418,7 +1429,9 @@ class CodexWorker:
             )
             raise
 
-    def _prepare_stage_artifacts(self, prepared: PreparedTaskWorkspace) -> list[ArtifactUpload]:
+    def _prepare_stage_artifacts(
+        self, prepared: PreparedTaskWorkspace
+    ) -> list[ArtifactUpload]:
         """Return standard prepare-stage artifacts."""
 
         return [
@@ -1658,7 +1671,9 @@ class CodexWorker:
         if include_ref and selected_ref:
             args.setdefault("ref", selected_ref)
         args.setdefault("workdirMode", workdir_mode)
-        args.setdefault("publishMode", publish_mode_override or publish.get("mode") or "branch")
+        args.setdefault(
+            "publishMode", publish_mode_override or publish.get("mode") or "branch"
+        )
         publish_base = (
             publish_base_override
             if publish_base_override is not None
@@ -1900,9 +1915,7 @@ class CodexWorker:
         if not isinstance(required_raw, list):
             return "requiredCapabilities must be a non-empty list"
         required = {
-            str(item).strip().lower()
-            for item in required_raw
-            if str(item).strip()
+            str(item).strip().lower() for item in required_raw if str(item).strip()
         }
         if not required:
             return "requiredCapabilities must include at least one capability"
@@ -1973,7 +1986,9 @@ class CodexWorker:
                     f"{purpose} auth ref was provided but Vault resolver is not configured"
                 )
             try:
-                resolved = await self._vault_secret_resolver.resolve_github_auth(auth_ref)
+                resolved = await self._vault_secret_resolver.resolve_github_auth(
+                    auth_ref
+                )
             except SecretReferenceError as exc:
                 raise RuntimeError(f"{purpose} auth resolution failed: {exc}") from exc
             self._register_redaction_value(resolved.token)
@@ -2011,8 +2026,7 @@ class CodexWorker:
             return self._redact_text(payload)
         if isinstance(payload, Mapping):
             return {
-                str(key): self._redact_payload(value)
-                for key, value in payload.items()
+                str(key): self._redact_payload(value) for key, value in payload.items()
             }
         if isinstance(payload, list):
             return [self._redact_payload(item) for item in payload]
@@ -2075,9 +2089,9 @@ class CodexWorker:
                 worker_id=self._config.worker_id,
                 level=level,
                 message=redacted_message,
-                payload=redacted_payload
-                if isinstance(redacted_payload, dict)
-                else None,
+                payload=(
+                    redacted_payload if isinstance(redacted_payload, dict) else None
+                ),
             )
         except Exception:
             # Event publication failures should not break terminal job transitions.

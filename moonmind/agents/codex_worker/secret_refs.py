@@ -119,7 +119,9 @@ class VaultSecretResolver:
         addr = str(address or "").strip().rstrip("/")
         tok = str(token or "").strip()
         if not addr:
-            raise SecretReferenceError("Vault address is required for secret resolution")
+            raise SecretReferenceError(
+                "Vault address is required for secret resolution"
+            )
         if not tok:
             raise SecretReferenceError("Vault token is required for secret resolution")
         self._address = addr

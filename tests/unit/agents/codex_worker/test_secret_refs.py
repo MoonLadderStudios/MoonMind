@@ -87,10 +87,7 @@ async def test_vault_secret_resolver_reads_kv_v2_field() -> None:
     assert resolved.token == "ghp_test_secret"
     assert resolved.username == "x-access-token"
     assert resolved.host == "github.com"
-    assert (
-        resolved.source_ref
-        == "vault://kv/moonmind/repos/Moon/Mind#github_token"
-    )
+    assert resolved.source_ref == "vault://kv/moonmind/repos/Moon/Mind#github_token"
 
 
 async def test_vault_secret_resolver_rejects_missing_field() -> None:

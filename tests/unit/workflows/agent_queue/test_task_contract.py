@@ -6,8 +6,8 @@ import pytest
 
 from moonmind.workflows.agent_queue.task_contract import (
     TaskContractError,
-    build_task_stage_plan,
     build_canonical_task_view,
+    build_task_stage_plan,
     normalize_queue_job_payload,
 )
 
