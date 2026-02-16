@@ -33,22 +33,23 @@ def _run_checked_command(
     *,
     input_text: str | None = None,
     redaction_values: Sequence[str] = (),
-    env: Mapping[str, str | None] | None = None,
+    env_overrides: Mapping[str, str] | None = None,
+    unset_env_keys: Sequence[str] = (),
 ) -> None:
-    run_env = dict(os.environ)
-    if env is not None:
-        for key, value in env.items():
-            if value is None:
-                run_env.pop(key, None)
-            else:
-                run_env[key] = value
-    result = subprocess.run(
-        command,
-        input=input_text,
-        capture_output=True,
-        text=True,
-        env=run_env,
-    )
+    run_kwargs: dict[str, object] = {
+        "input": input_text,
+        "capture_output": True,
+        "text": True,
+    }
+    if env_overrides or unset_env_keys:
+        process_env = os.environ.copy()
+        if env_overrides:
+            process_env.update(env_overrides)
+        for key in unset_env_keys:
+            process_env.pop(key, None)
+        run_kwargs["env"] = process_env
+
+    result = subprocess.run(command, **run_kwargs)
     if result.returncode == 0:
         return
 
@@ -153,17 +154,17 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         ],
         input_text=github_token,
         redaction_values=redaction_values,
-        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
     _run_checked_command(
         [gh_path, "auth", "setup-git"],
         redaction_values=redaction_values,
-        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
     _run_checked_command(
         [gh_path, "auth", "status", "--hostname", "github.com"],
         redaction_values=redaction_values,
-        env={"GITHUB_TOKEN": None, "GH_TOKEN": None},
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
 
 

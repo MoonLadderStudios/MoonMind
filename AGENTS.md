@@ -4,6 +4,12 @@
 - **Unit Tests**: Always use `./tools/test_unit.sh` to run unit tests. This script is the single source of truth for CI and local development, ensuring consistent execution and proper exit codes. It automatically uses `python` and falls back to `python3` when `python` is unavailable. Do not run `pytest` directly or pipe to `tail` as this may mask failures.
 - **Integration Tests**: Orchestrator integration tests run via GitHub Actions on main branch pushes or manually. Locally, use `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`.
 
+## Security Guardrails
+- Never post or commit raw credentials (tokens, API keys, passwords, private keys, cookies, auth headers, session IDs).
+- Never paste full `docker compose` output, `.env` files, or environment/config dumps into PR comments. Summarize and redact.
+- Before posting any PR/issue/review comment, scan the outgoing text for secret-like patterns (`ghp_`, `github_pat_`, `AIza`, `ATATT`, `AKIA`, private key blocks, `token=`/`password=` assignments) and block posting on any match.
+- If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
+
 ## Spec Numbering
 
 When creating a new spec folder/feature ID:
@@ -22,6 +28,11 @@ When creating a new spec folder/feature ID:
 - 001-celery-chain-workflow: Added Python 3.11 (matches existing MoonMind services and supported pyproject range) + Celery 5.4, RabbitMQ 3.x (broker), PostgreSQL (result backend & existing MoonMind DB for run persistence), Codex CLI, GitHub CLI
 - 005-orchestrator-architecture: Documented mm-orchestrator container responsibilities (plan/patch/build/restart/verify/rollback), StatsD instrumentation hooks, approval enforcement, and sequential worker processing against the shared Docker daemon
 - 006-add-gemini-cli: Added Gemini CLI to Docker environment for Orchestrator and Celery Worker to enable natural language processing capabilities
+
+## Shared Skills Runtime
+- MoonMind now materializes one per-run active skill set and exposes it to both CLIs through adapter links.
+- Expected adapter layout per run: `.agents/skills -> ../skills_active` and `.gemini/skills -> ../skills_active`.
+- Prefer configuring `SPEC_SKILLS_WORKSPACE_ROOT` and `SPEC_SKILLS_CACHE_ROOT` for writable runtime paths in local and CI environments.
 
 ## Spec Workflow Verification Checklist
 - Bring up RabbitMQ and the dedicated Celery worker alongside the API service when validating the Spec Kit workflow: `docker compose up rabbitmq celery-worker api`.

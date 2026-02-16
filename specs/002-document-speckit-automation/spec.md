@@ -95,7 +95,7 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 
 - Existing `spec_automation_*` persistence tables remain in use; this alignment does not require destructive schema changes.
 - Legacy `speckit_*` phase values remain valid and should continue to deserialize in API responses.
-- Speckit skills are installed and mirrored in `.agents/skills` and `.codex/skills`.
+- Speckit skills are installed and exposed via shared adapters in `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` may be retained as fallback).
 - Existing `/api/spec-automation/*` endpoints remain the compatibility surface during this migration.
 
 ### Scope Boundaries

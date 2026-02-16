@@ -5,7 +5,6 @@ temp/
 data/
 prompts/
 jobs/
-agent_jobs/
 *.code-workspace
 .env
 .env-backup
@@ -27,3 +26,7 @@ uv.lock
 # Worker runtime scratch outputs
 var/worker/
 var/worker-relative/
+var/skill_cache/
+var/skills_workspaces/
+var/security/
+agent_jobs/

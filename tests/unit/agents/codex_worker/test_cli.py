@@ -56,7 +56,8 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
 def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> None:
     """Token-present startup should run gh auth login/setup/status in order."""
 
-    calls: list[tuple[list[str], str | None, dict[str, str | None] | None]] = []
+    calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
+    monkeypatch.setenv("MOONMIND_TEST_ENV", "preserved")
 
     def fake_verify(name: str) -> str:
         return f"/usr/bin/{name}"
@@ -77,11 +78,8 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         }
     )
 
-    assert calls[0][0] == ["/usr/bin/speckit", "--version"]
-    assert calls[0][1] is None
-    assert calls[1][0] == ["/usr/bin/codex", "login", "status"]
-    assert calls[1][1] is None
-
+    assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
+    assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
     assert calls[2][0] == [
         "/usr/bin/gh",
         "auth",
@@ -92,24 +90,19 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     ]
     assert calls[2][1] == "ghp-test-token"
     assert calls[2][2] is not None
+    assert calls[2][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[2][2]
     assert "GH_TOKEN" not in calls[2][2]
-
     assert calls[3][0] == ["/usr/bin/gh", "auth", "setup-git"]
     assert calls[3][1] is None
     assert calls[3][2] is not None
+    assert calls[3][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[3][2]
     assert "GH_TOKEN" not in calls[3][2]
-
-    assert calls[4][0] == [
-        "/usr/bin/gh",
-        "auth",
-        "status",
-        "--hostname",
-        "github.com",
-    ]
+    assert calls[4][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
     assert calls[4][1] is None
     assert calls[4][2] is not None
+    assert calls[4][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[4][2]
     assert "GH_TOKEN" not in calls[4][2]
 

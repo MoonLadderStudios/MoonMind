@@ -626,6 +626,35 @@ jobs:
             console.log(`Build succeeded for this workflow_run: ${buildSucceededForThisRun}`);
             console.log(`Should request Codex review from build: ${shouldRequestReviewFromBuild}`);
 
+            const SECURITY_GUARDRAIL =
+              'Do not expose secrets. Never include tokens, API keys, passwords, or raw environment/config dumps in comments.';
+            const COMMENT_BUILD_AND_REVIEW_FIX =
+              `@codex fix comments and fix build failures\n${SECURITY_GUARDRAIL}`;
+            const COMMENT_BUILD_FIX =
+              `@codex fix build failures\n${SECURITY_GUARDRAIL}`;
+            const COMMENT_REVIEW_FIX =
+              `@codex fix comments\n${SECURITY_GUARDRAIL}`;
+            const COMMENT_REQUEST_REVIEW =
+              `@codex review\n@gemini-code-assist review\n${SECURITY_GUARDRAIL}`;
+            const allowedCommentBodies = new Set([
+              COMMENT_BUILD_AND_REVIEW_FIX,
+              COMMENT_BUILD_FIX,
+              COMMENT_REVIEW_FIX,
+              COMMENT_REQUEST_REVIEW,
+            ]);
+            const sensitiveContentPatterns = [
+              /github_pat_[A-Za-z0-9_]{20,}/,
+              /gh[pousr]_[A-Za-z0-9]{36}/,
+              /AIza[0-9A-Za-z\\-_]{35}/,
+              /ATATT[0-9A-Za-z._=-]{20,}/,
+              /xox[baprs]-[A-Za-z0-9-]{10,}/,
+              /AKIA[0-9A-Z]{16}/,
+              /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+              /\b(?:password|passwd|token|api[_-]?key|secret)\b\s*[:=]\s*['"][^'"\n]{12,}['"]/i,
+            ];
+            const containsSensitiveContent = (text = '') =>
+              sensitiveContentPatterns.some(pattern => pattern.test(text));
+
             // Determine what action to take
             let commentBody = null;
             const allowSelfTriggeredBlockingHandling =
@@ -634,18 +663,24 @@ jobs:
             if (triggeredByCodexBot && !allowSelfTriggeredBlockingHandling) {
               console.log('Blocking command generation because the event was initiated by the Codex bot and no blocking P0/P1 findings are present.');
             } else if (hasFailures && hasUnresolvedBlockingReviewComments) {
-              commentBody = '@codex fix comments and fix build failures';
+              commentBody = COMMENT_BUILD_AND_REVIEW_FIX;
             } else if (hasFailures) {
-              commentBody = '@codex fix build failures';
+              commentBody = COMMENT_BUILD_FIX;
             } else if (hasUnresolvedBlockingReviewComments) {
-              commentBody = '@codex fix comments';
+              commentBody = COMMENT_REVIEW_FIX;
             } else if (shouldRequestReviewFromBuild) {
-              commentBody = '@codex review\n@gemini-code-assist review';
+              commentBody = COMMENT_REQUEST_REVIEW;
             }
 
             if (commentBody) {
               const normalizedCommentBody = commentBody.trim();
               const normalizedCommentBodyLower = normalizedCommentBody.toLowerCase();
+              if (!allowedCommentBodies.has(normalizedCommentBody)) {
+                throw new Error('Refusing to post unapproved Codex command body.');
+              }
+              if (containsSensitiveContent(normalizedCommentBody)) {
+                throw new Error('Refusing to post Codex command body with potential secret material.');
+              }
               const headSha = pr.head.sha;
 
               let purpose = 'general';
@@ -688,6 +723,9 @@ jobs:
                 }
 
                 const updatedBody = [marker, normalizedCommentBody].join('\n');
+                if (containsSensitiveContent(updatedBody)) {
+                  throw new Error('Refusing to update Codex comment because payload appears to contain sensitive content.');
+                }
                 console.log(`Updating existing Codex comment ${existingCommentForSha.id} for SHA ${headSha}.`);
                 await github.rest.issues.updateComment({
                   owner: context.repo.owner,
@@ -756,6 +794,9 @@ jobs:
               }
 
               const body = [marker, normalizedCommentBody].join('\n');
+              if (containsSensitiveContent(body)) {
+                throw new Error('Refusing to create Codex comment because payload appears to contain sensitive content.');
+              }
 
               console.log(`Posting comment for purpose '${purpose}': ${normalizedCommentBody}`);
               await github.rest.issues.createComment({
