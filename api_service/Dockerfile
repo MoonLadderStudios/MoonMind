@@ -43,6 +43,9 @@ ARG INSTALL_GEMINI_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
+# Keep complex platform-vendor installation logic out of the Dockerfile body.
+COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local/bin/install_codex_platform_vendor.sh
+
 # Ensure vendor directory exists so CLIs (like Codex) that might install
 # binaries there can detect it during the npm install process.
 RUN mkdir -p /usr/local/vendor
@@ -56,41 +59,6 @@ RUN mkdir -p /usr/local/vendor
 # command never falls back to `/bin/sh` even if the Dockerfile shell is
 # changed later.
 RUN /bin/bash -euo pipefail <<'BASH'
-install_codex_platform_vendor() {
-    local platform_tag
-    case "$(uname -m)" in
-        x86_64 | amd64)
-            platform_tag="linux-x64"
-            ;;
-        aarch64 | arm64)
-            platform_tag="linux-arm64"
-            ;;
-        *)
-            platform_tag="linux-x64"
-            ;;
-    esac
-
-    local vendor_version="${CODEX_CLI_VERSION}-${platform_tag}"
-    local platform_tmp_dir
-    local platform_archive
-    platform_tmp_dir="$(mktemp -d)"
-    platform_archive="$(cd "$platform_tmp_dir" && npm pack "@openai/codex@${vendor_version}")" || true
-    if [ -z "$platform_archive" ] || [ ! -f "$platform_tmp_dir/$platform_archive" ]; then
-        echo "Warning: did not receive platform codex archive ${vendor_version}; continuing with base package only" >&2
-        rm -rf "$platform_tmp_dir"
-        return
-    fi
-
-    tar -xzf "$platform_tmp_dir/$platform_archive" -C "$platform_tmp_dir"
-    if [ -d "$platform_tmp_dir/package/vendor" ]; then
-        mkdir -p /usr/local/lib/node_modules/@openai/codex/vendor
-        cp -r "$platform_tmp_dir/package/vendor/." /usr/local/lib/node_modules/@openai/codex/vendor/
-    else
-        echo "Warning: no vendor directory in ${vendor_version}; codex may fail to execute" >&2
-    fi
-    rm -rf "$platform_tmp_dir"
-}
-
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
@@ -136,7 +104,7 @@ else
         echo "Warning: Failed to install @openai/codex; installing stub" >&2
         stub_codex
     else
-        install_codex_platform_vendor
+        /usr/local/bin/install_codex_platform_vendor.sh
     fi
 
     # Try installing Spec Kit (Github Next) - might fail if private/no token
