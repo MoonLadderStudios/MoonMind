@@ -85,6 +85,83 @@ docker-compose down
 
 This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration, you might use other specific compose files (for example `docker-compose.test.yaml`).
 
+### Private skills for worker jobs
+
+MoonMind now supports run-scoped worker skills, including private skill definitions.
+
+1. Add a private skill artifact in the local mirror:
+
+- Default mirror root: `.agents/skills/skills`
+- Optional legacy mirror root: `.codex/skills/skills`
+
+```text
+.agents/skills/skills/
+  my-private-scan/
+    SKILL.md
+    ... (skill implementation files)
+```
+
+`SKILL.md` must include frontmatter naming the skill, and the `name` must match the directory name.
+
+```yaml
+---
+name: my-private-scan
+description: Private project-specific scan helper skill
+---
+```
+
+2. Point workers at private skills and allowlist them:
+
+- For spec workflow/Celery/Gemini workers, set in `.env`:
+
+  - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/skills`
+  - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.codex/skills/skills` (optional compatibility)
+  - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
+  - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"`
+  - `SPEC_WORKFLOW_DEFAULT_SKILL=my-private-scan` (optional)
+  - `SPEC_WORKFLOW_DISCOVER_SKILL=my-private-scan` / `SPEC_WORKFLOW_SUBMIT_SKILL=my-private-scan` / `SPEC_WORKFLOW_PUBLISH_SKILL=my-private-scan` (optional per-stage selection)
+
+- For standalone `moonmind-codex-worker`, also use:
+
+  - `MOONMIND_DEFAULT_SKILL=my-private-scan`
+  - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit`
+
+3. Source private skills from external locations when needed.
+
+- Use local path sources:
+
+```text
+skill_sources:
+  my-private-scan:1.0.0: /absolute/path/to/my-private-scan
+```
+
+- Use private git sources:
+
+```text
+skill_sources:
+  my-private-scan:1.0.0: git+https://<token>@github.com/org/my-private-scan.git
+```
+
+These mappings are consumed from workflow job context as `skill_selection` + `skill_sources` when your orchestration path submits runs through the workflow context payload.
+
+4. Enqueue `codex_skill` jobs with an allowlisted `skillId` to route via worker selection metadata:
+
+```json
+{
+  "type": "codex_skill",
+  "payload": {
+    "skillId": "my-private-scan"
+  }
+}
+```
+
+5. Validate the path after startup:
+
+- Start workers with `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` and confirm startup logs show skill materialization success.
+- For run workspace checks, inspect `<run_root>/skills_active` and linked adapters:
+  - `<run_root>/.agents/skills -> ../skills_active`
+  - `<run_root>/.gemini/skills -> ../skills_active`
+
 ## Automation & Orchestrator
 
 ### Spec-driven Celery automation
