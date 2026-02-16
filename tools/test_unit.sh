@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run only unit tests
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+is_wsl() {
+    if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+        return 0
+    fi
+    grep -qiE "(microsoft|wsl)" /proc/version 2>/dev/null
+}
+
+# In WSL environments, use Docker-backed tests by default to avoid host Python
+# dependency drift. Set MOONMIND_FORCE_LOCAL_TESTS=1 to bypass this behavior.
+if is_wsl && [[ "${MOONMIND_FORCE_LOCAL_TESTS:-0}" != "1" ]]; then
+    exec "$SCRIPT_DIR/test_unit_docker.sh"
+fi
+
+# Run only unit tests locally.
 if command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
 elif command -v python3 >/dev/null 2>&1; then

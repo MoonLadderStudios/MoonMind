@@ -10,11 +10,9 @@ services:
     env_file:
       - .env
     environment:
-      - PYTHONPATH=/app:/app/moonmind
+      - PYTHONPATH=/app
     volumes:
-      - ./moonmind:/app/moonmind
-      - ./api_service:/app/api_service
-      - ./tests:/app/tests
+      - ./:/app
     working_dir: /app
     command: ["bash", "-c", "pytest -s /app/tests/${TEST_TYPE}"]
     networks:
@@ -31,14 +29,10 @@ services:
     env_file:
       - .env
     environment:
-      - PYTHONPATH=/app:/app/moonmind
+      - PYTHONPATH=/app
       - TEST_TYPE=integration/orchestrator
     volumes:
-      - ./moonmind:/app/moonmind
-      - ./api_service:/app/api_service
-      - ./services:/app/services
-      - ./specs:/app/specs
-      - ./tests:/app/tests
+      - ./:/app
     working_dir: /app
     command: ["bash", "-c", "pytest -s /app/tests/${TEST_TYPE}"]
     networks:
