@@ -109,6 +109,14 @@
     return runtime ? escapeHtml(runtime) : "-";
   }
 
+  function normalizeRuntimeInput(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) {
+      return "";
+    }
+    return supportedWorkerRuntimes.includes(normalized) ? normalized : "";
+  }
+
   function normalizeStatus(source, rawStatus) {
     const sourceMap = (config.statusMaps || {})[source] || {};
     const statusKey = String(rawStatus || "").toLowerCase();
@@ -527,18 +535,25 @@
         requestBody.affinityKey = affinityKey;
       }
 
-      const targetRuntime = String(formData.get("targetRuntime") || "").trim();
+      const rawTargetRuntime = String(formData.get("targetRuntime") || "");
+      const targetRuntime = normalizeRuntimeInput(rawTargetRuntime);
+      if (rawTargetRuntime.trim() && !targetRuntime) {
+        message.className = "notice error";
+        message.textContent =
+          "Target Runtime must be one of: " + supportedWorkerRuntimes.join(", ") + ".";
+        return;
+      }
+
       if (targetRuntime) {
-        requestBody.payload.targetRuntime = targetRuntime;
+        requestBody.payload.target_runtime = targetRuntime;
         const taskNode = requestBody.payload.task;
-        if (
-          taskNode &&
-          typeof taskNode === "object" &&
-          !Array.isArray(taskNode) &&
-          !Object.prototype.hasOwnProperty.call(taskNode, "target_runtime") &&
-          !Object.prototype.hasOwnProperty.call(taskNode, "targetRuntime")
-        ) {
-          taskNode.target_runtime = targetRuntime;
+        if (taskNode && typeof taskNode === "object" && !Array.isArray(taskNode)) {
+          const hasRuntimeKey = ["targetRuntime", "target_runtime", "runtime"].some((key) =>
+            Object.prototype.hasOwnProperty.call(taskNode, key),
+          );
+          if (!hasRuntimeKey) {
+            taskNode.target_runtime = targetRuntime;
+          }
         }
       }
 

@@ -22,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict, MutableList
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api_service.db.models import (
@@ -41,8 +41,6 @@ from api_service.db.models import (
 )
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
-_MUTABLE_JSON_LIST = MutableList.as_mutable(JSON().with_variant(JSONB, "postgresql"))
-_TASK_PAYLOAD_TYPE = _MUTABLE_JSON
 
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
