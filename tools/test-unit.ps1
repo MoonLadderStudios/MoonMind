@@ -11,7 +11,9 @@ Write-Host "Pre-commit checks passed!" -ForegroundColor Green
 Write-Host ""
 
 # Run unit tests
-$env:TEST_TYPE = "unit"
+if (!(Test-Path ".env")) {
+    Copy-Item ".env-template" ".env"
+}
 
-docker-compose -f docker-compose.test.yaml build
-docker-compose -f docker-compose.test.yaml up --abort-on-container-exit
+docker-compose -f docker-compose.test.yaml build pytest
+docker-compose -f docker-compose.test.yaml run --rm pytest
