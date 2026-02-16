@@ -1,0 +1,9 @@
+# Normalize text files and let per-extension rules override where needed.
+* text=auto
+
+# Windows-native scripts should keep CRLF line endings.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell scripts should keep LF line endings.
+*.sh text eol=lf
