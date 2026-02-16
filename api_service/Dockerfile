@@ -43,6 +43,9 @@ ARG INSTALL_GEMINI_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
+# Keep complex platform-vendor installation logic out of the Dockerfile body.
+COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local/bin/install_codex_platform_vendor.sh
+
 # Ensure vendor directory exists so CLIs (like Codex) that might install
 # binaries there can detect it during the npm install process.
 RUN mkdir -p /usr/local/vendor
@@ -100,6 +103,8 @@ else
     if ! npm install -g @openai/codex@"${CODEX_CLI_VERSION}"; then
         echo "Warning: Failed to install @openai/codex; installing stub" >&2
         stub_codex
+    else
+        /usr/local/bin/install_codex_platform_vendor.sh
     fi
 
     # Try installing Spec Kit (Github Next) - might fail if private/no token

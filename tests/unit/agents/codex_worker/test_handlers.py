@@ -240,6 +240,38 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="high"'
 
 
+async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None:
+    """Known model/effort aliases should normalize before codex execution."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    calls: list[list[str]] = []
+
+    async def fake_run_command(command, *, cwd, log_path, check=True):
+        calls.append(list(command))
+        if command[:2] == ["git", "diff"]:
+            return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    handler._run_command = fake_run_command  # type: ignore[method-assign]
+
+    result = await handler.handle(
+        job_id=uuid4(),
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "codex": {"model": "gpt-5.3-codex-spark", "effort": "xhigh"},
+            "publish": {"mode": "none"},
+        },
+    )
+
+    assert result.succeeded is True
+    codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
+    assert "--model" in codex_cmd
+    assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5-codex"
+    assert "--config" in codex_cmd
+    assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="high"'
+
+
 async def test_handler_falls_back_to_worker_default_codex_settings(
     tmp_path: Path,
 ) -> None:
@@ -423,6 +455,33 @@ async def test_handler_publish_commit_failure_returns_failed_result(
     assert result.succeeded is False
     assert result.error_message is not None
     assert "git commit" in result.error_message
+
+
+async def test_run_command_error_includes_stderr_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Failure exceptions should include stderr context for fast diagnostics."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "command.log"
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (b"", b"invalid model: gpt-5.3-codex-spark\n")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(CodexWorkerHandlerError, match="invalid model"):
+        await handler._run_command(
+            ["codex", "exec", "--model", "gpt-5.3-codex-spark", "run task"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
 
 
 async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> None:
