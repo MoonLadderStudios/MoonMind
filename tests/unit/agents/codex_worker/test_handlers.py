@@ -457,7 +457,9 @@ async def test_handler_publish_commit_failure_returns_failed_result(
     assert "git commit" in result.error_message
 
 
-async def test_run_command_error_includes_stderr_tail(tmp_path: Path, monkeypatch) -> None:
+async def test_run_command_error_includes_stderr_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Failure exceptions should include stderr context for fast diagnostics."""
 
     handler = CodexExecHandler(workdir_root=tmp_path)
