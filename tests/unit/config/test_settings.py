@@ -197,3 +197,21 @@ class TestSpecWorkflowSettings:
 
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("speckit", "custom-default")
+
+    def test_app_settings_defaults_codex_queue_to_celery_default(
+        self, app_settings_defaults
+    ):
+        """When codex queue is unset, app settings should align it to default queue."""
+
+        settings = AppSettings(
+            **app_settings_defaults,
+            celery={
+                "default_queue": "moonmind.jobs",
+                "default_exchange": "moonmind.jobs",
+                "default_routing_key": "moonmind.jobs",
+            },
+            spec_workflow={"codex_queue": None},
+        )
+
+        assert settings.celery.default_queue == "moonmind.jobs"
+        assert settings.spec_workflow.codex_queue == "moonmind.jobs"

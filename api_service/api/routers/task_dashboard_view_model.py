@@ -5,25 +5,35 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from moonmind.config.settings import settings
+
 _POLL_INTERVALS_MS = {
     "list": 5000,
     "detail": 2000,
     "events": 1000,
 }
 
+_SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "universal")
+
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "queue": {
         "queued": "queued",
+        "pending": "queued",
         "running": "running",
         "succeeded": "succeeded",
+        "success": "succeeded",
+        "completed": "succeeded",
         "failed": "failed",
+        "error": "failed",
         "cancelled": "cancelled",
         "dead_letter": "failed",
     },
     "speckit": {
+        "queued": "queued",
         "pending": "queued",
         "retrying": "queued",
         "running": "running",
+        "in_progress": "running",
         "succeeded": "succeeded",
         "no_work": "succeeded",
         "failed": "failed",
@@ -105,6 +115,13 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "approve": "/orchestrator/runs/{id}/approvals",
                 "retry": "/orchestrator/runs/{id}/retry",
             },
+        },
+        "system": {
+            "defaultQueue": settings.spec_workflow.codex_queue
+            or settings.celery.default_queue,
+            "queueEnv": "MOONMIND_QUEUE",
+            "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
+            "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
         },
     }
 

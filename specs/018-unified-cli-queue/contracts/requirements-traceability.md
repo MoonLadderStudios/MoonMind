@@ -1,0 +1,16 @@
+# Requirements Traceability: Unified CLI Single Queue Worker Runtime
+
+| DOC-REQ ID | Source Reference | Mapped FR(s) | Planned Implementation Surfaces | Validation Strategy |
+|---|---|---|---|---|
+| DOC-REQ-001 | `docs/UnifiedCliSingleQueueArchitecture.md` §1, §5.1 | FR-001 | `api_service/Dockerfile` | Validate Dockerfile includes install/copy/verify paths for `codex`, `gemini`, `claude`, and `speckit`; confirm startup checks reference all required CLIs. |
+| DOC-REQ-002 | `docs/UnifiedCliSingleQueueArchitecture.md` §1, §5.1 | FR-002 | `api_service/Dockerfile` | Validate `speckit` install remains in shared Dockerfile and no separate pipeline files are introduced. |
+| DOC-REQ-003 | `docs/UnifiedCliSingleQueueArchitecture.md` §1, §5.2 | FR-003 | `moonmind/config/settings.py`, `moonmind/workflows/speckit_celery/celeryconfig.py`, `docker-compose.yaml` | Unit tests assert default queue resolves to `moonmind.jobs`; compose env defaults route worker services to one queue. |
+| DOC-REQ-004 | `docs/UnifiedCliSingleQueueArchitecture.md` §1, §5.3 | FR-004 | `celery_worker/runtime_mode.py`, `celery_worker/speckit_worker.py`, `celery_worker/gemini_worker.py` | Unit tests validate accepted runtime modes and fail-fast behavior on invalid mode values. |
+| DOC-REQ-005 | `docs/UnifiedCliSingleQueueArchitecture.md` §1, §5.4 | FR-005 | `moonmind/workflows/speckit_celery/celeryconfig.py` | Unit tests validate queue/task defaults no longer enforce runtime-specific routes for baseline jobs. |
+| DOC-REQ-006 | `docs/UnifiedCliSingleQueueArchitecture.md` §5.4 | FR-006 | `celery_worker/runtime_mode.py`, `celery_worker/speckit_worker.py`, `celery_worker/gemini_worker.py` | Worker-level tests validate `universal` mode is accepted and available for targeted payload handling paths. |
+| DOC-REQ-007 | `docs/UnifiedCliSingleQueueArchitecture.md` §6.4 | FR-007 | `docker-compose.yaml` | Compose review confirms homogeneous/mixed service definitions still consume single queue with env-selected runtime mode. |
+| DOC-REQ-008 | `docs/UnifiedCliSingleQueueArchitecture.md` §6.5 | FR-008 | `docker-compose.yaml`, docs/spec artifacts | Contract and quickstart validation confirm runtime auth mounting/env pattern and no credential image baking behavior. |
+| DOC-REQ-009 | `docs/UnifiedCliSingleQueueArchitecture.md` §8 | FR-009 | `celery_worker/speckit_worker.py`, `celery_worker/gemini_worker.py`, `api_service/Dockerfile` | Worker tests validate startup CLI verification includes required commands and fails before work on missing tools. |
+| DOC-REQ-010 | `docs/UnifiedCliSingleQueueArchitecture.md` §7 | FR-010 | `moonmind/config/settings.py`, `moonmind/workflows/speckit_celery/celeryconfig.py`, `docker-compose.yaml` | Unit tests verify compatibility fallback behavior for legacy queue vars and steady-state single queue defaults. |
+| DOC-REQ-011 | `docs/UnifiedCliSingleQueueArchitecture.md` §8 | FR-011 | `celery_worker/speckit_worker.py`, `celery_worker/gemini_worker.py` | Validate startup logs include runtime/queue fields and preserve telemetry context for runtime-tagged metrics. |
+| DOC-REQ-012 | `docs/UnifiedCliSingleQueueArchitecture.md` §10 | FR-012 | All files above | End-to-end traceability review confirms all acceptance criteria are represented in implementation and validation tasks. |

@@ -17,6 +17,10 @@ def test_normalize_status_maps_speckit_retrying_to_queued() -> None:
     assert normalize_status("speckit", "retrying") == "queued"
 
 
+def test_normalize_status_maps_speckit_in_progress_to_running() -> None:
+    assert normalize_status("speckit", "in_progress") == "running"
+
+
 def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
     assert normalize_status("orchestrator", "awaiting_approval") == "awaiting_action"
 
@@ -38,3 +42,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["sources"]["queue"]["list"] == "/api/queue/jobs"
     assert config["sources"]["speckit"]["create"] == "/api/workflows/speckit/runs"
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
+    assert config["system"]["defaultQueue"]
+    assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
+    assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
+    assert "claude" in config["system"]["supportedWorkerRuntimes"]
