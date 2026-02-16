@@ -6,14 +6,17 @@ import hashlib
 import ipaddress
 import os
 import shutil
+
 <<<<<<< HEAD
 =======
 import socket
+
 >>>>>>> origin/main
 import stat
 import subprocess
 import tarfile
 import tempfile
+
 <<<<<<< HEAD
 import time
 import zipfile
@@ -22,6 +25,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
+
 =======
 import uuid
 import zipfile
@@ -29,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
 >>>>>>> origin/main
 
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
