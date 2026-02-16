@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+from importlib import import_module
 from pathlib import Path
 
 from celery_worker.runtime_mode import resolve_worker_runtime
@@ -23,6 +24,9 @@ from moonmind.workflows.speckit_celery.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Register Gemini tasks so all shared-queue workers recognize task names.
+import_module("celery_worker.gemini_tasks")
 
 try:  # pragma: no branch - import guard required for health enforcement
     from api_service.scripts import ensure_codex_config as codex_config
@@ -314,14 +318,7 @@ celery_app = speckit_celery_app
 app = celery_app
 
 _runtime_mode = _configure_worker_runtime()
-if _runtime_mode in {"codex", "universal"}:
-    _enforce_codex_approval_policy()
-else:
-    logger.info(
-        "Skipping Codex approval policy enforcement for runtime mode '%s'",
-        _runtime_mode,
-        extra={"worker_runtime": _runtime_mode},
-    )
+_enforce_codex_approval_policy()
 _log_codex_cli_version()
 _log_gemini_cli_version()
 _log_claude_cli_version()
