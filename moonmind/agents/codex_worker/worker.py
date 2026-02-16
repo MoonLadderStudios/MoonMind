@@ -30,7 +30,7 @@ from moonmind.agents.codex_worker.secret_refs import (
     load_vault_token,
 )
 from moonmind.config.settings import settings
-from moonmind.utils.logging import SecretRedactor
+import moonmind.utils.logging as moonmind_logging
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
@@ -517,7 +517,9 @@ class CodexWorker:
         self._config = config
         self._queue_client = queue_client
         self._codex_exec_handler = codex_exec_handler
-        self._secret_redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
+        self._secret_redactor = moonmind_logging.SecretRedactor.from_environ(
+            placeholder="[REDACTED]"
+        )
         self._dynamic_redaction_values: set[str] = set()
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
