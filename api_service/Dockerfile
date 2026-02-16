@@ -122,6 +122,18 @@ else
         stub_codex
     else
         /usr/local/bin/install_codex_platform_vendor.sh
+        # Resolve the symlink target created by npm install -g so we can replace it
+        # with a durable wrapper script. Docker COPY can dereference symlinks
+        # across stages, which would move this launcher away from node_modules and
+        # break Codex's optional dependency resolution.
+        CODEX_LINK_TARGET=$(readlink -f /usr/local/bin/codex)
+        echo "Resolving codex symlink target: $CODEX_LINK_TARGET"
+        rm /usr/local/bin/codex
+        cat <<EOF > /usr/local/bin/codex
+#!/bin/sh
+exec node "$CODEX_LINK_TARGET" "\$@"
+EOF
+        chmod +x /usr/local/bin/codex
     fi
 
     # Try installing Spec Kit (Github Next) - might fail if private/no token

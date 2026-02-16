@@ -11,7 +11,24 @@ case "$(uname -m)" in
         ;;
 esac
 
-vendor_version="${CODEX_CLI_VERSION}-${platform_tag}"
+resolved_codex_version="${CODEX_CLI_VERSION}"
+if [ -f /usr/local/lib/node_modules/@openai/codex/package.json ]; then
+    resolved_codex_version="$(node -p "require('/usr/local/lib/node_modules/@openai/codex/package.json').version" 2>/dev/null || true)"
+fi
+if [ -z "${resolved_codex_version}" ]; then
+    echo "Warning: could not determine installed codex version; skipping platform vendor install" >&2
+    exit 0
+fi
+
+case "${resolved_codex_version}" in
+    *-linux-x64 | *-linux-arm64 | *-darwin-x64 | *-darwin-arm64 | *-win32-x64 | *-win32-arm64)
+        vendor_version="${resolved_codex_version}"
+        ;;
+    *)
+        vendor_version="${resolved_codex_version}-${platform_tag}"
+        ;;
+esac
+
 platform_tmp_dir="$(mktemp -d)"
 platform_archive="$(cd "$platform_tmp_dir" && npm pack "@openai/codex@${vendor_version}")" || true
 if [ -z "$platform_archive" ] || [ ! -f "$platform_tmp_dir/$platform_archive" ]; then
