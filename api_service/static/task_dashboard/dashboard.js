@@ -545,14 +545,14 @@
       }
 
       if (targetRuntime) {
-        requestBody.payload.targetRuntime = targetRuntime;
+        requestBody.payload.target_runtime = targetRuntime;
         const taskNode = requestBody.payload.task;
         if (taskNode && typeof taskNode === "object" && !Array.isArray(taskNode)) {
           const hasRuntimeKey = ["targetRuntime", "target_runtime", "runtime"].some((key) =>
             Object.prototype.hasOwnProperty.call(taskNode, key),
           );
           if (!hasRuntimeKey) {
-            taskNode.targetRuntime = targetRuntime;
+            taskNode.target_runtime = targetRuntime;
           }
         }
       }

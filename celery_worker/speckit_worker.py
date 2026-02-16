@@ -26,16 +26,21 @@ from moonmind.workflows.speckit_celery.utils import (
 logger = logging.getLogger(__name__)
 
 # Register Gemini tasks so all shared-queue workers recognize task names.
-import_module("celery_worker.gemini_tasks")
-
-try:  # pragma: no branch - import guard required for health enforcement
-    from api_service.scripts import ensure_codex_config as codex_config
+try:
+    import_module("celery_worker.gemini_tasks")
 except ImportError as exc:  # pragma: no cover - import failure should abort start
     logger.critical(
-        "Codex config enforcement script missing from image: %s",
+        "Failed to import celery_worker.gemini_tasks at worker startup: %s",
         exc,
     )
-    raise RuntimeError("Codex config enforcement script unavailable") from exc
+    raise RuntimeError("Gemini task registration failed") from exc
+
+codex_config = None
+_codex_config_import_error: ImportError | None = None
+try:  # pragma: no branch - optional import gated by runtime mode
+    from api_service.scripts import ensure_codex_config as codex_config
+except ImportError as exc:  # pragma: no cover - handled when codex policy is required
+    _codex_config_import_error = exc
 
 
 def _assert_policy_locked(
@@ -67,6 +72,15 @@ def _assert_policy_locked(
 
 def _enforce_codex_approval_policy() -> Path:
     """Run the merge script and confirm the policy is locked to ``never``."""
+
+    if codex_config is None:
+        logger.critical(
+            "Codex config enforcement requested, but script is unavailable: %s",
+            _codex_config_import_error,
+        )
+        raise RuntimeError("Codex config enforcement script unavailable") from (
+            _codex_config_import_error
+        )
 
     try:
         home_result = codex_config.ensure_codex_config()
@@ -318,7 +332,14 @@ celery_app = speckit_celery_app
 app = celery_app
 
 _runtime_mode = _configure_worker_runtime()
-_enforce_codex_approval_policy()
+if _runtime_mode in {"codex", "universal"}:
+    _enforce_codex_approval_policy()
+else:
+    logger.info(
+        "Skipping Codex approval policy enforcement for runtime mode '%s'",
+        _runtime_mode,
+        extra={"worker_runtime": _runtime_mode},
+    )
 _log_codex_cli_version()
 _log_gemini_cli_version()
 _log_claude_cli_version()
