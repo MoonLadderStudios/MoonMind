@@ -56,7 +56,7 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
 def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> None:
     """Token-present startup should run gh auth login/setup/status in order."""
 
-    calls: list[tuple[list[str], str | None, dict[str, str | None] | None]] = []
+    calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
 
     def fake_verify(name: str) -> str:
         return f"/usr/bin/{name}"
@@ -79,7 +79,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
 
     assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
     assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
-    assert calls[2] == (
+    assert calls[2][:2] == (
         [
             "/usr/bin/gh",
             "auth",
@@ -89,18 +89,19 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
             "--with-token",
         ],
         "ghp-test-token",
-        {"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
-    assert calls[3] == (
-        ["/usr/bin/gh", "auth", "setup-git"],
-        None,
-        {"GITHUB_TOKEN": None, "GH_TOKEN": None},
-    )
-    assert calls[4] == (
+    assert calls[3][:2] == ([ "/usr/bin/gh", "auth", "setup-git"], None)
+    assert calls[4][:2] == (
         ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"],
         None,
-        {"GITHUB_TOKEN": None, "GH_TOKEN": None},
     )
+
+    for idx in (2, 3, 4):
+        env = calls[idx][2]
+        assert env is not None
+        assert "PATH" in env
+        assert "GITHUB_TOKEN" not in env
+        assert "GH_TOKEN" not in env
 
 
 def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
@@ -193,6 +194,33 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
 
     assert token not in str(exc_info.value)
     assert "[REDACTED]" in str(exc_info.value)
+
+
+def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
+    """Subprocess env overrides should preserve base vars while removing None values."""
+
+    observed_env: dict[str, str] | None = None
+
+    def fake_run(command, *args, **kwargs):
+        nonlocal observed_env
+        observed_env = kwargs.get("env")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("MM_KEEP_VAR", "present")
+    monkeypatch.setenv("MM_REMOVE_VAR", "remove-me")
+
+    cli._run_checked_command(
+        ["/usr/bin/echo", "ok"],
+        env={"MM_KEEP_VAR": "overridden", "MM_REMOVE_VAR": None, "MM_NEW_VAR": "new"},
+    )
+
+    assert observed_env is not None
+    assert observed_env["MM_KEEP_VAR"] == "overridden"
+    assert "MM_REMOVE_VAR" not in observed_env
+    assert observed_env["MM_NEW_VAR"] == "new"
 
 
 def test_run_preflight_missing_speckit_raises(monkeypatch) -> None:

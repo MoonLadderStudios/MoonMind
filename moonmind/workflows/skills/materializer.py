@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import urlparse
-from urllib.request import urlretrieve
+from urllib.request import urlopen
 
 from .resolver import ResolvedSkill, RunSkillSelection
 from .workspace_links import (
@@ -27,6 +31,12 @@ class SkillMaterializationError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+_SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+_DOWNLOAD_TIMEOUT_SECONDS = 30
+_CACHE_READY_TIMEOUT_SECONDS = 5.0
+_CACHE_READY_POLL_INTERVAL_SECONDS = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +129,28 @@ def _hash_skill_directory(skill_dir: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_skill_name(skill_name: str) -> None:
+    if not skill_name:
+        raise SkillMaterializationError("invalid_skill_name", "Skill name cannot be blank")
+    if Path(skill_name).name != skill_name:
+        raise SkillMaterializationError(
+            "invalid_skill_name",
+            f"Skill name '{skill_name}' is not a safe path component",
+        )
+    if ".." in skill_name:
+        raise SkillMaterializationError(
+            "invalid_skill_name",
+            f"Skill name '{skill_name}' cannot contain '..'",
+        )
+    import re
+
+    if not re.fullmatch(_SKILL_NAME_PATTERN, skill_name):
+        raise SkillMaterializationError(
+            "invalid_skill_name",
+            f"Skill name '{skill_name}' contains unsupported characters",
+        )
+
+
 def _mark_read_only(path: Path) -> None:
     if path.is_symlink():
         return
@@ -130,15 +162,61 @@ def _mark_read_only(path: Path) -> None:
     path.chmod(0o444)
 
 
+def _validate_archive_member_path(destination: Path, member_name: str) -> None:
+    normalized = member_name.replace("\\", "/")
+    if normalized.startswith("/"):
+        raise SkillMaterializationError(
+            "unsafe_archive_member",
+            f"Archive member path is absolute: {member_name}",
+        )
+
+    target_path = (destination / normalized).resolve()
+    destination_root = destination.resolve()
+    try:
+        target_path.relative_to(destination_root)
+    except ValueError as exc:
+        raise SkillMaterializationError(
+            "unsafe_archive_member",
+            f"Archive member escapes destination: {member_name}",
+        ) from exc
+
+
+def _validate_zip_member(member: zipfile.ZipInfo, destination: Path) -> None:
+    _validate_archive_member_path(destination, member.filename)
+    mode = member.external_attr >> 16
+    if stat.S_ISLNK(mode):
+        raise SkillMaterializationError(
+            "unsafe_archive_member",
+            f"Archive member uses unsupported symlink entry: {member.filename}",
+        )
+
+
+def _validate_tar_member(member: tarfile.TarInfo, destination: Path) -> None:
+    _validate_archive_member_path(destination, member.name)
+    if member.issym() or member.islnk():
+        raise SkillMaterializationError(
+            "unsafe_archive_member",
+            f"Archive member uses unsupported link entry: {member.name}",
+        )
+
+
 def _extract_archive(archive: Path, destination: Path) -> Path:
     if zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(destination)
+            members = bundle.infolist()
+            for member in members:
+                _validate_zip_member(member, destination)
+            for member in members:
+                bundle.extract(member, destination)
         return destination
 
     try:
         with tarfile.open(archive) as bundle:
-            bundle.extractall(destination)
+            members = bundle.getmembers()
+            for member in members:
+                _validate_tar_member(member, destination)
+            for member in members:
+                bundle.extract(member, destination)
         return destination
     except tarfile.TarError as exc:
         raise SkillMaterializationError(
@@ -169,7 +247,7 @@ def _resolve_source_root(entry: ResolvedSkill, scratch_dir: Path) -> Path:
         destination = scratch_dir / f"git-{entry.skill_name}"
         try:
             subprocess.run(
-                ["git", "clone", "--depth", "1", repo_uri, str(destination)],
+                ["git", "clone", "--depth", "1", "--", repo_uri, str(destination)],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -184,15 +262,17 @@ def _resolve_source_root(entry: ResolvedSkill, scratch_dir: Path) -> Path:
     if parsed.scheme in {"http", "https"}:
         download_path = scratch_dir / f"bundle-{entry.skill_name}"
         try:
-            local_path, _ = urlretrieve(source_uri, filename=download_path)
-        except OSError as exc:
+            with urlopen(source_uri, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
+                with download_path.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
+        except (OSError, URLError) as exc:
             raise SkillMaterializationError(
                 "bundle_fetch_failed",
                 f"Unable to download skill bundle for {entry.skill_name}: {exc}",
             ) from exc
         extracted = scratch_dir / f"bundle-extract-{entry.skill_name}"
         extracted.mkdir(parents=True, exist_ok=True)
-        return _extract_archive(Path(local_path), extracted)
+        return _extract_archive(download_path, extracted)
 
     if parsed.scheme == "file":
         candidate = Path(parsed.path)
@@ -302,16 +382,39 @@ def _materialize_cache_entry(
                 f"(expected {entry.content_hash}, got {computed_hash})",
             )
 
-        skill_cache_dir = cache_root / computed_hash / entry.skill_name
-        if not skill_cache_dir.exists():
-            skill_cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        digest_root = cache_root / computed_hash
+        skill_cache_dir = digest_root / entry.skill_name
+        marker_path = digest_root / ".ready"
+
+        cache_ready = marker_path.is_file() or (skill_cache_dir / "SKILL.md").is_file()
+        if not cache_ready:
             try:
-                shutil.copytree(skill_dir, skill_cache_dir)
+                digest_root.mkdir(parents=True, exist_ok=False)
             except FileExistsError:
-                # Concurrent run already materialized the same digest.
-                pass
+                deadline = time.monotonic() + _CACHE_READY_TIMEOUT_SECONDS
+                while time.monotonic() < deadline:
+                    cache_ready = marker_path.is_file() or (
+                        skill_cache_dir / "SKILL.md"
+                    ).is_file()
+                    if cache_ready:
+                        break
+                    time.sleep(_CACHE_READY_POLL_INTERVAL_SECONDS)
+
+                if not cache_ready:
+                    raise SkillMaterializationError(
+                        "cache_entry_incomplete",
+                        f"Cache entry for '{entry.skill_name}:{entry.version}' "
+                        "did not become ready in time",
+                    )
             else:
-                _mark_read_only(skill_cache_dir)
+                try:
+                    shutil.copytree(skill_dir, skill_cache_dir)
+                    _mark_read_only(skill_cache_dir)
+                    marker_path.write_text("ready\n", encoding="utf-8")
+                    marker_path.chmod(0o444)
+                except Exception:
+                    shutil.rmtree(digest_root, ignore_errors=True)
+                    raise
 
     return MaterializedSkill(
         name=entry.skill_name,
@@ -343,6 +446,7 @@ def materialize_run_skill_workspace(
     seen_names: set[str] = set()
 
     for entry in selection.skills:
+        _validate_skill_name(entry.skill_name)
         if entry.skill_name in seen_names:
             raise SkillMaterializationError(
                 "duplicate_skill_name",

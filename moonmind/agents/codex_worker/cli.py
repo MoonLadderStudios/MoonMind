@@ -41,7 +41,13 @@ def _run_checked_command(
         "text": True,
     }
     if env is not None:
-        run_kwargs["env"] = dict(env)
+        merged_env = dict(os.environ)
+        for key, value in env.items():
+            if value is None:
+                merged_env.pop(key, None)
+                continue
+            merged_env[key] = value
+        run_kwargs["env"] = merged_env
 
     result = subprocess.run(command, **run_kwargs)
     if result.returncode == 0:

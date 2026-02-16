@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
@@ -12,6 +13,9 @@ from moonmind.config.settings import settings
 
 class SkillResolutionError(ValueError):
     """Raised when a run skill selection cannot be resolved."""
+
+
+_SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +112,19 @@ def _file_uri(path: Path) -> str:
     return path.resolve().as_uri()
 
 
+def _validate_skill_name(skill_name: str) -> None:
+    if not skill_name:
+        raise SkillResolutionError("Skill name cannot be blank")
+    if Path(skill_name).name != skill_name or ".." in skill_name:
+        raise SkillResolutionError(
+            f"Skill name '{skill_name}' is not a safe path component"
+        )
+    if not _SKILL_NAME_PATTERN.fullmatch(skill_name):
+        raise SkillResolutionError(
+            f"Skill name '{skill_name}' contains unsupported characters"
+        )
+
+
 def _resolve_local_source(skill_name: str) -> str | None:
     cfg = settings.spec_workflow
 
@@ -198,8 +215,7 @@ def resolve_run_skill_selection(
     for entry in normalized:
         skill_name = str(entry["skill_name"] or "").strip()
         version = str(entry["version"] or "local").strip() or "local"
-        if not skill_name:
-            raise SkillResolutionError("Skill name cannot be blank")
+        _validate_skill_name(skill_name)
         if skill_name in seen_names:
             raise SkillResolutionError(
                 f"Duplicate skill name '{skill_name}' in resolved selection"

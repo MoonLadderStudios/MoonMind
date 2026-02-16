@@ -13,7 +13,7 @@ Set environment values for resolver/materializer integration:
 - `SPEC_WORKFLOW_USE_SKILLS=true`
 - `SPEC_WORKFLOW_ALLOWED_SKILLS=<comma-separated skill names>`
 - `SPEC_SKILLS_CACHE_ROOT=var/skill_cache`
-- `SPEC_SKILLS_WORKSPACE_ROOT=var/skills_workspaces`
+- `SPEC_SKILLS_WORKSPACE_ROOT=runs`
 - `SPEC_SKILLS_REGISTRY_SOURCE=<registry uri or profile>`
 - `SPEC_SKILLS_VERIFY_SIGNATURES=<true|false>`
 
