@@ -6,6 +6,7 @@ import logging
 
 import pytest
 
+from celery_worker.runtime_mode import resolve_worker_queue, resolve_worker_runtime
 from celery_worker.startup_checks import (
     resolve_embedding_runtime_profile,
     validate_embedding_runtime_profile,
@@ -137,3 +138,54 @@ def test_validate_shared_skills_mirror_strict_resolves_relative_to_repo_root(
     )
 
     assert resolved == mirror_root.resolve()
+
+
+def test_resolve_worker_runtime_defaults_to_supplied_default(monkeypatch):
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
+
+    runtime, ai_cli = resolve_worker_runtime(default_runtime="codex")
+
+    assert runtime == "codex"
+    assert ai_cli == "codex"
+
+
+def test_resolve_worker_runtime_accepts_universal(monkeypatch):
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "universal")
+
+    runtime, ai_cli = resolve_worker_runtime(default_runtime="codex")
+
+    assert runtime == "universal"
+    assert ai_cli == "universal"
+
+
+def test_resolve_worker_runtime_rejects_invalid_value(monkeypatch):
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "invalid-runtime")
+
+    with pytest.raises(RuntimeError, match="Invalid MOONMIND_WORKER_RUNTIME"):
+        resolve_worker_runtime(default_runtime="codex")
+
+
+def test_resolve_worker_queue_prefers_moonmind_queue(monkeypatch):
+    monkeypatch.setenv("MOONMIND_QUEUE", "moonmind.jobs")
+    monkeypatch.setenv("GEMINI_CELERY_QUEUE", "gemini")
+    monkeypatch.setenv("CELERY_DEFAULT_QUEUE", "speckit")
+
+    queue = resolve_worker_queue(
+        default_queue="moonmind.jobs",
+        legacy_queue_env="GEMINI_CELERY_QUEUE",
+    )
+
+    assert queue == "moonmind.jobs"
+
+
+def test_resolve_worker_queue_falls_back_to_legacy_when_needed(monkeypatch):
+    monkeypatch.delenv("MOONMIND_QUEUE", raising=False)
+    monkeypatch.setenv("GEMINI_CELERY_QUEUE", "gemini")
+    monkeypatch.setenv("CELERY_DEFAULT_QUEUE", "speckit")
+
+    queue = resolve_worker_queue(
+        default_queue="moonmind.jobs",
+        legacy_queue_env="GEMINI_CELERY_QUEUE",
+    )
+
+    assert queue == "gemini"

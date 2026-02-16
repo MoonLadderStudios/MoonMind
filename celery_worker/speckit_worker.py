@@ -8,6 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from celery_worker.runtime_mode import resolve_worker_runtime
 from celery_worker.startup_checks import (
     validate_embedding_runtime_profile,
     validate_shared_skills_mirror,
@@ -133,71 +134,91 @@ def _enforce_codex_approval_policy() -> Path:
 def _log_codex_cli_version() -> None:
     """Emit a startup log confirming the bundled Codex CLI version."""
 
-    try:
-        codex_path = verify_cli_is_executable("codex")
-    except CliVerificationError as exc:
-        logger.critical(str(exc), extra={"codex_path": exc.cli_path})
-        raise RuntimeError(str(exc)) from exc
+    _log_cli_version("codex", label="Codex", failure_message="Codex CLI health check failed")
 
-    try:
-        result = subprocess.run(
-            [codex_path, "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        logger.critical(
-            "Failed to execute 'codex --version': %s",
-            exc,
-            extra={"codex_path": codex_path},
-        )
-        raise RuntimeError("Codex CLI health check failed") from exc
 
-    raw_output = result.stdout.strip() or result.stderr.strip()
-    version_match = re.search(r"\d+\.\d+\.\d+", raw_output)
-    version_output = version_match.group(0) if version_match else "unknown"
-    logger.info(
-        "Codex CLI detected at %s (version: %s)",
-        codex_path,
-        version_output,
-        extra={"codex_path": codex_path, "codex_version": version_output},
+def _log_gemini_cli_version() -> None:
+    """Emit a startup log confirming the bundled Gemini CLI version."""
+
+    _log_cli_version(
+        "gemini",
+        label="Gemini",
+        failure_message="Gemini CLI health check failed",
+    )
+
+
+def _log_claude_cli_version() -> None:
+    """Emit a startup log confirming the bundled Claude CLI version."""
+
+    _log_cli_version(
+        "claude",
+        label="Claude",
+        failure_message="Claude CLI health check failed",
     )
 
 
 def _log_speckit_cli_version() -> None:
     """Emit a startup log confirming the bundled Spec Kit CLI version."""
 
+    _log_cli_version(
+        "speckit",
+        label="Spec Kit",
+        failure_message="Spec Kit CLI health check failed",
+    )
+
+
+def _log_cli_version(cli_name: str, *, label: str, failure_message: str) -> None:
+    """Emit a startup log confirming the bundled CLI version."""
+
     try:
-        speckit_path = verify_cli_is_executable("speckit")
+        cli_path = verify_cli_is_executable(cli_name)
     except CliVerificationError as exc:
-        logger.critical(str(exc), extra={"speckit_path": exc.cli_path})
+        logger.critical(str(exc), extra={f"{cli_name}_path": exc.cli_path})
         raise RuntimeError(str(exc)) from exc
 
     try:
         result = subprocess.run(
-            [speckit_path, "--version"],
+            [cli_path, "--version"],
             check=True,
             capture_output=True,
             text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         logger.critical(
-            "Failed to execute 'speckit --version': %s",
+            "Failed to execute '%s --version': %s",
+            cli_name,
             exc,
-            extra={"speckit_path": speckit_path},
+            extra={f"{cli_name}_path": cli_path},
         )
-        raise RuntimeError("Spec Kit CLI health check failed") from exc
+        raise RuntimeError(failure_message) from exc
 
     raw_output = result.stdout.strip() or result.stderr.strip()
     version_match = re.search(r"\d+\.\d+\.\d+", raw_output)
     version_output = version_match.group(0) if version_match else "unknown"
     logger.info(
-        "Spec Kit CLI detected at %s (version: %s)",
-        speckit_path,
+        "%s CLI detected at %s (version: %s)",
+        label,
+        cli_path,
         version_output,
-        extra={"speckit_path": speckit_path, "speckit_version": version_output},
+        extra={
+            f"{cli_name}_path": cli_path,
+            f"{cli_name}_version": version_output,
+        },
     )
+
+
+def _configure_worker_runtime() -> str:
+    """Resolve runtime mode and publish normalized runtime environment values."""
+
+    runtime, ai_cli = resolve_worker_runtime(default_runtime="codex")
+    os.environ["MOONMIND_WORKER_RUNTIME"] = runtime
+    os.environ["MOONMIND_AI_CLI"] = ai_cli
+    logger.info(
+        "Worker runtime mode resolved: %s",
+        runtime,
+        extra={"worker_runtime": runtime, "worker_ai_cli": ai_cli},
+    )
+    return runtime
 
 
 def _log_queue_configuration() -> tuple[str, ...]:
@@ -290,13 +311,30 @@ celery_app = speckit_celery_app
 # when running ``celery -A celery_worker.speckit_worker worker``.
 app = celery_app
 
-_enforce_codex_approval_policy()
+_runtime_mode = _configure_worker_runtime()
+if _runtime_mode in {"codex", "universal"}:
+    _enforce_codex_approval_policy()
+else:
+    logger.info(
+        "Skipping Codex approval policy enforcement for runtime mode '%s'",
+        _runtime_mode,
+        extra={"worker_runtime": _runtime_mode},
+    )
 _log_codex_cli_version()
+_log_gemini_cli_version()
+_log_claude_cli_version()
 _log_speckit_cli_version()
 _log_queue_configuration()
 _validate_embedding_profile()
 _validate_shared_skills_profile()
-_run_codex_preflight_check()
+if _runtime_mode in {"codex", "universal"}:
+    _run_codex_preflight_check()
+else:
+    logger.info(
+        "Skipping Codex pre-flight check for runtime mode '%s'",
+        _runtime_mode,
+        extra={"worker_runtime": _runtime_mode},
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI execution path

@@ -11,6 +11,13 @@
     detail: 2000,
     events: 1000,
   };
+  const systemConfig = config.system || {};
+  const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
+  const supportedWorkerRuntimes =
+    Array.isArray(systemConfig.supportedWorkerRuntimes) &&
+    systemConfig.supportedWorkerRuntimes.length > 0
+      ? systemConfig.supportedWorkerRuntimes
+      : ["codex", "gemini", "claude", "universal"];
 
   const pollers = [];
 
@@ -75,6 +82,31 @@
     } catch (_error) {
       return String(value);
     }
+  }
+
+  function extractRuntimeFromPayload(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return null;
+    }
+
+    const directRuntime = pick(payload, "targetRuntime", "target_runtime", "runtime");
+    if (directRuntime) {
+      return String(directRuntime);
+    }
+
+    const task = pick(payload, "task");
+    if (task && typeof task === "object" && !Array.isArray(task)) {
+      const taskRuntime = pick(task, "targetRuntime", "target_runtime", "runtime");
+      if (taskRuntime) {
+        return String(taskRuntime);
+      }
+    }
+
+    return null;
+  }
+
+  function renderRuntime(runtime) {
+    return runtime ? escapeHtml(runtime) : "-";
   }
 
   function normalizeStatus(source, rawStatus) {
@@ -165,6 +197,8 @@
         <tr>
           <td>${escapeHtml(row.sourceLabel)}</td>
           <td><a href="${escapeHtml(row.link)}">${escapeHtml(row.id)}</a></td>
+          <td>${escapeHtml(row.queueName || "-")}</td>
+          <td>${renderRuntime(row.runtimeMode)}</td>
           <td>${statusBadge(row.source, row.rawStatus)} <span class="small">${escapeHtml(
             row.rawStatus,
           )}</span></td>
@@ -183,6 +217,8 @@
           <tr>
             <th>Source</th>
             <th>ID</th>
+            <th>Queue</th>
+            <th>Runtime</th>
             <th>Status</th>
             <th>Title</th>
             <th>Created</th>
@@ -196,18 +232,23 @@
   }
 
   function toQueueRows(items) {
-    return items.map((item) => ({
-      source: "queue",
-      sourceLabel: "Queue",
-      id: pick(item, "id") || "",
-      rawStatus: pick(item, "status") || "queued",
-      title:
-        pick(item, "type") || pick(item, "payload")?.instruction || "Queue Job",
-      createdAt: pick(item, "createdAt"),
-      startedAt: pick(item, "startedAt"),
-      finishedAt: pick(item, "finishedAt"),
-      link: `/tasks/queue/${encodeURIComponent(String(pick(item, "id") || ""))}`,
-    }));
+    return items.map((item) => {
+      const payload = pick(item, "payload") || {};
+      return {
+        source: "queue",
+        sourceLabel: "Queue",
+        id: pick(item, "id") || "",
+        queueName: defaultQueueName,
+        runtimeMode: extractRuntimeFromPayload(payload),
+        rawStatus: pick(item, "status") || "queued",
+        title:
+          pick(item, "type") || pick(payload, "instruction") || "Queue Job",
+        createdAt: pick(item, "createdAt"),
+        startedAt: pick(item, "startedAt"),
+        finishedAt: pick(item, "finishedAt"),
+        link: `/tasks/queue/${encodeURIComponent(String(pick(item, "id") || ""))}`,
+      };
+    });
   }
 
   function toSpeckitRows(items) {
@@ -215,6 +256,8 @@
       source: "speckit",
       sourceLabel: "SpecKit",
       id: pick(item, "id") || "",
+      queueName: pick(item, "codexQueue") || defaultQueueName,
+      runtimeMode: null,
       rawStatus: pick(item, "status") || "pending",
       title:
         pick(item, "featureKey") || pick(item, "repository") || "SpecKit Run",
@@ -230,6 +273,8 @@
       source: "orchestrator",
       sourceLabel: "Orchestrator",
       id: pick(run, "runId") || "",
+      queueName: pick(run, "queueName") || "-",
+      runtimeMode: null,
       rawStatus: pick(run, "status") || "pending",
       title:
         pick(run, "targetService") ||
@@ -255,7 +300,7 @@
   async function renderActivePage() {
     setView(
       "Active Tasks",
-      "Running and queued work across queue, SpecKit, and orchestrator systems.",
+      `Running and queued work across queue, SpecKit, and orchestrator systems. Unified queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading active runs...</p>",
     );
 
@@ -333,7 +378,7 @@
       root.querySelector(".panel")?.remove();
       setView(
         "Active Tasks",
-        "Running and queued work across queue, SpecKit, and orchestrator systems.",
+        `Running and queued work across queue, SpecKit, and orchestrator systems. Unified queue: ${defaultQueueName}.`,
         `${notices}${renderRowsTable(sortRows(rows))}`,
       );
     };
@@ -342,14 +387,18 @@
   }
 
   async function renderQueueListPage() {
-    setView("Queue Jobs", "All queue jobs ordered by creation time.", "<p class='loading'>Loading queue jobs...</p>");
+    setView(
+      "Queue Jobs",
+      `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
+      "<p class='loading'>Loading queue jobs...</p>",
+    );
 
     const load = async () => {
       const payload = await fetchJson("/api/queue/jobs?limit=100");
       const rows = sortRows(toQueueRows(payload?.items || []));
       setView(
         "Queue Jobs",
-        "All queue jobs ordered by creation time.",
+        `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
         `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Job</button></a></div>${renderRowsTable(rows)}`,
       );
     };
@@ -358,14 +407,18 @@
   }
 
   async function renderSpeckitListPage() {
-    setView("SpecKit Runs", "Recent SpecKit runs.", "<p class='loading'>Loading SpecKit runs...</p>");
+    setView(
+      "SpecKit Runs",
+      `Recent SpecKit runs. Effective queue: ${defaultQueueName}.`,
+      "<p class='loading'>Loading SpecKit runs...</p>",
+    );
 
     const load = async () => {
       const payload = await fetchJson("/api/workflows/speckit/runs?limit=100");
       const rows = sortRows(toSpeckitRows(payload?.items || []));
       setView(
         "SpecKit Runs",
-        "Recent SpecKit runs.",
+        `Recent SpecKit runs. Effective queue: ${defaultQueueName}.`,
         `<div class="actions"><a href="/tasks/speckit/new"><button type="button">New SpecKit Run</button></a></div>${renderRowsTable(rows)}`,
       );
     };
@@ -394,9 +447,16 @@
   }
 
   function renderQueueSubmitPage() {
+    const runtimeOptions = supportedWorkerRuntimes
+      .map(
+        (runtime) =>
+          `<option value="${escapeHtml(runtime)}">${escapeHtml(runtime)}</option>`,
+      )
+      .join("");
+
     setView(
       "Submit Queue Job",
-      "Create an Agent Queue job with JSON payload.",
+      `Create an Agent Queue job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
       `
       <form id="queue-submit-form">
         <label>Type
@@ -413,8 +473,15 @@
         <label>Affinity Key
           <input name="affinityKey" placeholder="optional affinity key" />
         </label>
+        <label>Target Runtime (optional)
+          <select name="targetRuntime">
+            <option value="">(any runtime worker)</option>
+            ${runtimeOptions}
+          </select>
+        </label>
         <label>Payload (JSON)
           <textarea name="payload">{
+  "repository": "owner/repo",
   "instruction": "Describe the job work here"
 }</textarea>
         </label>
@@ -458,6 +525,21 @@
       const affinityKey = String(formData.get("affinityKey") || "").trim();
       if (affinityKey) {
         requestBody.affinityKey = affinityKey;
+      }
+
+      const targetRuntime = String(formData.get("targetRuntime") || "").trim();
+      if (targetRuntime) {
+        requestBody.payload.targetRuntime = targetRuntime;
+        const taskNode = requestBody.payload.task;
+        if (
+          taskNode &&
+          typeof taskNode === "object" &&
+          !Array.isArray(taskNode) &&
+          !Object.prototype.hasOwnProperty.call(taskNode, "target_runtime") &&
+          !Object.prototype.hasOwnProperty.call(taskNode, "targetRuntime")
+        ) {
+          taskNode.target_runtime = targetRuntime;
+        }
       }
 
       try {
@@ -672,6 +754,9 @@
 
       const detail = job
         ? `
+            <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
+              pick(job, "queueName") || defaultQueueName,
+            )}</span></p>
             <div class="grid-2">
               <div class="card"><strong>Status:</strong> ${statusBadge("queue", pick(
                 job,
@@ -685,6 +770,12 @@
               )}</div>
               <div class="card"><strong>Started:</strong> ${formatTimestamp(
                 pick(job, "startedAt"),
+              )}</div>
+              <div class="card"><strong>Runtime Target:</strong> ${escapeHtml(
+                extractRuntimeFromPayload(pick(job, "payload") || {}) || "any",
+              )}</div>
+              <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
+                pick(job, "leaseExpiresAt"),
               )}</div>
             </div>
           `
@@ -838,8 +929,14 @@
               <div class="card"><strong>Feature Key:</strong> ${escapeHtml(
                 pick(run, "featureKey") || "-",
               )}</div>
+              <div class="card"><strong>Queue:</strong> <span class="inline-code">${escapeHtml(
+                pick(run, "codexQueue") || defaultQueueName,
+              )}</span></div>
               <div class="card"><strong>Started:</strong> ${formatTimestamp(
                 pick(run, "startedAt"),
+              )}</div>
+              <div class="card"><strong>Preflight:</strong> ${escapeHtml(
+                pick(run, "codexPreflightStatus") || "-",
               )}</div>
             </div>
             <div class="stack">

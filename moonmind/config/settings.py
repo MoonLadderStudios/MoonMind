@@ -49,17 +49,17 @@ class CelerySettings(BaseSettings):
         description="Database URL used by Celery to persist task results.",
     )
     default_queue: str = Field(
-        "speckit",
+        "moonmind.jobs",
         env="CELERY_DEFAULT_QUEUE",
         description="Default queue name for Spec Kit workflow tasks.",
     )
     default_exchange: str = Field(
-        "speckit",
+        "moonmind.jobs",
         env="CELERY_DEFAULT_EXCHANGE",
         description="Default exchange for Spec Kit workflow tasks.",
     )
     default_routing_key: str = Field(
-        "speckit",
+        "moonmind.jobs",
         env="CELERY_DEFAULT_ROUTING_KEY",
         description="Default routing key used by the Spec Kit queue.",
     )
@@ -181,7 +181,7 @@ class SpecWorkflowSettings(BaseSettings):
     )
     codex_queue: Optional[str] = Field(
         None,
-        env=("SPEC_WORKFLOW_CODEX_QUEUE", "CODEX_QUEUE"),
+        env=("MOONMIND_QUEUE", "SPEC_WORKFLOW_CODEX_QUEUE", "CODEX_QUEUE"),
         description="Explicit Codex queue name assigned to this worker.",
     )
     codex_volume_name: Optional[str] = Field(
@@ -785,6 +785,8 @@ class AppSettings(BaseSettings):
             self.spec_workflow.celery_broker_url = self.celery.broker_url
         if not self.spec_workflow.celery_result_backend:
             self.spec_workflow.celery_result_backend = self.celery.result_backend
+        if not self.spec_workflow.codex_queue:
+            self.spec_workflow.codex_queue = self.celery.default_queue
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),

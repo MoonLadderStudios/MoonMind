@@ -53,6 +53,12 @@ class Base(DeclarativeBase):
     pass
 
 
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
+    """Return enum members as stored DB labels, not Python enum names."""
+
+    return [member.value for member in enum_cls]
+
+
 # Note: fastapi-users[sqlalchemy] uses GUID/UUID by default for id.
 # If you need an Integer ID, you would use SQLAlchemyBaseUserTable[int]
 # and ensure your UserManager and FastAPIUsers instances are typed accordingly.
@@ -352,6 +358,7 @@ class ApprovalGate(Base):
             name="orchestratorapprovalrequirement",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
         default=OrchestratorApprovalRequirement.NONE,
@@ -429,6 +436,7 @@ class OrchestratorActionPlan(Base):
             name="orchestratorplanorigin",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
         default=OrchestratorPlanOrigin.SYSTEM,
@@ -461,6 +469,7 @@ class OrchestratorRun(Base):
             name="orchestratorrunpriority",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
         default=OrchestratorRunPriority.NORMAL,
@@ -472,6 +481,7 @@ class OrchestratorRun(Base):
             name="orchestratorrunstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
         default=OrchestratorRunStatus.PENDING,
@@ -565,6 +575,7 @@ class OrchestratorRunArtifact(Base):
             name="orchestratorrunartifacttype",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -604,6 +615,7 @@ class WorkflowCredentialAudit(Base):
             name="workflowcodexcredentialstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -613,6 +625,7 @@ class WorkflowCredentialAudit(Base):
             name="workflowgithubcredentialstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -666,6 +679,7 @@ class SpecWorkflowRun(Base):
             name="specworkflowrunstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
         default=SpecWorkflowRunStatus.PENDING,
@@ -676,6 +690,7 @@ class SpecWorkflowRun(Base):
             name="specworkflowrunphase",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
         default=SpecWorkflowRunPhase.DISCOVER,
@@ -706,6 +721,7 @@ class SpecWorkflowRun(Base):
             name="codexpreflightstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=True,
     )
@@ -719,6 +735,7 @@ class SpecWorkflowRun(Base):
             name="specworkflowtaskname",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=True,
     )
@@ -799,6 +816,7 @@ class WorkflowArtifact(Base):
             name="workflowartifacttype",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -877,6 +895,7 @@ class SpecWorkflowTaskState(Base):
             name="specworkflowtaskstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -890,6 +909,7 @@ class SpecWorkflowTaskState(Base):
             name="orchestratorplanstep",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=True,
     )
@@ -899,6 +919,7 @@ class SpecWorkflowTaskState(Base):
             name="orchestratorplanstepstatus",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=True,
     )
@@ -908,6 +929,7 @@ class SpecWorkflowTaskState(Base):
             name="orchestratortaskstate",
             native_enum=True,
             validate_strings=True,
+        values_callable=_enum_values,
         ),
         nullable=True,
     )

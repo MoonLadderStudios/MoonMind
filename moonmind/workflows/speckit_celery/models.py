@@ -45,6 +45,12 @@ _MUTABLE_JSON_LIST = MutableList.as_mutable(JSON().with_variant(JSONB, "postgres
 _TASK_PAYLOAD_TYPE = _MUTABLE_JSON
 
 
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
+    """Return enum member values so SQLAlchemy stores lowercase labels."""
+
+    return [member.value for member in enum_cls]
+
+
 class CodexAuthVolumeStatus(str, enum.Enum):
     """Health states for persisted Codex authentication volumes."""
 
@@ -96,6 +102,7 @@ class CodexAuthVolume(Base):
             name="codexauthvolumestatus",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
         default=CodexAuthVolumeStatus.NEEDS_AUTH,
@@ -146,6 +153,7 @@ class CodexWorkerShard(Base):
             name="codexworkershardstatus",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
         default=CodexWorkerShardStatus.ACTIVE,
@@ -253,6 +261,7 @@ class SpecAutomationRun(Base):
             name="specautomationrunstatus",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
         default=SpecAutomationRunStatus.QUEUED,
@@ -322,6 +331,7 @@ class SpecAutomationTaskState(Base):
             name="specautomationphase",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -331,6 +341,7 @@ class SpecAutomationTaskState(Base):
             name="specautomationtaskstatus",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -461,6 +472,7 @@ class SpecAutomationArtifact(Base):
             name="specautomationartifacttype",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -476,6 +488,7 @@ class SpecAutomationArtifact(Base):
             name="specautomationphase",
             native_enum=True,
             validate_strings=True,
+            values_callable=_enum_values,
         )
     )
     created_at: Mapped[datetime] = mapped_column(

@@ -7,6 +7,8 @@ x-celery-worker-base: &celery-worker-base
     PYTHONPATH: /app
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     PYTHONUNBUFFERED: "1"
+    MOONMIND_QUEUE: ${MOONMIND_QUEUE:-moonmind.jobs}
+    MOONMIND_WORKER_RUNTIME: ${MOONMIND_WORKER_RUNTIME:-codex}
     CODEX_VOLUME_NAME: ${CODEX_VOLUME_NAME:-codex_auth_volume}
     CODEX_VOLUME_PATH: ${CODEX_VOLUME_PATH:-/home/app/.codex}
     CODEX_HOME: ${CODEX_HOME:-/home/app/.codex}
@@ -218,24 +220,28 @@ services:
     command: >-
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
-      --queues=${CELERY_DEFAULT_QUEUE:-speckit}
+      --queues=${MOONMIND_QUEUE:-moonmind.jobs}
 
   celery_codex_worker:
     <<: *celery-worker-base
+    environment:
+      <<: *celery-environment
+      MOONMIND_WORKER_RUNTIME: codex
     command: >-
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
-      --queues=${CELERY_DEFAULT_QUEUE:-speckit},${SPEC_WORKFLOW_CODEX_QUEUE:-codex}
+      --queues=${MOONMIND_QUEUE:-moonmind.jobs}
 
   celery_gemini_worker:
     <<: *celery-worker-base
     environment:
       <<: *celery-environment
+      MOONMIND_WORKER_RUNTIME: gemini
       GEMINI_HOME: ${GEMINI_HOME:-/var/lib/gemini-auth}
     command: >-
       celery -A celery_worker.gemini_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
-      --queues=${GEMINI_CELERY_QUEUE:-gemini}
+      --queues=${MOONMIND_QUEUE:-moonmind.jobs}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./moonmind:/app/moonmind:ro
@@ -247,6 +253,16 @@ services:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - speckit_workspaces:/work/runs
       - gemini_auth_volume:${GEMINI_HOME:-/var/lib/gemini-auth}
+
+  celery_claude_worker:
+    <<: *celery-worker-base
+    environment:
+      <<: *celery-environment
+      MOONMIND_WORKER_RUNTIME: claude
+    command: >-
+      celery -A celery_worker.speckit_worker worker
+      --loglevel=${CELERY_LOG_LEVEL:-info}
+      --queues=${MOONMIND_QUEUE:-moonmind.jobs}
 
   codex-worker:
     build:

@@ -9,6 +9,7 @@ from typing import Any
 
 from celery.utils.log import get_task_logger
 
+from celery_worker.runtime_mode import resolve_worker_queue
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery.utils import (
@@ -18,7 +19,10 @@ from moonmind.workflows.speckit_celery.utils import (
 
 logger = get_task_logger(__name__)
 
-GEMINI_QUEUE = os.getenv("GEMINI_CELERY_QUEUE", "gemini")
+GEMINI_QUEUE = resolve_worker_queue(
+    default_queue=settings.celery.default_queue,
+    legacy_queue_env="GEMINI_CELERY_QUEUE",
+)
 
 
 @celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)

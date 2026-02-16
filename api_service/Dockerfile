@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=latest
 ARG SPEC_KIT_VERSION=0.4.0
+ARG CLAUDE_CLI_VERSION=latest
 # Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
 # the API, orchestrator, and Celery workers can run from the same image tag.
 # Disable selectively in test-only or constrained builds when needed.
 ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_GEMINI_CLI=true
+ARG INSTALL_CLAUDE_CLI=true
 ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
@@ -24,6 +26,8 @@ ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG INSTALL_TEST_DEPS
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
+ARG CLAUDE_CLI_VERSION
+ARG INSTALL_CLAUDE_CLI
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -40,6 +44,8 @@ RUN npm config set fund false \
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
+ARG CLAUDE_CLI_VERSION
+ARG INSTALL_CLAUDE_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
@@ -68,6 +74,9 @@ esac
 case "${GEMINI_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid GEMINI_CLI_VERSION: ${GEMINI_CLI_VERSION}" >&2; exit 1;;
 esac
+case "${CLAUDE_CLI_VERSION}" in
+    (""|*[!0-9A-Za-z._-]*) echo "Invalid CLAUDE_CLI_VERSION: ${CLAUDE_CLI_VERSION}" >&2; exit 1;;
+esac
 stub_codex() {
     mkdir -p /usr/local/lib/node_modules/@openai/codex
     printf 'codex stub installed during fallback.\n' > /usr/local/lib/node_modules/@openai/codex/LICENSE
@@ -91,6 +100,14 @@ stub_gemini() {
                    "echo \"gemini-cli stub: package unavailable during image build\" >&2" \
                    "exit 0" > /usr/local/bin/gemini
     chmod +x /usr/local/bin/gemini
+}
+stub_claude() {
+    mkdir -p /usr/local/lib/node_modules/@anthropic-ai/claude-code
+    printf 'claude-code stub installed during fallback; package unavailable.\n' > /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"claude-code stub: package unavailable during image build\" >&2" \
+                   "exit 0" > /usr/local/bin/claude
+    chmod +x /usr/local/bin/claude
 }
 
 if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
@@ -137,6 +154,15 @@ EOF
     chmod +x /usr/local/bin/gemini
 fi
 
+if [ "${INSTALL_CLAUDE_CLI}" != "true" ]; then
+    echo "INSTALL_CLAUDE_CLI=${INSTALL_CLAUDE_CLI}; skipping Claude CLI install and using stub" >&2
+    stub_claude
+elif ! npm install -g @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
+    INSTALL_STATUS=$?
+    echo "Warning: Failed to install Claude CLI (exit ${INSTALL_STATUS}); installing stub binary" >&2
+    stub_claude
+fi
+
 # Ensure LICENSE files exist so COPY instructions in the next stage do not fail.
 # Some npm packages might not include a LICENSE file, or it might be named differently.
 if [ ! -f /usr/local/lib/node_modules/@openai/codex/LICENSE ]; then
@@ -150,6 +176,10 @@ fi
 if [ ! -f /usr/local/lib/node_modules/@google/gemini-cli/LICENSE ]; then
     mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
     touch /usr/local/lib/node_modules/@google/gemini-cli/LICENSE
+fi
+if [ ! -f /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE ]; then
+    mkdir -p /usr/local/lib/node_modules/@anthropic-ai/claude-code
+    touch /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE
 fi
 
 npm cache clean --force || true
@@ -165,7 +195,8 @@ RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
     fi \
     && codex --version \
     && speckit --version \
-    && gemini --version
+    && gemini --version \
+    && claude --version
 
 FROM python:3.12-slim-bookworm
 
@@ -174,6 +205,8 @@ ARG SPEC_KIT_VERSION
 ARG INSTALL_TEST_DEPS
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
+ARG CLAUDE_CLI_VERSION
+ARG INSTALL_CLAUDE_CLI
 
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
@@ -194,14 +227,16 @@ COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/speckit /usr/local/bin/speckit
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
+COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
-RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit /usr/share/licenses/gemini-cli
+RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit /usr/share/licenses/gemini-cli /usr/share/licenses/claude-cli
 
 COPY --from=tooling-builder /usr/local/lib/node_modules/@openai/codex/LICENSE /usr/share/licenses/codex-cli/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE /usr/share/licenses/spec-kit/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@google/gemini-cli/LICENSE /usr/share/licenses/gemini-cli/LICENSE
+COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE /usr/share/licenses/claude-cli/LICENSE
 
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled Codex and Spec Kit binaries rely on.
@@ -234,14 +269,10 @@ RUN apt-get update && \
 # Ensure the non-root ``app`` user exists for Celery workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit /usr/local/bin/gemini
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit /usr/local/bin/gemini /usr/local/bin/claude
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
-RUN if [ "${INSTALL_GEMINI_CLI:-true}" = "true" ]; then \
-        runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version'; \
-    else \
-        runuser -u app -- sh -c 'codex --version && speckit --version'; \
-    fi
+RUN runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version && claude --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at
