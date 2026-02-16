@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import pytest
 
 from moonmind.workflows.skills.resolver import (
@@ -116,9 +115,7 @@ def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("invalid_name", ["../escape", "bad/name", "bad name"])
-def test_resolve_run_skill_selection_rejects_unsafe_names(
-    skills_mirror, invalid_name
-):
+def test_resolve_run_skill_selection_rejects_unsafe_names(skills_mirror, invalid_name):
     with pytest.raises(SkillResolutionError, match="Skill name"):
         resolve_run_skill_selection(
             run_id="run-unsafe",

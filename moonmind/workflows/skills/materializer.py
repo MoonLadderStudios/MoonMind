@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import stat
 import subprocess
@@ -131,7 +130,9 @@ def _hash_skill_directory(skill_dir: Path) -> str:
 
 def _validate_skill_name(skill_name: str) -> None:
     if not skill_name:
-        raise SkillMaterializationError("invalid_skill_name", "Skill name cannot be blank")
+        raise SkillMaterializationError(
+            "invalid_skill_name", "Skill name cannot be blank"
+        )
     if Path(skill_name).name != skill_name:
         raise SkillMaterializationError(
             "invalid_skill_name",
@@ -393,9 +394,10 @@ def _materialize_cache_entry(
             except FileExistsError:
                 deadline = time.monotonic() + _CACHE_READY_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
-                    cache_ready = marker_path.is_file() or (
-                        skill_cache_dir / "SKILL.md"
-                    ).is_file()
+                    cache_ready = (
+                        marker_path.is_file()
+                        or (skill_cache_dir / "SKILL.md").is_file()
+                    )
                     if cache_ready:
                         break
                     time.sleep(_CACHE_READY_POLL_INTERVAL_SECONDS)

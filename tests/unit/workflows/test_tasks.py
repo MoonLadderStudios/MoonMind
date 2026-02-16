@@ -1150,7 +1150,9 @@ def test_is_existing_skills_workspace_valid_requires_resolvable_skill_targets(tm
     assert not tasks._is_existing_skills_workspace_valid(payload)
 
 
-def test_ensure_shared_skills_workspace_rematerializes_invalid_payload(monkeypatch, tmp_path):
+def test_ensure_shared_skills_workspace_rematerializes_invalid_payload(
+    monkeypatch, tmp_path
+):
     run_id = uuid4()
     now = datetime.now(UTC)
     run = models.SpecWorkflowRun(

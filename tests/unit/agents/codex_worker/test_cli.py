@@ -90,7 +90,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         ],
         "ghp-test-token",
     )
-    assert calls[3][:2] == ([ "/usr/bin/gh", "auth", "setup-git"], None)
+    assert calls[3][:2] == (["/usr/bin/gh", "auth", "setup-git"], None)
     assert calls[4][:2] == (
         ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"],
         None,

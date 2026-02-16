@@ -249,7 +249,9 @@ def test_materialize_run_skill_workspace_rejects_tar_path_traversal(tmp_path):
     assert exc.value.code == "unsafe_archive_member"
 
 
-def test_materialize_run_skill_workspace_uses_git_option_separator(tmp_path, monkeypatch):
+def test_materialize_run_skill_workspace_uses_git_option_separator(
+    tmp_path, monkeypatch
+):
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "git"
     commands: list[list[str]] = []
