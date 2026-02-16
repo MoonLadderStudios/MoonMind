@@ -45,4 +45,3 @@ def test_task_router_honors_explicit_queue_override():
     )
 
     assert route == {"queue": "explicit-queue", "routing_key": "explicit-routing"}
-

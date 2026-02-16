@@ -134,7 +134,9 @@ def _enforce_codex_approval_policy() -> Path:
 def _log_codex_cli_version() -> None:
     """Emit a startup log confirming the bundled Codex CLI version."""
 
-    _log_cli_version("codex", label="Codex", failure_message="Codex CLI health check failed")
+    _log_cli_version(
+        "codex", label="Codex", failure_message="Codex CLI health check failed"
+    )
 
 
 def _log_gemini_cli_version() -> None:

@@ -16,7 +16,9 @@ def resolve_worker_runtime(
     """Resolve and validate worker runtime mode from environment."""
 
     env_map = env or os.environ
-    runtime = (env_map.get("MOONMIND_WORKER_RUNTIME") or default_runtime).strip().lower()
+    runtime = (
+        (env_map.get("MOONMIND_WORKER_RUNTIME") or default_runtime).strip().lower()
+    )
     if runtime not in ALLOWED_WORKER_RUNTIMES:
         allowed = ", ".join(sorted(ALLOWED_WORKER_RUNTIMES))
         raise RuntimeError(
@@ -49,4 +51,3 @@ def resolve_worker_queue(
         return celery_default
 
     return default_queue.strip() or "moonmind.jobs"
-
