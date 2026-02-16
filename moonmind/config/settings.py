@@ -292,7 +292,7 @@ class SpecWorkflowSettings(BaseSettings):
         description="Default local skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
-        ".codex/skills/skills",
+        ".agents/skills/skills",
         env="SPEC_SKILLS_LEGACY_MIRROR_ROOT",
         description="Legacy local mirror fallback for backward compatibility.",
     )
