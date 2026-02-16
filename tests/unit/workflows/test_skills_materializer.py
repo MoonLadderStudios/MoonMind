@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from io import BytesIO
-from pathlib import Path
 import socket
 import subprocess
 import tarfile
 import zipfile
+from io import BytesIO
+from pathlib import Path
 
 import pytest
 
 from moonmind.workflows.skills.materializer import (
+    SkillMaterializationError,
     _extract_archive,
     _resolve_source_root,
     _validate_public_remote_host,
-    SkillMaterializationError,
     materialize_run_skill_workspace,
 )
 from moonmind.workflows.skills.resolver import ResolvedSkill, RunSkillSelection

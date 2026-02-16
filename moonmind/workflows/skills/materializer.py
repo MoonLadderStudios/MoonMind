@@ -7,8 +7,8 @@ import ipaddress
 import os
 import shutil
 import socket
-import subprocess
 import stat
+import subprocess
 import tarfile
 import tempfile
 import uuid
@@ -382,9 +382,7 @@ def _materialize_cache_entry(
     *, entry: ResolvedSkill, cache_root: Path
 ) -> MaterializedSkill:
     skill_name = validate_skill_name(entry.skill_name)
-    with tempfile.TemporaryDirectory(
-        prefix=f"skill-{skill_name}-"
-    ) as temp_dir_str:
+    with tempfile.TemporaryDirectory(prefix=f"skill-{skill_name}-") as temp_dir_str:
         temp_dir = Path(temp_dir_str)
         source_root = _resolve_source_root(entry, temp_dir)
         skill_dir = _find_skill_dir(source_root, skill_name=skill_name)

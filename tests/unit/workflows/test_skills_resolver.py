@@ -83,9 +83,7 @@ def test_resolve_run_skill_selection_rejects_duplicates(skills_mirror):
 
 
 @pytest.mark.parametrize("skill_name", ["../evil", "a/b", "a\\b", "..", "bad name"])
-def test_resolve_run_skill_selection_rejects_unsafe_names(
-    skills_mirror, skill_name
-):
+def test_resolve_run_skill_selection_rejects_unsafe_names(skills_mirror, skill_name):
     with pytest.raises(SkillResolutionError, match="Invalid skill name"):
         resolve_run_skill_selection(
             run_id="run-invalid",
