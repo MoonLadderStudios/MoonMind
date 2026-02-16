@@ -30,3 +30,6 @@ var/skill_cache/
 var/skills_workspaces/
 var/security/
 agent_jobs/
+
+# Local saved artifacts
+/Saved/

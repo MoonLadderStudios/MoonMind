@@ -100,7 +100,7 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `SPEC_WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`).
 - `SPEC_WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`).
 - `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (default `speckit`).
-- `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace root used to create shared skill adapters (default `var/skills_workspaces`).
+- `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `SPEC_WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
 - `SPEC_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`).
 - `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/skills`).
 - `SPEC_SKILLS_LEGACY_MIRROR_ROOT` – Legacy mirror fallback for compatibility (default `.codex/skills/skills`).

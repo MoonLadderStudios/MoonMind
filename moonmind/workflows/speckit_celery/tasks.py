@@ -41,6 +41,11 @@ from moonmind.workflows.skills.resolver import (
     resolve_run_skill_selection,
 )
 from moonmind.workflows.skills.runner import execute_stage
+from moonmind.workflows.skills.workspace_links import (
+    SkillWorkspaceError,
+    SkillWorkspaceLinks,
+    validate_shared_skill_links,
+)
 from moonmind.workflows.speckit_celery import celery_app, models
 from moonmind.workflows.speckit_celery.celeryconfig import (
     CODEX_AFFINITY_HEADER,
@@ -1155,6 +1160,60 @@ def _skills_workspace_payload(context: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _shared_skills_failure_details(
+    exc: SkillResolutionError | SkillMaterializationError,
+) -> tuple[str, str]:
+    if isinstance(exc, SkillMaterializationError):
+        code = exc.code
+    else:
+        code = "skill_resolution_failed"
+    return code, f"Shared skills workspace setup failed ({code})."
+
+
+def _is_existing_skills_workspace_valid(workspace_payload: Mapping[str, Any]) -> bool:
+    active_raw = workspace_payload.get("skillsActivePath")
+    agents_raw = workspace_payload.get("agentsSkillsPath")
+    gemini_raw = workspace_payload.get("geminiSkillsPath")
+
+    if not all(
+        isinstance(raw, str) and raw.strip()
+        for raw in (active_raw, agents_raw, gemini_raw)
+    ):
+        return False
+
+    links = SkillWorkspaceLinks(
+        skills_active_path=Path(active_raw),
+        agents_skills_path=Path(agents_raw),
+        gemini_skills_path=Path(gemini_raw),
+    )
+    try:
+        validate_shared_skill_links(links)
+    except SkillWorkspaceError:
+        return False
+
+    skills_raw = workspace_payload.get("skills")
+    if not isinstance(skills_raw, Sequence) or isinstance(
+        skills_raw, (str, bytes, bytearray)
+    ):
+        return True
+
+    for raw_skill in skills_raw:
+        if not isinstance(raw_skill, Mapping):
+            return False
+        skill_name = str(raw_skill.get("name") or "").strip()
+        if not skill_name:
+            return False
+        active_entry = links.skills_active_path / skill_name
+        try:
+            resolved = active_entry.resolve(strict=True)
+        except FileNotFoundError:
+            return False
+        if not resolved.is_dir() or not (resolved / "SKILL.md").is_file():
+            return False
+
+    return True
+
+
 def _ensure_shared_skills_workspace(
     *,
     run: models.SpecWorkflowRun,
@@ -1163,21 +1222,33 @@ def _ensure_shared_skills_workspace(
     """Resolve and materialize the run-scoped shared skills workspace once."""
 
     workspace_payload = context.get("skills_workspace")
-    if isinstance(workspace_payload, Mapping) and workspace_payload.get(
-        "skillsActivePath"
-    ):
-        return
+    if isinstance(workspace_payload, Mapping):
+        if _is_existing_skills_workspace_valid(workspace_payload):
+            return
+        logger.info(
+            "Existing shared skills workspace payload is invalid for run %s; rematerializing",
+            run.id,
+        )
 
     selection = resolve_run_skill_selection(run_id=str(run.id), context=context)
-    repo_root = Path(settings.spec_workflow.repo_root).expanduser()
-    if not repo_root.is_absolute():
-        repo_root = (Path.cwd() / repo_root).resolve()
+    workspace_root = Path(settings.spec_workflow.workspace_root).expanduser()
+    if not workspace_root.is_absolute():
+        workspace_root = (Path.cwd() / workspace_root).resolve()
 
     runs_root = Path(settings.spec_workflow.skills_workspace_root).expanduser()
     if not runs_root.is_absolute():
-        runs_root = (repo_root / runs_root).resolve()
-    run_root = runs_root / str(run.id)
+        runs_root = (workspace_root / runs_root).resolve()
+    run_root = (runs_root / str(run.id)).resolve()
+    if not run_root.is_relative_to(workspace_root.resolve()):
+        raise SkillMaterializationError(
+            "workspace_root_out_of_bounds",
+            "Shared skills workspace root must be within spec workflow workspace_root.",
+        )
     run_root.mkdir(parents=True, exist_ok=True)
+
+    repo_root = Path(settings.spec_workflow.repo_root).expanduser()
+    if not repo_root.is_absolute():
+        repo_root = (Path.cwd() / repo_root).resolve()
     cache_root = Path(settings.spec_workflow.skills_cache_root).expanduser()
     if not cache_root.is_absolute():
         cache_root = (repo_root / cache_root).resolve()
@@ -1489,19 +1560,24 @@ def discover_next_phase(
             await session.commit()
 
             try:
-                _ensure_shared_skills_workspace(run=run, context=stage_context)
+                await asyncio.to_thread(
+                    _ensure_shared_skills_workspace, run=run, context=stage_context
+                )
                 effective_feature = feature_key or run.feature_key
                 tasks_file = _resolve_tasks_file(effective_feature)
                 discovered = _parse_next_task(tasks_file)
             except (SkillResolutionError, SkillMaterializationError) as exc:
+                failure_code, failure_message = _shared_skills_failure_details(exc)
                 logger.warning(
-                    "Shared skill workspace setup failed for run %s: %s", run_id, exc
+                    "Shared skill workspace setup failed for run %s (%s)",
+                    run_id,
+                    failure_code,
                 )
                 await _persist_failure(
                     repo,
                     run_id=run_uuid,
                     task_name=TASK_DISCOVER,
-                    message=str(exc),
+                    message=failure_message,
                     attempt=attempt,
                 )
                 await session.commit()
@@ -1731,13 +1807,21 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             await session.commit()
 
             try:
-                _ensure_shared_skills_workspace(run=run, context=context)
+                await asyncio.to_thread(
+                    _ensure_shared_skills_workspace, run=run, context=context
+                )
             except (SkillResolutionError, SkillMaterializationError) as exc:
+                failure_code, failure_message = _shared_skills_failure_details(exc)
+                logger.warning(
+                    "Shared skill workspace setup failed for run %s (%s)",
+                    context.get("run_id"),
+                    failure_code,
+                )
                 await _persist_failure(
                     repo,
                     run_id=run_uuid,
                     task_name=TASK_SUBMIT,
-                    message=str(exc),
+                    message=failure_message,
                     attempt=attempt,
                 )
                 await session.commit()
@@ -2015,13 +2099,21 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             await session.commit()
 
             try:
-                _ensure_shared_skills_workspace(run=run, context=context)
+                await asyncio.to_thread(
+                    _ensure_shared_skills_workspace, run=run, context=context
+                )
             except (SkillResolutionError, SkillMaterializationError) as exc:
+                failure_code, failure_message = _shared_skills_failure_details(exc)
+                logger.warning(
+                    "Shared skill workspace setup failed for run %s (%s)",
+                    context.get("run_id"),
+                    failure_code,
+                )
                 await _persist_failure(
                     repo,
                     run_id=run_uuid,
                     task_name=TASK_PUBLISH,
-                    message=str(exc),
+                    message=failure_message,
                     attempt=attempt,
                 )
                 await session.commit()

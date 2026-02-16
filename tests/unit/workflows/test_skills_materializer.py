@@ -183,6 +183,46 @@ def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_
     assert not global_codex_config.exists()
 
 
+def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
+    tmp_path, monkeypatch
+):
+    source_root = tmp_path / "source"
+    cache_root = tmp_path / "cache"
+    run_root = tmp_path / "runs" / "cache-incomplete"
+    _make_skill(source_root, "speckit")
+
+    digest_root = cache_root / "fixedhash"
+    incomplete_skill_dir = digest_root / "speckit"
+    incomplete_skill_dir.mkdir(parents=True)
+    (incomplete_skill_dir / "steps.md").write_text("partial", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer._hash_skill_directory",
+        lambda *_args, **_kwargs: "fixedhash",
+    )
+
+    selection = RunSkillSelection(
+        run_id="cache-incomplete",
+        selection_source="job_override",
+        skills=(
+            ResolvedSkill(
+                skill_name="speckit",
+                version="1.0.0",
+                source_uri=(source_root / "speckit").resolve().as_uri(),
+            ),
+        ),
+    )
+
+    with pytest.raises(SkillMaterializationError, match="is incomplete") as exc:
+        materialize_run_skill_workspace(
+            selection=selection,
+            run_root=run_root,
+            cache_root=cache_root,
+        )
+
+    assert exc.value.code == "cache_entry_incomplete"
+
+
 def test_extract_archive_rejects_zip_path_traversal(tmp_path):
     archive = tmp_path / "malicious.zip"
     destination = tmp_path / "extract"

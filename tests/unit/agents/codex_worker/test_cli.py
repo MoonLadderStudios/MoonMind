@@ -106,6 +106,13 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     assert "GITHUB_TOKEN" not in calls[4][2]
     assert "GH_TOKEN" not in calls[4][2]
 
+    for idx in (2, 3, 4):
+        env = calls[idx][2]
+        assert env is not None
+        assert "PATH" in env
+        assert "GITHUB_TOKEN" not in env
+        assert "GH_TOKEN" not in env
+
 
 def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
     """No token should preserve existing codex-only preflight behavior."""
@@ -197,6 +204,34 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
 
     assert token not in str(exc_info.value)
     assert "[REDACTED]" in str(exc_info.value)
+
+
+def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
+    """Subprocess env overrides should preserve base vars while removing keys."""
+
+    observed_env: dict[str, str] | None = None
+
+    def fake_run(command, *args, **kwargs):
+        nonlocal observed_env
+        observed_env = kwargs.get("env")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("MM_KEEP_VAR", "present")
+    monkeypatch.setenv("MM_REMOVE_VAR", "remove-me")
+
+    cli._run_checked_command(
+        ["/usr/bin/echo", "ok"],
+        env_overrides={"MM_KEEP_VAR": "overridden", "MM_NEW_VAR": "new"},
+        unset_env_keys=("MM_REMOVE_VAR",),
+    )
+
+    assert observed_env is not None
+    assert observed_env["MM_KEEP_VAR"] == "overridden"
+    assert "MM_REMOVE_VAR" not in observed_env
+    assert observed_env["MM_NEW_VAR"] == "new"
 
 
 def test_run_preflight_missing_speckit_raises(monkeypatch) -> None:

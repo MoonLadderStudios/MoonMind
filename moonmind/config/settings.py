@@ -277,9 +277,9 @@ class SpecWorkflowSettings(BaseSettings):
         description="Immutable cache root for verified skill artifacts.",
     )
     skills_workspace_root: str = Field(
-        "var/skills_workspaces",
+        "runs",
         env="SPEC_SKILLS_WORKSPACE_ROOT",
-        description="Workspace root for per-run active skills links.",
+        description="Workspace subdirectory (under SPEC_WORKFLOW_WORKSPACE_ROOT) for per-run active skills links.",
     )
     skills_registry_source: Optional[str] = Field(
         None,

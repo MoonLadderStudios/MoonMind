@@ -34,6 +34,10 @@ class SkillMaterializationError(RuntimeError):
         self.code = code
 
 
+_SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+_DOWNLOAD_TIMEOUT_SECONDS = 30
+
+
 @dataclass(frozen=True, slots=True)
 class MaterializedSkill:
     """Materialized skill metadata for one run."""
@@ -122,6 +126,30 @@ def _hash_skill_directory(skill_dir: Path) -> str:
                 digest.update(chunk)
 
     return digest.hexdigest()
+
+
+def _validate_skill_name(skill_name: str) -> None:
+    if not skill_name:
+        raise SkillMaterializationError(
+            "invalid_skill_name", "Skill name cannot be blank"
+        )
+    if Path(skill_name).name != skill_name:
+        raise SkillMaterializationError(
+            "invalid_skill_name",
+            f"Skill name '{skill_name}' is not a safe path component",
+        )
+    if ".." in skill_name:
+        raise SkillMaterializationError(
+            "invalid_skill_name",
+            f"Skill name '{skill_name}' cannot contain '..'",
+        )
+    import re
+
+    if not re.fullmatch(_SKILL_NAME_PATTERN, skill_name):
+        raise SkillMaterializationError(
+            "invalid_skill_name",
+            f"Skill name '{skill_name}' contains unsupported characters",
+        )
 
 
 def _mark_read_only(path: Path) -> None:
@@ -234,7 +262,7 @@ def _download_remote_bundle(source_uri: str, destination: Path) -> Path:
     _validate_public_remote_host(source_uri)
     request = Request(source_uri, method="GET")
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
             final_url = response.geturl()
             _validate_public_remote_host(final_url)
             with destination.open("wb") as output:
@@ -408,6 +436,11 @@ def _materialize_cache_entry(
             except FileExistsError:
                 # Concurrent run already materialized the same digest.
                 shutil.rmtree(staging_dir, ignore_errors=True)
+        if not (skill_cache_dir / "SKILL.md").is_file():
+            raise SkillMaterializationError(
+                "cache_entry_incomplete",
+                f"Cache entry for '{skill_name}:{entry.version}' is incomplete",
+            )
 
     return MaterializedSkill(
         name=skill_name,
@@ -439,6 +472,7 @@ def materialize_run_skill_workspace(
     seen_names: set[str] = set()
 
     for entry in selection.skills:
+        _validate_skill_name(entry.skill_name)
         if entry.skill_name in seen_names:
             raise SkillMaterializationError(
                 "duplicate_skill_name",

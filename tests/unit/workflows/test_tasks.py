@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import celery.app.task as celery_task
@@ -253,7 +254,7 @@ def test_base_context_includes_codex_volume(monkeypatch):
     assert context["codex_volume"] == "codex_auth_primary"
 
 
-def test_submit_codex_job_preflight_failure(monkeypatch):
+def test_submit_codex_job_preflight_failure(monkeypatch, tmp_path):
     """Pre-flight failures should mark the run failed and surface remediation."""
 
     run_id = uuid4()
@@ -354,6 +355,11 @@ def test_submit_codex_job_preflight_failure(monkeypatch):
     monkeypatch.setattr(tasks, "_build_codex_client", fail_if_client_built)
     monkeypatch.setattr(
         tasks.settings.spec_workflow, "codex_volume_name", "codex_auth_0", raising=False
+    )
+    monkeypatch.setattr(
+        tasks,
+        "_ensure_shared_skills_workspace",
+        lambda **_: None,
     )
 
     context = {"run_id": str(run_id), "feature_key": run.feature_key, "task": {}}
@@ -490,6 +496,11 @@ def test_submit_codex_job_preflight_skipped(monkeypatch, tmp_path):
         "codex_auth_default",
         raising=False,
     )
+    monkeypatch.setattr(
+        tasks,
+        "_ensure_shared_skills_workspace",
+        lambda **_: None,
+    )
 
     context = {"run_id": str(run_id), "feature_key": run.feature_key, "task": {}}
 
@@ -625,6 +636,7 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
 
     monkeypatch.setitem(tasks.celery_app.conf, "task_always_eager", True)
     monkeypatch.setitem(tasks.celery_app.conf, "task_eager_propagates", True)
+    monkeypatch.setitem(tasks.celery_app.conf, "result_backend", "cache+memory://")
 
     monkeypatch.setattr(
         tasks,
@@ -659,6 +671,11 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     }
     for key, value in workflow_settings.items():
         monkeypatch.setattr(tasks.settings.spec_workflow, key, value, raising=False)
+    monkeypatch.setattr(
+        tasks,
+        "_ensure_shared_skills_workspace",
+        lambda **_: None,
+    )
 
     async with workflow_db(monkeypatch, tmp_path) as async_session_maker:
         async with async_session_maker() as session:
@@ -758,6 +775,7 @@ async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monke
 
     monkeypatch.setitem(tasks.celery_app.conf, "task_always_eager", True)
     monkeypatch.setitem(tasks.celery_app.conf, "task_eager_propagates", True)
+    monkeypatch.setitem(tasks.celery_app.conf, "result_backend", "cache+memory://")
 
     artifacts_root = tmp_path / "artifacts"
     workflow_settings = {
@@ -771,6 +789,11 @@ async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monke
     }
     for key, value in workflow_settings.items():
         monkeypatch.setattr(tasks.settings.spec_workflow, key, value, raising=False)
+    monkeypatch.setattr(
+        tasks,
+        "_ensure_shared_skills_workspace",
+        lambda **_: None,
+    )
 
     specs_dir = tmp_path / "specs" / TEST_FEATURE_KEY
     specs_dir.mkdir(parents=True)
@@ -1060,8 +1083,14 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(
         tasks.settings.spec_workflow,
+        "workspace_root",
+        str(tmp_path),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
         "skills_workspace_root",
-        str(runs_root),
+        "runs",
         raising=False,
     )
     monkeypatch.setattr(
@@ -1090,3 +1119,129 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
     assert context["agents_skills_path"] == str(workspace_root / ".agents" / "skills")
     assert context["gemini_skills_path"] == str(workspace_root / ".gemini" / "skills")
     assert context["resolved_skills"] == [{"name": "speckit", "version": "local"}]
+
+
+def test_is_existing_skills_workspace_valid_requires_resolvable_skill_targets(tmp_path):
+    run_root = tmp_path / "runs" / "run-1"
+    active = run_root / "skills_active"
+    active.mkdir(parents=True)
+    cache_skill = tmp_path / "cache" / "abc" / "speckit"
+    cache_skill.mkdir(parents=True)
+    (cache_skill / "SKILL.md").write_text("---\nname: speckit\n---\n", encoding="utf-8")
+
+    (active / "speckit").symlink_to(cache_skill)
+    agents = run_root / ".agents" / "skills"
+    agents.parent.mkdir(parents=True)
+    agents.symlink_to(Path("..") / "skills_active")
+    gemini = run_root / ".gemini" / "skills"
+    gemini.parent.mkdir(parents=True)
+    gemini.symlink_to(Path("..") / "skills_active")
+
+    payload = {
+        "skillsActivePath": str(active),
+        "agentsSkillsPath": str(agents),
+        "geminiSkillsPath": str(gemini),
+        "skills": [{"name": "speckit"}],
+    }
+
+    assert tasks._is_existing_skills_workspace_valid(payload)
+
+    (active / "speckit").unlink()
+    assert not tasks._is_existing_skills_workspace_valid(payload)
+
+
+def test_ensure_shared_skills_workspace_rematerializes_invalid_payload(
+    monkeypatch, tmp_path
+):
+    run_id = uuid4()
+    now = datetime.now(UTC)
+    run = models.SpecWorkflowRun(
+        id=run_id,
+        feature_key="016-shared-agent-skills",
+        status=models.SpecWorkflowRunStatus.PENDING,
+        phase=models.SpecWorkflowRunPhase.DISCOVER,
+        artifacts_path=str(tmp_path / "artifacts"),
+        created_at=now,
+        updated_at=now,
+    )
+
+    class DummySelection:
+        def __init__(self) -> None:
+            self.run_id = str(run_id)
+            self.selection_source = "global_default"
+            self.skills = ()
+
+    class DummyWorkspace:
+        def to_payload(self) -> dict[str, object]:
+            workspace_root = tmp_path / "work" / "runs" / str(run_id)
+            return {
+                "runId": str(run_id),
+                "selectionSource": "global_default",
+                "skillsActivePath": str(workspace_root / "skills_active"),
+                "agentsSkillsPath": str(workspace_root / ".agents" / "skills"),
+                "geminiSkillsPath": str(workspace_root / ".gemini" / "skills"),
+                "skills": [],
+            }
+
+    materialize_calls = 0
+
+    def fake_materialize(**_kwargs):
+        nonlocal materialize_calls
+        materialize_calls += 1
+        return DummyWorkspace()
+
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "workspace_root",
+        str(tmp_path / "work"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "skills_workspace_root",
+        "runs",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "repo_root",
+        str(tmp_path),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "skills_cache_root",
+        str(tmp_path / "cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks,
+        "resolve_run_skill_selection",
+        lambda **_: DummySelection(),
+    )
+    monkeypatch.setattr(tasks, "materialize_run_skill_workspace", fake_materialize)
+
+    context: dict[str, object] = {
+        "skills_workspace": {
+            "skillsActivePath": str(tmp_path / "missing" / "skills_active"),
+            "agentsSkillsPath": str(tmp_path / "missing" / ".agents" / "skills"),
+            "geminiSkillsPath": str(tmp_path / "missing" / ".gemini" / "skills"),
+            "skills": [{"name": "speckit"}],
+        }
+    }
+    tasks._ensure_shared_skills_workspace(run=run, context=context)
+
+    assert materialize_calls == 1
+    assert "skills_workspace" in context
+
+
+def test_shared_skills_failure_details_use_error_code_without_leaking_details():
+    code, message = tasks._shared_skills_failure_details(
+        tasks.SkillMaterializationError(
+            "hash_mismatch",
+            "Hash mismatch for git+https://token@example.com/private.git",
+        )
+    )
+
+    assert code == "hash_mismatch"
+    assert "token@" not in message
