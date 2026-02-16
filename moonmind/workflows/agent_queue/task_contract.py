@@ -341,7 +341,6 @@ class CanonicalTaskPayload(BaseModel):
                     or payload.get("runtime")
                 },
             }
-            task_node = payload["task"]
         else:
             task_node = dict(task_node)
             if not task_node.get("instructions"):
@@ -484,6 +483,8 @@ def build_canonical_task_view(
         canonical = model.model_dump(by_alias=True, exclude_none=False)
     elif normalized_type == "codex_exec":
         repository = _clean_optional_str(source.get("repository")) or ""
+        if not repository:
+            raise TaskContractError("repository is required")
         canonical = {
             "repository": repository,
             "targetRuntime": "codex",
@@ -505,6 +506,8 @@ def build_canonical_task_view(
             )
             or ""
         )
+        if not repository:
+            raise TaskContractError("repository is required")
         canonical = {
             "repository": repository,
             "targetRuntime": "codex",
@@ -635,6 +638,7 @@ __all__ = [
     "CANONICAL_TASK_JOB_TYPE",
     "DEFAULT_TASK_RUNTIME",
     "LEGACY_TASK_JOB_TYPES",
+    "SUPPORTED_EXECUTION_RUNTIMES",
     "CanonicalTaskPayload",
     "TaskContractError",
     "build_task_stage_plan",

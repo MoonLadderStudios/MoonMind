@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
 import socket
 from contextlib import suppress
@@ -51,6 +52,8 @@ from moonmind.workflows.skills.workspace_links import (
     ensure_shared_skill_links,
 )
 from moonmind.workflows.speckit_celery.workspace import generate_branch_name
+
+logger = logging.getLogger(__name__)
 
 
 class QueueClientError(RuntimeError):
@@ -535,6 +538,7 @@ class CodexWorker:
                 try:
                     claimed_work = await self.run_once()
                 except Exception:
+                    logger.exception("Unhandled exception in CodexWorker.run_forever")
                     await asyncio.sleep(self._config.poll_interval_ms / 1000.0)
                     continue
                 if claimed_work:
@@ -803,7 +807,16 @@ class CodexWorker:
                 )
         except Exception as exc:
             if staged_artifacts:
-                await self._upload_artifacts(job_id=job.id, artifacts=staged_artifacts)
+                try:
+                    await self._upload_artifacts(
+                        job_id=job.id,
+                        artifacts=staged_artifacts,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Best-effort artifact upload failed during exception path",
+                        exc_info=True,
+                    )
             terminal_error = self._redact_text(str(exc))
             await self._queue_client.fail_job(
                 job_id=job.id,
@@ -1142,8 +1155,9 @@ class CodexWorker:
             }
             if materialized_skill_payload is not None:
                 context_payload["skillsMaterialized"] = materialized_skill_payload
+            redacted_context_payload = self._redact_payload(context_payload)
             task_context_path.write_text(
-                json.dumps(context_payload, indent=2, sort_keys=True) + "\n",
+                json.dumps(redacted_context_payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
 

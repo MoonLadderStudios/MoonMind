@@ -19,6 +19,7 @@ from moonmind.workflows.agent_queue.repositories import (
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (
+    CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
@@ -26,6 +27,8 @@ from moonmind.workflows.agent_queue.task_contract import (
 )
 
 logger = logging.getLogger(__name__)
+_SUPPORTED_QUEUE_JOB_TYPES = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
+_TELEMETRY_EVENT_FETCH_LIMIT = 100000
 
 
 class AgentQueueValidationError(ValueError):
@@ -79,6 +82,7 @@ class QueueMigrationTelemetry:
     failure_counts_by_runtime_stage: list[dict[str, Any]]
     publish_outcomes: dict[str, Any]
     legacy_job_submissions: int
+    events_truncated: bool
 
 
 class AgentQueueService:
@@ -125,6 +129,9 @@ class AgentQueueService:
         candidate_type = job_type.strip()
         if not candidate_type:
             raise AgentQueueValidationError("type must be a non-empty string")
+        if candidate_type not in _SUPPORTED_QUEUE_JOB_TYPES:
+            supported = ", ".join(sorted(_SUPPORTED_QUEUE_JOB_TYPES))
+            raise AgentQueueValidationError(f"type must be one of: {supported}")
         if max_attempts < 1:
             raise AgentQueueValidationError("maxAttempts must be >= 1")
 
@@ -586,7 +593,10 @@ class AgentQueueService:
             if job.type in LEGACY_TASK_JOB_TYPES:
                 legacy_job_submissions += 1
 
-        events_by_job = await self._load_events_by_job(jobs=jobs, since=since)
+        events_by_job, events_truncated = await self._load_events_by_job(
+            jobs=jobs,
+            since=since,
+        )
 
         failure_counts: dict[tuple[str, str], int] = {}
         publish_requested = 0
@@ -647,6 +657,7 @@ class AgentQueueService:
             failure_counts_by_runtime_stage=failure_counts_by_runtime_stage,
             publish_outcomes=publish_outcomes,
             legacy_job_submissions=legacy_job_submissions,
+            events_truncated=events_truncated,
         )
 
     async def require_worker_token(self, token_id: UUID) -> models.AgentWorkerToken:
@@ -685,18 +696,23 @@ class AgentQueueService:
         *,
         jobs: list[models.AgentJob],
         since: datetime,
-    ) -> dict[UUID, list[models.AgentJobEvent]]:
+        event_limit: int = _TELEMETRY_EVENT_FETCH_LIMIT,
+    ) -> tuple[dict[UUID, list[models.AgentJobEvent]], bool]:
         if not jobs:
-            return {}
+            return {}, False
+        fetch_limit = max(1, event_limit)
         events = await self._repository.list_events_for_jobs(
             job_ids=[job.id for job in jobs],
             since=since,
-            limit=100000,
+            limit=fetch_limit + 1,
         )
+        events_truncated = len(events) > fetch_limit
+        if events_truncated:
+            events = events[:fetch_limit]
         grouped: dict[UUID, list[models.AgentJobEvent]] = {}
         for event in events:
             grouped.setdefault(event.job_id, []).append(event)
-        return grouped
+        return grouped, events_truncated
 
     @staticmethod
     def _extract_runtime(payload: dict[str, Any] | None) -> str:
@@ -730,12 +746,12 @@ class AgentQueueService:
             task_publish.get("mode")
             or publish.get("mode")
             or source.get("publishMode")
-            or "branch"
+            or "none"
         )
         mode = str(publish).strip().lower()
         if mode in {"none", "branch", "pr"}:
             return mode
-        return "branch"
+        return "none"
 
     @staticmethod
     def _event_stage_marker(event: models.AgentJobEvent) -> str:

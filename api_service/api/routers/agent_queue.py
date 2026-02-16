@@ -357,6 +357,7 @@ async def migration_telemetry(
         windowHours=snapshot.window_hours,
         totalJobs=snapshot.total_jobs,
         legacyJobSubmissions=snapshot.legacy_job_submissions,
+        eventsTruncated=snapshot.events_truncated,
         jobVolumeByType=snapshot.job_volume_by_type,
         failureCountsByRuntimeStage=snapshot.failure_counts_by_runtime_stage,
         publishOutcomes=snapshot.publish_outcomes,

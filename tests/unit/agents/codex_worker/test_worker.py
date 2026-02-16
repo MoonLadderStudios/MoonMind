@@ -74,6 +74,13 @@ class FakeQueueClient:
         )
 
 
+class FailingUploadQueueClient(FakeQueueClient):
+    """Queue client stub that simulates artifact upload failures."""
+
+    async def upload_artifact(self, *, job_id, worker_id, artifact):
+        raise RuntimeError("artifact upload failed")
+
+
 class FakeHandler:
     """Handler stub returning configured results."""
 
@@ -211,6 +218,81 @@ async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     assert "patches/changes.patch" not in queue.uploaded
     assert len(queue.completed) == 1
     assert queue.failed == []
+
+
+async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
+    tmp_path: Path,
+) -> None:
+    """Exception path should fail the job even when artifact upload retry errors."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="codex_exec",
+        payload={"repository": "a/b", "instruction": "run"},
+    )
+    queue = FailingUploadQueueClient(jobs=[job])
+    handler = FakeHandler(RuntimeError("execute exploded"))
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.failed) == 1
+    assert "execute exploded" in queue.failed[0]
+    assert queue.completed == []
+
+
+async def test_run_once_redacts_task_context_payload(tmp_path: Path, monkeypatch) -> None:
+    """task_context.json should redact secret values from job-derived payloads."""
+
+    secret_value = "super-secret-token-value"
+    monkeypatch.setenv("MOONMIND_TEST_TOKEN", secret_value)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "a/b",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "speckit", "args": {"api_token": secret_value}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    task_context_content = task_context_path.read_text(encoding="utf-8")
+
+    assert processed is True
+    assert secret_value not in task_context_content
+    assert "[REDACTED]" in task_context_content
 
 
 async def test_run_once_unsupported_type_fails_job(tmp_path: Path) -> None:

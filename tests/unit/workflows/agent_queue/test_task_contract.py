@@ -124,6 +124,16 @@ def test_normalize_legacy_exec_payload_adds_task_contract_fields() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
+def test_normalize_legacy_exec_payload_requires_repository() -> None:
+    """Legacy codex_exec payloads must include repository for worker compatibility."""
+
+    with pytest.raises(TaskContractError, match="repository is required"):
+        normalize_queue_job_payload(
+            job_type="codex_exec",
+            payload={"instruction": "Run tests"},
+        )
+
+
 def test_build_canonical_view_for_skill_payload_sets_skill_id() -> None:
     """Compatibility view should expose concrete skill id for legacy codex_skill jobs."""
 
@@ -139,6 +149,16 @@ def test_build_canonical_view_for_skill_payload_sets_skill_id() -> None:
     assert canonical["task"]["skill"]["id"] == "speckit"
     assert canonical["task"]["instructions"] == "Run"
     assert canonical["targetRuntime"] == "codex"
+
+
+def test_build_canonical_view_for_skill_payload_requires_repository() -> None:
+    """Legacy codex_skill payloads must include repo/repository in inputs or top level."""
+
+    with pytest.raises(TaskContractError, match="repository is required"):
+        build_canonical_task_view(
+            job_type="codex_skill",
+            payload={"skillId": "speckit", "inputs": {"instruction": "Run"}},
+        )
 
 
 def test_task_stage_plan_includes_publish_only_when_enabled() -> None:

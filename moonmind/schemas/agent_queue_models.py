@@ -240,6 +240,7 @@ class MigrationTelemetryResponse(BaseModel):
     window_hours: int = Field(..., alias="windowHours")
     total_jobs: int = Field(..., alias="totalJobs")
     legacy_job_submissions: int = Field(..., alias="legacyJobSubmissions")
+    events_truncated: bool = Field(..., alias="eventsTruncated")
     job_volume_by_type: dict[str, int] = Field(..., alias="jobVolumeByType")
     failure_counts_by_runtime_stage: list[MigrationFailureBucketModel] = Field(
         default_factory=list,
