@@ -204,3 +204,49 @@ class WorkerTokenListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[WorkerTokenModel] = Field(default_factory=list, alias="items")
+
+
+class MigrationFailureBucketModel(BaseModel):
+    """Failure count grouped by runtime and stage."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    runtime: str = Field(..., alias="runtime")
+    stage: str = Field(..., alias="stage")
+    count: int = Field(..., alias="count")
+
+
+class MigrationPublishOutcomesModel(BaseModel):
+    """Publish outcome totals and rates for task migration telemetry."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    requested: int = Field(..., alias="requested")
+    published: int = Field(..., alias="published")
+    skipped: int = Field(..., alias="skipped")
+    failed: int = Field(..., alias="failed")
+    unknown: int = Field(..., alias="unknown")
+    published_rate: float = Field(..., alias="publishedRate")
+    skipped_rate: float = Field(..., alias="skippedRate")
+    failed_rate: float = Field(..., alias="failedRate")
+
+
+class MigrationTelemetryResponse(BaseModel):
+    """Queue migration telemetry summary response."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    generated_at: datetime = Field(..., alias="generatedAt")
+    window_hours: int = Field(..., alias="windowHours")
+    total_jobs: int = Field(..., alias="totalJobs")
+    legacy_job_submissions: int = Field(..., alias="legacyJobSubmissions")
+    events_truncated: bool = Field(..., alias="eventsTruncated")
+    job_volume_by_type: dict[str, int] = Field(..., alias="jobVolumeByType")
+    failure_counts_by_runtime_stage: list[MigrationFailureBucketModel] = Field(
+        default_factory=list,
+        alias="failureCountsByRuntimeStage",
+    )
+    publish_outcomes: MigrationPublishOutcomesModel = Field(
+        ...,
+        alias="publishOutcomes",
+    )

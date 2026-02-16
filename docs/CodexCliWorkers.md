@@ -188,18 +188,19 @@ For the remote queue worker path (`/api/queue/*`), the worker daemon now support
 - `MOONMIND_WORKER_TOKEN` sent as `X-MoonMind-Worker-Token` for dedicated worker-token auth.
 - `MOONMIND_WORKER_CAPABILITIES` (comma-separated) forwarded in claim requests as `workerCapabilities`.
 - Lifecycle event emission to `POST /api/queue/jobs/{jobId}/events` for polling-based progress visibility.
-- Task payload-level Codex runtime overrides via `payload.codex.model` and `payload.codex.effort`.
+- Canonical Task jobs (`type="task"`) with runtime overrides via `payload.task.runtime.model` and `payload.task.runtime.effort`.
+- Legacy `codex_exec` / `codex_skill` acceptance only as migration compatibility.
 
 ## 9. Task-Level Codex Overrides
 
 Queue task payloads should be capable of specifying a per-task Codex runtime override object:
 
-- `payload.codex.model` (string, optional)
-- `payload.codex.effort` (string, optional)
+- `payload.task.runtime.model` (string, optional)
+- `payload.task.runtime.effort` (string, optional)
 
-This contract applies to both `codex_exec` and `codex_skill` jobs and should use the following precedence:
+This contract applies to canonical `type="task"` queue jobs (with temporary legacy shims still supported during migration) and uses the following precedence:
 
-1. Task payload override (`payload.codex.*`)
+1. Task payload override (`payload.task.runtime.*`)
 2. Worker defaults (`MOONMIND_CODEX_MODEL`/`MOONMIND_CODEX_EFFORT`, or `CODEX_MODEL`/`CODEX_MODEL_REASONING_EFFORT`)
 3. Codex CLI built-in defaults
 

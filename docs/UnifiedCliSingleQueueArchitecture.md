@@ -2,7 +2,7 @@
 
 Status: Proposed  
 Owners: MoonMind Eng  
-Last Updated: February 16, 2026
+Last Updated: 2026-02-16
 
 ## 1. Summary
 
@@ -10,66 +10,56 @@ This design unifies MoonMind worker execution around:
 
 - One shared worker image that includes `codex`, `gemini`, `claude`, and `speckit`.
 - One RabbitMQ queue for AI execution jobs (`moonmind.jobs`).
-- Runtime selection through environment (`MOONMIND_WORKER_RUNTIME`) instead of queue-level routing.
-- A runtime-neutral job contract so any worker can execute any job without requeue thrash.
+- Runtime selection through environment (`MOONMIND_WORKER_RUNTIME`) plus per-job target runtime.
+- Canonical `type="task"` queue payloads that are runtime-neutral and policy-safe.
+- Automatic pre/execute/publish wrapper stages for each claimed Task.
 
-Key requirement: `speckit` remains bundled in the same Docker image as the other CLIs, not as a separate image or install path.
+Key requirement: `speckit` remains bundled in the same Docker image as the other CLIs.
 
 ## 2. Current State (Repo-Scoped)
 
-Current MoonMind deployment is split by runtime/queue:
+Current deployment still contains runtime-specific routing and legacy queue payload types (`codex_exec`, `codex_skill`) in some docs and workers.
 
-- `docker-compose.yaml` defines separate worker services and queues (`speckit`, `codex`, `gemini`).
-- `api_service/Dockerfile` already bundles `codex`, `gemini`, and `speckit`.
-- No Claude Code CLI install path exists yet in the shared runtime image.
-
-This causes operational complexity when scaling mixed fleets and adds queue-routing maintenance overhead.
+This adds operational complexity and blocks a consistent typed Task UI contract.
 
 ## 3. Goals
 
 - Keep a single queue for worker jobs.
 - Allow runtime mode selection by `.env` per worker container.
-- Make job payloads portable across runtimes by default.
 - Keep one base image for all AI CLIs plus `speckit`.
-- Preserve non-interactive automation and existing artifact persistence patterns.
+- Execute canonical Task jobs across runtimes with capability matching.
+- Preserve compatibility with legacy job types during migration.
 
 ## 4. Non-Goals
 
 - Replacing Celery, RabbitMQ, or PostgreSQL.
 - Changing Spec Kit workflow semantics (`specify/plan/tasks/analyze/implement`).
-- Forcing targeted-runtime routing for all jobs.
+- Guaranteeing identical output across all runtime adapters.
 
 ## 5. Architecture Decisions
 
 ### 5.1 Single Shared Worker Image
 
-Use `api_service/Dockerfile` as the single build source for API and worker services.  
-Extend current CLI tooling stage to also install Claude Code CLI with pinned version args.
-
-Required CLIs in one image:
+Use `api_service/Dockerfile` as the build source for API and worker services. Required CLIs in one image:
 
 - `codex`
 - `gemini`
 - `claude`
 - `speckit`
 
-Constraint:
-
-- `speckit` installation remains in this Dockerfile and is never split into a second image.
-
 ### 5.2 Single Queue
 
-Define one default queue for runtime-neutral jobs:
+Use one default queue:
 
 - `MOONMIND_QUEUE=moonmind.jobs`
 
-Celery config target:
+Celery target:
 
 - `task_default_queue = "moonmind.jobs"`
 - `worker_prefetch_multiplier = 1`
 - `task_acks_late = true`
 
-Dedicated runtime queues (`codex`, `gemini`) are deprecated after migration.
+Runtime-specific queues are deprecated after migration.
 
 ### 5.3 Runtime Mode via Environment
 
@@ -79,153 +69,153 @@ Each worker service selects behavior with:
 
 Interpretation:
 
-- `codex`, `gemini`, `claude`: default runner for claimed jobs.
-- `universal`: can dispatch per job using optional target runtime metadata.
+- `codex`, `gemini`, `claude`: execute only matching runtime Tasks.
+- `universal`: can execute any runtime, honoring `payload.targetRuntime`.
 
-### 5.4 Runtime-Neutral Job Contract
+### 5.4 Canonical Task Contract
 
-All jobs published to `moonmind.jobs` must be runtime-agnostic by default:
+New queue submissions should use:
 
-- describe objective, repo/ref, constraints, artifacts, and limits.
-- avoid provider-specific command fields in the base payload.
+- `type = "task"`
+- `payload` matching `docs/TaskArchitecture.md`
 
-Optional targeted execution (only when needed):
+Top-level policy fields:
 
-- `task.target_runtime` in payload.
-- honored only by `universal` mode workers.
+- `repository`
+- `requiredCapabilities`
+- `targetRuntime`
+- `auth` (optional secret references only: `repoAuthRef`, `publishAuthRef`)
+- `task` object (`instructions`, `skill`, `runtime`, `git`, `publish`)
+
+### 5.5 Capability Matching
+
+Before claim/execution, workers enforce capability eligibility:
+
+- include runtime capability (`codex` | `gemini` | `claude`)
+- include `git` for all Tasks
+- include `gh` when `publish.mode = pr`
+- include skill-required extras when applicable
+
+Workers advertise capabilities through worker token policy and/or runtime config.
 
 ## 6. Detailed Design
 
-### 6.1 Dockerfile Changes
+### 6.1 Worker Boot Mode
 
-File: `api_service/Dockerfile`
+Startup path must:
 
-Add:
-
-- build arg for Claude CLI version (for example `CLAUDE_CLI_VERSION`).
-- install branch with fallback stub pattern matching existing Codex/Gemini/Speckit strategy.
-- runtime copy/chmod/version checks for `claude`.
-
-Keep:
-
-- existing global install and verification for `speckit`.
-- existing behavior where missing registries can fall back to explicit stub binaries.
-
-Outcome:
-
-- one reproducible worker image for all runtimes and `speckit`.
-
-### 6.2 Worker Boot Mode
-
-Introduce runtime selector in worker startup path (entrypoint or worker bootstrap module):
-
-- read `MOONMIND_WORKER_RUNTIME`.
-- map to selected runner implementation.
-- fail fast on invalid mode values.
+- read `MOONMIND_WORKER_RUNTIME`
+- fail fast on invalid mode
+- register runtime/capability metadata for claim filtering
 
 Runner abstraction:
 
-- `IRunner.execute(job) -> RunResult`
+- `IRunner.execute(task_context) -> RunResult`
 - `CodexRunner`
 - `GeminiRunner`
 - `ClaudeRunner`
-- `UniversalRunner` (delegates to one of the above when target runtime is provided)
+- `UniversalRunner`
 
-### 6.3 Queue and Task Routing
+### 6.2 Wrapper Stage Plan (Per Task)
 
-Update Celery configuration under `moonmind/workflows/speckit_celery/` so producer and workers share:
+Each claimed Task executes the same stage plan:
 
-- queue name: `moonmind.jobs`
-- no runtime-specific task routes
+1. `moonmind.task.prepare`
+2. `moonmind.task.execute`
+3. `moonmind.task.publish` (when `publish.mode != none`)
 
-Existing orchestration task chains remain; only queue/routing policy changes.
+Required prepare behavior:
+
+- isolate workspace (`repo/`, `home/`, `skills_active/`, `artifacts/`)
+- materialize `.agents/skills -> skills_active`
+- materialize `.gemini/skills -> skills_active`
+- resolve default branch and effective working branch
+- emit `task_context.json`
+
+Required execute behavior:
+
+- run selected adapter/runtime
+- apply selected skill when `skill.id != auto`
+- capture stdout/stderr logs
+- emit patch artifact when changes exist
+
+Required publish behavior:
+
+- deterministic commit/push/PR logic owned by system stage
+
+### 6.3 Runtime Override Precedence
+
+Per-task runtime config precedence:
+
+1. `task.runtime.model`, `task.runtime.effort`
+2. worker defaults (`MOONMIND_*` env/config)
+3. CLI defaults
 
 ### 6.4 Compose Topology
 
-File: `docker-compose.yaml`
+Target topology in `docker-compose.yaml`:
 
-Target topology:
+- one image build (`api_service/Dockerfile`)
+- worker services differ by env values and scaling
+- all subscribe to `moonmind.jobs`
 
-- keep one image build (`api_service/Dockerfile`).
-- worker services differ only by env values and scaling.
-- all worker services subscribe to `moonmind.jobs`.
+Supported modes:
 
-Two supported deployment modes:
-
-1. Homogeneous fleet (`MOONMIND_WORKER_RUNTIME=codex` for all worker replicas).
-2. Mixed fleet (`codex`, `gemini`, `claude`, and optional `universal` services together).
-
-### 6.5 Auth and Secrets
-
-Do not bake credentials into the image.
-
-Mount runtime-specific auth/config volumes:
-
-- Codex config directory
-- Gemini config directory
-- Claude config directory
-
-Or provide secrets through env at runtime:
-
-- `OPENAI_*`
-- `GOOGLE_*`
-- `ANTHROPIC_*`
+1. Homogeneous fleet (`MOONMIND_WORKER_RUNTIME=codex` on all replicas)
+2. Mixed fleet (`codex`, `gemini`, `claude`, optional `universal`)
 
 ## 7. Migration Plan
 
-### Phase 1: Image Unification
+### Phase 1: Image and Runtime Unification
 
-- Add Claude CLI installation path to `api_service/Dockerfile`.
-- Keep `speckit` in the same Dockerfile.
-- Validate startup probes for all four CLIs.
+- keep `speckit` in shared image
+- ensure `codex`, `gemini`, `claude`, `speckit` health checks
 
-### Phase 2: Runtime-Neutral Contract
+### Phase 2: Canonical Task Payload
 
-- Introduce provider-neutral job payload schema.
-- Implement runner abstraction and runtime selection by env.
+- update UI and producer paths to submit `type="task"`
+- derive capabilities and target runtime into top-level payload fields
 
 ### Phase 3: Queue Consolidation
 
-- Switch workers to `moonmind.jobs`.
-- Remove runtime-specific queue bindings from compose/config.
-- Keep compatibility shim for legacy queued jobs during rollout window.
+- switch workers to `moonmind.jobs`
+- remove runtime-specific queue routes
+- keep compatibility handlers for `codex_exec` and `codex_skill`
 
-### Phase 4: Cleanup
+### Phase 4: Legacy Deprecation
 
-- Retire deprecated queue env vars (`SPEC_WORKFLOW_CODEX_QUEUE`, `GEMINI_CELERY_QUEUE`) after stable cutover.
+- retire legacy payload submission paths
+- keep compatibility shims internal until all producers are migrated
 
 ## 8. Observability and Operations
 
-Required telemetry additions:
+Required telemetry:
 
-- job count/latency by selected runtime
-- runner failures by error class
-- queue wait time and execution duration
-- fallback/stub CLI detection at startup
+- queue wait and execution duration by runtime
+- stage-level duration (`prepare`, `execute`, `publish`)
+- claim rejections by missing capability
+- publish outcomes (branch push / PR create / no changes)
 
-Required startup checks:
+Required artifacts:
 
-- `codex --version`
-- `gemini --version`
-- `claude --version`
-- `speckit --version`
+- `logs/prepare.log`
+- `logs/execute.log`
+- `logs/publish.log` (when publish enabled)
+- `patches/changes.patch`
+- `task_context.json`
+- `publish_result.json` (when publish enabled)
 
-Workers should not accept jobs when required CLIs are missing or unhealthy.
+## 9. Acceptance Criteria
 
-## 9. Risks and Mitigations
+- Single image from `api_service/Dockerfile` contains `codex`, `gemini`, `claude`, `speckit`.
+- Workers are selectable through `MOONMIND_WORKER_RUNTIME` only.
+- Queue jobs submitted from Task UI use `type="task"` and canonical payload shape.
+- `prepare -> execute -> publish` events appear for Task jobs.
+- Legacy `codex_exec`/`codex_skill` jobs still execute during migration window.
 
-- CLI package naming/version drift:
-  - Mitigation: pin versions, enforce build-time checks, document fallback stubs.
-- Runtime behavior drift for identical jobs:
-  - Mitigation: shared runner contract and normalized artifact schema.
-- Queue cutover regressions:
-  - Mitigation: phased rollout with temporary compatibility routing.
+## 10. References
 
-## 10. Acceptance Criteria
-
-- A single Docker image built from `api_service/Dockerfile` contains `codex`, `gemini`, `claude`, and `speckit`.
-- `speckit` is not installed via a separate image pipeline.
-- Workers can be switched between runtime modes using only `.env`.
-- All AI jobs are consumable from one queue (`moonmind.jobs`) without requeue thrash.
-- Mixed-runtime and homogeneous fleets both operate with the same queue and job schema.
-
+- `docs/TaskArchitecture.md`
+- `docs/CodexTaskQueue.md`
+- `docs/WorkerGitAuth.md`
+- `docs/SecretStore.md`

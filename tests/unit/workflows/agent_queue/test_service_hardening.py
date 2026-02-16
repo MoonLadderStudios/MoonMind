@@ -16,6 +16,7 @@ from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueService,
+    AgentQueueValidationError,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
@@ -92,12 +93,13 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
             )
             job = await service.create_job(
                 job_type="codex_exec",
-                payload={"instruction": "run"},
+                payload={"repository": "Moon/Mind", "instruction": "run"},
                 max_attempts=2,
             )
             await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
+                worker_capabilities=["codex", "git"],
             )
 
             first = await service.fail_job(
@@ -113,7 +115,11 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
             first.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
             await repo.commit()
 
-            await service.claim_job(worker_id="executor-01", lease_seconds=30)
+            await service.claim_job(
+                worker_id="executor-01",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
             second = await service.fail_job(
                 job_id=job.id,
                 worker_id="executor-01",
@@ -134,7 +140,7 @@ async def test_append_and_list_events_with_after_cursor(tmp_path: Path) -> None:
             service = AgentQueueService(repo)
             job = await service.create_job(
                 job_type="codex_exec",
-                payload={"instruction": "run"},
+                payload={"repository": "Moon/Mind", "instruction": "run"},
             )
             first = await service.append_event(
                 job_id=job.id,
@@ -151,3 +157,269 @@ async def test_append_and_list_events_with_after_cursor(tmp_path: Path) -> None:
 
     assert len(events) == 1
     assert events[0].id == second.id
+
+
+async def test_create_task_job_derives_runtime_capabilities(tmp_path: Path) -> None:
+    """Canonical task jobs should derive required capabilities automatically."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "skill": {"id": "auto", "args": {}},
+                        "runtime": {"mode": "codex", "model": None, "effort": None},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "pr", "prBaseBranch": "main"},
+                    },
+                },
+            )
+
+    assert job.payload["targetRuntime"] == "codex"
+    assert job.payload["task"]["runtime"]["mode"] == "codex"
+    assert job.payload["requiredCapabilities"] == ["codex", "git", "gh"]
+
+
+async def test_create_task_job_preserves_auth_secret_refs(tmp_path: Path) -> None:
+    """Task creation should keep validated auth refs without raw tokens."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "auth": {
+                        "repoAuthRef": "vault://kv/moonmind/repos/Moon/Mind#github_token",
+                        "publishAuthRef": "vault://kv/moonmind/repos/Moon/Mind#publish_token",
+                    },
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "branch"},
+                    },
+                },
+            )
+
+    assert job.payload["auth"]["repoAuthRef"] == (
+        "vault://kv/moonmind/repos/Moon/Mind#github_token"
+    )
+    assert job.payload["auth"]["publishAuthRef"] == (
+        "vault://kv/moonmind/repos/Moon/Mind#publish_token"
+    )
+
+
+async def test_create_task_job_rejects_missing_instructions(tmp_path: Path) -> None:
+    """Canonical task jobs should fail fast when instructions are missing."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            with pytest.raises(AgentQueueValidationError, match="task.instructions"):
+                await service.create_job(
+                    job_type="task",
+                    payload={
+                        "repository": "Moon/Mind",
+                        "task": {
+                            "skill": {"id": "auto", "args": {}},
+                            "runtime": {"mode": "codex"},
+                            "git": {"startingBranch": None, "newBranch": None},
+                            "publish": {"mode": "branch"},
+                        },
+                    },
+                )
+
+
+async def test_create_job_rejects_unsupported_job_type(tmp_path: Path) -> None:
+    """Queue API should reject job types that workers will never claim."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="type must be one of",
+            ):
+                await service.create_job(
+                    job_type="unsupported_type",
+                    payload={
+                        "repository": "Moon/Mind",
+                        "task": {"instructions": "Run"},
+                    },
+                )
+
+
+async def test_create_legacy_exec_job_requires_repository(tmp_path: Path) -> None:
+    """Legacy codex_exec submissions should fail fast without repository."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="repository is required",
+            ):
+                await service.create_job(
+                    job_type="codex_exec",
+                    payload={"instruction": "Run legacy path"},
+                )
+
+
+async def test_create_legacy_skill_job_is_enriched_with_task_contract(
+    tmp_path: Path,
+) -> None:
+    """Legacy codex_skill jobs should be enriched with canonical task metadata."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="codex_skill",
+                payload={
+                    "skillId": "speckit",
+                    "inputs": {"repo": "Moon/Mind", "instruction": "Run"},
+                    "publishMode": "none",
+                },
+            )
+
+    assert job.payload["repository"] == "Moon/Mind"
+    assert job.payload["targetRuntime"] == "codex"
+    assert job.payload["task"]["skill"]["id"] == "speckit"
+    assert "codex" in job.payload["requiredCapabilities"]
+    assert "git" in job.payload["requiredCapabilities"]
+
+
+async def test_create_legacy_job_records_warning_event(tmp_path: Path) -> None:
+    """Legacy submissions should emit migration warnings for rollout telemetry."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={
+                    "repository": "Moon/Mind",
+                    "instruction": "Run legacy path",
+                    "publish": {"mode": "none"},
+                },
+            )
+            events = await service.list_events(job_id=job.id, limit=20)
+
+    warning = next(
+        (
+            event
+            for event in events
+            if event.message == "Legacy job type submitted"
+            and event.level is models.AgentJobEventLevel.WARN
+        ),
+        None,
+    )
+    assert warning is not None
+
+
+async def test_migration_telemetry_reports_volume_and_legacy_counts(
+    tmp_path: Path,
+) -> None:
+    """Migration telemetry should report job-type volumes and legacy submission totals."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "skill": {"id": "auto", "args": {}},
+                        "runtime": {"mode": "codex", "model": None, "effort": None},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "branch"},
+                    },
+                },
+            )
+            await service.create_job(
+                job_type="codex_exec",
+                payload={
+                    "repository": "Moon/Mind",
+                    "instruction": "Run legacy path",
+                    "publish": {"mode": "none"},
+                },
+            )
+            telemetry = await service.get_migration_telemetry(
+                window_hours=24,
+                limit=100,
+            )
+
+    assert telemetry.total_jobs >= 2
+    assert telemetry.job_volume_by_type.get("task", 0) >= 1
+    assert telemetry.job_volume_by_type.get("codex_exec", 0) >= 1
+    assert telemetry.legacy_job_submissions >= 1
+    assert telemetry.events_truncated is False
+    assert "publishedRate" in telemetry.publish_outcomes
+
+
+async def test_extract_publish_mode_defaults_to_none_when_absent() -> None:
+    """Telemetry parser should not count missing publish metadata as requested."""
+
+    assert AgentQueueService._extract_publish_mode({}) == "none"
+    assert (
+        AgentQueueService._extract_publish_mode(
+            {"task": {"publish": {"mode": "branch"}}}
+        )
+        == "branch"
+    )
+
+
+async def test_load_events_by_job_sets_truncation_flag(tmp_path: Path) -> None:
+    """Event-loader should flag telemetry truncation when limit is exceeded."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+            await service.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="first",
+            )
+            await service.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="second",
+            )
+
+            events_by_job, events_truncated = await service._load_events_by_job(
+                jobs=[job],
+                since=datetime.now(UTC) - timedelta(hours=1),
+                event_limit=1,
+            )
+
+    assert events_truncated is True
+    assert len(events_by_job.get(job.id, [])) == 1

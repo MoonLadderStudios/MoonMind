@@ -210,6 +210,45 @@ def test_get_job_not_found_returns_404(client: tuple[TestClient, AsyncMock]) -> 
     assert response.json()["detail"]["code"] == "job_not_found"
 
 
+def test_migration_telemetry_returns_summary(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Migration telemetry endpoint should return aggregated rollout metrics."""
+
+    test_client, service = client
+    service.get_migration_telemetry.return_value = SimpleNamespace(
+        generated_at=datetime.now(UTC),
+        window_hours=168,
+        total_jobs=12,
+        legacy_job_submissions=3,
+        events_truncated=False,
+        job_volume_by_type={"task": 9, "codex_exec": 3},
+        failure_counts_by_runtime_stage=[
+            {"runtime": "codex", "stage": "execute", "count": 2}
+        ],
+        publish_outcomes={
+            "requested": 5,
+            "published": 3,
+            "skipped": 1,
+            "failed": 1,
+            "unknown": 0,
+            "publishedRate": 0.6,
+            "skippedRate": 0.2,
+            "failedRate": 0.2,
+        },
+    )
+
+    response = test_client.get("/api/queue/telemetry/migration?windowHours=168")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["totalJobs"] == 12
+    assert payload["legacyJobSubmissions"] == 3
+    assert payload["eventsTruncated"] is False
+    assert payload["jobVolumeByType"]["task"] == 9
+    assert payload["publishOutcomes"]["publishedRate"] == 0.6
+
+
 def test_complete_job_state_conflict_maps_409(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

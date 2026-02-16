@@ -502,12 +502,21 @@ class CodexExecHandler:
         cwd: Path,
         log_path: Path,
         check: bool = True,
+        env: Mapping[str, str] | None = None,
+        redaction_values: tuple[str, ...] = (),
     ) -> CommandResult:
-        self._append_log(log_path, self._redact_text(f"$ {' '.join(command)}"))
+        self._append_log(
+            log_path,
+            self._redact_text(
+                f"$ {' '.join(command)}",
+                extra_redaction_values=redaction_values,
+            ),
+        )
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(cwd),
+                env=dict(env) if env is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -521,9 +530,21 @@ class CodexExecHandler:
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 
         if stdout:
-            self._append_log(log_path, self._redact_text(stdout.rstrip("\n")))
+            self._append_log(
+                log_path,
+                self._redact_text(
+                    stdout.rstrip("\n"),
+                    extra_redaction_values=redaction_values,
+                ),
+            )
         if stderr:
-            self._append_log(log_path, self._redact_text(stderr.rstrip("\n")))
+            self._append_log(
+                log_path,
+                self._redact_text(
+                    stderr.rstrip("\n"),
+                    extra_redaction_values=redaction_values,
+                ),
+            )
 
         result = CommandResult(
             command=tuple(command),
@@ -535,7 +556,9 @@ class CodexExecHandler:
             detail = (stderr or stdout).strip()
             if detail:
                 tail_line = detail.splitlines()[-1]
-                redacted_tail = self._redact_text(tail_line)
+                redacted_tail = self._redact_text(
+                    tail_line, extra_redaction_values=redaction_values
+                )
                 raise CodexWorkerHandlerError(
                     f"command failed ({result.returncode}): {' '.join(command)} | {redacted_tail}"
                 )
@@ -591,9 +614,23 @@ class CodexExecHandler:
             return configured
         return "workspace-write"
 
-    def _redact_text(self, text: str) -> str:
+    def _redact_text(
+        self,
+        text: str,
+        *,
+        extra_redaction_values: tuple[str, ...] = (),
+    ) -> str:
         redacted = text
-        for value in self._redaction_values:
+        values = tuple(
+            dict.fromkeys(
+                [
+                    item
+                    for item in (*self._redaction_values, *extra_redaction_values)
+                    if item
+                ]
+            )
+        )
+        for value in values:
             redacted = redacted.replace(value, "[REDACTED]")
         return redacted
 

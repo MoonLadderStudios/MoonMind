@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from typing import Any
 
@@ -14,6 +15,7 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "universal")
+_SUPPORTED_TASK_RUNTIMES = ("codex", "gemini", "claude")
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "queue": {
@@ -83,6 +85,15 @@ def status_maps() -> dict[str, dict[str, str]]:
 def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
 
+    configured_runtime = (
+        str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower()
+    )
+    default_task_runtime = (
+        configured_runtime
+        if configured_runtime in _SUPPORTED_TASK_RUNTIMES
+        else "codex"
+    )
+
     return {
         "initialPath": initial_path,
         "pollIntervalsMs": {
@@ -99,6 +110,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "events": "/api/queue/jobs/{id}/events",
                 "artifacts": "/api/queue/jobs/{id}/artifacts",
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
+                "migrationTelemetry": "/api/queue/telemetry/migration",
             },
             "speckit": {
                 "list": "/api/workflows/speckit/runs",
@@ -119,8 +131,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         "system": {
             "defaultQueue": settings.spec_workflow.codex_queue
             or settings.celery.default_queue,
+            "defaultRepository": settings.spec_workflow.github_repository,
+            "defaultTaskRuntime": default_task_runtime,
             "queueEnv": "MOONMIND_QUEUE",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
+            "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
         },
     }

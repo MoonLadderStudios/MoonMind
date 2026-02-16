@@ -11,6 +11,9 @@
     detail: 2000,
     events: 1000,
   };
+  const sourceConfig = config.sources || {};
+  const queueSourceConfig =
+    sourceConfig.queue && typeof sourceConfig.queue === "object" ? sourceConfig.queue : {};
   const systemConfig = config.system || {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
   const supportedWorkerRuntimes =
@@ -18,6 +21,27 @@
     systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
       : ["codex", "gemini", "claude", "universal"];
+  const configuredTaskRuntimes =
+    Array.isArray(systemConfig.supportedTaskRuntimes) &&
+    systemConfig.supportedTaskRuntimes.length > 0
+      ? systemConfig.supportedTaskRuntimes
+      : [];
+  const inferredTaskRuntimes = supportedWorkerRuntimes.filter(
+    (runtime) => runtime !== "universal",
+  );
+  const supportedTaskRuntimes =
+    configuredTaskRuntimes.length > 0
+      ? configuredTaskRuntimes
+      : inferredTaskRuntimes.length > 0
+        ? inferredTaskRuntimes
+        : ["codex", "gemini", "claude"];
+  const defaultTaskRuntime =
+    normalizeTaskRuntimeInput(systemConfig.defaultTaskRuntime) ||
+    (supportedTaskRuntimes.includes("codex")
+      ? "codex"
+      : supportedTaskRuntimes[0] || "codex");
+  const defaultRepository = String(systemConfig.defaultRepository || "").trim();
+  const lastRepositoryStorageKey = "moonmind.task.lastRepository";
 
   const pollers = [];
 
@@ -96,6 +120,13 @@
 
     const task = pick(payload, "task");
     if (task && typeof task === "object" && !Array.isArray(task)) {
+      const runtimeNode = pick(task, "runtime");
+      if (runtimeNode && typeof runtimeNode === "object" && !Array.isArray(runtimeNode)) {
+        const runtimeMode = pick(runtimeNode, "mode");
+        if (runtimeMode) {
+          return String(runtimeMode);
+        }
+      }
       const taskRuntime = pick(task, "targetRuntime", "target_runtime", "runtime");
       if (taskRuntime) {
         return String(taskRuntime);
@@ -105,16 +136,163 @@
     return null;
   }
 
+  function extractTaskNode(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return null;
+    }
+    const task = pick(payload, "task");
+    if (!task || typeof task !== "object" || Array.isArray(task)) {
+      return null;
+    }
+    return task;
+  }
+
+  function extractRuntimeModelFromPayload(payload) {
+    const task = extractTaskNode(payload);
+    if (!task) {
+      return null;
+    }
+    const runtimeNode = pick(task, "runtime");
+    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
+      return null;
+    }
+    const model = pick(runtimeNode, "model");
+    return model ? String(model) : null;
+  }
+
+  function extractRuntimeEffortFromPayload(payload) {
+    const task = extractTaskNode(payload);
+    if (!task) {
+      return null;
+    }
+    const runtimeNode = pick(task, "runtime");
+    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
+      return null;
+    }
+    const effort = pick(runtimeNode, "effort");
+    return effort ? String(effort) : null;
+  }
+
+  function extractSkillFromPayload(payload) {
+    const task = extractTaskNode(payload);
+    if (!task) {
+      return null;
+    }
+    const skillNode = pick(task, "skill");
+    if (!skillNode || typeof skillNode !== "object" || Array.isArray(skillNode)) {
+      return null;
+    }
+    const skillId = pick(skillNode, "id");
+    return skillId ? String(skillId) : null;
+  }
+
+  function extractPublishModeFromPayload(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return null;
+    }
+    const task = extractTaskNode(payload);
+    if (task) {
+      const publishNode = pick(task, "publish");
+      if (publishNode && typeof publishNode === "object" && !Array.isArray(publishNode)) {
+        const mode = pick(publishNode, "mode");
+        if (mode) {
+          return String(mode).toLowerCase();
+        }
+      }
+    }
+    const publishNode = pick(payload, "publish");
+    if (publishNode && typeof publishNode === "object" && !Array.isArray(publishNode)) {
+      const mode = pick(publishNode, "mode");
+      if (mode) {
+        return String(mode).toLowerCase();
+      }
+    }
+    const legacyMode = pick(payload, "publishMode");
+    return legacyMode ? String(legacyMode).toLowerCase() : null;
+  }
+
   function renderRuntime(runtime) {
     return runtime ? escapeHtml(runtime) : "-";
   }
 
-  function normalizeRuntimeInput(value) {
+  function deriveStageFromEvent(event) {
+    const payload = pick(event, "payload");
+    const payloadStage =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? String(pick(payload, "stage") || "").trim()
+        : "";
+    const message = String(pick(event, "message") || "").trim();
+    const candidate = payloadStage || message;
+    if (candidate.startsWith("moonmind.task.prepare")) {
+      return "prepare";
+    }
+    if (candidate.startsWith("moonmind.task.execute")) {
+      return "execute";
+    }
+    if (candidate.startsWith("moonmind.task.publish")) {
+      return "publish";
+    }
+    if (candidate.startsWith("task.git.")) {
+      return "git";
+    }
+    return "-";
+  }
+
+  function deriveStageFromArtifactName(name) {
+    const candidate = String(name || "");
+    if (candidate.includes("prepare.log")) {
+      return "prepare";
+    }
+    if (candidate.includes("execute.log") || candidate.includes("codex_exec.log")) {
+      return "execute";
+    }
+    if (candidate.includes("publish.log") || candidate.includes("publish_result")) {
+      return "publish";
+    }
+    if (candidate.includes("task_context")) {
+      return "prepare";
+    }
+    if (candidate.includes("changes.patch")) {
+      return "execute";
+    }
+    return "-";
+  }
+
+  function normalizeTaskRuntimeInput(value) {
     const normalized = String(value || "").trim().toLowerCase();
     if (!normalized) {
       return "";
     }
-    return supportedWorkerRuntimes.includes(normalized) ? normalized : "";
+    return supportedTaskRuntimes.includes(normalized) ? normalized : "";
+  }
+
+  function getLastUsedRepository() {
+    try {
+      const value = window.localStorage.getItem(lastRepositoryStorageKey);
+      return String(value || "").trim();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function setLastUsedRepository(repository) {
+    const value = String(repository || "").trim();
+    if (!value) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(lastRepositoryStorageKey, value);
+    } catch (_error) {
+      // Storage failures should never block task submission.
+    }
+  }
+
+  function deriveRequiredCapabilities({ runtimeMode, publishMode }) {
+    const capabilities = [runtimeMode, "git"];
+    if (publishMode === "pr") {
+      capabilities.push("gh");
+    }
+    return Array.from(new Set(capabilities));
   }
 
   function normalizeStatus(source, rawStatus) {
@@ -242,15 +420,23 @@
   function toQueueRows(items) {
     return items.map((item) => {
       const payload = pick(item, "payload") || {};
+      const task =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? pick(payload, "task")
+          : null;
       return {
         source: "queue",
         sourceLabel: "Queue",
         id: pick(item, "id") || "",
+        payload,
         queueName: defaultQueueName,
         runtimeMode: extractRuntimeFromPayload(payload),
         rawStatus: pick(item, "status") || "queued",
         title:
-          pick(item, "type") || pick(payload, "instruction") || "Queue Job",
+          pick(task, "instructions") ||
+          pick(payload, "instruction") ||
+          pick(item, "type") ||
+          "Queue Job",
         createdAt: pick(item, "createdAt"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "finishedAt"),
@@ -401,14 +587,182 @@
       "<p class='loading'>Loading queue jobs...</p>",
     );
 
+    const filterState = {
+      runtime: "",
+      stageStatus: "",
+      publishMode: "",
+    };
+
+    function applyQueueFilters(rows) {
+      return rows.filter((row) => {
+        if (filterState.runtime) {
+          const rowRuntime = String(row.runtimeMode || "").trim().toLowerCase();
+          if (rowRuntime !== filterState.runtime) {
+            return false;
+          }
+        }
+
+        if (filterState.stageStatus) {
+          const normalizedStatus = normalizeStatus("queue", row.rawStatus);
+          if (normalizedStatus !== filterState.stageStatus) {
+            return false;
+          }
+        }
+
+        if (filterState.publishMode) {
+          const publishMode =
+            extractPublishModeFromPayload(row.payload || {}) || "branch";
+          if (publishMode !== filterState.publishMode) {
+            return false;
+          }
+        }
+
+        return true;
+      });
+    }
+
+    function renderQueueFilters() {
+      const runtimeOptions = supportedTaskRuntimes
+        .map(
+          (runtime) =>
+            `<option value="${escapeHtml(runtime)}" ${
+              filterState.runtime === runtime ? "selected" : ""
+            }>${escapeHtml(runtime)}</option>`,
+        )
+        .join("");
+      const stageStatusOptions = [
+        ["queued", "queued"],
+        ["running", "running"],
+        ["succeeded", "succeeded"],
+        ["failed", "failed"],
+        ["cancelled", "cancelled"],
+      ]
+        .map(
+          ([value, label]) =>
+            `<option value="${escapeHtml(value)}" ${
+              filterState.stageStatus === value ? "selected" : ""
+            }>${escapeHtml(label)}</option>`,
+        )
+        .join("");
+      const publishOptions = ["none", "branch", "pr"]
+        .map(
+          (mode) =>
+            `<option value="${escapeHtml(mode)}" ${
+              filterState.publishMode === mode ? "selected" : ""
+            }>${escapeHtml(mode)}</option>`,
+        )
+        .join("");
+
+      return `
+        <form id="queue-filter-form">
+          <div class="grid-2">
+            <label>Runtime
+              <select name="runtime">
+                <option value="">(all)</option>
+                ${runtimeOptions}
+              </select>
+            </label>
+            <label>Stage Status
+              <select name="stageStatus">
+                <option value="">(all)</option>
+                ${stageStatusOptions}
+              </select>
+            </label>
+          </div>
+          <label>Publish Mode
+            <select name="publishMode">
+              <option value="">(all)</option>
+              ${publishOptions}
+            </select>
+          </label>
+        </form>
+      `;
+    }
+
+    function renderTelemetrySummary(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") {
+        return "";
+      }
+      const volumes = pick(snapshot, "jobVolumeByType") || {};
+      const publish = pick(snapshot, "publishOutcomes") || {};
+      const legacyCount = Number(pick(snapshot, "legacyJobSubmissions") || 0);
+      const totalJobs = Number(pick(snapshot, "totalJobs") || 0);
+      const publishedRate = Number(pick(publish, "publishedRate") || 0);
+      const failedRate = Number(pick(publish, "failedRate") || 0);
+      return `
+        <div class="grid-2">
+          <div class="card"><strong>Total Jobs (Window):</strong> ${escapeHtml(totalJobs)}</div>
+          <div class="card"><strong>Legacy Submissions:</strong> ${escapeHtml(legacyCount)}</div>
+          <div class="card"><strong>Task Jobs:</strong> ${escapeHtml(Number(volumes.task || 0))}</div>
+          <div class="card"><strong>Publish Success Rate:</strong> ${escapeHtml(
+            (publishedRate * 100).toFixed(1),
+          )}%</div>
+          <div class="card"><strong>Publish Failure Rate:</strong> ${escapeHtml(
+            (failedRate * 100).toFixed(1),
+          )}%</div>
+        </div>
+      `;
+    }
+
+    function attachFilterHandlers(rows, telemetryHtml) {
+      const filterForm = document.getElementById("queue-filter-form");
+      if (!filterForm) {
+        return;
+      }
+      const runtimeField = filterForm.elements.namedItem("runtime");
+      const stageField = filterForm.elements.namedItem("stageStatus");
+      const publishField = filterForm.elements.namedItem("publishMode");
+
+      const rerender = () => {
+        const filteredRows = applyQueueFilters(rows);
+        setView(
+          "Queue Jobs",
+          `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
+          `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Task</button></a></div>${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
+        );
+        attachFilterHandlers(rows, telemetryHtml);
+      };
+
+      if (runtimeField) {
+        runtimeField.addEventListener("change", () => {
+          filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
+          rerender();
+        });
+      }
+      if (stageField) {
+        stageField.addEventListener("change", () => {
+          filterState.stageStatus = String(stageField.value || "").trim().toLowerCase();
+          rerender();
+        });
+      }
+      if (publishField) {
+        publishField.addEventListener("change", () => {
+          filterState.publishMode = String(publishField.value || "").trim().toLowerCase();
+          rerender();
+        });
+      }
+    }
+
     const load = async () => {
-      const payload = await fetchJson("/api/queue/jobs?limit=100");
+      let telemetryPayload = null;
+      const payload = await fetchJson("/api/queue/jobs?limit=200");
+      try {
+        telemetryPayload = await fetchJson(
+          (queueSourceConfig.migrationTelemetry || "/api/queue/telemetry/migration") +
+            "?windowHours=168",
+        );
+      } catch (error) {
+        console.error("queue migration telemetry load failed", error);
+      }
       const rows = sortRows(toQueueRows(payload?.items || []));
+      const filteredRows = applyQueueFilters(rows);
+      const telemetryHtml = renderTelemetrySummary(telemetryPayload);
       setView(
         "Queue Jobs",
         `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-        `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Job</button></a></div>${renderRowsTable(rows)}`,
+        `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Task</button></a></div>${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
       );
+      attachFilterHandlers(rows, telemetryHtml);
     };
 
     startPolling(load, pollIntervals.list);
@@ -455,20 +809,65 @@
   }
 
   function renderQueueSubmitPage() {
-    const runtimeOptions = supportedWorkerRuntimes
+    const runtimeOptions = supportedTaskRuntimes
       .map(
         (runtime) =>
           `<option value="${escapeHtml(runtime)}">${escapeHtml(runtime)}</option>`,
       )
       .join("");
+    const lastRepository = getLastUsedRepository();
+    const repositoryFallback = lastRepository || defaultRepository;
+    const repositoryHint = repositoryFallback
+      ? `Leave blank to use default repository: ${repositoryFallback}.`
+      : "Set a repository in this form (no system default repository is configured).";
 
     setView(
-      "Submit Queue Job",
-      `Create an Agent Queue job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
+      "Submit Queue Task",
+      `Create a typed Task job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
       `
       <form id="queue-submit-form">
-        <label>Type
-          <input name="type" value="codex_exec" required />
+        <label>Instructions
+          <textarea name="instructions" required placeholder="Describe the task to execute against the repository."></textarea>
+        </label>
+        <div class="grid-2">
+          <label>Skill (optional)
+            <input name="skill" value="auto" placeholder="auto" />
+            <span class="small">Use <span class="inline-code">auto</span> for direct execution; provide a skill id to run a skill path.</span>
+          </label>
+          <label>Runtime (optional)
+            <select name="runtime">
+              <option value="">(system default: ${escapeHtml(defaultTaskRuntime)})</option>
+              ${runtimeOptions}
+            </select>
+          </label>
+        </div>
+        <div class="grid-2">
+          <label>Model (optional)
+            <input name="model" placeholder="runtime default" />
+          </label>
+          <label>Effort (optional)
+            <input name="effort" placeholder="runtime default" />
+          </label>
+        </div>
+        <label>GitHub Repo (optional)
+          <input name="repository" placeholder="owner/repo" />
+          <span class="small">${escapeHtml(repositoryHint)}</span>
+        </label>
+        <div class="grid-2">
+          <label>Starting Branch (optional)
+            <input name="startingBranch" placeholder="repo default branch" />
+          </label>
+          <label>New Branch (optional)
+            <input name="newBranch" placeholder="auto-generated unless starting branch is non-default" />
+          </label>
+        </div>
+        <label>Publish Mode
+          <select name="publishMode">
+            <option value="branch" selected>branch</option>
+            <option value="none">none</option>
+            <option value="pr">pr</option>
+          </select>
+          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">branch</span>.</span>
         </label>
         <div class="grid-2">
           <label>Priority
@@ -478,23 +877,12 @@
             <input type="number" min="1" name="maxAttempts" value="3" />
           </label>
         </div>
-        <label>Affinity Key
+        <label>Affinity Key (optional)
           <input name="affinityKey" placeholder="optional affinity key" />
         </label>
-        <label>Target Runtime (optional)
-          <select name="targetRuntime">
-            <option value="">(any runtime worker)</option>
-            ${runtimeOptions}
-          </select>
-        </label>
-        <label>Payload (JSON)
-          <textarea name="payload">{
-  "repository": "owner/repo",
-  "instruction": "Describe the job work here"
-}</textarea>
-        </label>
+        <p class="small">Submission emits canonical <span class="inline-code">type="task"</span> payloads; server validation rejects malformed contracts.</p>
         <div class="actions">
-          <button type="submit">Create Queue Job</button>
+          <button type="submit">Create Queue Task</button>
           <a href="/tasks/queue"><button class="secondary" type="button">Cancel</button></a>
         </div>
         <p class="small" id="queue-submit-message"></p>
@@ -514,47 +902,93 @@
       message.textContent = "Submitting...";
 
       const formData = new FormData(form);
-      let payload;
-      try {
-        payload = JSON.parse(String(formData.get("payload") || "{}"));
-      } catch (_error) {
+      const instructions = String(formData.get("instructions") || "").trim();
+      if (!instructions) {
         message.className = "notice error";
-        message.textContent = "Payload must be valid JSON.";
+        message.textContent = "Instructions are required.";
         return;
       }
 
-      const requestBody = {
-        type: String(formData.get("type") || "").trim(),
-        payload,
-        priority: Number(formData.get("priority") || 0),
-        maxAttempts: Number(formData.get("maxAttempts") || 3),
-      };
-
-      const affinityKey = String(formData.get("affinityKey") || "").trim();
-      if (affinityKey) {
-        requestBody.affinityKey = affinityKey;
-      }
-
-      const rawTargetRuntime = String(formData.get("targetRuntime") || "");
-      const targetRuntime = normalizeRuntimeInput(rawTargetRuntime);
-      if (rawTargetRuntime.trim() && !targetRuntime) {
+      const repositoryInput = String(formData.get("repository") || "").trim();
+      const repository = repositoryInput || getLastUsedRepository() || defaultRepository;
+      if (!repository) {
         message.className = "notice error";
         message.textContent =
-          "Target Runtime must be one of: " + supportedWorkerRuntimes.join(", ") + ".";
+          "Repository is required because no system default repository is configured.";
         return;
       }
 
-      if (targetRuntime) {
-        requestBody.payload.target_runtime = targetRuntime;
-        const taskNode = requestBody.payload.task;
-        if (taskNode && typeof taskNode === "object" && !Array.isArray(taskNode)) {
-          const hasRuntimeKey = ["targetRuntime", "target_runtime", "runtime"].some((key) =>
-            Object.prototype.hasOwnProperty.call(taskNode, key),
-          );
-          if (!hasRuntimeKey) {
-            taskNode.target_runtime = targetRuntime;
-          }
-        }
+      const affinityKey = String(formData.get("affinityKey") || "").trim();
+      const rawRuntime = String(formData.get("runtime") || "").trim();
+      const runtimeCandidate = rawRuntime || defaultTaskRuntime;
+      const runtimeMode = normalizeTaskRuntimeInput(runtimeCandidate);
+      if (!runtimeMode) {
+        message.className = "notice error";
+        message.textContent =
+          "Runtime must be one of: " + supportedTaskRuntimes.join(", ") + ".";
+        return;
+      }
+
+      const publishMode = String(formData.get("publishMode") || "branch")
+        .trim()
+        .toLowerCase();
+      if (!["none", "branch", "pr"].includes(publishMode)) {
+        message.className = "notice error";
+        message.textContent =
+          "Publish mode must be one of: none, branch, pr.";
+        return;
+      }
+
+      const priority = Number(formData.get("priority") || 0);
+      if (!Number.isInteger(priority)) {
+        message.className = "notice error";
+        message.textContent = "Priority must be an integer.";
+        return;
+      }
+
+      const maxAttempts = Number(formData.get("maxAttempts") || 3);
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+        message.className = "notice error";
+        message.textContent = "Max Attempts must be an integer >= 1.";
+        return;
+      }
+
+      const skillId = String(formData.get("skill") || "").trim() || "auto";
+      const model = String(formData.get("model") || "").trim() || null;
+      const effort = String(formData.get("effort") || "").trim() || null;
+      const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
+      const newBranch = String(formData.get("newBranch") || "").trim() || null;
+
+      const payload = {
+        repository,
+        requiredCapabilities: deriveRequiredCapabilities({
+          runtimeMode,
+          publishMode,
+        }),
+        targetRuntime: runtimeMode,
+        task: {
+          instructions,
+          skill: { id: skillId, args: {} },
+          runtime: { mode: runtimeMode, model, effort },
+          git: { startingBranch, newBranch },
+          publish: {
+            mode: publishMode,
+            prBaseBranch: null,
+            commitMessage: null,
+            prTitle: null,
+            prBody: null,
+          },
+        },
+      };
+
+      const requestBody = {
+        type: "task",
+        payload,
+        priority,
+        maxAttempts,
+      };
+      if (affinityKey) {
+        requestBody.affinityKey = affinityKey;
       }
 
       try {
@@ -562,11 +996,14 @@
           method: "POST",
           body: JSON.stringify(requestBody),
         });
+        setLastUsedRepository(repository);
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);
         message.className = "notice error";
-        message.textContent = "Failed to create queue job.";
+        message.textContent =
+          "Failed to create queue task: " +
+          String(error?.message || "request failed");
       }
     });
   }
@@ -740,6 +1177,7 @@
           (event) => `
             <tr>
               <td>${formatTimestamp(pick(event, "createdAt"))}</td>
+              <td>${escapeHtml(deriveStageFromEvent(event))}</td>
               <td>${escapeHtml(pick(event, "level") || "info")}</td>
               <td>${escapeHtml(pick(event, "message") || "")}</td>
             </tr>
@@ -759,6 +1197,7 @@
           return `
             <tr>
               <td>${escapeHtml(pick(artifact, "name") || "")}</td>
+              <td>${escapeHtml(deriveStageFromArtifactName(pick(artifact, "name") || ""))}</td>
               <td>${escapeHtml(String(pick(artifact, "sizeBytes") || "-"))}</td>
               <td>${escapeHtml(pick(artifact, "contentType") || "-")}</td>
               <td><a href="${escapeHtml(downloadUrl)}">Download</a></td>
@@ -769,6 +1208,13 @@
 
       const detail = job
         ? `
+            ${(() => {
+              const payload = pick(job, "payload") || {};
+              const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
+              const runtimeModel = extractRuntimeModelFromPayload(payload) || "default";
+              const runtimeEffort = extractRuntimeEffortFromPayload(payload) || "default";
+              const selectedSkill = extractSkillFromPayload(payload) || "auto";
+              return `
             <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
               pick(job, "queueName") || defaultQueueName,
             )}</span></p>
@@ -786,13 +1232,16 @@
               <div class="card"><strong>Started:</strong> ${formatTimestamp(
                 pick(job, "startedAt"),
               )}</div>
-              <div class="card"><strong>Runtime Target:</strong> ${escapeHtml(
-                extractRuntimeFromPayload(pick(job, "payload") || {}) || "any",
-              )}</div>
+              <div class="card"><strong>Runtime Target:</strong> ${escapeHtml(runtimeTarget)}</div>
+              <div class="card"><strong>Runtime Model:</strong> ${escapeHtml(runtimeModel)}</div>
+              <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
+              <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
               <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
                 pick(job, "leaseExpiresAt"),
               )}</div>
             </div>
+          `;
+            })()}
           `
         : "<div class='notice error'>Queue job not found.</div>";
 
@@ -806,15 +1255,15 @@
             <section>
               <h3>Events</h3>
               <table>
-                <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
-                <tbody>${eventRows || "<tr><td colspan='3' class='small'>No events.</td></tr>"}</tbody>
+                <thead><tr><th>Time</th><th>Stage</th><th>Level</th><th>Message</th></tr></thead>
+                <tbody>${eventRows || "<tr><td colspan='4' class='small'>No events.</td></tr>"}</tbody>
               </table>
             </section>
             <section>
               <h3>Artifacts</h3>
               <table>
-                <thead><tr><th>Name</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
-                <tbody>${artifactRows || "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"}</tbody>
+                <thead><tr><th>Name</th><th>Stage</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
+                <tbody>${artifactRows || "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"}</tbody>
               </table>
             </section>
           </div>

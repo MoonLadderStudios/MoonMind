@@ -74,21 +74,32 @@ class FakeQueueClient:
         )
 
 
+class FailingUploadQueueClient(FakeQueueClient):
+    """Queue client stub that simulates artifact upload failures."""
+
+    async def upload_artifact(self, *, job_id, worker_id, artifact):
+        raise RuntimeError("artifact upload failed")
+
+
 class FakeHandler:
     """Handler stub returning configured results."""
 
     def __init__(self, result: WorkerExecutionResult | Exception) -> None:
         self.result = result
         self.calls: list[str] = []
+        self.exec_payloads: list[dict[str, object]] = []
+        self.skill_payloads: list[dict[str, object]] = []
 
     async def handle(self, *, job_id, payload):
         self.calls.append("codex_exec")
+        self.exec_payloads.append(dict(payload))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
     async def handle_skill(self, *, job_id, payload, selected_skill, fallback=False):
         self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
+        self.skill_payloads.append(dict(payload))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -150,7 +161,8 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     processed = await worker.run_once()
 
     assert processed is True
-    assert queue.uploaded == ["logs/result.log"]
+    assert "logs/result.log" in queue.uploaded
+    assert "task_context.json" in queue.uploaded
     assert len(queue.completed) == 1
     assert queue.failed == []
     assert any(event["message"] == "Worker claimed job" for event in queue.events)
@@ -160,7 +172,7 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     )
     payload = claimed["payload"]
     assert isinstance(payload, dict)
-    assert payload["selectedSkill"] == "speckit"
+    assert payload["selectedSkill"] == "auto"
     assert payload["executionPath"] == "direct_only"
 
 
@@ -202,9 +214,87 @@ async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     processed = await worker.run_once()
 
     assert processed is True
-    assert queue.uploaded == ["logs/run.log"]
+    assert "logs/run.log" in queue.uploaded
+    assert "patches/changes.patch" not in queue.uploaded
     assert len(queue.completed) == 1
     assert queue.failed == []
+
+
+async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
+    tmp_path: Path,
+) -> None:
+    """Exception path should fail the job even when artifact upload retry errors."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="codex_exec",
+        payload={"repository": "a/b", "instruction": "run"},
+    )
+    queue = FailingUploadQueueClient(jobs=[job])
+    handler = FakeHandler(RuntimeError("execute exploded"))
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.failed) == 1
+    assert "execute exploded" in queue.failed[0]
+    assert queue.completed == []
+
+
+async def test_run_once_redacts_task_context_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """task_context.json should redact secret values from job-derived payloads."""
+
+    secret_value = "super-secret-token-value"
+    monkeypatch.setenv("MOONMIND_TEST_TOKEN", secret_value)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "a/b",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "speckit", "args": {"api_token": secret_value}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    task_context_content = task_context_path.read_text(encoding="utf-8")
+
+    assert processed is True
+    assert secret_value not in task_context_content
+    assert "[REDACTED]" in task_context_content
 
 
 async def test_run_once_unsupported_type_fails_job(tmp_path: Path) -> None:
@@ -271,6 +361,242 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
     assert payload["executionPath"] == "skill"
     assert payload["usedSkills"] is True
     assert payload["usedFallback"] is False
+
+
+async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> None:
+    """Canonical `task` jobs should execute through direct codex path by default."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "branch"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="task ok", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert handler.calls == ["codex_exec"]
+    claimed = next(
+        event for event in queue.events if event["message"] == "Worker claimed job"
+    )
+    payload = claimed["payload"]
+    assert isinstance(payload, dict)
+    assert payload["selectedSkill"] == "auto"
+    assert payload["executionPath"] == "direct_only"
+    assert "ref" not in handler.exec_payloads[0]
+    assert "logs/publish.log" in queue.uploaded
+    assert "publish_result.json" in queue.uploaded
+    assert any(event["message"] == "moonmind.task.prepare" for event in queue.events)
+    assert any(event["message"] == "moonmind.task.execute" for event in queue.events)
+    assert any(event["message"] == "moonmind.task.publish" for event in queue.events)
+
+
+async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> None:
+    """Canonical `task` jobs with concrete skill id should use skill handler path."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {
+                    "id": "speckit",
+                    "args": {"repo": "MoonLadderStudios/MoonMind"},
+                },
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "develop", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True, summary="task skill ok", error_message=None
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert handler.calls == ["codex_skill:speckit:False"]
+    assert "ref" not in handler.skill_payloads[0]
+    inputs = handler.skill_payloads[0].get("inputs")
+    assert isinstance(inputs, dict)
+    assert "ref" not in inputs
+    publish_event = next(
+        event for event in queue.events if event["message"] == "moonmind.task.publish"
+    )
+    payload = publish_event["payload"]
+    assert isinstance(payload, dict)
+    assert payload["status"] == "skipped"
+
+
+async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
+    tmp_path: Path,
+) -> None:
+    """Runtime-specific worker mode should reject tasks for other runtimes."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="gemini",
+        worker_capabilities=("gemini", "git"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert "unsupported task runtime" in queue.failed[0]
+
+
+async def test_run_once_rejects_when_required_capabilities_missing(
+    tmp_path: Path,
+) -> None:
+    """Deny-by-default policy should fail jobs requiring unavailable capabilities."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "requiredCapabilities": ["codex", "git", "qdrant"],
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_capabilities=("codex", "git"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.failed) == 1
+    assert "missing required capabilities" in queue.failed[0]
+    assert handler.calls == []
+
+
+async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) -> None:
+    """Universal worker mode should execute non-codex runtime tasks."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "gemini",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "gemini"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="universal",
+        worker_capabilities=("codex", "gemini", "claude", "git"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert handler.calls == []
 
 
 async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> None:
@@ -386,8 +712,117 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.allowed_skills == ("speckit",)
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
-    assert config.allowed_types == ("codex_exec", "codex_skill")
-    assert config.worker_capabilities == ()
+    assert config.legacy_job_types_enabled is True
+    assert config.worker_runtime == "codex"
+    assert config.allowed_types == ("task", "codex_exec", "codex_skill")
+    assert config.worker_capabilities == ("codex", "git")
+
+
+async def test_config_from_env_runtime_mode_controls_default_capabilities(
+    monkeypatch,
+) -> None:
+    """Runtime mode should derive safe default capabilities when unset."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "universal")
+    monkeypatch.delenv("MOONMIND_WORKER_CAPABILITIES", raising=False)
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.worker_runtime == "universal"
+    assert config.worker_capabilities == ("codex", "gemini", "claude", "git")
+
+
+async def test_config_from_env_disables_legacy_job_types_when_flag_is_off(
+    monkeypatch,
+) -> None:
+    """Workers should be task-only when legacy compatibility flag is disabled."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_ENABLE_LEGACY_JOB_TYPES", "false")
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.legacy_job_types_enabled is False
+    assert config.allowed_types == ("task",)
+
+
+async def test_config_from_env_loads_vault_settings(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Vault settings should parse from environment for secret-ref resolution."""
+
+    token_file = tmp_path / "vault.token"
+    token_file.write_text("vault-file-token\n", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_VAULT_ADDR", "https://vault.local")
+    monkeypatch.setenv("MOONMIND_VAULT_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("MOONMIND_VAULT_NAMESPACE", "moonmind")
+    monkeypatch.setenv("MOONMIND_VAULT_ALLOWED_MOUNTS", "kv,kv-runtime")
+    monkeypatch.setenv("MOONMIND_VAULT_TIMEOUT_SECONDS", "5")
+    monkeypatch.delenv("MOONMIND_VAULT_TOKEN", raising=False)
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.vault_address == "https://vault.local"
+    assert config.vault_token == "vault-file-token"
+    assert config.vault_token_file == token_file
+    assert config.vault_namespace == "moonmind"
+    assert config.vault_allowed_mounts == ("kv", "kv-runtime")
+    assert config.vault_timeout_seconds == 5.0
+
+
+async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
+    tmp_path: Path,
+) -> None:
+    """Runtime model/effort should resolve as task override then worker default."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="universal",
+        default_gemini_model="gemini-default",
+        default_gemini_effort="medium",
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    model, effort = worker._resolve_runtime_overrides(
+        canonical_payload={
+            "task": {
+                "runtime": {
+                    "mode": "gemini",
+                    "model": None,
+                    "effort": None,
+                }
+            }
+        },
+        runtime_mode="gemini",
+    )
+    assert model == "gemini-default"
+    assert effort == "medium"
+
+    model_override, effort_override = worker._resolve_runtime_overrides(
+        canonical_payload={
+            "task": {
+                "runtime": {
+                    "mode": "gemini",
+                    "model": "gemini-2.5-pro",
+                    "effort": "high",
+                }
+            }
+        },
+        runtime_mode="gemini",
+    )
+    assert model_override == "gemini-2.5-pro"
+    assert effort_override == "high"
 
 
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
@@ -415,7 +850,7 @@ async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> 
         poll_interval_ms=1500,
         lease_seconds=75,
         workdir=tmp_path,
-        allowed_types=("codex_exec", "codex_skill"),
+        allowed_types=("task", "codex_exec", "codex_skill"),
         worker_capabilities=("codex", "git"),
     )
     queue = FakeQueueClient(jobs=[None])
@@ -431,5 +866,86 @@ async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> 
     claim = queue.claim_calls[0]
     assert claim["worker_id"] == "worker-9"
     assert claim["lease_seconds"] == 75
-    assert claim["allowed_types"] == ("codex_exec", "codex_skill")
+    assert claim["allowed_types"] == ("task", "codex_exec", "codex_skill")
     assert claim["worker_capabilities"] == ("codex", "git")
+
+
+async def test_run_once_fails_auth_ref_when_vault_not_configured(
+    tmp_path: Path,
+) -> None:
+    """Auth refs should fail closed when Vault resolver config is absent."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "auth": {
+                "repoAuthRef": "vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token",
+                "publishAuthRef": None,
+            },
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.failed) == 1
+    assert "Vault resolver is not configured" in queue.failed[0]
+    assert handler.calls == []
+
+
+async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
+    tmp_path: Path,
+) -> None:
+    """Workers with legacy compatibility disabled should reject legacy jobs."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="codex_exec",
+        payload={"repository": "a/b", "instruction": "run"},
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-9",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=75,
+        workdir=tmp_path,
+        allowed_types=("task",),
+        legacy_job_types_enabled=False,
+        worker_capabilities=("codex", "git"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.failed) == 1
+    assert "legacy job type disabled" in queue.failed[0]
+    assert handler.calls == []

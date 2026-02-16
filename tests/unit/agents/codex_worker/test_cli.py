@@ -334,6 +334,39 @@ def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None
         )
 
 
+def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> None:
+    """Gemini worker runtime should check Gemini CLI without Codex login."""
+
+    calls: list[list[str]] = []
+    verifications: list[str] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "gemini",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
+
+    assert verifications == ["gemini", "speckit"]
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/gemini", "--version"],
+    ]
+
+
 def test_main_returns_error_when_run_fails(monkeypatch) -> None:
     """CLI main should exit 1 when async runtime fails."""
 

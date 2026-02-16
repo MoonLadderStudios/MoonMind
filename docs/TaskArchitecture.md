@@ -1,0 +1,397 @@
+# Task Architecture
+
+Status: Draft  
+Owners: MoonMind Engineering  
+Last Updated: 2026-02-16
+
+## 1. Purpose
+
+Define the desired architecture for MoonMind Tasks created from the Task UI and executed by CLI workers (Codex / Gemini / Claude). The design enables:
+
+- A typed Task submission UX (instructions + optional advanced controls)
+- A runtime-neutral Task contract that can be executed by any compatible worker fleet
+- Deterministic, policy-safe Git operations (checkout/branch/commit/push/PR)
+- Skill-based execution with automatic pre and post wrapper stages
+
+This document is declarative: it describes the intended steady state, contracts, and invariants.
+
+---
+
+## 2. Definitions
+
+**Task**  
+A user-submitted unit of work intended to modify or analyze a GitHub repository, optionally publishing changes.
+
+**Agent Queue Job**  
+The persisted execution record in MoonMind's `/api/queue` system. A Task is represented as an Agent Queue Job.
+
+**Worker Runtime**  
+The CLI environment used to execute the Task (`codex` | `gemini` | `claude` | `universal`).
+
+**Skill**  
+A named automation capability (example: `speckit-specify`) that can be invoked by a runtime adapter and executed against a workspace.
+
+**Workspace**  
+A job-scoped directory tree that contains:
+
+- a repository checkout
+- runtime home/config
+- materialized skills and adapter links
+- artifacts/logs produced by execution
+
+**Publish Mode**
+
+- `none`: do not commit/push
+- `branch`: commit and push to a branch
+- `pr`: commit and push, then create a PR
+
+---
+
+## 3. Goals and Non-Goals
+
+### Goals
+
+1. Instructions are the only required UI input. Everything else has safe defaults.
+2. Support UI fields:
+   - instructions (required)
+   - skill (optional)
+   - runtime (`codex`/`gemini`/`claude`)
+   - model (optional)
+   - effort (optional)
+   - GitHub repo (optional)
+   - starting branch (optional)
+   - new branch (optional)
+   - publish mode (`none`/`branch`/`pr`)
+3. Ensure Git operations are system-owned (not duplicated inside each skill).
+4. Enable automatic wrapper stages:
+   - Pre stage: retrieval + workspace + repo setup
+   - Post stage: commit/push/PR (if requested)
+5. Preserve worker safety:
+   - repo allowlists
+   - capability-based claim eligibility
+   - no secrets in payloads/logs
+
+### Non-Goals
+
+- Replacing SpecKit workflow runs or orchestrator runs
+- Defining UI implementation details (framework/layout)
+- Guaranteeing identical behavior across runtimes for all prompts (behavioral parity is best-effort)
+
+---
+
+## 4. Task UI Contract
+
+### 4.1 Fields
+
+| UI Field | Required | Default | Notes |
+|---|---:|---|---|
+| Instructions | Yes | - | Primary natural-language intent for the Task |
+| Skill | No | `auto` | `auto` means "direct execution unless a skill is explicitly chosen" |
+| Runtime | No | system default runtime | Defaults to the deployment's default worker runtime |
+| Model | No | runtime default | Empty means "worker/runtime default" |
+| Effort | No | runtime default | Empty means "worker/runtime default" |
+| GitHub Repo | No | system default repo | Defaults to configured default repo or last-used repo |
+| Starting Branch | No | repo default branch | Resolved as repo's default branch |
+| New Branch | No | auto-generated (see Section 6.2) | Auto-generated unless starting branch is non-default |
+| Publish Mode | No | `branch` | Default is "commit and push" |
+
+### 4.2 Default Resolution Rules
+
+Defaults are resolved at execution time so they remain correct if the repo's default branch changes.
+
+1. Repo
+   - If omitted, use system default repo (configured).
+2. Starting Branch
+   - If omitted, use repo default branch (resolved in Pre stage).
+3. New Branch
+   - If the user selects a non-default starting branch and does not set a new branch, the default behavior is to work directly on that starting branch.
+   - Otherwise, the system generates a new branch name.
+4. Publish Mode
+   - Defaults to `branch`.
+5. Skill
+   - Defaults to `auto`:
+     - If a concrete skill is selected, the system runs it.
+     - Otherwise, the system executes the instructions directly via the chosen runtime.
+
+---
+
+## 5. Task Representation in the Agent Queue
+
+### 5.1 Job Type
+
+Tasks are represented as queue jobs with:
+
+- `type = "task"`
+- `payload` conforming to the canonical Task payload contract (Section 5.2)
+
+Legacy job types (`codex_exec`, `codex_skill`) remain supported during migration (Section 11).
+
+### 5.2 Canonical Task Payload (Declarative Contract)
+
+The queue payload MUST include policy-critical fields at top-level for server-side eligibility checks, plus a structured `task` object for execution.
+
+```json
+{
+  "repository": "owner/repo",
+  "requiredCapabilities": ["git", "codex"],
+  "targetRuntime": "codex",
+  "auth": {
+    "repoAuthRef": null,
+    "publishAuthRef": null
+  },
+  "task": {
+    "instructions": "...",
+    "skill": {
+      "id": "auto",
+      "args": {}
+    },
+    "runtime": {
+      "mode": "codex",
+      "model": null,
+      "effort": null
+    },
+    "git": {
+      "startingBranch": null,
+      "newBranch": null
+    },
+    "publish": {
+      "mode": "branch",
+      "prBaseBranch": null,
+      "commitMessage": null,
+      "prTitle": null,
+      "prBody": null
+    }
+  }
+}
+```
+
+`auth` is optional. When present, fields are secret references (for example
+`vault://...`) and MUST NOT contain raw credentials.
+
+### 5.3 Capability Derivation
+
+MoonMind MUST derive `requiredCapabilities` from the payload so workers can be matched safely:
+
+- Always include the runtime capability:
+  - `codex` OR `gemini` OR `claude`
+- Always include `git` (repo checkout is always required)
+- If `publish.mode == "pr"`, include `gh` (or a dedicated PR capability)
+- If the selected skill requires extra access (for example qdrant, drive), include those capabilities
+
+Workers MUST advertise capabilities via worker token policy and/or runtime config.
+
+---
+
+## 6. Git and Branch Semantics
+
+### 6.1 Repo Default Branch Resolution
+
+The Pre stage MUST resolve the repo default branch by inspecting the checked-out clone (or GitHub metadata) and record it in:
+
+- a queue job event (`task.git.defaultBranchResolved`)
+- an artifact (`artifacts/task_context.json`)
+
+### 6.2 Working Branch Selection
+
+The system MUST compute an effective working branch:
+
+- Let `defaultBranch` be the repo default branch
+- Let `startingBranch` be:
+  - `task.git.startingBranch` if provided
+  - else `defaultBranch`
+- Let `newBranch` be:
+  - `task.git.newBranch` if provided
+  - else:
+    - if `startingBranch != defaultBranch`: `null` (work directly on startingBranch)
+    - else: auto-generate
+
+If `newBranch` is non-null, the Pre stage MUST create it from `startingBranch` and check it out.
+If `newBranch` is null, the Pre stage MUST ensure `startingBranch` is checked out.
+
+### 6.3 Branch Name Generation
+
+Auto-generated branches MUST be deterministic and collision-resistant.
+
+Recommended format:
+
+```text
+task/<YYYYMMDD>/<jobId8>
+```
+
+Optionally allow a sanitized suffix derived from the selected skill id.
+
+---
+
+## 7. Execution Plan: Automatic Wrapper Stages
+
+### 7.1 Required Stages
+
+Every Task is executed as a three-stage plan:
+
+1. Pre: Retrieval + Setup (`moonmind.task.prepare`)
+2. Main: Execute User Skill or Direct Instructions (`moonmind.task.execute`)
+3. Post: Publish (`moonmind.task.publish`) - conditional on `publish.mode != none`
+
+These stages MUST be visible in job events.
+
+### 7.2 Pre Stage Responsibilities (Retrieval + Setup)
+
+The Pre stage MUST:
+
+- Prepare job workspace layout:
+  - `repo/` (git checkout)
+  - `home/` (runtime HOME/config isolation)
+  - `skills_active/` (active skills for this run)
+  - `.agents/skills -> skills_active` (symlink)
+  - `.gemini/skills -> skills_active` (symlink)
+  - `artifacts/` (logs/patches/metadata)
+- Clone or reuse repo checkout (policy-driven)
+- Resolve default branch, starting branch, and working branch
+- Materialize selected skills (if any) into `skills_active/` using configured skill sources/mirrors
+- Produce a compact `task_context.json` artifact describing:
+  - repo, branches, runtime selection, skill selection, publish mode
+  - resolved defaults (what was implicit vs explicit)
+
+Retrieval behavior:
+
+- When enabled, the Pre stage SHOULD assemble context packs (for example relevant docs/PRs) into artifacts for the runtime to consume.
+- Retrieval MUST NOT introduce secrets into artifacts.
+
+### 7.3 Execute Stage Responsibilities
+
+The Execute stage MUST:
+
+- Invoke the chosen runtime adapter (`codex`/`gemini`/`claude`)
+- Provide:
+  - workspace paths
+  - skill adapter links
+  - the Task instructions
+  - the selected skill id (if not `auto`)
+- Capture runtime stdout/stderr into artifacts
+- Produce a `changes.patch` artifact (when applicable) by diffing the repo after execution
+
+### 7.4 Post Stage Responsibilities (Publish)
+
+The Publish stage MUST implement the selected publish mode:
+
+- `none`
+  - Do not commit or push
+- `branch`
+  - Commit all changes
+  - Push to the effective working branch
+- `pr`
+  - Commit + push
+  - Create a PR with:
+    - base = `publish.prBaseBranch` if set, else resolved `startingBranch`
+    - head = effective working branch
+
+Commit message / PR title/body defaults:
+
+- If omitted, the system MUST generate safe defaults (deterministic templates).
+- The system MAY allow the runtime to propose copy, but the publish stage owns the final action.
+
+---
+
+## 8. Worker Runtime Model
+
+### 8.1 Runtime Modes
+
+Workers are deployed in one of:
+
+- `MOONMIND_WORKER_RUNTIME=codex|gemini|claude|universal`
+
+Interpretation:
+
+- A runtime-specific worker executes only Tasks matching its capability.
+- A `universal` worker may execute Tasks for any runtime, honoring `payload.targetRuntime` when present.
+
+### 8.2 Runtime Override Precedence
+
+Runtime config precedence MUST be:
+
+1. Per-task overrides (`task.runtime.model`, `task.runtime.effort`)
+2. Worker defaults (env/config)
+3. CLI defaults
+
+### 8.3 Runtime Adapters (Conceptual)
+
+Each runtime provides an adapter implementing:
+
+- `prepare(workspace, task)` (optional; mostly shared)
+- `execute(workspace, task)` (required)
+- `healthcheck()` (required)
+
+Adapters MUST respect:
+
+- skill links
+- HOME isolation
+- artifact output conventions
+
+---
+
+## 9. Artifacts and Observability
+
+### 9.1 Required Artifacts
+
+Tasks SHOULD produce:
+
+- `logs/prepare.log`
+- `logs/execute.log`
+- `logs/publish.log` (when publish enabled)
+- `patches/changes.patch`
+- `task_context.json`
+- `publish_result.json` (branch ref and/or PR URL)
+
+### 9.2 Required Events
+
+Workers MUST emit queue job events for:
+
+- stage start/finish
+- resolved defaults (repo default branch, effective branches)
+- publish outcomes (branch pushed, PR created, publish skipped due to no changes)
+- failures with non-secret error summaries
+
+---
+
+## 10. Security and Secrets
+
+1. Secrets MUST NOT appear in queue payloads or repository URLs.
+2. GitHub auth MUST be provided via:
+   - worker environment (`GITHUB_TOKEN`) for the fast path, OR
+   - secret references (for example Vault `repoAuthRef`) for the hardened path.
+3. Workers MUST redact token-like values from logs and artifacts.
+4. Queue worker tokens MUST enforce:
+   - allowed repositories
+   - allowed job types
+   - capability scope
+
+---
+
+## 11. Backward Compatibility and Migration
+
+### 11.1 Compatibility Window
+
+During migration:
+
+- `codex_exec` and `codex_skill` jobs remain valid
+- The new UI should create `type="task"` jobs
+- Workers may continue to run legacy job types until all fleets are upgraded
+
+### 11.2 Migration Outcome
+
+Steady state:
+
+- The Task UI uses typed fields and submits `type="task"`
+- A unified CLI worker fleet executes Tasks across runtimes
+- Legacy job types become internal compatibility shims and can be deprecated
+
+---
+
+## 12. Related Documents
+
+- Task UI Architecture (`docs/TaskUiArchitecture.md`)
+- Task UI Strategy 1 Thin Dashboard (`docs/TaskUiStrategy1ThinDashboard.md`)
+- Codex Task Queue (`docs/CodexTaskQueue.md`)
+- Unified CLI Worker Architecture (`docs/UnifiedCliSingleQueueArchitecture.md`)
+- Worker Git Authentication (`docs/WorkerGitAuth.md`)
+- Secret Store Design (`docs/SecretStore.md`)
