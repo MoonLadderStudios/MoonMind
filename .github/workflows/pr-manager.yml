@@ -37,6 +37,10 @@ concurrency:
     }}
   cancel-in-progress: true
 
+env:
+  # Set repository variable PR_MANAGER_ENABLE_AUTO_MERGE=true to allow auto-merge.
+  PR_MANAGER_ENABLE_AUTO_MERGE: ${{ vars.PR_MANAGER_ENABLE_AUTO_MERGE || 'false' }}
+
 jobs:
   check-and-comment:
     # Suppress human @codex pings, but allow Codex-bot-initiated events
@@ -821,7 +825,7 @@ jobs:
             console.log(`Ready for auto-merge: ${readyToMerge}`);
 
       - name: Enable native auto-merge
-        if: steps.eval.outputs.ready == 'true'
+        if: steps.eval.outputs.ready == 'true' && env.PR_MANAGER_ENABLE_AUTO_MERGE == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ github.token }}
