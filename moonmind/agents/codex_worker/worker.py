@@ -18,6 +18,7 @@ from uuid import UUID
 
 import httpx
 
+import moonmind.utils.logging as moonmind_logging
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
@@ -30,7 +31,6 @@ from moonmind.agents.codex_worker.secret_refs import (
     load_vault_token,
 )
 from moonmind.config.settings import settings
-import moonmind.utils.logging as moonmind_logging
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
