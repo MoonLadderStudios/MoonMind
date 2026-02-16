@@ -532,6 +532,13 @@ class CodexExecHandler:
             stderr=stderr,
         )
         if check and result.returncode != 0:
+            detail = (stderr or stdout).strip()
+            if detail:
+                tail_line = detail.splitlines()[-1]
+                redacted_tail = self._redact_text(tail_line)
+                raise CodexWorkerHandlerError(
+                    f"command failed ({result.returncode}): {' '.join(command)} | {redacted_tail}"
+                )
             raise CodexWorkerHandlerError(
                 f"command failed ({result.returncode}): {' '.join(command)}"
             )
@@ -609,6 +616,32 @@ def _clean_optional_string(
     return cleaned or None
 
 
+def _normalize_codex_model_alias(model: str | None) -> str | None:
+    """Map known compatibility aliases onto supported Codex model ids."""
+
+    if model is None:
+        return None
+    aliases = {
+        "gpt-5.3-codex-spark": "gpt-5-codex",
+        "gpt-5.3-codex": "gpt-5-codex",
+    }
+    return aliases.get(model, model)
+
+
+def _normalize_codex_effort_alias(effort: str | None) -> str | None:
+    """Normalize reasoning-effort aliases to CLI-compatible values."""
+
+    if effort is None:
+        return None
+    normalized = effort.lower()
+    aliases = {
+        "xlow": "low",
+        "xmedium": "medium",
+        "xhigh": "high",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str | None]:
     """Extract optional codex model/effort overrides from payload mapping."""
 
@@ -619,8 +652,8 @@ def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str 
         raise CodexWorkerHandlerError(
             "codex field must be an object containing optional model/effort"
         )
-    model = _clean_optional_string(raw.get("model"))
-    effort = _clean_optional_string(raw.get("effort"))
+    model = _normalize_codex_model_alias(_clean_optional_string(raw.get("model")))
+    effort = _normalize_codex_effort_alias(_clean_optional_string(raw.get("effort")))
     return (model, effort)
 
 

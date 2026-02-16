@@ -1,0 +1,26 @@
+{
+  "name": "moonmind",
+  "version": "1.0.0",
+  "description": "**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Celery-based orchestrator that can run skills-based workflows across your code and infrastructure.**",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MoonLadderStudios/MoonMind.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/MoonLadderStudios/MoonMind/issues"
+  },
+  "homepage": "https://github.com/MoonLadderStudios/MoonMind#readme"
+}

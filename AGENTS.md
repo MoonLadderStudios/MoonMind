@@ -4,6 +4,12 @@
 - **Unit Tests**: Always use `./tools/test_unit.sh` to run unit tests. This script is the single source of truth for CI and local development, ensuring consistent execution and proper exit codes. It automatically uses `python` and falls back to `python3` when `python` is unavailable. Do not run `pytest` directly or pipe to `tail` as this may mask failures.
 - **Integration Tests**: Orchestrator integration tests run via GitHub Actions on main branch pushes or manually. Locally, use `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`.
 
+## Security Guardrails
+- Never post or commit raw credentials (tokens, API keys, passwords, private keys, cookies, auth headers, session IDs).
+- Never paste full `docker compose` output, `.env` files, or environment/config dumps into PR comments. Summarize and redact.
+- Before posting any PR/issue/review comment, scan the outgoing text for secret-like patterns (`ghp_`, `github_pat_`, `AIza`, `ATATT`, `AKIA`, private key blocks, `token=`/`password=` assignments) and block posting on any match.
+- If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
+
 ## Spec Numbering
 
 When creating a new spec folder/feature ID:
