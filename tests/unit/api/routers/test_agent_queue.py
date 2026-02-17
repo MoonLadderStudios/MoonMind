@@ -41,6 +41,9 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         payload={"instruction": "run"},
         created_by_user_id=uuid4(),
         requested_by_user_id=uuid4(),
+        cancel_requested_by_user_id=None,
+        cancel_requested_at=None,
+        cancel_reason=None,
         affinity_key="repo/moonmind",
         claimed_by=None,
         lease_expires_at=None,
@@ -310,6 +313,58 @@ def test_fail_job_validation_error_maps_422(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_queue_payload"
+
+
+def test_cancel_job_success_maps_service_response(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Cancel endpoint should return serialized queue job response."""
+
+    test_client, service = client
+    job = _build_job(status=models.AgentJobStatus.CANCELLED)
+    service.request_cancel.return_value = job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/cancel",
+        json={"reason": "operator request"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    service.request_cancel.assert_awaited_once()
+
+
+def test_ack_cancel_worker_mismatch_maps_403(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Worker identity mismatch on cancel ack should map to forbidden."""
+
+    test_client, service = client
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/cancel/ack",
+        json={"workerId": "worker-2", "message": "stop"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    service.ack_cancel.assert_not_awaited()
+
+
+def test_ack_cancel_state_conflict_maps_409(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Cancel ack should map repository state conflicts to HTTP 409."""
+
+    test_client, service = client
+    service.ack_cancel.side_effect = AgentJobStateError("invalid cancel ack")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/cancel/ack",
+        json={"workerId": "worker-1", "message": "stop"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "job_state_conflict"
 
 
 def test_append_event_success(client: tuple[TestClient, AsyncMock]) -> None:

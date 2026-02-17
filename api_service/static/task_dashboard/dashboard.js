@@ -1163,6 +1163,12 @@
       const notices = loadError
         ? `<div class="notice error">${escapeHtml(loadError)}</div>`
         : "";
+      const normalizedStatus = job ? normalizeStatus("queue", pick(job, "status")) : "";
+      const cancelRequestedAt = job ? pick(job, "cancelRequestedAt") : null;
+      const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
+      const canCancel = Boolean(job) && (normalizedStatus === "queued" || normalizedStatus === "running");
+      const cancelButtonDisabled = !canCancel || cancelPending;
+      const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
       const eventRows = events
         .map(
           (event) => `
@@ -1227,6 +1233,12 @@
               <div class="card"><strong>Runtime Model:</strong> ${escapeHtml(runtimeModel)}</div>
               <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
               <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
+              <div class="card"><strong>Cancel Requested:</strong> ${formatTimestamp(
+                pick(job, "cancelRequestedAt"),
+              )}</div>
+              <div class="card"><strong>Cancel Reason:</strong> ${escapeHtml(
+                pick(job, "cancelReason") || "-",
+              )}</div>
               <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
                 pick(job, "leaseExpiresAt"),
               )}</div>
@@ -1241,6 +1253,10 @@
         `Job ${jobId}`,
         `
           ${notices}
+          ${job ? `<div id="queue-cancel-notice"></div>` : ""}
+          ${job ? `<div class="actions"><button type="button" id="queue-cancel-button" ${
+            cancelButtonDisabled ? "disabled" : ""
+          }>${escapeHtml(cancelButtonLabel)}</button></div>` : ""}
           ${detail}
           <div class="stack">
             <section>
@@ -1260,6 +1276,43 @@
           </div>
         `,
       );
+
+      const cancelButton = document.getElementById("queue-cancel-button");
+      const cancelNotice = document.getElementById("queue-cancel-notice");
+      if (cancelButton && job) {
+        cancelButton.addEventListener("click", async () => {
+          cancelButton.disabled = true;
+          if (cancelNotice) {
+            cancelNotice.className = "notice";
+            cancelNotice.textContent = "Submitting cancellation request...";
+          }
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.cancel || "/api/queue/jobs/{id}/cancel",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ reason: "Cancellation requested from dashboard" }),
+              },
+            );
+            if (cancelNotice) {
+              cancelNotice.className = "notice";
+              cancelNotice.textContent = "Cancellation request submitted.";
+            }
+            await loadEvents();
+            await loadDetail();
+          } catch (error) {
+            console.error("queue cancellation request failed", error);
+            if (cancelNotice) {
+              cancelNotice.className = "notice error";
+              cancelNotice.textContent = "Failed to cancel queue job.";
+            }
+            cancelButton.disabled = false;
+          }
+        });
+      }
     };
 
     const loadDetail = async () => {

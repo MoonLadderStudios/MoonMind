@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -420,3 +421,139 @@ async def test_list_jobs_for_telemetry_and_events_for_jobs(tmp_path):
     assert {job.id for job in jobs} == {older.id, newer.id}
     assert len(events) == 2
     assert {event.message for event in events} == {"older", "newer"}
+
+
+async def test_request_cancel_queued_job_is_immediate_and_idempotent(tmp_path):
+    """Queued cancellation should be immediate and repeated requests no-op."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo)
+            await repo.commit()
+
+            cancelled, action = await repo.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="operator request",
+            )
+            await repo.commit()
+            repeated, repeated_action = await repo.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="ignored",
+            )
+            await repo.commit()
+
+    assert cancelled.status is models.AgentJobStatus.CANCELLED
+    assert cancelled.finished_at is not None
+    assert cancelled.cancel_requested_at is not None
+    assert cancelled.cancel_reason == "operator request"
+    assert action == "queued_cancelled"
+    assert repeated.status is models.AgentJobStatus.CANCELLED
+    assert repeated_action == "noop_cancelled"
+
+
+async def test_running_cancel_request_requires_owner_ack(tmp_path):
+    """Running cancellation should require owner ack for terminal transition."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo)
+            await repo.commit()
+
+            await repo.claim_job(
+                worker_id="owner",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+            requested, request_action = await repo.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="stop",
+            )
+            await repo.commit()
+            assert requested.status is models.AgentJobStatus.RUNNING
+            assert request_action == "running_requested"
+            assert requested.cancel_requested_at is not None
+
+            with pytest.raises(AgentJobOwnershipError):
+                await repo.ack_cancel(job_id=job.id, worker_id="other-worker")
+
+            acknowledged, ack_action = await repo.ack_cancel(
+                job_id=job.id,
+                worker_id="owner",
+            )
+            await repo.commit()
+
+    assert acknowledged.status is models.AgentJobStatus.CANCELLED
+    assert acknowledged.claimed_by is None
+    assert acknowledged.finished_at is not None
+    assert ack_action == "acknowledged"
+
+
+async def test_retryable_fail_does_not_requeue_cancel_requested_job(tmp_path):
+    """retryable fail should not requeue after cancellation request exists."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo)
+            await repo.commit()
+            await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+            await repo.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="stop",
+            )
+            await repo.commit()
+
+            failed = await repo.fail_job(
+                job_id=job.id,
+                worker_id="worker-1",
+                error_message="transient after cancel",
+                retryable=True,
+            )
+            await repo.commit()
+
+    assert failed.status is models.AgentJobStatus.CANCELLED
+    assert failed.finished_at is not None
+    assert failed.next_attempt_at is None
+
+
+async def test_expired_running_job_with_cancel_request_is_not_requeued(tmp_path):
+    """Lease expiry normalization should cancel requested jobs instead of requeueing."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo, priority=10)
+            await _create_job(repo, priority=1)
+            await repo.commit()
+
+            await repo.claim_job(
+                worker_id="owner",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            job.cancel_requested_at = datetime.now(UTC) - timedelta(seconds=2)
+            job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=5)
+            await repo.commit()
+
+            await repo.claim_job(
+                worker_id="next",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+    assert job.status is models.AgentJobStatus.CANCELLED
+    assert job.finished_at is not None

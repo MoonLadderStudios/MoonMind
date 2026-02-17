@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -547,3 +548,81 @@ async def test_load_events_by_job_sets_truncation_flag(tmp_path: Path) -> None:
 
     assert events_truncated is True
     assert len(events_by_job.get(job.id, [])) == 1
+
+
+async def test_request_cancel_queued_job_adds_terminal_event(tmp_path: Path) -> None:
+    """Queued cancellation should terminalize job and append cancellation event."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+
+            cancelled = await service.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="operator request",
+            )
+            events = await service.list_events(job_id=job.id, limit=20)
+
+    assert cancelled.status is models.AgentJobStatus.CANCELLED
+    assert any(event.message == "Job cancelled" for event in events)
+
+
+async def test_running_cancellation_is_requested_then_acknowledged(
+    tmp_path: Path,
+) -> None:
+    """Running cancellation should be cooperative via request then worker ack."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+            await service.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+
+            running = await service.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="stop",
+            )
+            running_status = running.status
+            acknowledged = await service.ack_cancel(
+                job_id=job.id,
+                worker_id="worker-1",
+                message="stopped by cancellation",
+            )
+            events = await service.list_events(job_id=job.id, limit=50)
+
+    assert running_status is models.AgentJobStatus.RUNNING
+    assert running.cancel_requested_at is not None
+    assert acknowledged.status is models.AgentJobStatus.CANCELLED
+    assert any(event.message == "Cancellation requested" for event in events)
+    assert any(event.message == "Job cancelled" for event in events)

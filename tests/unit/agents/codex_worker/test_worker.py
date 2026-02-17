@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ import pytest
 
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
+    CommandCancelledError,
     CommandResult,
     WorkerExecutionResult,
 )
@@ -30,10 +32,13 @@ class FakeQueueClient:
         self.jobs = list(jobs or [])
         self.claim_calls: list[dict[str, object]] = []
         self.heartbeats: list[str] = []
+        self.heartbeat_payloads: list[dict[str, object]] = []
         self.completed: list[tuple[str, str | None]] = []
         self.failed: list[str] = []
+        self.cancel_acks: list[tuple[str, str | None]] = []
         self.uploaded: list[str] = []
         self.events: list[dict[str, object]] = []
+        self.cancel_requested_at: str | None = None
 
     async def claim_job(
         self,
@@ -57,6 +62,15 @@ class FakeQueueClient:
 
     async def heartbeat(self, *, job_id, worker_id, lease_seconds):
         self.heartbeats.append(str(job_id))
+        payload = {"id": str(job_id)}
+        if self.cancel_requested_at:
+            payload["cancelRequestedAt"] = self.cancel_requested_at
+        self.heartbeat_payloads.append(payload)
+        return payload
+
+    async def ack_cancel(self, *, job_id, worker_id, message=None):
+        self.cancel_acks.append((str(job_id), message))
+        return {"id": str(job_id), "status": "cancelled"}
 
     async def complete_job(self, *, job_id, worker_id, result_summary):
         self.completed.append((str(job_id), result_summary))
@@ -94,14 +108,22 @@ class FakeHandler:
         self.exec_payloads: list[dict[str, object]] = []
         self.skill_payloads: list[dict[str, object]] = []
 
-    async def handle(self, *, job_id, payload):
+    async def handle(self, *, job_id, payload, cancel_event=None):
         self.calls.append("codex_exec")
         self.exec_payloads.append(dict(payload))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
-    async def handle_skill(self, *, job_id, payload, selected_skill, fallback=False):
+    async def handle_skill(
+        self,
+        *,
+        job_id,
+        payload,
+        selected_skill,
+        fallback=False,
+        cancel_event=None,
+    ):
         self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
         self.skill_payloads.append(dict(payload))
         if isinstance(self.result, Exception):
@@ -928,8 +950,13 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
     stop_event = asyncio.Event()
+    cancel_event = asyncio.Event()
     task = asyncio.create_task(
-        worker._heartbeat_loop(job_id=uuid4(), stop_event=stop_event)
+        worker._heartbeat_loop(
+            job_id=uuid4(),
+            stop_event=stop_event,
+            cancel_event=cancel_event,
+        )
     )
     await asyncio.sleep(2.3)
     stop_event.set()
@@ -938,6 +965,60 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
         await task
 
     assert len(queue.heartbeats) >= 2
+
+
+async def test_run_once_acks_cancellation_requested_via_heartbeat(
+    tmp_path: Path,
+) -> None:
+    """Worker should acknowledge cancellation and avoid completion/failure transitions."""
+
+    class CancelAwareHandler(FakeHandler):
+        async def handle(self, *, job_id, payload, cancel_event=None):
+            assert cancel_event is not None
+            await asyncio.wait_for(cancel_event.wait(), timeout=3.0)
+            raise CommandCancelledError("cancelled by request")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    queue.cancel_requested_at = datetime.now(UTC).isoformat()
+    handler = CancelAwareHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=3,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert queue.failed == []
+    assert len(queue.cancel_acks) == 1
+    assert queue.cancel_acks[0][0] == str(job.id)
+    assert any(
+        event["message"] == "Job cancellation requested; stopping"
+        for event in queue.events
+    )
 
 
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:

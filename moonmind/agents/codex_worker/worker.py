@@ -22,6 +22,7 @@ import httpx
 import moonmind.utils.logging as moonmind_logging
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
+    CommandCancelledError,
     CodexExecHandler,
     CommandResult,
     WorkerExecutionResult,
@@ -63,6 +64,10 @@ _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
+
+
+class JobCancellationRequested(RuntimeError):
+    """Raised when a claimed job has an active cancellation request."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,10 +448,25 @@ class QueueApiClient:
         job_id: UUID,
         worker_id: str,
         lease_seconds: int,
-    ) -> None:
-        await self._post_json(
+    ) -> dict[str, Any]:
+        return await self._post_json(
             f"/api/queue/jobs/{job_id}/heartbeat",
             json={"workerId": worker_id, "leaseSeconds": lease_seconds},
+        )
+
+    async def ack_cancel(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"workerId": worker_id}
+        if message:
+            payload["message"] = message
+        return await self._post_json(
+            f"/api/queue/jobs/{job_id}/cancel/ack",
+            json=payload,
         )
 
     async def complete_job(
@@ -568,6 +588,7 @@ class CodexWorker:
             placeholder="[REDACTED]"
         )
         self._dynamic_redaction_values: set[str] = set()
+        self._active_cancel_event: asyncio.Event | None = None
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
             self._vault_secret_resolver = VaultSecretResolver(
@@ -748,8 +769,14 @@ class CodexWorker:
             return True
 
         heartbeat_stop = asyncio.Event()
+        cancel_requested_event = asyncio.Event()
+        self._active_cancel_event = cancel_requested_event
         heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(job_id=job.id, stop_event=heartbeat_stop)
+            self._heartbeat_loop(
+                job_id=job.id,
+                stop_event=heartbeat_stop,
+                cancel_event=cancel_requested_event,
+            )
         )
 
         staged_artifacts: list[ArtifactUpload] = []
@@ -761,6 +788,7 @@ class CodexWorker:
                 message="moonmind.task.plan",
                 payload={"jobType": job.type, "stages": stage_plan, **skill_meta},
             )
+            await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
 
             prepared = await self._run_prepare_stage(
                 job_id=job.id,
@@ -771,6 +799,7 @@ class CodexWorker:
                 skill_meta=skill_meta,
             )
             staged_artifacts.extend(self._prepare_stage_artifacts(prepared))
+            await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
 
             await self._emit_stage_event(
                 job_id=job.id,
@@ -799,6 +828,7 @@ class CodexWorker:
                 status="finished" if result.succeeded else "failed",
                 payload={"jobType": job.type, "summary": result.summary, **skill_meta},
             )
+            await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
             if result.succeeded:
                 publish_note = await self._run_publish_stage(
                     job_id=job.id,
@@ -816,8 +846,17 @@ class CodexWorker:
                         error_message=None,
                         artifacts=result.artifacts,
                     )
+                await self._raise_if_cancel_requested(
+                    cancel_event=cancel_requested_event
+                )
 
             await self._upload_artifacts(job_id=job.id, artifacts=staged_artifacts)
+            if cancel_requested_event.is_set():
+                await self._acknowledge_cancellation(
+                    job_id=job.id,
+                    message="cancellation requested",
+                )
+                return True
             if result.succeeded:
                 await self._queue_client.complete_job(
                     job_id=job.id,
@@ -866,6 +905,14 @@ class CodexWorker:
                         "Best-effort artifact upload failed during exception path",
                         exc_info=True,
                     )
+            if cancel_requested_event.is_set() or isinstance(
+                exc, (JobCancellationRequested, CommandCancelledError)
+            ):
+                await self._acknowledge_cancellation(
+                    job_id=job.id,
+                    message=self._redact_text(str(exc) or "cancellation requested"),
+                )
+                return True
             terminal_error = self._redact_text(str(exc))
             await self._queue_client.fail_job(
                 job_id=job.id,
@@ -880,6 +927,7 @@ class CodexWorker:
                 payload={"error": terminal_error, "jobType": job.type, **skill_meta},
             )
         finally:
+            self._active_cancel_event = None
             heartbeat_stop.set()
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -898,6 +946,37 @@ class CodexWorker:
             allowed_types=self._config.allowed_types,
             worker_capabilities=self._config.worker_capabilities,
         )
+
+    @staticmethod
+    async def _raise_if_cancel_requested(*, cancel_event: asyncio.Event) -> None:
+        """Raise when a cancellation request has been observed for active job."""
+
+        if cancel_event.is_set():
+            raise JobCancellationRequested("cancellation requested by user")
+
+    async def _acknowledge_cancellation(self, *, job_id: UUID, message: str) -> None:
+        """Acknowledge cancellation and avoid terminal success/failure transitions."""
+
+        await self._emit_event(
+            job_id=job_id,
+            level="warn",
+            message="Job cancellation requested; stopping",
+            payload={"workerId": self._config.worker_id, "message": message},
+        )
+        try:
+            await self._queue_client.ack_cancel(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                message=message,
+            )
+        except Exception:
+            # Fallback to fail_job so ownership is still released on transient ack issues.
+            await self._queue_client.fail_job(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                error_message="cancellation requested but cancel ack failed",
+                retryable=False,
+            )
 
     def _execution_metadata(
         self, canonical_payload: Mapping[str, Any]
@@ -1652,7 +1731,13 @@ class CodexWorker:
         check: bool = True,
         env: Mapping[str, str] | None = None,
         redaction_values: tuple[str, ...] = (),
+        cancel_event: asyncio.Event | None = None,
     ) -> CommandResult:
+        effective_cancel_event = cancel_event or getattr(
+            self, "_active_cancel_event", None
+        )
+        if effective_cancel_event is not None and effective_cancel_event.is_set():
+            raise JobCancellationRequested("cancellation requested before command start")
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
             merged_redaction_values = tuple(
@@ -1674,6 +1759,7 @@ class CodexWorker:
                 check=check,
                 env=dict(env) if env is not None else None,
                 redaction_values=merged_redaction_values,
+                cancel_event=effective_cancel_event,
             )
         self._append_stage_log(log_path, f"$ {' '.join(command)}")
         return CommandResult(tuple(command), 0, "", "")
@@ -1824,6 +1910,7 @@ class CodexWorker:
                     ),
                     selected_skill=selected_skill,
                     fallback=use_fallback,
+                    cancel_event=getattr(self, "_active_cancel_event", None),
                 )
 
             exec_payload = self._build_exec_payload(
@@ -1845,6 +1932,7 @@ class CodexWorker:
             return await self._codex_exec_handler.handle(
                 job_id=job_id,
                 payload=exec_payload,
+                cancel_event=getattr(self, "_active_cancel_event", None),
             )
 
         instruction = self._compose_instruction_for_runtime(
@@ -2538,20 +2626,29 @@ class CodexWorker:
             return tuple(self._redact_payload(item) for item in payload)
         return payload
 
-    async def _heartbeat_loop(self, *, job_id: UUID, stop_event: asyncio.Event) -> None:
+    async def _heartbeat_loop(
+        self,
+        *,
+        job_id: UUID,
+        stop_event: asyncio.Event,
+        cancel_event: asyncio.Event,
+    ) -> None:
         """Send lease renewals while a job is actively executing."""
 
-        interval_seconds = max(1.0, self._config.lease_seconds / 3.0)
+        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 5.0)
         while not stop_event.is_set():
             await asyncio.sleep(interval_seconds)
             if stop_event.is_set():
                 return
             try:
-                await self._queue_client.heartbeat(
+                payload = await self._queue_client.heartbeat(
                     job_id=job_id,
                     worker_id=self._config.worker_id,
                     lease_seconds=self._config.lease_seconds,
                 )
+                cancel_requested_at = str(payload.get("cancelRequestedAt") or "").strip()
+                if cancel_requested_at:
+                    cancel_event.set()
             except Exception:
                 # Heartbeat errors are tolerated so terminal transition can still run.
                 continue
