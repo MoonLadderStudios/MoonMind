@@ -36,7 +36,10 @@ def _select_stage_skill(stage_name: str, context: Mapping[str, Any]) -> str:
 
 
 def _skill_allowed(skill_name: str) -> bool:
-    allowed = settings.spec_workflow.allowed_skills
+    cfg = settings.spec_workflow
+    if cfg.skill_policy_mode != "allowlist":
+        return True
+    allowed = cfg.allowed_skills
     if not allowed:
         return True
     return skill_name in allowed
