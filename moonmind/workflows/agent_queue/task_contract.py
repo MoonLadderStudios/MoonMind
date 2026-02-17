@@ -248,7 +248,9 @@ class TaskContainerCacheVolume(BaseModel):
                 "task.container.cacheVolumes[].name contains invalid characters"
             )
         if not _CONTAINER_VOLUME_NAME_PATTERN.fullmatch(cleaned):
-            raise TaskContractError("task.container.cacheVolumes[].name has invalid format")
+            raise TaskContractError(
+                "task.container.cacheVolumes[].name has invalid format"
+            )
         return cleaned
 
     @field_validator("target", mode="before")
