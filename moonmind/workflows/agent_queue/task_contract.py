@@ -419,9 +419,7 @@ class TaskStepSpec(BaseModel):
             "publish",
             "container",
         }
-        blocked = sorted(
-            key for key in payload.keys() if str(key).strip() in forbidden
-        )
+        blocked = sorted(key for key in payload.keys() if str(key).strip() in forbidden)
         if blocked:
             formatted = ", ".join(blocked)
             raise TaskContractError(

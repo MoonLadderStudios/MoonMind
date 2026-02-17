@@ -22,8 +22,8 @@ import httpx
 import moonmind.utils.logging as moonmind_logging
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
-    CommandCancelledError,
     CodexExecHandler,
+    CommandCancelledError,
     CommandResult,
     WorkerExecutionResult,
 )
@@ -773,7 +773,9 @@ class CodexWorker:
             )
         )
         disallowed = sorted(
-            skill for skill in selected_skills if skill not in self._config.allowed_skills
+            skill
+            for skill in selected_skills
+            if skill not in self._config.allowed_skills
         )
         if disallowed:
             await self._emit_event(
@@ -1028,9 +1030,9 @@ class CodexWorker:
                     title=None,
                     instructions=None,
                     effective_skill_id=task_skill_id,
-                    effective_skill_args=dict(task_skill_args)
-                    if task_skill_id != "auto"
-                    else {},
+                    effective_skill_args=(
+                        dict(task_skill_args) if task_skill_id != "auto" else {}
+                    ),
                     has_step_instructions=False,
                 )
             ]
@@ -1089,7 +1091,9 @@ class CodexWorker:
         """Return normalized skill execution metadata for job events."""
 
         task_node = canonical_payload.get("task")
-        runtime_node = task_node.get("runtime") if isinstance(task_node, Mapping) else None
+        runtime_node = (
+            task_node.get("runtime") if isinstance(task_node, Mapping) else None
+        )
         if isinstance(runtime_node, Mapping):
             selected_model = str(runtime_node.get("model") or "").strip() or None
             selected_effort = str(runtime_node.get("effort") or "").strip() or None
@@ -1098,7 +1102,11 @@ class CodexWorker:
             selected_effort = None
 
         selected_skills = sorted(
-            {step.effective_skill_id for step in resolved_steps if step.effective_skill_id != "auto"}
+            {
+                step.effective_skill_id
+                for step in resolved_steps
+                if step.effective_skill_id != "auto"
+            }
         )
         used_skills = bool(selected_skills)
         used_fallback = any(skill != "speckit" for skill in selected_skills)
@@ -1107,7 +1115,9 @@ class CodexWorker:
             execution_path = "direct_only"
         elif len(selected_skills) == 1:
             selected_skill = selected_skills[0]
-            execution_path = "skill" if selected_skill == "speckit" else "direct_fallback"
+            execution_path = (
+                "skill" if selected_skill == "speckit" else "direct_fallback"
+            )
         else:
             selected_skill = "multiple"
             execution_path = "direct_fallback"
@@ -1154,9 +1164,11 @@ class CodexWorker:
 
         payload: dict[str, Any] = {
             "repository": canonical_payload.get("repository"),
-            "instruction": instruction_override
-            if instruction_override is not None
-            else task.get("instructions"),
+            "instruction": (
+                instruction_override
+                if instruction_override is not None
+                else task.get("instructions")
+            ),
             "workdirMode": workdir_mode_override
             or self._safe_workdir_mode(source_payload),
             "publish": {
@@ -1266,9 +1278,7 @@ class CodexWorker:
             git = git_node if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
-            publish_mode = (
-                str(publish.get("mode") or "pr").strip().lower() or "pr"
-            )
+            publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -1933,7 +1943,9 @@ class CodexWorker:
             self, "_active_cancel_event", None
         )
         if effective_cancel_event is not None and effective_cancel_event.is_set():
-            raise JobCancellationRequested("cancellation requested before command start")
+            raise JobCancellationRequested(
+                "cancellation requested before command start"
+            )
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
             merged_redaction_values = tuple(
@@ -2121,7 +2133,10 @@ class CodexWorker:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
             step_log_path = (
-                prepared.artifacts_dir / "logs" / "steps" / f"step-{step.step_index:04d}.log"
+                prepared.artifacts_dir
+                / "logs"
+                / "steps"
+                / f"step-{step.step_index:04d}.log"
             )
             step_patch_path = (
                 prepared.artifacts_dir
@@ -2431,7 +2446,9 @@ class CodexWorker:
         candidate = str(value or "").strip().strip("/")
         if not candidate:
             return "container"
-        parts = [segment for segment in candidate.split("/") if segment and segment != "."]
+        parts = [
+            segment for segment in candidate.split("/") if segment and segment != "."
+        ]
         if any(segment == ".." for segment in parts):
             raise ValueError("task.container.artifactsSubdir may not contain '..'")
         normalized = "/".join(parts)
@@ -2456,9 +2473,7 @@ class CodexWorker:
         if not cleaned:
             raise ValueError("task.container.cacheVolumes[].target is required")
         if "," in cleaned:
-            raise ValueError(
-                "task.container.cacheVolumes[].target may not contain ','"
-            )
+            raise ValueError("task.container.cacheVolumes[].target may not contain ','")
         if not cleaned.startswith("/"):
             raise ValueError(
                 "task.container.cacheVolumes[].target must be an absolute path"
@@ -2689,9 +2704,7 @@ class CodexWorker:
             )
 
         finished_at = datetime.now(UTC)
-        duration_seconds = max(
-            0.0, (finished_at - started_at).total_seconds()
-        )
+        duration_seconds = max(0.0, (finished_at - started_at).total_seconds())
         exit_code = run_result.returncode if run_result is not None else None
         succeeded = bool(run_result is not None and run_result.returncode == 0) and (
             not timed_out
@@ -3001,7 +3014,9 @@ class CodexWorker:
                     worker_id=self._config.worker_id,
                     lease_seconds=self._config.lease_seconds,
                 )
-                cancel_requested_at = str(payload.get("cancelRequestedAt") or "").strip()
+                cancel_requested_at = str(
+                    payload.get("cancelRequestedAt") or ""
+                ).strip()
                 if cancel_requested_at:
                     cancel_event.set()
             except Exception:

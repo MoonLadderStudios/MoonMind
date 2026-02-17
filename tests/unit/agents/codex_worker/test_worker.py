@@ -104,9 +104,9 @@ class FakeHandler:
 
     def __init__(
         self,
-        result: WorkerExecutionResult
-        | Exception
-        | list[WorkerExecutionResult | Exception],
+        result: (
+            WorkerExecutionResult | Exception | list[WorkerExecutionResult | Exception]
+        ),
     ) -> None:
         self.result = result
         self.calls: list[str] = []
@@ -590,7 +590,9 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert "patches/steps/step-0000.patch" in queue.uploaded
     assert "patches/steps/step-0001.patch" in queue.uploaded
     assert any(event["message"] == "task.steps.plan" for event in queue.events)
-    started = [event for event in queue.events if event["message"] == "task.step.started"]
+    started = [
+        event for event in queue.events if event["message"] == "task.step.started"
+    ]
     finished = [
         event for event in queue.events if event["message"] == "task.step.finished"
     ]
@@ -600,7 +602,9 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert started[1]["payload"]["stepId"] == "patch"
 
 
-async def test_run_once_task_steps_fail_fast_on_first_failed_step(tmp_path: Path) -> None:
+async def test_run_once_task_steps_fail_fast_on_first_failed_step(
+    tmp_path: Path,
+) -> None:
     """Execute stage should stop on first step failure and skip publish."""
 
     step1_log = tmp_path / "step1.log"
@@ -667,8 +671,12 @@ async def test_run_once_task_steps_fail_fast_on_first_failed_step(tmp_path: Path
     assert len(queue.failed) == 1
     assert "step2 failed" in queue.failed[0]
     assert handler.calls == ["codex_exec", "codex_exec"]
-    assert not any(event["message"] == "moonmind.task.publish" for event in queue.events)
-    failed_events = [event for event in queue.events if event["message"] == "task.step.failed"]
+    assert not any(
+        event["message"] == "moonmind.task.publish" for event in queue.events
+    )
+    failed_events = [
+        event for event in queue.events if event["message"] == "task.step.failed"
+    ]
     assert len(failed_events) == 1
     assert failed_events[0]["payload"]["stepId"] == "step-2"
 
