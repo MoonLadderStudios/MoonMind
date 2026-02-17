@@ -46,7 +46,7 @@ ollama = "~=0.6.0"
 anthropic = "~=0.79.0"
 llama-index-llms-anthropic = "~=0.10.8"
 httpx = "~=0.28.1"
-atlassian-python-api = "~=3.41.21"
+atlassian-python-api = "~=4.0.7"
 beautifulsoup4 = "~=4.14.3"
 html2text = "~=2024.2.26"
 lxml = "~=6.0.0"
@@ -61,14 +61,14 @@ docker = "~=7.1.0"
 "fastapi-users" = { version = "~=15.0.4", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
 alembic = "~=1.16.2"
-sqlalchemy-utils = "~=0.41.2"
+sqlalchemy-utils = "~=0.42.1"
 cryptography = "~=46.0.5"
-psycopg2-binary = "~=2.9.0"
+psycopg2-binary = "~=2.9.11"
 jinja2 = "~=3.1.4"
 gitpython = "~=3.1.42"
 toml = "~=0.10.2"
 pydantic-extra-types = "~=2.10.1"
-structlog = "~=24.1.0"
+structlog = "~=25.5.0"
 pytest = { version = "~=8.4.2", optional = true }
 pytest-mock = { version = "~=3.14.1", optional = true }
 pytest-asyncio = { version = "^0.23.7", optional = true }
