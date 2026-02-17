@@ -36,6 +36,54 @@ def test_normalize_task_payload_derives_capabilities() -> None:
     assert normalized["task"]["runtime"]["mode"] == "codex"
 
 
+def test_normalize_task_payload_container_enabled_adds_docker_capability() -> None:
+    """Container-enabled tasks should require docker capability automatically."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "Run tests in container",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "container": {
+                    "enabled": True,
+                    "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+                    "command": ["bash", "-lc", "dotnet --info"],
+                },
+            },
+        },
+    )
+
+    assert normalized["requiredCapabilities"] == ["codex", "git", "docker"]
+    assert normalized["task"]["container"]["enabled"] is True
+
+
+def test_normalize_task_payload_rejects_enabled_container_without_image() -> None:
+    """Container spec validation should fail when enabled image is missing."""
+
+    with pytest.raises(TaskContractError, match="task.container.image"):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Run tests in container",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                    "container": {
+                        "enabled": True,
+                        "command": ["bash", "-lc", "dotnet --info"],
+                    },
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_accepts_vault_auth_refs() -> None:
     """Canonical task payload should preserve validated auth secret refs."""
 

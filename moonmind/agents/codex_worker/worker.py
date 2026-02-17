@@ -84,6 +84,9 @@ class CodexWorkerConfig:
     gemini_binary: str = "gemini"
     claude_binary: str = "claude"
     worker_capabilities: tuple[str, ...] = ("codex", "git", "gh")
+    docker_binary: str = "docker"
+    container_workspace_volume: str | None = None
+    container_default_timeout_seconds: int = 3600
     vault_address: str | None = None
     vault_token: str | None = None
     vault_token_file: Path | None = None
@@ -240,6 +243,18 @@ class CodexWorkerConfig:
             else:
                 worker_capabilities = (worker_runtime, "git", "gh")
 
+        docker_binary = (
+            str(source.get("MOONMIND_DOCKER_BINARY", "docker")).strip() or "docker"
+        )
+        container_workspace_volume = (
+            str(source.get("MOONMIND_CONTAINER_WORKSPACE_VOLUME", "")).strip() or None
+        )
+        container_default_timeout_seconds = int(
+            str(source.get("MOONMIND_CONTAINER_TIMEOUT_SECONDS", "3600")).strip()
+        )
+        if container_default_timeout_seconds < 1:
+            raise ValueError("MOONMIND_CONTAINER_TIMEOUT_SECONDS must be >= 1")
+
         vault_address = str(source.get("MOONMIND_VAULT_ADDR", "")).strip() or None
         vault_token_file_raw = str(source.get("MOONMIND_VAULT_TOKEN_FILE", "")).strip()
         vault_token_file = Path(vault_token_file_raw) if vault_token_file_raw else None
@@ -286,6 +301,9 @@ class CodexWorkerConfig:
             gemini_binary=gemini_binary,
             claude_binary=claude_binary,
             worker_capabilities=worker_capabilities,
+            docker_binary=docker_binary,
+            container_workspace_volume=container_workspace_volume,
+            container_default_timeout_seconds=container_default_timeout_seconds,
             vault_address=vault_address,
             vault_token=vault_token,
             vault_token_file=vault_token_file,
@@ -335,6 +353,30 @@ class TaskAuthContext:
     publish_auth_source: str | None
     repo_command_env: dict[str, str] | None
     publish_command_env: dict[str, str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerCacheVolume:
+    """Normalized cache volume mount for container task execution."""
+
+    name: str
+    target: str
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerTaskSpec:
+    """Normalized task.container payload used by execute stage."""
+
+    image: str
+    command: tuple[str, ...]
+    workdir: str | None
+    env: dict[str, str]
+    artifacts_subdir: str
+    timeout_seconds: int
+    pull_mode: str
+    cpus: str | None
+    memory: str | None
+    cache_volumes: tuple[ContainerCacheVolume, ...]
 
 
 class QueueApiClient:
@@ -1735,6 +1777,15 @@ class CodexWorker:
     ) -> WorkerExecutionResult:
         """Execute task instructions via the selected runtime adapter."""
 
+        container_spec = self._extract_container_task_spec(canonical_payload)
+        if container_spec is not None:
+            return await self._run_container_execute_stage(
+                job_id=job_id,
+                canonical_payload=canonical_payload,
+                prepared=prepared,
+                container_spec=container_spec,
+            )
+
         runtime_model, runtime_effort = self._resolve_runtime_overrides(
             canonical_payload=canonical_payload,
             runtime_mode=runtime_mode,
@@ -1833,6 +1884,383 @@ class CodexWorker:
                     ),
                 ),
             )
+
+    def _extract_container_task_spec(
+        self, canonical_payload: Mapping[str, Any]
+    ) -> ContainerTaskSpec | None:
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        container_node = task.get("container")
+        container = container_node if isinstance(container_node, Mapping) else {}
+        if not bool(container.get("enabled")):
+            return None
+
+        image = str(container.get("image") or "").strip()
+        if not image:
+            raise ValueError(
+                "task.container.image is required when task.container.enabled=true"
+            )
+
+        raw_command = container.get("command")
+        if not isinstance(raw_command, list):
+            raise ValueError("task.container.command must be a list when enabled")
+        command = tuple(str(item).strip() for item in raw_command if str(item).strip())
+        if not command:
+            raise ValueError(
+                "task.container.command is required when task.container.enabled=true"
+            )
+
+        workdir = str(container.get("workdir") or "").strip() or None
+        artifacts_subdir = self._sanitize_artifacts_subdir(
+            str(container.get("artifactsSubdir") or "").strip() or None
+        )
+
+        timeout_raw = container.get("timeoutSeconds")
+        if timeout_raw is None or timeout_raw == "":
+            timeout_seconds = self._config.container_default_timeout_seconds
+        else:
+            timeout_seconds = int(timeout_raw)
+        if timeout_seconds < 1:
+            raise ValueError("task.container.timeoutSeconds must be >= 1")
+
+        pull_mode = str(container.get("pull") or "if-missing").strip().lower()
+        if pull_mode not in {"if-missing", "always"}:
+            raise ValueError("task.container.pull must be if-missing or always")
+
+        resources_node = container.get("resources")
+        resources = resources_node if isinstance(resources_node, Mapping) else {}
+        cpus = str(resources.get("cpus") or "").strip() or None
+        memory = str(resources.get("memory") or "").strip() or None
+
+        env_node = container.get("env")
+        env = env_node if isinstance(env_node, Mapping) else {}
+        normalized_env: dict[str, str] = {}
+        for raw_key, raw_value in env.items():
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            normalized_env[key] = str(raw_value)
+
+        cache_volumes: list[ContainerCacheVolume] = []
+        cache_node = container.get("cacheVolumes")
+        if isinstance(cache_node, list):
+            for item in cache_node:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("name") or "").strip()
+                target = str(item.get("target") or "").strip()
+                if not name or not target:
+                    continue
+                cache_volumes.append(ContainerCacheVolume(name=name, target=target))
+
+        return ContainerTaskSpec(
+            image=image,
+            command=command,
+            workdir=workdir,
+            env=normalized_env,
+            artifacts_subdir=artifacts_subdir,
+            timeout_seconds=timeout_seconds,
+            pull_mode=pull_mode,
+            cpus=cpus,
+            memory=memory,
+            cache_volumes=tuple(cache_volumes),
+        )
+
+    @staticmethod
+    def _sanitize_artifacts_subdir(value: str | None) -> str:
+        candidate = str(value or "").strip().strip("/")
+        if not candidate:
+            return "container"
+        parts = [segment for segment in candidate.split("/") if segment and segment != "."]
+        if any(segment == ".." for segment in parts):
+            raise ValueError("task.container.artifactsSubdir may not contain '..'")
+        normalized = "/".join(parts)
+        return normalized or "container"
+
+    @staticmethod
+    def _container_command_summary(command: Sequence[str]) -> str:
+        rendered = " ".join(str(item) for item in command)
+        if len(rendered) <= 320:
+            return rendered
+        return f"{rendered[:317]}..."
+
+    async def _ensure_container_image(
+        self,
+        *,
+        image: str,
+        pull_mode: str,
+        cwd: Path,
+        log_path: Path,
+    ) -> None:
+        if pull_mode == "always":
+            await self._run_stage_command(
+                [self._config.docker_binary, "pull", image],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            return
+
+        inspect_result = await self._run_stage_command(
+            [self._config.docker_binary, "image", "inspect", image],
+            cwd=cwd,
+            log_path=log_path,
+            check=False,
+        )
+        if inspect_result.returncode == 0:
+            return
+        await self._run_stage_command(
+            [self._config.docker_binary, "pull", image],
+            cwd=cwd,
+            log_path=log_path,
+        )
+
+    def _build_container_run_command(
+        self,
+        *,
+        job_id: UUID,
+        repository: str,
+        prepared: PreparedTaskWorkspace,
+        container_spec: ContainerTaskSpec,
+    ) -> tuple[list[str], str, str]:
+        workspace_root = self._config.workdir
+        if not workspace_root.is_absolute():
+            raise ValueError(
+                "MOONMIND_WORKDIR must be an absolute path for task.container execution"
+            )
+
+        mount_target = str(workspace_root)
+        artifact_dir_in_container = str(
+            prepared.artifacts_dir / container_spec.artifacts_subdir
+        )
+        workdir = container_spec.workdir or str(prepared.repo_dir)
+        container_name = f"mm-task-{job_id}"
+
+        command: list[str] = [
+            self._config.docker_binary,
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--label",
+            f"moonmind.job_id={job_id}",
+            "--label",
+            f"moonmind.repository={repository}",
+            "--label",
+            "moonmind.runtime=container",
+        ]
+
+        if self._config.container_workspace_volume:
+            command.extend(
+                [
+                    "--mount",
+                    (
+                        "type=volume,"
+                        f"src={self._config.container_workspace_volume},"
+                        f"dst={mount_target}"
+                    ),
+                ]
+            )
+        else:
+            command.extend(
+                [
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace_root.resolve()},"
+                        f"dst={mount_target}"
+                    ),
+                ]
+            )
+
+        for cache_volume in container_spec.cache_volumes:
+            command.extend(
+                [
+                    "--mount",
+                    (
+                        "type=volume,"
+                        f"src={cache_volume.name},"
+                        f"dst={cache_volume.target}"
+                    ),
+                ]
+            )
+
+        if container_spec.cpus:
+            command.extend(["--cpus", container_spec.cpus])
+        if container_spec.memory:
+            command.extend(["--memory", container_spec.memory])
+
+        command.extend(["--workdir", workdir])
+
+        run_env = {
+            "ARTIFACT_DIR": artifact_dir_in_container,
+            "JOB_ID": str(job_id),
+            "REPOSITORY": repository,
+            **container_spec.env,
+        }
+        for key in sorted(run_env):
+            command.extend(["-e", f"{key}={run_env[key]}"])
+
+        command.append(container_spec.image)
+        command.extend(container_spec.command)
+        return command, container_name, artifact_dir_in_container
+
+    async def _run_container_execute_stage(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        prepared: PreparedTaskWorkspace,
+        container_spec: ContainerTaskSpec,
+    ) -> WorkerExecutionResult:
+        repository = str(canonical_payload.get("repository") or "").strip()
+        if not repository:
+            raise ValueError("repository is required for task.container execution")
+
+        run_command: list[str] = []
+        container_name = f"mm-task-{job_id}"
+        artifact_dir_in_container = str(
+            prepared.artifacts_dir / container_spec.artifacts_subdir
+        )
+        run_result: CommandResult | None = None
+        timed_out = False
+        error_message: str | None = None
+        started_at = datetime.now(UTC)
+
+        await self._emit_event(
+            job_id=job_id,
+            level="info",
+            message="moonmind.task.container.started",
+            payload={
+                "image": container_spec.image,
+                "command": self._container_command_summary(container_spec.command),
+                "pullMode": container_spec.pull_mode,
+                "timeoutSeconds": container_spec.timeout_seconds,
+            },
+        )
+
+        try:
+            await self._ensure_container_image(
+                image=container_spec.image,
+                pull_mode=container_spec.pull_mode,
+                cwd=prepared.repo_dir,
+                log_path=prepared.execute_log_path,
+            )
+            run_command, container_name, artifact_dir_in_container = (
+                self._build_container_run_command(
+                    job_id=job_id,
+                    repository=repository,
+                    prepared=prepared,
+                    container_spec=container_spec,
+                )
+            )
+            run_result = await asyncio.wait_for(
+                self._run_stage_command(
+                    run_command,
+                    cwd=prepared.repo_dir,
+                    log_path=prepared.execute_log_path,
+                    check=False,
+                ),
+                timeout=float(container_spec.timeout_seconds),
+            )
+            if run_result.returncode != 0:
+                detail = (run_result.stderr or run_result.stdout).strip()
+                tail = detail.splitlines()[-1] if detail else ""
+                error_message = (
+                    f"container command failed ({run_result.returncode}): {tail}"
+                    if tail
+                    else f"container command failed ({run_result.returncode})"
+                )
+        except asyncio.TimeoutError:
+            timed_out = True
+            error_message = (
+                f"container execution timed out after {container_spec.timeout_seconds}s"
+            )
+            with suppress(Exception):
+                await self._run_stage_command(
+                    [self._config.docker_binary, "stop", container_name],
+                    cwd=prepared.repo_dir,
+                    log_path=prepared.execute_log_path,
+                    check=False,
+                )
+            run_result = CommandResult(
+                command=tuple(run_command),
+                returncode=124,
+                stdout="",
+                stderr=error_message,
+            )
+        except Exception as exc:
+            error_message = str(exc)
+            run_result = CommandResult(
+                command=tuple(run_command),
+                returncode=1,
+                stdout="",
+                stderr=error_message,
+            )
+
+        finished_at = datetime.now(UTC)
+        duration_seconds = max(
+            0.0, (finished_at - started_at).total_seconds()
+        )
+        exit_code = run_result.returncode if run_result is not None else None
+        succeeded = bool(run_result is not None and run_result.returncode == 0) and (
+            not timed_out
+        )
+
+        metadata_dir = (
+            prepared.artifacts_dir / container_spec.artifacts_subdir / "metadata"
+        )
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        metadata_path = metadata_dir / "run.json"
+        metadata_payload = {
+            "jobId": str(job_id),
+            "repository": repository,
+            "containerName": container_name,
+            "image": container_spec.image,
+            "command": list(container_spec.command),
+            "commandSummary": self._container_command_summary(container_spec.command),
+            "pullMode": container_spec.pull_mode,
+            "workdir": container_spec.workdir or str(prepared.repo_dir),
+            "artifactDir": artifact_dir_in_container,
+            "timeoutSeconds": container_spec.timeout_seconds,
+            "timedOut": timed_out,
+            "exitCode": exit_code,
+            "startedAt": started_at.isoformat(),
+            "finishedAt": finished_at.isoformat(),
+            "durationSeconds": duration_seconds,
+            "error": error_message,
+        }
+        metadata_path.write_text(
+            json.dumps(metadata_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        await self._emit_event(
+            job_id=job_id,
+            level="info" if succeeded else "error",
+            message="moonmind.task.container.finished",
+            payload={
+                "containerName": container_name,
+                "image": container_spec.image,
+                "command": self._container_command_summary(container_spec.command),
+                "timedOut": timed_out,
+                "exitCode": exit_code,
+                "durationSeconds": duration_seconds,
+                "artifactsSubdir": container_spec.artifacts_subdir,
+            },
+        )
+
+        return WorkerExecutionResult(
+            succeeded=succeeded,
+            summary="container task execution completed" if succeeded else None,
+            error_message=error_message,
+            artifacts=(
+                ArtifactUpload(
+                    path=metadata_path,
+                    name=f"{container_spec.artifacts_subdir}/metadata/run.json",
+                    content_type="application/json",
+                ),
+            ),
+        )
 
     def _compose_instruction_for_runtime(
         self,

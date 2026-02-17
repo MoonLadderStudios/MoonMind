@@ -227,6 +227,141 @@ class TaskAuthSelection(BaseModel):
         return _normalize_secret_ref(value, field_name="auth.publishAuthRef")
 
 
+class TaskContainerCacheVolume(BaseModel):
+    """Named volume mount requested by container-enabled task execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(..., alias="name")
+    target: str = Field(..., alias="target")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _normalize_name(cls, value: object) -> str:
+        cleaned = _clean_optional_str(value)
+        if not cleaned:
+            raise TaskContractError("task.container.cacheVolumes[].name is required")
+        return cleaned
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _normalize_target(cls, value: object) -> str:
+        cleaned = _clean_optional_str(value)
+        if not cleaned:
+            raise TaskContractError("task.container.cacheVolumes[].target is required")
+        return cleaned
+
+
+class TaskContainerSelection(BaseModel):
+    """Optional container execution controls for canonical tasks."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    enabled: bool = Field(False, alias="enabled")
+    image: str | None = Field(None, alias="image")
+    command: list[str] | None = Field(None, alias="command")
+    workdir: str | None = Field(None, alias="workdir")
+    env: dict[str, str] | None = Field(None, alias="env")
+    artifacts_subdir: str | None = Field(None, alias="artifactsSubdir")
+    timeout_seconds: int | None = Field(None, alias="timeoutSeconds")
+    pull: str | None = Field(None, alias="pull")
+    resources: dict[str, Any] | None = Field(None, alias="resources")
+    cache_volumes: list[TaskContainerCacheVolume] | None = Field(
+        None, alias="cacheVolumes"
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _normalize_enabled(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        candidate = _clean_optional_str(value)
+        if not candidate:
+            return False
+        lowered = candidate.lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        raise TaskContractError("task.container.enabled must be a boolean")
+
+    @field_validator("image", "workdir", "artifacts_subdir", "pull", mode="before")
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("command", mode="before")
+    @classmethod
+    def _normalize_command(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.container.command must be a list")
+        normalized: list[str] = []
+        for raw in value:
+            item = _clean_optional_str(raw)
+            if item is None:
+                continue
+            normalized.append(item)
+        return normalized or None
+
+    @field_validator("env", mode="before")
+    @classmethod
+    def _normalize_env(cls, value: object) -> dict[str, str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise TaskContractError("task.container.env must be an object")
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            key = _clean_optional_str(raw_key)
+            if key is None:
+                continue
+            normalized[key] = _clean_str(raw_value)
+        return normalized or None
+
+    @field_validator("timeout_seconds", mode="before")
+    @classmethod
+    def _normalize_timeout_seconds(cls, value: object) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            timeout = int(value)
+        except (TypeError, ValueError) as exc:
+            raise TaskContractError(
+                "task.container.timeoutSeconds must be an integer"
+            ) from exc
+        if timeout < 1:
+            raise TaskContractError(
+                "task.container.timeoutSeconds must be greater than zero"
+            )
+        return timeout
+
+    @field_validator("pull", mode="after")
+    @classmethod
+    def _validate_pull_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        lowered = value.lower()
+        if lowered not in {"if-missing", "always"}:
+            raise TaskContractError("task.container.pull must be if-missing or always")
+        return lowered
+
+    @model_validator(mode="after")
+    def _validate_enabled_requirements(self) -> "TaskContainerSelection":
+        if not self.enabled:
+            return self
+        if not self.image:
+            raise TaskContractError(
+                "task.container.image is required when task.container.enabled=true"
+            )
+        if not self.command:
+            raise TaskContractError(
+                "task.container.command is required when task.container.enabled=true"
+            )
+        return self
+
+
 class TaskExecutionSpec(BaseModel):
     """Main task execution body."""
 
@@ -245,6 +380,7 @@ class TaskExecutionSpec(BaseModel):
     publish: TaskPublishSelection = Field(
         default_factory=TaskPublishSelection, alias="publish"
     )
+    container: TaskContainerSelection | None = Field(None, alias="container")
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -581,6 +717,11 @@ def build_canonical_task_view(
     skill_caps = skill_node.get("requiredCapabilities")
     if isinstance(skill_caps, list):
         required.extend(skill_caps)
+
+    container_node = (canonical.get("task") or {}).get("container")
+    container = container_node if isinstance(container_node, Mapping) else {}
+    if bool(container.get("enabled")):
+        required.append("docker")
 
     canonical["requiredCapabilities"] = _normalize_capabilities(tuple(required))
     return canonical
