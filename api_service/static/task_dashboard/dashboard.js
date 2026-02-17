@@ -873,11 +873,11 @@
         </div>
         <label>Publish Mode
           <select name="publishMode">
-            <option value="branch" selected>branch</option>
+            <option value="pr" selected>pr</option>
+            <option value="branch">branch</option>
             <option value="none">none</option>
-            <option value="pr">pr</option>
           </select>
-          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">branch</span>.</span>
+          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">pr</span>.</span>
         </label>
         <div class="grid-2">
           <label>Priority
@@ -982,7 +982,7 @@
         return;
       }
 
-      const publishMode = String(formData.get("publishMode") || "branch")
+      const publishMode = String(formData.get("publishMode") || "pr")
         .trim()
         .toLowerCase();
       if (!["none", "branch", "pr"].includes(publishMode)) {

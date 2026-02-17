@@ -223,6 +223,31 @@ async def test_create_task_job_applies_settings_defaults_for_missing_fields(
     assert job.payload["task"]["runtime"]["effort"] == "high"
 
 
+async def test_create_task_job_defaults_publish_mode_to_pr_when_omitted(
+    tmp_path: Path,
+) -> None:
+    """Canonical task jobs should default to PR publishing when mode is omitted."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                    },
+                },
+            )
+
+    assert job.payload["task"]["publish"]["mode"] == "pr"
+    assert job.payload["requiredCapabilities"] == ["codex", "git", "gh"]
+
+
 async def test_create_task_job_rejects_invalid_repository_format(
     tmp_path: Path,
 ) -> None:

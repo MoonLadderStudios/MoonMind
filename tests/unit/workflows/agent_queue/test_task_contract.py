@@ -36,6 +36,26 @@ def test_normalize_task_payload_derives_capabilities() -> None:
     assert normalized["task"]["runtime"]["mode"] == "codex"
 
 
+def test_normalize_task_payload_defaults_publish_mode_to_pr() -> None:
+    """Canonical task payloads should default to PR publishing when mode is omitted."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "Run tests",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+            },
+        },
+    )
+
+    assert normalized["task"]["publish"]["mode"] == "pr"
+    assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
+
+
 def test_normalize_task_payload_container_enabled_adds_docker_capability() -> None:
     """Container-enabled tasks should require docker capability automatically."""
 
@@ -328,4 +348,15 @@ def test_task_stage_plan_includes_publish_only_when_enabled() -> None:
     assert none_plan == [
         "moonmind.task.prepare",
         "moonmind.task.execute",
+    ]
+
+
+def test_task_stage_plan_defaults_to_publish_when_mode_omitted() -> None:
+    """Task stage plan fallback should assume PR publishing when mode is omitted."""
+
+    default_plan = build_task_stage_plan({"task": {}})
+    assert default_plan == [
+        "moonmind.task.prepare",
+        "moonmind.task.execute",
+        "moonmind.task.publish",
     ]

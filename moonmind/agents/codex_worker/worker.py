@@ -1053,7 +1053,7 @@ class CodexWorker:
             "workdirMode": workdir_mode_override
             or self._safe_workdir_mode(source_payload),
             "publish": {
-                "mode": publish_mode_override or publish.get("mode") or "branch",
+                "mode": publish_mode_override or publish.get("mode") or "pr",
                 "baseBranch": (
                     publish_base_override
                     if publish_base_override is not None
@@ -1152,7 +1152,7 @@ class CodexWorker:
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
             publish_mode = (
-                str(publish.get("mode") or "branch").strip().lower() or "branch"
+                str(publish.get("mode") or "pr").strip().lower() or "pr"
             )
 
             repository = str(canonical_payload.get("repository") or "").strip()
@@ -1360,7 +1360,7 @@ class CodexWorker:
         task = task_node if isinstance(task_node, Mapping) else {}
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
-        publish_mode = str(publish.get("mode") or "branch").strip().lower() or "branch"
+        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
         if publish_mode == "none":
             await self._emit_event(
                 job_id=job_id,
@@ -1834,7 +1834,7 @@ class CodexWorker:
             args.setdefault("ref", selected_ref)
         args.setdefault("workdirMode", workdir_mode)
         args.setdefault(
-            "publishMode", publish_mode_override or publish.get("mode") or "branch"
+            "publishMode", publish_mode_override or publish.get("mode") or "pr"
         )
         publish_base = (
             publish_base_override
@@ -1850,7 +1850,7 @@ class CodexWorker:
             "repository": repository,
             "instruction": instructions,
             "workdirMode": workdir_mode,
-            "publishMode": publish_mode_override or publish.get("mode") or "branch",
+            "publishMode": publish_mode_override or publish.get("mode") or "pr",
             "publishBaseBranch": publish_base,
         }
         if include_ref and selected_ref:

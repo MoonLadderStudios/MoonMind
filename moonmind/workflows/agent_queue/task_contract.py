@@ -57,7 +57,7 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
 
 
 def _normalize_publish_mode(value: object) -> str:
-    candidate = (_clean_optional_str(value) or "branch").lower()
+    candidate = (_clean_optional_str(value) or "pr").lower()
     if candidate not in SUPPORTED_PUBLISH_MODES:
         supported = ", ".join(sorted(SUPPORTED_PUBLISH_MODES))
         raise TaskContractError(f"publish.mode must be one of: {supported}")
@@ -183,7 +183,7 @@ class TaskPublishSelection(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    mode: str = Field("branch", alias="mode")
+    mode: str = Field("pr", alias="mode")
     pr_base_branch: str | None = Field(
         None,
         alias="prBaseBranch",
@@ -729,7 +729,7 @@ def build_canonical_task_view(
     required.append("git")
 
     publish_mode = _normalize_publish_mode(
-        (((canonical.get("task") or {}).get("publish") or {}).get("mode") or "branch")
+        (((canonical.get("task") or {}).get("publish") or {}).get("mode") or "pr")
     )
     canonical["task"]["publish"]["mode"] = publish_mode
     if publish_mode == "pr":
@@ -789,7 +789,7 @@ def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     task = task_node if isinstance(task_node, Mapping) else {}
     publish_node = task.get("publish")
     publish = publish_node if isinstance(publish_node, Mapping) else {}
-    publish_mode = _normalize_publish_mode(publish.get("mode") or "branch")
+    publish_mode = _normalize_publish_mode(publish.get("mode") or "pr")
 
     stages = ["moonmind.task.prepare", "moonmind.task.execute"]
     if publish_mode != "none":
