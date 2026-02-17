@@ -265,6 +265,107 @@ class AgentQueueRepository:
         await self._session.flush()
         return job
 
+    async def request_cancel(
+        self,
+        *,
+        job_id: UUID,
+        requested_by_user_id: UUID | None,
+        reason: str | None,
+    ) -> tuple[models.AgentJob, str]:
+        """Request cancellation for a queued or running job."""
+
+        now = datetime.now(UTC)
+        stmt: Select[tuple[models.AgentJob]] = (
+            select(models.AgentJob)
+            .where(models.AgentJob.id == job_id)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        job = result.scalars().first()
+        if job is None:
+            raise AgentJobNotFoundError(job_id)
+
+        if job.status is models.AgentJobStatus.QUEUED:
+            job.status = models.AgentJobStatus.CANCELLED
+            job.cancel_requested_at = now
+            job.cancel_requested_by_user_id = requested_by_user_id
+            job.cancel_reason = reason
+            job.finished_at = now
+            job.claimed_by = None
+            job.lease_expires_at = None
+            job.next_attempt_at = None
+            job.updated_at = now
+            await self._session.flush()
+            return (job, "queued_cancelled")
+
+        if job.status is models.AgentJobStatus.RUNNING:
+            if job.cancel_requested_at is not None:
+                await self._session.flush()
+                return (job, "noop_running_requested")
+            job.cancel_requested_at = now
+            job.cancel_requested_by_user_id = requested_by_user_id
+            job.cancel_reason = reason
+            job.updated_at = now
+            await self._session.flush()
+            return (job, "running_requested")
+
+        if job.status is models.AgentJobStatus.CANCELLED:
+            await self._session.flush()
+            return (job, "noop_cancelled")
+
+        raise AgentJobStateError(
+            f"Job {job_id} is {job.status.value} and cannot be cancelled"
+        )
+
+    async def ack_cancel(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+    ) -> tuple[models.AgentJob, str]:
+        """Acknowledge cancellation for a running job owned by the worker."""
+
+        now = datetime.now(UTC)
+        stmt: Select[tuple[models.AgentJob]] = (
+            select(models.AgentJob)
+            .where(models.AgentJob.id == job_id)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        job = result.scalars().first()
+        if job is None:
+            raise AgentJobNotFoundError(job_id)
+
+        if job.status is models.AgentJobStatus.CANCELLED:
+            if job.claimed_by not in {None, worker_id}:
+                raise AgentJobOwnershipError(
+                    f"Job {job_id} is owned by {job.claimed_by or 'none'}"
+                )
+            await self._session.flush()
+            return (job, "noop_cancelled")
+
+        if job.status is not models.AgentJobStatus.RUNNING:
+            raise AgentJobStateError(
+                f"Job {job_id} is {job.status.value} and cannot be cancellation-acked"
+            )
+        if job.claimed_by != worker_id:
+            raise AgentJobOwnershipError(
+                f"Job {job_id} is owned by {job.claimed_by or 'none'}"
+            )
+        if job.cancel_requested_at is None:
+            raise AgentJobStateError(
+                f"Job {job_id} has no cancellation request to acknowledge"
+            )
+
+        job.status = models.AgentJobStatus.CANCELLED
+        job.finished_at = now
+        job.claimed_by = None
+        job.lease_expires_at = None
+        job.next_attempt_at = None
+        job.updated_at = now
+        await self._session.flush()
+        return (job, "acknowledged")
+
     async def complete_job(
         self,
         *,
@@ -300,6 +401,16 @@ class AgentQueueRepository:
         now = datetime.now(UTC)
         job = await self._require_running_owned_job(job_id=job_id, worker_id=worker_id)
         job.error_message = error_message
+
+        if job.cancel_requested_at is not None:
+            job.status = models.AgentJobStatus.CANCELLED
+            job.finished_at = now
+            job.claimed_by = None
+            job.lease_expires_at = None
+            job.next_attempt_at = None
+            job.updated_at = now
+            await self._session.flush()
+            return job
 
         if retryable and job.attempt < job.max_attempts:
             delay_seconds = max(
@@ -586,7 +697,11 @@ class AgentQueueRepository:
         expired_jobs = list(result.scalars().all())
 
         for job in expired_jobs:
-            if job.attempt >= job.max_attempts:
+            if job.cancel_requested_at is not None:
+                job.status = models.AgentJobStatus.CANCELLED
+                job.finished_at = now
+                job.next_attempt_at = None
+            elif job.attempt >= job.max_attempts:
                 job.status = models.AgentJobStatus.DEAD_LETTER
                 job.finished_at = now
                 job.next_attempt_at = None

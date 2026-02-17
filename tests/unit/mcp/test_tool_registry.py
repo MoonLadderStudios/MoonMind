@@ -32,6 +32,9 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         payload={"instruction": "run"},
         created_by_user_id=uuid4(),
         requested_by_user_id=uuid4(),
+        cancel_requested_by_user_id=None,
+        cancel_requested_at=None,
+        cancel_reason=None,
         affinity_key="repo/moonmind",
         claimed_by=None,
         lease_expires_at=None,
@@ -73,6 +76,7 @@ def _build_service() -> SimpleNamespace:
         heartbeat=AsyncMock(),
         complete_job=AsyncMock(),
         fail_job=AsyncMock(),
+        request_cancel=AsyncMock(),
         get_job=AsyncMock(),
         list_jobs=AsyncMock(),
         upload_artifact=AsyncMock(),
@@ -90,6 +94,7 @@ def test_list_tools_is_deterministic_and_complete() -> None:
     assert names == sorted(names)
     assert "queue.enqueue" in names
     assert "queue.claim" in names
+    assert "queue.cancel" in names
     assert "queue.upload_artifact" in names
 
 
@@ -202,3 +207,24 @@ async def test_queue_upload_artifact_decodes_payload_and_dispatches() -> None:
     assert result["jobId"] == str(job_id)
     called_kwargs = service.upload_artifact.await_args.kwargs
     assert called_kwargs["data"] == b"hello"
+
+
+async def test_queue_cancel_dispatches_to_service() -> None:
+    """queue.cancel should forward reason/user and return serialized job."""
+
+    registry = QueueToolRegistry()
+    service = _build_service()
+    job = _build_job(status=models.AgentJobStatus.CANCELLED)
+    service.request_cancel.return_value = job
+
+    result = await registry.call_tool(
+        tool="queue.cancel",
+        arguments={"jobId": str(job.id), "reason": "operator request"},
+        context=_build_context(service),
+    )
+
+    assert result["id"] == str(job.id)
+    assert result["status"] == "cancelled"
+    called = service.request_cancel.await_args.kwargs
+    assert called["job_id"] == job.id
+    assert called["reason"] == "operator request"

@@ -1,0 +1,60 @@
+openapi: 3.1.0
+info:
+  title: Agent Queue Cancellation API
+  version: 0.1.0
+paths:
+  /api/queue/jobs/{job_id}/cancel:
+    post:
+      summary: Request queue job cancellation
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Updated queue job
+        '404':
+          description: Job not found
+        '409':
+          description: Job state conflict
+  /api/queue/jobs/{job_id}/cancel/ack:
+    post:
+      summary: Acknowledge cancellation for a worker-owned running job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workerId]
+              properties:
+                workerId:
+                  type: string
+                message:
+                  type: string
+      responses:
+        '200':
+          description: Updated queue job
+        '404':
+          description: Job not found
+        '409':
+          description: Job ownership or state conflict

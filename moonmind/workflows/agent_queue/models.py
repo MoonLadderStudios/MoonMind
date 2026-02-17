@@ -92,6 +92,15 @@ class AgentJob(Base):
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
     )
+    cancel_requested_by_user_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cancel_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     affinity_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     claimed_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
     Form,
@@ -30,6 +31,8 @@ from moonmind.schemas.agent_queue_models import (
     AppendJobEventRequest,
     ArtifactListResponse,
     ArtifactModel,
+    CancelJobAckRequest,
+    CancelJobRequest,
     ClaimJobRequest,
     ClaimJobResponse,
     CompleteJobRequest,
@@ -477,6 +480,48 @@ async def fail_job(
             worker_id=payload.worker_id,
             error_message=payload.error_message,
             retryable=payload.retryable,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_job(job)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobModel)
+async def cancel_job(
+    job_id: UUID,
+    payload: CancelJobRequest | None = Body(None),
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> JobModel:
+    """Request cancellation for a queued or running queue job."""
+
+    try:
+        user_id = getattr(user, "id", None)
+        job = await service.request_cancel(
+            job_id=job_id,
+            requested_by_user_id=user_id,
+            reason=(payload.reason if payload is not None else None),
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_job(job)
+
+
+@router.post("/jobs/{job_id}/cancel/ack", response_model=JobModel)
+async def ack_cancel_job(
+    job_id: UUID,
+    payload: CancelJobAckRequest,
+    service: AgentQueueService = Depends(_get_service),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> JobModel:
+    """Acknowledge cancellation for a running job owned by the worker."""
+
+    try:
+        _ensure_worker_identity(payload.worker_id, worker_auth)
+        job = await service.ack_cancel(
+            job_id=job_id,
+            worker_id=payload.worker_id,
+            message=payload.message,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc

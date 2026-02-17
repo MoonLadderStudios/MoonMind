@@ -23,6 +23,7 @@ import moonmind.utils.logging as moonmind_logging
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
+    CommandCancelledError,
     CommandResult,
     WorkerExecutionResult,
 )
@@ -63,6 +64,10 @@ _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
+
+
+class JobCancellationRequested(RuntimeError):
+    """Raised when a claimed job has an active cancellation request."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +389,19 @@ class ContainerTaskSpec:
     cache_volumes: tuple[ContainerCacheVolume, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedTaskStep:
+    """Runtime-resolved step metadata for execute-stage iteration."""
+
+    step_index: int
+    step_id: str
+    title: str | None
+    instructions: str | None
+    effective_skill_id: str
+    effective_skill_args: dict[str, Any]
+    has_step_instructions: bool
+
+
 class QueueApiClient:
     """HTTP client wrapper for queue and artifact endpoints."""
 
@@ -443,10 +461,25 @@ class QueueApiClient:
         job_id: UUID,
         worker_id: str,
         lease_seconds: int,
-    ) -> None:
-        await self._post_json(
+    ) -> dict[str, Any]:
+        return await self._post_json(
             f"/api/queue/jobs/{job_id}/heartbeat",
             json={"workerId": worker_id, "leaseSeconds": lease_seconds},
+        )
+
+    async def ack_cancel(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"workerId": worker_id}
+        if message:
+            payload["message"] = message
+        return await self._post_json(
+            f"/api/queue/jobs/{job_id}/cancel/ack",
+            json=payload,
         )
 
     async def complete_job(
@@ -568,6 +601,7 @@ class CodexWorker:
             placeholder="[REDACTED]"
         )
         self._dynamic_redaction_values: set[str] = set()
+        self._active_cancel_event: asyncio.Event | None = None
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
             self._vault_secret_resolver = VaultSecretResolver(
@@ -720,7 +754,8 @@ class CodexWorker:
             )
             return True
 
-        skill_meta = self._execution_metadata(canonical_payload)
+        resolved_steps = self._resolve_task_steps(canonical_payload)
+        skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
         await self._emit_event(
             job_id=job.id,
             level="info",
@@ -728,28 +763,48 @@ class CodexWorker:
             payload={"jobType": job.type, "targetRuntime": runtime_mode, **skill_meta},
         )
 
-        selected_skill = str(
-            skill_meta.get("selectedSkill") or self._config.default_skill
+        selected_skills = tuple(
+            sorted(
+                {
+                    step.effective_skill_id
+                    for step in resolved_steps
+                    if step.effective_skill_id != "auto"
+                }
+            )
         )
-        uses_skills = bool(skill_meta.get("usedSkills"))
-        if uses_skills and selected_skill not in self._config.allowed_skills:
+        disallowed = sorted(
+            skill
+            for skill in selected_skills
+            if skill not in self._config.allowed_skills
+        )
+        if disallowed:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
                 message="Skill is not allowlisted for this worker",
-                payload={"jobType": job.type, **skill_meta},
+                payload={
+                    "jobType": job.type,
+                    "selectedSkills": disallowed,
+                    **skill_meta,
+                },
             )
             await self._queue_client.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
-                error_message=f"skill not allowlisted: {selected_skill}",
+                error_message=f"skill not allowlisted: {', '.join(disallowed)}",
                 retryable=False,
             )
             return True
 
         heartbeat_stop = asyncio.Event()
+        cancel_requested_event = asyncio.Event()
+        self._active_cancel_event = cancel_requested_event
         heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(job_id=job.id, stop_event=heartbeat_stop)
+            self._heartbeat_loop(
+                job_id=job.id,
+                stop_event=heartbeat_stop,
+                cancel_event=cancel_requested_event,
+            )
         )
 
         staged_artifacts: list[ArtifactUpload] = []
@@ -761,16 +816,18 @@ class CodexWorker:
                 message="moonmind.task.plan",
                 payload={"jobType": job.type, "stages": stage_plan, **skill_meta},
             )
+            await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
 
             prepared = await self._run_prepare_stage(
                 job_id=job.id,
                 canonical_payload=canonical_payload,
                 source_payload=job.payload,
-                selected_skill=selected_skill,
+                selected_skills=selected_skills,
                 job_type=job.type,
                 skill_meta=skill_meta,
             )
             staged_artifacts.extend(self._prepare_stage_artifacts(prepared))
+            await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
 
             await self._emit_stage_event(
                 job_id=job.id,
@@ -783,10 +840,8 @@ class CodexWorker:
                 canonical_payload=canonical_payload,
                 source_payload=job.payload,
                 runtime_mode=runtime_mode,
-                selected_skill=selected_skill,
+                resolved_steps=resolved_steps,
                 prepared=prepared,
-                uses_skills=uses_skills,
-                use_fallback=bool(skill_meta.get("usedFallback")),
             )
             execute_artifacts = self._normalize_execute_artifacts(
                 result_artifacts=result.artifacts,
@@ -799,6 +854,7 @@ class CodexWorker:
                 status="finished" if result.succeeded else "failed",
                 payload={"jobType": job.type, "summary": result.summary, **skill_meta},
             )
+            await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
             if result.succeeded:
                 publish_note = await self._run_publish_stage(
                     job_id=job.id,
@@ -816,8 +872,17 @@ class CodexWorker:
                         error_message=None,
                         artifacts=result.artifacts,
                     )
+                await self._raise_if_cancel_requested(
+                    cancel_event=cancel_requested_event
+                )
 
             await self._upload_artifacts(job_id=job.id, artifacts=staged_artifacts)
+            if cancel_requested_event.is_set():
+                await self._acknowledge_cancellation(
+                    job_id=job.id,
+                    message="cancellation requested",
+                )
+                return True
             if result.succeeded:
                 await self._queue_client.complete_job(
                     job_id=job.id,
@@ -866,6 +931,14 @@ class CodexWorker:
                         "Best-effort artifact upload failed during exception path",
                         exc_info=True,
                     )
+            if cancel_requested_event.is_set() or isinstance(
+                exc, (JobCancellationRequested, CommandCancelledError)
+            ):
+                await self._acknowledge_cancellation(
+                    job_id=job.id,
+                    message=self._redact_text(str(exc) or "cancellation requested"),
+                )
+                return True
             terminal_error = self._redact_text(str(exc))
             await self._queue_client.fail_job(
                 job_id=job.id,
@@ -880,6 +953,7 @@ class CodexWorker:
                 payload={"error": terminal_error, "jobType": job.type, **skill_meta},
             )
         finally:
+            self._active_cancel_event = None
             heartbeat_stop.set()
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -899,40 +973,159 @@ class CodexWorker:
             worker_capabilities=self._config.worker_capabilities,
         )
 
-    def _execution_metadata(
+    @staticmethod
+    async def _raise_if_cancel_requested(*, cancel_event: asyncio.Event) -> None:
+        """Raise when a cancellation request has been observed for active job."""
+
+        if cancel_event.is_set():
+            raise JobCancellationRequested("cancellation requested by user")
+
+    async def _acknowledge_cancellation(self, *, job_id: UUID, message: str) -> None:
+        """Acknowledge cancellation and avoid terminal success/failure transitions."""
+
+        await self._emit_event(
+            job_id=job_id,
+            level="warn",
+            message="Job cancellation requested; stopping",
+            payload={"workerId": self._config.worker_id, "message": message},
+        )
+        try:
+            await self._queue_client.ack_cancel(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                message=message,
+            )
+        except Exception:
+            # Fallback to fail_job so ownership is still released on transient ack issues.
+            await self._queue_client.fail_job(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                error_message="cancellation requested but cancel ack failed",
+                retryable=False,
+            )
+
+    def _resolve_task_steps(
         self, canonical_payload: Mapping[str, Any]
+    ) -> list[ResolvedTaskStep]:
+        """Resolve canonical payload into ordered runtime step metadata."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        task_skill_node = task.get("skill")
+        task_skill = task_skill_node if isinstance(task_skill_node, Mapping) else {}
+        task_skill_id = str(task_skill.get("id") or "auto").strip() or "auto"
+        task_skill_args_node = task_skill.get("args")
+        task_skill_args = (
+            dict(task_skill_args_node)
+            if isinstance(task_skill_args_node, Mapping)
+            else {}
+        )
+
+        raw_steps = task.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            return [
+                ResolvedTaskStep(
+                    step_index=0,
+                    step_id="step-1",
+                    title=None,
+                    instructions=None,
+                    effective_skill_id=task_skill_id,
+                    effective_skill_args=(
+                        dict(task_skill_args) if task_skill_id != "auto" else {}
+                    ),
+                    has_step_instructions=False,
+                )
+            ]
+
+        resolved: list[ResolvedTaskStep] = []
+        for index, raw_step in enumerate(raw_steps):
+            step = raw_step if isinstance(raw_step, Mapping) else {}
+            step_id = str(step.get("id") or "").strip() or f"step-{index + 1}"
+            step_title = str(step.get("title") or "").strip() or None
+            step_instructions = str(step.get("instructions") or "").strip() or None
+
+            step_skill_node = step.get("skill")
+            step_skill = (
+                step_skill_node if isinstance(step_skill_node, Mapping) else None
+            )
+            if step_skill is not None:
+                explicit_step_skill = str(step_skill.get("id") or "").strip()
+                if explicit_step_skill:
+                    effective_skill_id = explicit_step_skill
+                    step_skill_args_node = step_skill.get("args")
+                    effective_skill_args = (
+                        dict(step_skill_args_node)
+                        if isinstance(step_skill_args_node, Mapping)
+                        else {}
+                    )
+                else:
+                    effective_skill_id = task_skill_id
+                    effective_skill_args = dict(task_skill_args)
+            else:
+                effective_skill_id = task_skill_id
+                effective_skill_args = dict(task_skill_args)
+
+            if not effective_skill_id:
+                effective_skill_id = "auto"
+            if effective_skill_id == "auto":
+                effective_skill_args = {}
+
+            resolved.append(
+                ResolvedTaskStep(
+                    step_index=index,
+                    step_id=step_id,
+                    title=step_title,
+                    instructions=step_instructions,
+                    effective_skill_id=effective_skill_id,
+                    effective_skill_args=effective_skill_args,
+                    has_step_instructions=step_instructions is not None,
+                )
+            )
+        return resolved
+
+    def _execution_metadata(
+        self,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
     ) -> dict[str, Any]:
         """Return normalized skill execution metadata for job events."""
 
         task_node = canonical_payload.get("task")
-        if isinstance(task_node, Mapping):
-            skill_node = task_node.get("skill")
-            runtime_node = task_node.get("runtime")
-        else:
-            skill_node = None
-            runtime_node = None
-        if isinstance(skill_node, Mapping):
-            selected_skill = str(skill_node.get("id") or "auto").strip() or "auto"
-        else:
-            selected_skill = "auto"
+        runtime_node = (
+            task_node.get("runtime") if isinstance(task_node, Mapping) else None
+        )
         if isinstance(runtime_node, Mapping):
             selected_model = str(runtime_node.get("model") or "").strip() or None
             selected_effort = str(runtime_node.get("effort") or "").strip() or None
         else:
             selected_model = None
             selected_effort = None
-        execution_path = "direct_only"
-        used_skills = selected_skill != "auto"
-        used_fallback = False
 
-        if used_skills:
-            execution_path = "skill"
-            if selected_skill != "speckit":
-                execution_path = "direct_fallback"
-                used_fallback = True
+        selected_skills = sorted(
+            {
+                step.effective_skill_id
+                for step in resolved_steps
+                if step.effective_skill_id != "auto"
+            }
+        )
+        used_skills = bool(selected_skills)
+        used_fallback = any(skill != "speckit" for skill in selected_skills)
+        if not used_skills:
+            selected_skill = "auto"
+            execution_path = "direct_only"
+        elif len(selected_skills) == 1:
+            selected_skill = selected_skills[0]
+            execution_path = (
+                "skill" if selected_skill == "speckit" else "direct_fallback"
+            )
+        else:
+            selected_skill = "multiple"
+            execution_path = "direct_fallback"
 
         return {
             "selectedSkill": selected_skill,
+            "selectedSkills": selected_skills,
+            "stepCount": len(resolved_steps),
             "executionPath": execution_path,
             "usedSkills": used_skills,
             "usedFallback": used_fallback,
@@ -953,6 +1146,7 @@ class CodexWorker:
         *,
         canonical_payload: Mapping[str, Any],
         source_payload: Mapping[str, Any],
+        instruction_override: str | None = None,
         ref_override: str | None = None,
         publish_mode_override: str | None = None,
         publish_base_override: str | None = None,
@@ -970,11 +1164,15 @@ class CodexWorker:
 
         payload: dict[str, Any] = {
             "repository": canonical_payload.get("repository"),
-            "instruction": task.get("instructions"),
+            "instruction": (
+                instruction_override
+                if instruction_override is not None
+                else task.get("instructions")
+            ),
             "workdirMode": workdir_mode_override
             or self._safe_workdir_mode(source_payload),
             "publish": {
-                "mode": publish_mode_override or publish.get("mode") or "branch",
+                "mode": publish_mode_override or publish.get("mode") or "pr",
                 "baseBranch": (
                     publish_base_override
                     if publish_base_override is not None
@@ -1005,7 +1203,7 @@ class CodexWorker:
         job_id: UUID,
         canonical_payload: Mapping[str, Any],
         source_payload: Mapping[str, Any],
-        selected_skill: str,
+        selected_skills: Sequence[str],
         job_type: str,
         skill_meta: Mapping[str, Any],
     ) -> PreparedTaskWorkspace:
@@ -1035,12 +1233,17 @@ class CodexWorker:
             home_dir.mkdir(parents=True, exist_ok=True)
             skills_active_path.mkdir(parents=True, exist_ok=True)
 
+            deduped_selected_skills = tuple(
+                dict.fromkeys(
+                    [skill.strip() for skill in selected_skills if skill.strip()]
+                )
+            )
             materialized_skill_payload: dict[str, Any] | None = None
-            if selected_skill != "auto":
+            if deduped_selected_skills:
                 try:
                     selection = resolve_run_skill_selection(
                         run_id=str(job_id),
-                        context={"skill_selection": [selected_skill]},
+                        context={"skill_selection": list(deduped_selected_skills)},
                     )
                     materialized_workspace = materialize_run_skill_workspace(
                         selection=selection,
@@ -1051,7 +1254,10 @@ class CodexWorker:
                     materialized_skill_payload = materialized_workspace.to_payload()
                     self._append_stage_log(
                         prepare_log_path,
-                        ("materialized selected skill workspace: " f"{selected_skill}"),
+                        (
+                            "materialized selected skill workspace: "
+                            + ", ".join(deduped_selected_skills)
+                        ),
                     )
                 except (SkillResolutionError, SkillMaterializationError) as exc:
                     raise RuntimeError(f"skill materialization failed: {exc}") from exc
@@ -1072,9 +1278,7 @@ class CodexWorker:
             git = git_node if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
-            publish_mode = (
-                str(publish.get("mode") or "branch").strip().lower() or "branch"
-            )
+            publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -1149,7 +1353,12 @@ class CodexWorker:
             elif starting_branch != default_branch:
                 new_branch = None
             else:
-                suffix = selected_skill if selected_skill != "auto" else None
+                if len(deduped_selected_skills) == 1:
+                    suffix = deduped_selected_skills[0]
+                elif len(deduped_selected_skills) > 1:
+                    suffix = "multi"
+                else:
+                    suffix = None
                 new_branch = generate_branch_name(job_id, prefix="task", suffix=suffix)
 
             working_branch = new_branch or starting_branch
@@ -1166,7 +1375,12 @@ class CodexWorker:
                 "repository": repository,
                 "runtime": canonical_payload.get("targetRuntime"),
                 "skill": {
-                    "id": selected_skill,
+                    "id": (
+                        deduped_selected_skills[0]
+                        if len(deduped_selected_skills) == 1
+                        else ("multiple" if deduped_selected_skills else "auto")
+                    ),
+                    "ids": list(deduped_selected_skills),
                     "args": (
                         (task.get("skill") or {}).get("args")
                         if isinstance(task.get("skill"), Mapping)
@@ -1281,7 +1495,7 @@ class CodexWorker:
         task = task_node if isinstance(task_node, Mapping) else {}
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
-        publish_mode = str(publish.get("mode") or "branch").strip().lower() or "branch"
+        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
         if publish_mode == "none":
             await self._emit_event(
                 job_id=job_id,
@@ -1548,6 +1762,77 @@ class CodexWorker:
             )
         return normalized
 
+    def _normalize_step_artifacts(
+        self,
+        *,
+        step: ResolvedTaskStep,
+        result_artifacts: Sequence[ArtifactUpload],
+        step_log_path: Path,
+        step_patch_path: Path,
+    ) -> list[ArtifactUpload]:
+        """Map runtime artifacts to deterministic per-step artifact paths."""
+
+        step_log_name = f"logs/steps/step-{step.step_index:04d}.log"
+        step_patch_name = f"patches/steps/step-{step.step_index:04d}.patch"
+        normalized: list[ArtifactUpload] = []
+        has_step_log = False
+        has_step_patch = False
+        for artifact in result_artifacts:
+            if artifact.name in {"logs/codex_exec.log", "logs/execute.log"}:
+                if artifact.path.exists():
+                    step_log_path.parent.mkdir(parents=True, exist_ok=True)
+                    if artifact.path != step_log_path:
+                        shutil.copy2(artifact.path, step_log_path)
+                    normalized.append(
+                        ArtifactUpload(
+                            path=step_log_path,
+                            name=step_log_name,
+                            content_type="text/plain",
+                            digest=artifact.digest,
+                        )
+                    )
+                    has_step_log = True
+                continue
+            if artifact.name == "patches/changes.patch":
+                if artifact.path.exists():
+                    step_patch_path.parent.mkdir(parents=True, exist_ok=True)
+                    if artifact.path != step_patch_path:
+                        shutil.copy2(artifact.path, step_patch_path)
+                    if step_patch_path.stat().st_size > 0:
+                        normalized.append(
+                            ArtifactUpload(
+                                path=step_patch_path,
+                                name=step_patch_name,
+                                content_type="text/x-diff",
+                                digest=artifact.digest,
+                            )
+                        )
+                        has_step_patch = True
+                continue
+            normalized.append(artifact)
+
+        if not has_step_log and step_log_path.exists():
+            normalized.append(
+                ArtifactUpload(
+                    path=step_log_path,
+                    name=step_log_name,
+                    content_type="text/plain",
+                )
+            )
+        if (
+            not has_step_patch
+            and step_patch_path.exists()
+            and step_patch_path.stat().st_size > 0
+        ):
+            normalized.append(
+                ArtifactUpload(
+                    path=step_patch_path,
+                    name=step_patch_name,
+                    content_type="text/x-diff",
+                )
+            )
+        return normalized
+
     async def _emit_stage_event(
         self,
         *,
@@ -1652,7 +1937,15 @@ class CodexWorker:
         check: bool = True,
         env: Mapping[str, str] | None = None,
         redaction_values: tuple[str, ...] = (),
+        cancel_event: asyncio.Event | None = None,
     ) -> CommandResult:
+        effective_cancel_event = cancel_event or getattr(
+            self, "_active_cancel_event", None
+        )
+        if effective_cancel_event is not None and effective_cancel_event.is_set():
+            raise JobCancellationRequested(
+                "cancellation requested before command start"
+            )
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
             merged_redaction_values = tuple(
@@ -1674,6 +1967,7 @@ class CodexWorker:
                 check=check,
                 env=dict(env) if env is not None else None,
                 redaction_values=merged_redaction_values,
+                cancel_event=effective_cancel_event,
             )
         self._append_stage_log(log_path, f"$ {' '.join(command)}")
         return CommandResult(tuple(command), 0, "", "")
@@ -1713,6 +2007,8 @@ class CodexWorker:
         canonical_payload: Mapping[str, Any],
         selected_skill: str,
         source_payload: Mapping[str, Any],
+        instruction_override: str | None = None,
+        skill_args_override: Mapping[str, Any] | None = None,
         ref_override: str | None = None,
         publish_mode_override: str | None = None,
         publish_base_override: str | None = None,
@@ -1729,11 +2025,18 @@ class CodexWorker:
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         skill_node = task.get("skill")
         skill = skill_node if isinstance(skill_node, Mapping) else {}
-        raw_args = skill.get("args")
-        args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
+        if isinstance(skill_args_override, Mapping):
+            args = dict(skill_args_override)
+        else:
+            raw_args = skill.get("args")
+            args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
 
         repository = str(canonical_payload.get("repository") or "").strip()
-        instructions = str(task.get("instructions") or "").strip()
+        instructions = (
+            str(instruction_override).strip()
+            if instruction_override is not None
+            else str(task.get("instructions") or "").strip()
+        )
         starting_branch = str(git.get("startingBranch") or "").strip()
         selected_ref = (
             str(ref_override).strip() if ref_override is not None else starting_branch
@@ -1748,7 +2051,7 @@ class CodexWorker:
             args.setdefault("ref", selected_ref)
         args.setdefault("workdirMode", workdir_mode)
         args.setdefault(
-            "publishMode", publish_mode_override or publish.get("mode") or "branch"
+            "publishMode", publish_mode_override or publish.get("mode") or "pr"
         )
         publish_base = (
             publish_base_override
@@ -1764,7 +2067,7 @@ class CodexWorker:
             "repository": repository,
             "instruction": instructions,
             "workdirMode": workdir_mode,
-            "publishMode": publish_mode_override or publish.get("mode") or "branch",
+            "publishMode": publish_mode_override or publish.get("mode") or "pr",
             "publishBaseBranch": publish_base,
         }
         if include_ref and selected_ref:
@@ -1788,15 +2091,20 @@ class CodexWorker:
         canonical_payload: Mapping[str, Any],
         source_payload: Mapping[str, Any],
         runtime_mode: str,
-        selected_skill: str,
+        resolved_steps: Sequence[ResolvedTaskStep],
         prepared: PreparedTaskWorkspace,
-        uses_skills: bool,
-        use_fallback: bool,
     ) -> WorkerExecutionResult:
-        """Execute task instructions via the selected runtime adapter."""
+        """Execute resolved task steps via selected runtime adapter."""
 
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        explicit_steps = isinstance(task.get("steps"), list) and bool(task.get("steps"))
         container_spec = self._extract_container_task_spec(canonical_payload)
         if container_spec is not None:
+            if explicit_steps:
+                raise ValueError(
+                    "task.steps is not supported when task.container.enabled=true"
+                )
             return await self._run_container_execute_stage(
                 job_id=job_id,
                 canonical_payload=canonical_payload,
@@ -1808,100 +2116,238 @@ class CodexWorker:
             canonical_payload=canonical_payload,
             runtime_mode=runtime_mode,
         )
-        if runtime_mode == "codex":
-            if uses_skills:
-                return await self._codex_exec_handler.handle_skill(
-                    job_id=job_id,
-                    payload=self._build_skill_payload(
-                        canonical_payload=canonical_payload,
-                        selected_skill=selected_skill,
-                        source_payload=source_payload,
-                        ref_override=None,
-                        publish_mode_override="none",
-                        publish_base_override=None,
-                        workdir_mode_override="reuse",
-                        include_ref=False,
-                    ),
-                    selected_skill=selected_skill,
-                    fallback=use_fallback,
-                )
-
-            exec_payload = self._build_exec_payload(
-                canonical_payload=canonical_payload,
-                source_payload=source_payload,
-                ref_override=None,
-                publish_mode_override="none",
-                publish_base_override=None,
-                workdir_mode_override="reuse",
-                include_ref=False,
-            )
-            codex_overrides: dict[str, str] = {}
-            if runtime_model:
-                codex_overrides["model"] = runtime_model
-            if runtime_effort:
-                codex_overrides["effort"] = runtime_effort
-            if codex_overrides:
-                exec_payload["codex"] = codex_overrides
-            return await self._codex_exec_handler.handle(
-                job_id=job_id,
-                payload=exec_payload,
-            )
-
-        instruction = self._compose_instruction_for_runtime(
-            canonical_payload=canonical_payload,
-            selected_skill=selected_skill,
-            runtime_mode=runtime_mode,
+        plan_payload = {
+            "stepCount": len(resolved_steps),
+            "stepIds": [step.step_id for step in resolved_steps],
+        }
+        await self._emit_event(
+            job_id=job_id,
+            level="info",
+            message="task.steps.plan",
+            payload=plan_payload,
         )
-        command = self._build_non_codex_runtime_command(
-            runtime_mode=runtime_mode,
-            instruction=instruction,
-            model=runtime_model,
-            effort=runtime_effort,
-        )
-        try:
-            await self._run_stage_command(
-                command,
-                cwd=prepared.repo_dir,
-                log_path=prepared.execute_log_path,
+
+        cancel_event = getattr(self, "_active_cancel_event", None)
+        step_artifacts: list[ArtifactUpload] = []
+        for step in resolved_steps:
+            if cancel_event is not None:
+                await self._raise_if_cancel_requested(cancel_event=cancel_event)
+            step_log_path = (
+                prepared.artifacts_dir
+                / "logs"
+                / "steps"
+                / f"step-{step.step_index:04d}.log"
             )
-            patch_path = prepared.artifacts_dir / "changes.patch"
-            patch_result = await self._run_stage_command(
-                ["git", "diff"],
-                cwd=prepared.repo_dir,
-                log_path=prepared.execute_log_path,
-                check=False,
+            step_patch_path = (
+                prepared.artifacts_dir
+                / "patches"
+                / "steps"
+                / f"step-{step.step_index:04d}.patch"
             )
-            patch_path.write_text(patch_result.stdout or "", encoding="utf-8")
-            return WorkerExecutionResult(
-                succeeded=True,
-                summary=f"{runtime_mode} task execution completed",
-                error_message=None,
-                artifacts=(
-                    ArtifactUpload(
-                        path=prepared.execute_log_path,
-                        name="logs/execute.log",
-                        content_type="text/plain",
-                    ),
-                    ArtifactUpload(
-                        path=patch_path,
-                        name="patches/changes.patch",
-                        content_type="text/x-diff",
-                    ),
+            event_payload: dict[str, Any] = {
+                "stepIndex": step.step_index,
+                "stepId": step.step_id,
+                "effectiveSkill": step.effective_skill_id,
+                "hasStepInstructions": step.has_step_instructions,
+            }
+            if step.title:
+                event_payload["stepTitle"] = step.title
+
+            self._append_stage_log(
+                prepared.execute_log_path,
+                (
+                    f"step {step.step_index + 1}/{len(resolved_steps)} started: "
+                    f"{step.step_id} (skill={step.effective_skill_id})"
                 ),
             )
-        except Exception as exc:
+            await self._emit_event(
+                job_id=job_id,
+                level="info",
+                message="task.step.started",
+                payload=event_payload,
+            )
+            instruction = self._compose_step_instruction_for_runtime(
+                canonical_payload=canonical_payload,
+                runtime_mode=runtime_mode,
+                step=step,
+                total_steps=len(resolved_steps),
+            )
+
+            try:
+                if runtime_mode == "codex":
+                    if step.effective_skill_id != "auto":
+                        step_result = await self._codex_exec_handler.handle_skill(
+                            job_id=job_id,
+                            payload=self._build_skill_payload(
+                                canonical_payload=canonical_payload,
+                                selected_skill=step.effective_skill_id,
+                                source_payload=source_payload,
+                                instruction_override=instruction,
+                                skill_args_override=step.effective_skill_args,
+                                ref_override=None,
+                                publish_mode_override="none",
+                                publish_base_override=None,
+                                workdir_mode_override="reuse",
+                                include_ref=False,
+                            ),
+                            selected_skill=step.effective_skill_id,
+                            fallback=step.effective_skill_id != "speckit",
+                            cancel_event=cancel_event,
+                        )
+                    else:
+                        exec_payload = self._build_exec_payload(
+                            canonical_payload=canonical_payload,
+                            source_payload=source_payload,
+                            instruction_override=instruction,
+                            ref_override=None,
+                            publish_mode_override="none",
+                            publish_base_override=None,
+                            workdir_mode_override="reuse",
+                            include_ref=False,
+                        )
+                        codex_overrides: dict[str, str] = {}
+                        if runtime_model:
+                            codex_overrides["model"] = runtime_model
+                        if runtime_effort:
+                            codex_overrides["effort"] = runtime_effort
+                        if codex_overrides:
+                            exec_payload["codex"] = codex_overrides
+                        step_result = await self._codex_exec_handler.handle(
+                            job_id=job_id,
+                            payload=exec_payload,
+                            cancel_event=cancel_event,
+                        )
+                else:
+                    command = self._build_non_codex_runtime_command(
+                        runtime_mode=runtime_mode,
+                        instruction=instruction,
+                        model=runtime_model,
+                        effort=runtime_effort,
+                    )
+                    await self._run_stage_command(
+                        command,
+                        cwd=prepared.repo_dir,
+                        log_path=step_log_path,
+                    )
+                    patch_result = await self._run_stage_command(
+                        ["git", "diff"],
+                        cwd=prepared.repo_dir,
+                        log_path=step_log_path,
+                        check=False,
+                    )
+                    step_patch_path.parent.mkdir(parents=True, exist_ok=True)
+                    step_patch_path.write_text(
+                        patch_result.stdout or "",
+                        encoding="utf-8",
+                    )
+                    step_result = WorkerExecutionResult(
+                        succeeded=True,
+                        summary=f"{runtime_mode} step execution completed",
+                        error_message=None,
+                        artifacts=(
+                            ArtifactUpload(
+                                path=step_log_path,
+                                name="logs/execute.log",
+                                content_type="text/plain",
+                            ),
+                            ArtifactUpload(
+                                path=step_patch_path,
+                                name="patches/changes.patch",
+                                content_type="text/x-diff",
+                            ),
+                        ),
+                    )
+            except CommandCancelledError:
+                raise
+            except Exception as exc:
+                event_payload["summary"] = str(exc)
+                await self._emit_event(
+                    job_id=job_id,
+                    level="error",
+                    message="task.step.failed",
+                    payload=event_payload,
+                )
+                self._append_stage_log(
+                    prepared.execute_log_path,
+                    (
+                        f"step {step.step_index + 1}/{len(resolved_steps)} failed: "
+                        f"{step.step_id}; error={exc}"
+                    ),
+                )
+                raise
+
+            normalized_step_artifacts = self._normalize_step_artifacts(
+                step=step,
+                result_artifacts=step_result.artifacts,
+                step_log_path=step_log_path,
+                step_patch_path=step_patch_path,
+            )
+            step_artifacts.extend(normalized_step_artifacts)
+
+            if step_result.succeeded:
+                event_payload["summary"] = step_result.summary
+                await self._emit_event(
+                    job_id=job_id,
+                    level="info",
+                    message="task.step.finished",
+                    payload=event_payload,
+                )
+                self._append_stage_log(
+                    prepared.execute_log_path,
+                    (
+                        f"step {step.step_index + 1}/{len(resolved_steps)} finished: "
+                        f"{step.step_id}; summary={step_result.summary or '-'}"
+                    ),
+                )
+                continue
+
+            event_payload["summary"] = step_result.error_message
+            await self._emit_event(
+                job_id=job_id,
+                level="error",
+                message="task.step.failed",
+                payload=event_payload,
+            )
+            self._append_stage_log(
+                prepared.execute_log_path,
+                (
+                    f"step {step.step_index + 1}/{len(resolved_steps)} failed: "
+                    f"{step.step_id}; error={step_result.error_message or '-'}"
+                ),
+            )
             return WorkerExecutionResult(
                 succeeded=False,
                 summary=None,
-                error_message=str(exc),
-                artifacts=(
-                    ArtifactUpload(
-                        path=prepared.execute_log_path,
-                        name="logs/execute.log",
-                        content_type="text/plain",
-                    ),
-                ),
+                error_message=step_result.error_message,
+                artifacts=tuple(step_artifacts),
             )
+
+        patch_path = prepared.artifacts_dir / "changes.patch"
+        patch_result = await self._run_stage_command(
+            ["git", "diff"],
+            cwd=prepared.repo_dir,
+            log_path=prepared.execute_log_path,
+            check=False,
+        )
+        patch_path.write_text(patch_result.stdout or "", encoding="utf-8")
+        if patch_path.exists() and patch_path.stat().st_size > 0:
+            step_artifacts.append(
+                ArtifactUpload(
+                    path=patch_path,
+                    name="patches/changes.patch",
+                    content_type="text/x-diff",
+                )
+            )
+
+        return WorkerExecutionResult(
+            succeeded=True,
+            summary=(
+                f"{runtime_mode} task execution completed "
+                f"({len(resolved_steps)} step{'s' if len(resolved_steps) != 1 else ''})"
+            ),
+            error_message=None,
+            artifacts=tuple(step_artifacts),
+        )
 
     def _extract_container_task_spec(
         self, canonical_payload: Mapping[str, Any]
@@ -2320,31 +2766,43 @@ class CodexWorker:
             ),
         )
 
-    def _compose_instruction_for_runtime(
+    def _compose_step_instruction_for_runtime(
         self,
         *,
         canonical_payload: Mapping[str, Any],
-        selected_skill: str,
         runtime_mode: str,
+        step: ResolvedTaskStep,
+        total_steps: int,
     ) -> str:
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
-        instruction = str(task.get("instructions") or "").strip()
-        if selected_skill == "auto":
-            return instruction
-
-        skill_node = task.get("skill")
-        skill = skill_node if isinstance(skill_node, Mapping) else {}
-        raw_args = skill.get("args")
-        args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
-        args_text = json.dumps(args, indent=2, sort_keys=True)
-        return (
-            f"Selected skill: {selected_skill}\n"
-            f"Runtime adapter: {runtime_mode}\n"
-            f"Skill arguments:\n{args_text}\n\n"
-            "Execute the user task with the selected skill semantics:\n"
-            f"{instruction}"
+        objective = str(task.get("instructions") or "").strip()
+        step_title = f" {step.title}" if step.title else ""
+        step_instruction = (
+            step.instructions
+            if step.instructions
+            else "(no step-specific instructions; continue based on objective)"
         )
+        instruction = (
+            "MOONMIND TASK OBJECTIVE:\n"
+            f"{objective}\n\n"
+            f"STEP {step.step_index + 1}/{total_steps} {step.step_id}{step_title}:\n"
+            f"{step_instruction}\n\n"
+            "EFFECTIVE SKILL:\n"
+            f"{step.effective_skill_id}\n\n"
+            "WORKSPACE:\n"
+            "- Repo is already checked out on the working branch.\n"
+            "- Do NOT commit or push. Publish is handled by MoonMind publish stage.\n"
+            "- Skills are available via .agents/skills and .gemini/skills links.\n"
+            "- Write logs to stdout/stderr; MoonMind captures them.\n\n"
+            f"RUNTIME ADAPTER: {runtime_mode}"
+        )
+        if step.effective_skill_id != "auto":
+            instruction += (
+                "\n\nSKILL USAGE:\n"
+                "Use the selected skill's files under .agents/skills/{skill}/ as the procedure for this step."
+            ).format(skill=step.effective_skill_id)
+        return instruction
 
     def _build_non_codex_runtime_command(
         self,
@@ -2536,20 +2994,31 @@ class CodexWorker:
             return tuple(self._redact_payload(item) for item in payload)
         return payload
 
-    async def _heartbeat_loop(self, *, job_id: UUID, stop_event: asyncio.Event) -> None:
+    async def _heartbeat_loop(
+        self,
+        *,
+        job_id: UUID,
+        stop_event: asyncio.Event,
+        cancel_event: asyncio.Event,
+    ) -> None:
         """Send lease renewals while a job is actively executing."""
 
-        interval_seconds = max(1.0, self._config.lease_seconds / 3.0)
+        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 5.0)
         while not stop_event.is_set():
             await asyncio.sleep(interval_seconds)
             if stop_event.is_set():
                 return
             try:
-                await self._queue_client.heartbeat(
+                payload = await self._queue_client.heartbeat(
                     job_id=job_id,
                     worker_id=self._config.worker_id,
                     lease_seconds=self._config.lease_seconds,
                 )
+                cancel_requested_at = str(
+                    payload.get("cancelRequestedAt") or ""
+                ).strip()
+                if cancel_requested_at:
+                    cancel_event.set()
             except Exception:
                 # Heartbeat errors are tolerated so terminal transition can still run.
                 continue

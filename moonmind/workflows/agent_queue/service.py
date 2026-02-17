@@ -425,6 +425,20 @@ class AgentQueueService:
             retryable=retryable,
             retry_delay_seconds=retry_delay_seconds,
         )
+        if job.status is models.AgentJobStatus.CANCELLED:
+            await self._repository.append_event(
+                job_id=job_id,
+                level=models.AgentJobEventLevel.WARN,
+                message="Job cancelled",
+                payload={
+                    "workerId": worker,
+                    "source": "fail_job",
+                    "reason": "cancellation_requested",
+                },
+            )
+            await self._repository.commit()
+            return job
+
         event_level = (
             models.AgentJobEventLevel.WARN
             if retryable
@@ -443,6 +457,82 @@ class AgentQueueService:
                 ),
             },
         )
+        await self._repository.commit()
+        return job
+
+    async def request_cancel(
+        self,
+        *,
+        job_id: UUID,
+        requested_by_user_id: UUID | None,
+        reason: str | None = None,
+    ) -> models.AgentJob:
+        """Request cancellation for one queue job."""
+
+        clean_reason = reason.strip() if reason else None
+        if clean_reason == "":
+            clean_reason = None
+
+        job, action = await self._repository.request_cancel(
+            job_id=job_id,
+            requested_by_user_id=requested_by_user_id,
+            reason=clean_reason,
+        )
+        if action == "queued_cancelled":
+            await self._repository.append_event(
+                job_id=job_id,
+                level=models.AgentJobEventLevel.INFO,
+                message="Job cancelled",
+                payload={
+                    "requestedByUserId": (
+                        str(requested_by_user_id)
+                        if requested_by_user_id is not None
+                        else None
+                    ),
+                    "reason": clean_reason,
+                },
+            )
+        elif action == "running_requested":
+            await self._repository.append_event(
+                job_id=job_id,
+                level=models.AgentJobEventLevel.WARN,
+                message="Cancellation requested",
+                payload={
+                    "requestedByUserId": (
+                        str(requested_by_user_id)
+                        if requested_by_user_id is not None
+                        else None
+                    ),
+                    "reason": clean_reason,
+                },
+            )
+        await self._repository.commit()
+        return job
+
+    async def ack_cancel(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        message: str | None = None,
+    ) -> models.AgentJob:
+        """Acknowledge cancellation for a running job owned by worker."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        detail = message.strip() if message else None
+        if detail == "":
+            detail = None
+
+        job, action = await self._repository.ack_cancel(job_id=job_id, worker_id=worker)
+        if action == "acknowledged":
+            await self._repository.append_event(
+                job_id=job_id,
+                level=models.AgentJobEventLevel.INFO,
+                message="Job cancelled",
+                payload={"workerId": worker, "message": detail},
+            )
         await self._repository.commit()
         return job
 

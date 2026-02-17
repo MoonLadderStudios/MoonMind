@@ -322,11 +322,26 @@
     return candidate.startsWith("git@");
   }
 
-  function deriveRequiredCapabilities({ runtimeMode, publishMode }) {
+  function parseCapabilitiesCsv(value) {
+    const parts = String(value || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+    return Array.from(new Set(parts));
+  }
+
+  function deriveRequiredCapabilities({
+    runtimeMode,
+    publishMode,
+    taskSkillRequiredCapabilities = [],
+    stepSkillRequiredCapabilities = [],
+  }) {
     const capabilities = [runtimeMode, "git"];
     if (publishMode === "pr") {
       capabilities.push("gh");
     }
+    capabilities.push(...taskSkillRequiredCapabilities);
+    capabilities.push(...stepSkillRequiredCapabilities);
     return Array.from(new Set(capabilities));
   }
 
@@ -851,6 +866,18 @@
           <textarea name="skillArgs" placeholder='{"featureKey":"019-remove-speckit-category","forcePhase":"discover","notes":"optional context"}'></textarea>
           <span class="small">Optional args forwarded to <span class="inline-code">task.skill.args</span>.</span>
         </label>
+        <label>Skill Required Capabilities (optional CSV)
+          <input name="skillRequiredCapabilities" placeholder="docker,qdrant,unity" />
+          <span class="small">Optional values forwarded to <span class="inline-code">task.skill.requiredCapabilities</span> and merged into job <span class="inline-code">requiredCapabilities</span>.</span>
+        </label>
+        <div class="card">
+          <div class="actions">
+            <strong>Steps (optional)</strong>
+            <button type="button" id="queue-step-add">Add Step</button>
+          </div>
+          <span class="small">Steps run in order within one job. Leave empty for implicit single-step behavior.</span>
+          <div id="queue-steps-list"></div>
+        </div>
         <div class="grid-2">
           <label>Model
             <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
@@ -873,11 +900,11 @@
         </div>
         <label>Publish Mode
           <select name="publishMode">
-            <option value="branch" selected>branch</option>
+            <option value="pr" selected>pr</option>
+            <option value="branch">branch</option>
             <option value="none">none</option>
-            <option value="pr">pr</option>
           </select>
-          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">branch</span>.</span>
+          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">pr</span>.</span>
         </label>
         <div class="grid-2">
           <label>Priority
@@ -908,6 +935,8 @@
     const runtimeSelect = form.querySelector('select[name="runtime"]');
     const modelInputElement = form.querySelector('input[name="model"]');
     const effortInputElement = form.querySelector('input[name="effort"]');
+    const stepsList = document.getElementById("queue-steps-list");
+    const addStepButton = document.getElementById("queue-step-add");
     const runtimeModelDefaults = {
       ...configuredModelDefaults,
       codex: codexDefaultTaskModel,
@@ -942,6 +971,144 @@
         applyRuntimeDefaults(nextRuntime || defaultTaskRuntime);
       });
     }
+    const stepState = [];
+    const renderStepEditor = () => {
+      if (!stepsList) {
+        return;
+      }
+      if (stepState.length === 0) {
+        stepsList.innerHTML = "<p class='small'>No explicit steps configured.</p>";
+        return;
+      }
+      const rows = stepState
+        .map((step, index) => {
+          return `
+            <div class="card" data-step-index="${index}">
+              <div class="actions">
+                <strong>Step ${index + 1}</strong>
+                <div>
+                  <button type="button" data-step-action="up" data-step-index="${index}" ${
+                    index === 0 ? "disabled" : ""
+                  }>Up</button>
+                  <button type="button" data-step-action="down" data-step-index="${index}" ${
+                    index === stepState.length - 1 ? "disabled" : ""
+                  }>Down</button>
+                  <button type="button" data-step-action="remove" data-step-index="${index}">Remove</button>
+                </div>
+              </div>
+              <div class="grid-2">
+                <label>Step ID (optional)
+                  <input data-step-field="id" data-step-index="${index}" value="${escapeHtml(step.id)}" placeholder="step-${index + 1}" />
+                </label>
+                <label>Title (optional)
+                  <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
+                </label>
+              </div>
+              <label>Instructions (optional)
+                <textarea data-step-field="instructions" data-step-index="${index}" placeholder="Step-specific instructions.">${escapeHtml(
+                  step.instructions,
+                )}</textarea>
+              </label>
+              <div class="grid-2">
+                <label>Skill (optional)
+                  <input data-step-field="skillId" data-step-index="${index}" value="${escapeHtml(
+                    step.skillId,
+                  )}" placeholder="auto, speckit-orchestrate, ..." />
+                </label>
+                <label>Skill Required Capabilities (optional CSV)
+                  <input data-step-field="skillRequiredCapabilities" data-step-index="${index}" value="${escapeHtml(
+                    step.skillRequiredCapabilities,
+                  )}" placeholder="docker,qdrant" />
+                </label>
+              </div>
+              <label>Skill Args (optional JSON object)
+                <textarea data-step-field="skillArgs" data-step-index="${index}" placeholder='{"notes":"optional context"}'>${escapeHtml(
+                  step.skillArgs,
+                )}</textarea>
+              </label>
+            </div>
+          `;
+        })
+        .join("");
+      stepsList.innerHTML = rows;
+    };
+    const readStepIndex = (target) => {
+      if (!(target instanceof HTMLElement)) {
+        return null;
+      }
+      const raw = target.getAttribute("data-step-index");
+      if (raw === null) {
+        return null;
+      }
+      const index = Number(raw);
+      if (!Number.isInteger(index) || index < 0 || index >= stepState.length) {
+        return null;
+      }
+      return index;
+    };
+    if (addStepButton) {
+      addStepButton.addEventListener("click", () => {
+        stepState.push({
+          id: "",
+          title: "",
+          instructions: "",
+          skillId: "",
+          skillArgs: "",
+          skillRequiredCapabilities: "",
+        });
+        renderStepEditor();
+      });
+    }
+    if (stepsList) {
+      stepsList.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const action = target.getAttribute("data-step-action");
+        if (!action) {
+          return;
+        }
+        const index = readStepIndex(target);
+        if (index === null) {
+          return;
+        }
+        if (action === "remove") {
+          stepState.splice(index, 1);
+          renderStepEditor();
+          return;
+        }
+        if (action === "up" && index > 0) {
+          const current = stepState[index];
+          stepState[index] = stepState[index - 1];
+          stepState[index - 1] = current;
+          renderStepEditor();
+          return;
+        }
+        if (action === "down" && index < stepState.length - 1) {
+          const current = stepState[index];
+          stepState[index] = stepState[index + 1];
+          stepState[index + 1] = current;
+          renderStepEditor();
+        }
+      });
+      stepsList.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        const field = target.getAttribute("data-step-field");
+        if (!field) {
+          return;
+        }
+        const index = readStepIndex(target);
+        if (index === null) {
+          return;
+        }
+        stepState[index][field] = target.value || "";
+      });
+    }
+    renderStepEditor();
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -982,7 +1149,7 @@
         return;
       }
 
-      const publishMode = String(formData.get("publishMode") || "branch")
+      const publishMode = String(formData.get("publishMode") || "pr")
         .trim()
         .toLowerCase();
       if (!["none", "branch", "pr"].includes(publishMode)) {
@@ -1008,6 +1175,9 @@
 
       const skillId = String(formData.get("skill") || "").trim() || "auto";
       const skillArgsRaw = String(formData.get("skillArgs") || "").trim();
+      const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
+        formData.get("skillRequiredCapabilities"),
+      );
       let skillArgs = {};
       if (skillArgsRaw) {
         try {
@@ -1027,17 +1197,82 @@
       const effort = String(formData.get("effort") || "").trim() || null;
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
+      const normalizedSteps = [];
+      const stepSkillRequiredCapabilities = [];
+      for (let index = 0; index < stepState.length; index += 1) {
+        const rawStep = stepState[index] || {};
+        const stepId = String(rawStep.id || "").trim();
+        const stepTitle = String(rawStep.title || "").trim();
+        const stepInstructions = String(rawStep.instructions || "").trim();
+        const stepSkillId = String(rawStep.skillId || "").trim();
+        const stepSkillArgsRaw = String(rawStep.skillArgs || "").trim();
+        const stepSkillCaps = parseCapabilitiesCsv(rawStep.skillRequiredCapabilities || "");
+        const hasStepContent =
+          Boolean(stepId) ||
+          Boolean(stepTitle) ||
+          Boolean(stepInstructions) ||
+          Boolean(stepSkillId) ||
+          Boolean(stepSkillArgsRaw) ||
+          stepSkillCaps.length > 0;
+        if (!hasStepContent) {
+          continue;
+        }
+        let stepSkillArgs = {};
+        if (stepSkillArgsRaw) {
+          try {
+            const parsed = JSON.parse(stepSkillArgsRaw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("Step skill args must be a JSON object.");
+            }
+            stepSkillArgs = parsed;
+          } catch (_error) {
+            message.className = "notice error";
+            message.textContent = `Step ${index + 1} Skill Args must be valid JSON object text.`;
+            return;
+          }
+        }
+        const stepPayload = {};
+        if (stepId) {
+          stepPayload.id = stepId;
+        }
+        if (stepTitle) {
+          stepPayload.title = stepTitle;
+        }
+        if (stepInstructions) {
+          stepPayload.instructions = stepInstructions;
+        }
+        if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
+          const skillPayload = {
+            id: stepSkillId || "auto",
+            args: stepSkillArgs,
+          };
+          if (stepSkillCaps.length > 0) {
+            skillPayload.requiredCapabilities = stepSkillCaps;
+            stepSkillRequiredCapabilities.push(...stepSkillCaps);
+          }
+          stepPayload.skill = skillPayload;
+        }
+        normalizedSteps.push(stepPayload);
+      }
 
       const payload = {
         repository,
         requiredCapabilities: deriveRequiredCapabilities({
           runtimeMode,
           publishMode,
+          taskSkillRequiredCapabilities,
+          stepSkillRequiredCapabilities,
         }),
         targetRuntime: runtimeMode,
         task: {
           instructions,
-          skill: { id: skillId, args: skillArgs },
+          skill: {
+            id: skillId,
+            args: skillArgs,
+            ...(taskSkillRequiredCapabilities.length > 0
+              ? { requiredCapabilities: taskSkillRequiredCapabilities }
+              : {}),
+          },
           runtime: { mode: runtimeMode, model, effort },
           git: { startingBranch, newBranch },
           publish: {
@@ -1047,6 +1282,7 @@
             prTitle: null,
             prBody: null,
           },
+          ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
         },
       };
 
@@ -1163,6 +1399,12 @@
       const notices = loadError
         ? `<div class="notice error">${escapeHtml(loadError)}</div>`
         : "";
+      const normalizedStatus = job ? normalizeStatus("queue", pick(job, "status")) : "";
+      const cancelRequestedAt = job ? pick(job, "cancelRequestedAt") : null;
+      const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
+      const canCancel = Boolean(job) && (normalizedStatus === "queued" || normalizedStatus === "running");
+      const cancelButtonDisabled = !canCancel || cancelPending;
+      const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
       const eventRows = events
         .map(
           (event) => `
@@ -1227,6 +1469,12 @@
               <div class="card"><strong>Runtime Model:</strong> ${escapeHtml(runtimeModel)}</div>
               <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
               <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
+              <div class="card"><strong>Cancel Requested:</strong> ${formatTimestamp(
+                pick(job, "cancelRequestedAt"),
+              )}</div>
+              <div class="card"><strong>Cancel Reason:</strong> ${escapeHtml(
+                pick(job, "cancelReason") || "-",
+              )}</div>
               <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
                 pick(job, "leaseExpiresAt"),
               )}</div>
@@ -1241,6 +1489,10 @@
         `Job ${jobId}`,
         `
           ${notices}
+          ${job ? `<div id="queue-cancel-notice"></div>` : ""}
+          ${job ? `<div class="actions"><button type="button" id="queue-cancel-button" ${
+            cancelButtonDisabled ? "disabled" : ""
+          }>${escapeHtml(cancelButtonLabel)}</button></div>` : ""}
           ${detail}
           <div class="stack">
             <section>
@@ -1260,6 +1512,43 @@
           </div>
         `,
       );
+
+      const cancelButton = document.getElementById("queue-cancel-button");
+      const cancelNotice = document.getElementById("queue-cancel-notice");
+      if (cancelButton && job) {
+        cancelButton.addEventListener("click", async () => {
+          cancelButton.disabled = true;
+          if (cancelNotice) {
+            cancelNotice.className = "notice";
+            cancelNotice.textContent = "Submitting cancellation request...";
+          }
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.cancel || "/api/queue/jobs/{id}/cancel",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ reason: "Cancellation requested from dashboard" }),
+              },
+            );
+            if (cancelNotice) {
+              cancelNotice.className = "notice";
+              cancelNotice.textContent = "Cancellation request submitted.";
+            }
+            await loadEvents();
+            await loadDetail();
+          } catch (error) {
+            console.error("queue cancellation request failed", error);
+            if (cancelNotice) {
+              cancelNotice.className = "notice error";
+              cancelNotice.textContent = "Failed to cancel queue job.";
+            }
+            cancelButton.disabled = false;
+          }
+        });
+      }
     };
 
     const loadDetail = async () => {

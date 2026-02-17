@@ -1,0 +1,73 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Queue Task Steps Contract
+  version: 0.1.0
+  description: Canonical queue task payload extension for ordered task step execution.
+paths: {}
+components:
+  schemas:
+    TaskSkillSelection:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          default: auto
+        args:
+          type: object
+          additionalProperties: true
+          default: {}
+        requiredCapabilities:
+          type: array
+          items:
+            type: string
+      required: [id, args]
+
+    TaskStepSpec:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        instructions:
+          type: string
+        skill:
+          $ref: '#/components/schemas/TaskSkillSelection'
+      description: Optional ordered step for canonical task execution.
+
+    TaskExecutionSpec:
+      type: object
+      additionalProperties: true
+      properties:
+        instructions:
+          type: string
+          description: Task objective, required even when steps are provided.
+        skill:
+          $ref: '#/components/schemas/TaskSkillSelection'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskStepSpec'
+          default: []
+      required: [instructions]
+
+    CanonicalTaskPayload:
+      type: object
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          enum: [task]
+        repository:
+          type: string
+        requiredCapabilities:
+          type: array
+          items:
+            type: string
+        targetRuntime:
+          type: string
+        task:
+          $ref: '#/components/schemas/TaskExecutionSpec'
+      required: [repository, task]

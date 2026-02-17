@@ -20,6 +20,10 @@ class CodexWorkerHandlerError(RuntimeError):
     """Raised when handler payloads or command execution are invalid."""
 
 
+class CommandCancelledError(CodexWorkerHandlerError):
+    """Raised when command execution is interrupted by a cancellation request."""
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactUpload:
     """Represents one artifact file to upload for a completed job."""
@@ -240,6 +244,7 @@ class CodexExecHandler:
         *,
         job_id: UUID,
         payload: Mapping[str, Any],
+        cancel_event: asyncio.Event | None = None,
     ) -> WorkerExecutionResult:
         """Process a `codex_exec` payload and return a normalized result."""
 
@@ -258,12 +263,14 @@ class CodexExecHandler:
                 payload=parsed,
                 job_root=job_root,
                 log_path=log_path,
+                cancel_event=cancel_event,
             )
 
             await self._run_command(
                 self._build_codex_exec_command(parsed),
                 cwd=repo_dir,
                 log_path=log_path,
+                cancel_event=cancel_event,
             )
 
             diff_result = await self._run_command(
@@ -271,6 +278,7 @@ class CodexExecHandler:
                 cwd=repo_dir,
                 log_path=log_path,
                 check=False,
+                cancel_event=cancel_event,
             )
             patch_path.write_text(diff_result.stdout or "", encoding="utf-8")
 
@@ -294,6 +302,7 @@ class CodexExecHandler:
                 payload=parsed,
                 repo_dir=repo_dir,
                 log_path=log_path,
+                cancel_event=cancel_event,
             )
             summary = "codex_exec completed"
             if publish_note:
@@ -336,6 +345,7 @@ class CodexExecHandler:
         payload: Mapping[str, Any],
         selected_skill: str,
         fallback: bool = False,
+        cancel_event: asyncio.Event | None = None,
     ) -> WorkerExecutionResult:
         """Process a `codex_skill` payload via skill-first compatibility mapping."""
 
@@ -371,7 +381,17 @@ class CodexExecHandler:
         if codex_overrides:
             mapped_payload["codex"] = codex_overrides
 
-        result = await self.handle(job_id=job_id, payload=mapped_payload)
+        if cancel_event is None:
+            result = await self.handle(
+                job_id=job_id,
+                payload=mapped_payload,
+            )
+        else:
+            result = await self.handle(
+                job_id=job_id,
+                payload=mapped_payload,
+                cancel_event=cancel_event,
+            )
         if not result.succeeded:
             return result
 
@@ -392,6 +412,7 @@ class CodexExecHandler:
         payload: CodexExecPayload,
         job_root: Path,
         log_path: Path,
+        cancel_event: asyncio.Event | None = None,
     ) -> Path:
         repo_dir = job_root / "repo"
         if payload.workdir_mode == "fresh_clone" and repo_dir.exists():
@@ -408,6 +429,7 @@ class CodexExecHandler:
                 ],
                 cwd=job_root,
                 log_path=log_path,
+                cancel_event=cancel_event,
             )
 
         if payload.ref:
@@ -416,11 +438,13 @@ class CodexExecHandler:
                 cwd=repo_dir,
                 log_path=log_path,
                 check=False,
+                cancel_event=cancel_event,
             )
             await self._run_command(
                 [self._git_binary, "checkout", payload.ref],
                 cwd=repo_dir,
                 log_path=log_path,
+                cancel_event=cancel_event,
             )
 
         return repo_dir
@@ -432,6 +456,7 @@ class CodexExecHandler:
         payload: CodexExecPayload,
         repo_dir: Path,
         log_path: Path,
+        cancel_event: asyncio.Event | None = None,
     ) -> str | None:
         if payload.publish_mode == "none":
             return None
@@ -441,6 +466,7 @@ class CodexExecHandler:
             cwd=repo_dir,
             log_path=log_path,
             check=False,
+            cancel_event=cancel_event,
         )
         if not status.stdout.strip():
             return "publish skipped: no local changes"
@@ -450,11 +476,13 @@ class CodexExecHandler:
             [self._git_binary, "checkout", "-B", branch_name],
             cwd=repo_dir,
             log_path=log_path,
+            cancel_event=cancel_event,
         )
         await self._run_command(
             [self._git_binary, "add", "-A"],
             cwd=repo_dir,
             log_path=log_path,
+            cancel_event=cancel_event,
         )
         await self._run_command(
             [
@@ -465,11 +493,13 @@ class CodexExecHandler:
             ],
             cwd=repo_dir,
             log_path=log_path,
+            cancel_event=cancel_event,
         )
         await self._run_command(
             [self._git_binary, "push", "-u", "origin", branch_name],
             cwd=repo_dir,
             log_path=log_path,
+            cancel_event=cancel_event,
         )
 
         if payload.publish_mode == "branch":
@@ -493,6 +523,7 @@ class CodexExecHandler:
             ],
             cwd=repo_dir,
             log_path=log_path,
+            cancel_event=cancel_event,
         )
         return f"published PR from {branch_name}"
 
@@ -505,6 +536,7 @@ class CodexExecHandler:
         check: bool = True,
         env: Mapping[str, str] | None = None,
         redaction_values: tuple[str, ...] = (),
+        cancel_event: asyncio.Event | None = None,
     ) -> CommandResult:
         self._append_log(
             log_path,
@@ -527,7 +559,33 @@ class CodexExecHandler:
             ) from exc
 
         try:
-            stdout_bytes, stderr_bytes = await process.communicate()
+            if cancel_event is None:
+                stdout_bytes, stderr_bytes = await process.communicate()
+            else:
+                communicate_task = asyncio.create_task(process.communicate())
+                cancel_task = asyncio.create_task(cancel_event.wait())
+                done, pending = await asyncio.wait(
+                    {communicate_task, cancel_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for pending_task in pending:
+                    pending_task.cancel()
+                if cancel_task in done and cancel_event.is_set():
+                    with suppress(ProcessLookupError):
+                        process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                    except (asyncio.TimeoutError, ProcessLookupError):
+                        with suppress(ProcessLookupError):
+                            process.kill()
+                        with suppress(Exception):
+                            await process.wait()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await communicate_task
+                    raise CommandCancelledError(
+                        f"command cancelled: {' '.join(command)}"
+                    )
+                stdout_bytes, stderr_bytes = await communicate_task
         except asyncio.CancelledError:
             # Ensure the subprocess is reaped when callers cancel this coroutine.
             with suppress(ProcessLookupError):
@@ -710,6 +768,7 @@ def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str 
 
 __all__ = [
     "ArtifactUpload",
+    "CommandCancelledError",
     "CodexExecHandler",
     "CodexExecPayload",
     "CodexSkillPayload",

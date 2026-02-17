@@ -14,6 +14,7 @@ from moonmind.agents.codex_worker.handlers import (
     CodexExecPayload,
     CodexSkillPayload,
     CodexWorkerHandlerError,
+    CommandCancelledError,
     CommandResult,
 )
 
@@ -182,6 +183,7 @@ async def test_run_command_cancellation_reaps_subprocess(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "cancel.log"
+    started = asyncio.Event()
 
     class FakeProcess:
         def __init__(self) -> None:
@@ -191,6 +193,7 @@ async def test_run_command_cancellation_reaps_subprocess(
             self.waited = False
 
         async def communicate(self):
+            started.set()
             await asyncio.sleep(3600)
             return (b"", b"")
 
@@ -220,9 +223,67 @@ async def test_run_command_cancellation_reaps_subprocess(
             check=False,
         )
     )
-    await asyncio.sleep(0)
+    await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.terminated is True
+    assert process.waited is True
+
+
+async def test_run_command_cancel_event_interrupts_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """cancel_event should stop subprocess and raise CommandCancelledError."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "cancel-event.log"
+    started = asyncio.Event()
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.terminated = False
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self):
+            started.set()
+            await asyncio.sleep(3600)
+            return (b"", b"")
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.waited = True
+            self.returncode = -15 if self.terminated else -9
+            return self.returncode
+
+    process = FakeProcess()
+
+    async def fake_exec(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    cancel_event = asyncio.Event()
+    task = asyncio.create_task(
+        handler._run_command(
+            ["sleep", "60"],
+            cwd=tmp_path,
+            log_path=log_path,
+            check=False,
+            cancel_event=cancel_event,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    cancel_event.set()
+    with pytest.raises(CommandCancelledError):
         await task
 
     assert process.terminated is True
@@ -235,7 +296,9 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[list[str]] = []
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
             return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
@@ -268,7 +331,9 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[list[str]] = []
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
             return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
@@ -300,7 +365,9 @@ async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[list[str]] = []
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
             return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
@@ -338,7 +405,9 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
     )
     calls: list[list[str]] = []
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
             return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
@@ -371,7 +440,9 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
     handler = CodexExecHandler(workdir_root=Path("var/worker-relative"))
     calls: list[list[str]] = []
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
             return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
@@ -400,7 +471,9 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[list[str]] = []
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         calls.append(list(command))
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")
@@ -486,7 +559,9 @@ async def test_handler_publish_commit_failure_returns_failed_result(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
 
-    async def fake_run_command(command, *, cwd, log_path, check=True):
+    async def fake_run_command(
+        command, *, cwd, log_path, check=True, cancel_event=None
+    ):
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")
         if command[:2] == ["git", "commit"]:

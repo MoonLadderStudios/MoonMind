@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ import pytest
 
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
+    CommandCancelledError,
     CommandResult,
     WorkerExecutionResult,
 )
@@ -30,10 +32,13 @@ class FakeQueueClient:
         self.jobs = list(jobs or [])
         self.claim_calls: list[dict[str, object]] = []
         self.heartbeats: list[str] = []
+        self.heartbeat_payloads: list[dict[str, object]] = []
         self.completed: list[tuple[str, str | None]] = []
         self.failed: list[str] = []
+        self.cancel_acks: list[tuple[str, str | None]] = []
         self.uploaded: list[str] = []
         self.events: list[dict[str, object]] = []
+        self.cancel_requested_at: str | None = None
 
     async def claim_job(
         self,
@@ -57,6 +62,15 @@ class FakeQueueClient:
 
     async def heartbeat(self, *, job_id, worker_id, lease_seconds):
         self.heartbeats.append(str(job_id))
+        payload = {"id": str(job_id)}
+        if self.cancel_requested_at:
+            payload["cancelRequestedAt"] = self.cancel_requested_at
+        self.heartbeat_payloads.append(payload)
+        return payload
+
+    async def ack_cancel(self, *, job_id, worker_id, message=None):
+        self.cancel_acks.append((str(job_id), message))
+        return {"id": str(job_id), "status": "cancelled"}
 
     async def complete_job(self, *, job_id, worker_id, result_summary):
         self.completed.append((str(job_id), result_summary))
@@ -88,25 +102,47 @@ class FailingUploadQueueClient(FakeQueueClient):
 class FakeHandler:
     """Handler stub returning configured results."""
 
-    def __init__(self, result: WorkerExecutionResult | Exception) -> None:
+    def __init__(
+        self,
+        result: (
+            WorkerExecutionResult | Exception | list[WorkerExecutionResult | Exception]
+        ),
+    ) -> None:
         self.result = result
         self.calls: list[str] = []
         self.exec_payloads: list[dict[str, object]] = []
         self.skill_payloads: list[dict[str, object]] = []
+        self._results = list(result) if isinstance(result, list) else None
 
-    async def handle(self, *, job_id, payload):
+    def _next_result(self) -> WorkerExecutionResult:
+        candidate: WorkerExecutionResult | Exception
+        if self._results is None:
+            candidate = self.result  # type: ignore[assignment]
+        else:
+            if not self._results:
+                raise RuntimeError("no fake handler result configured for call")
+            candidate = self._results.pop(0)
+        if isinstance(candidate, Exception):
+            raise candidate
+        return candidate
+
+    async def handle(self, *, job_id, payload, cancel_event=None):
         self.calls.append("codex_exec")
         self.exec_payloads.append(dict(payload))
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        return self._next_result()
 
-    async def handle_skill(self, *, job_id, payload, selected_skill, fallback=False):
+    async def handle_skill(
+        self,
+        *,
+        job_id,
+        payload,
+        selected_skill,
+        fallback=False,
+        cancel_event=None,
+    ):
         self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
         self.skill_payloads.append(dict(payload))
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        return self._next_result()
 
 
 async def test_run_once_returns_false_when_no_job() -> None:
@@ -473,6 +509,274 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
     assert payload["status"] == "skipped"
 
 
+async def test_run_once_task_steps_execute_in_order_with_step_events(
+    tmp_path: Path,
+) -> None:
+    """Multi-step tasks should execute each step in order with step lifecycle events."""
+
+    step1_log = tmp_path / "step1.log"
+    step1_patch = tmp_path / "step1.patch"
+    step2_log = tmp_path / "step2.log"
+    step2_patch = tmp_path / "step2.patch"
+    step1_log.write_text("step1", encoding="utf-8")
+    step1_patch.write_text("diff1", encoding="utf-8")
+    step2_log.write_text("step2", encoding="utf-8")
+    step2_patch.write_text("diff2", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "inspect", "instructions": "Inspect code"},
+                    {
+                        "id": "patch",
+                        "instructions": "Patch code",
+                        "skill": {"id": "speckit", "args": {"phase": "patch"}},
+                    },
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        [
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="step1 ok",
+                error_message=None,
+                artifacts=(
+                    ArtifactUpload(path=step1_log, name="logs/codex_exec.log"),
+                    ArtifactUpload(path=step1_patch, name="patches/changes.patch"),
+                ),
+            ),
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="step2 ok",
+                error_message=None,
+                artifacts=(
+                    ArtifactUpload(path=step2_log, name="logs/codex_exec.log"),
+                    ArtifactUpload(path=step2_patch, name="patches/changes.patch"),
+                ),
+            ),
+        ]
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert handler.calls == ["codex_exec", "codex_skill:speckit:False"]
+    assert "logs/steps/step-0000.log" in queue.uploaded
+    assert "logs/steps/step-0001.log" in queue.uploaded
+    assert "patches/steps/step-0000.patch" in queue.uploaded
+    assert "patches/steps/step-0001.patch" in queue.uploaded
+    assert any(event["message"] == "task.steps.plan" for event in queue.events)
+    started = [
+        event for event in queue.events if event["message"] == "task.step.started"
+    ]
+    finished = [
+        event for event in queue.events if event["message"] == "task.step.finished"
+    ]
+    assert len(started) == 2
+    assert len(finished) == 2
+    assert started[0]["payload"]["stepId"] == "inspect"
+    assert started[1]["payload"]["stepId"] == "patch"
+
+
+async def test_run_once_task_steps_fail_fast_on_first_failed_step(
+    tmp_path: Path,
+) -> None:
+    """Execute stage should stop on first step failure and skip publish."""
+
+    step1_log = tmp_path / "step1.log"
+    step2_log = tmp_path / "step2.log"
+    step1_log.write_text("step1", encoding="utf-8")
+    step2_log.write_text("step2", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "branch"},
+                "steps": [
+                    {"id": "step-1", "instructions": "Do step 1"},
+                    {"id": "step-2", "instructions": "Do step 2"},
+                    {"id": "step-3", "instructions": "Do step 3"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        [
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="step1 ok",
+                error_message=None,
+                artifacts=(ArtifactUpload(path=step1_log, name="logs/codex_exec.log"),),
+            ),
+            WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message="step2 failed",
+                artifacts=(ArtifactUpload(path=step2_log, name="logs/codex_exec.log"),),
+            ),
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="unexpected step3",
+                error_message=None,
+            ),
+        ]
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert "step2 failed" in queue.failed[0]
+    assert handler.calls == ["codex_exec", "codex_exec"]
+    assert not any(
+        event["message"] == "moonmind.task.publish" for event in queue.events
+    )
+    failed_events = [
+        event for event in queue.events if event["message"] == "task.step.failed"
+    ]
+    assert len(failed_events) == 1
+    assert failed_events[0]["payload"]["stepId"] == "step-2"
+
+
+async def test_run_once_task_steps_materialize_union_of_selected_skills(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Prepare stage should materialize the union of non-auto task/step skills."""
+
+    class _MaterializedWorkspace:
+        def __init__(self, selected):
+            self.selected = selected
+
+        def to_payload(self):
+            return {"selectedSkills": self.selected}
+
+    captured: dict[str, object] = {}
+
+    def _fake_resolve_run_skill_selection(*, run_id, context):
+        captured["run_id"] = run_id
+        captured["skills"] = list(context.get("skill_selection") or [])
+        return object()
+
+    def _fake_materialize_run_skill_workspace(
+        *,
+        selection,
+        run_root,
+        cache_root,
+        verify_signatures,
+    ):
+        del selection, run_root, cache_root, verify_signatures
+        return _MaterializedWorkspace(captured.get("skills") or [])
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.resolve_run_skill_selection",
+        _fake_resolve_run_skill_selection,
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
+        _fake_materialize_run_skill_workspace,
+    )
+
+    step_log = tmp_path / "step.log"
+    step_log.write_text("step", encoding="utf-8")
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "speckit", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "one", "instructions": "First", "skill": {"id": "custom"}},
+                    {"id": "two", "instructions": "Second", "skill": {"id": "speckit"}},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        [
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="step1 ok",
+                error_message=None,
+                artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+            ),
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="step2 ok",
+                error_message=None,
+                artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+            ),
+        ]
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        allowed_skills=("speckit", "custom"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert set(captured["skills"]) == {"custom", "speckit"}
+    assert handler.calls == ["codex_skill:custom:True", "codex_skill:speckit:False"]
+
+
 async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
     tmp_path: Path,
 ) -> None:
@@ -743,6 +1047,55 @@ async def test_run_once_task_container_supports_distinct_images(
     assert "alpine:3.20" in second_log
 
 
+async def test_run_once_task_container_with_steps_fails_contract_validation(
+    tmp_path: Path,
+) -> None:
+    """Container tasks with explicit steps should fail canonical contract validation."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "container": {
+                    "enabled": True,
+                    "image": "python:3.11",
+                    "command": ["python", "--version"],
+                },
+                "steps": [{"id": "step-1", "instructions": "Do work"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_capabilities=("codex", "git", "docker"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert "invalid job payload" in queue.failed[0]
+    assert "task.steps is not supported" in queue.failed[0]
+
+
 async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -928,8 +1281,13 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
     stop_event = asyncio.Event()
+    cancel_event = asyncio.Event()
     task = asyncio.create_task(
-        worker._heartbeat_loop(job_id=uuid4(), stop_event=stop_event)
+        worker._heartbeat_loop(
+            job_id=uuid4(),
+            stop_event=stop_event,
+            cancel_event=cancel_event,
+        )
     )
     await asyncio.sleep(2.3)
     stop_event.set()
@@ -938,6 +1296,60 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
         await task
 
     assert len(queue.heartbeats) >= 2
+
+
+async def test_run_once_acks_cancellation_requested_via_heartbeat(
+    tmp_path: Path,
+) -> None:
+    """Worker should acknowledge cancellation and avoid completion/failure transitions."""
+
+    class CancelAwareHandler(FakeHandler):
+        async def handle(self, *, job_id, payload, cancel_event=None):
+            assert cancel_event is not None
+            await asyncio.wait_for(cancel_event.wait(), timeout=3.0)
+            raise CommandCancelledError("cancelled by request")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    queue.cancel_requested_at = datetime.now(UTC).isoformat()
+    handler = CancelAwareHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=3,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert queue.failed == []
+    assert len(queue.cancel_acks) == 1
+    assert queue.cancel_acks[0][0] == str(job.id)
+    assert any(
+        event["message"] == "Job cancellation requested; stopping"
+        for event in queue.events
+    )
 
 
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:

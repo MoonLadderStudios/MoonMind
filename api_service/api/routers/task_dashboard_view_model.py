@@ -114,6 +114,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "list": "/api/queue/jobs",
                 "create": "/api/queue/jobs",
                 "detail": "/api/queue/jobs/{id}",
+                "cancel": "/api/queue/jobs/{id}/cancel",
                 "events": "/api/queue/jobs/{id}/events",
                 "artifacts": "/api/queue/jobs/{id}/artifacts",
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",

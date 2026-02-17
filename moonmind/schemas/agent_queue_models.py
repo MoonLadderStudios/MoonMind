@@ -62,6 +62,23 @@ class FailJobRequest(BaseModel):
     retryable: bool = Field(False, alias="retryable")
 
 
+class CancelJobRequest(BaseModel):
+    """Request body for cancellation requests."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: Optional[str] = Field(None, alias="reason")
+
+
+class CancelJobAckRequest(BaseModel):
+    """Request body for worker cancellation acknowledgement."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(..., alias="workerId")
+    message: Optional[str] = Field(None, alias="message")
+
+
 class AppendJobEventRequest(BaseModel):
     """Request body for appending one queue job event."""
 
@@ -99,6 +116,12 @@ class JobModel(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     created_by_user_id: Optional[UUID] = Field(None, alias="createdByUserId")
     requested_by_user_id: Optional[UUID] = Field(None, alias="requestedByUserId")
+    cancel_requested_by_user_id: Optional[UUID] = Field(
+        None,
+        alias="cancelRequestedByUserId",
+    )
+    cancel_requested_at: Optional[datetime] = Field(None, alias="cancelRequestedAt")
+    cancel_reason: Optional[str] = Field(None, alias="cancelReason")
     affinity_key: Optional[str] = Field(None, alias="affinityKey")
     claimed_by: Optional[str] = Field(None, alias="claimedBy")
     lease_expires_at: Optional[datetime] = Field(None, alias="leaseExpiresAt")

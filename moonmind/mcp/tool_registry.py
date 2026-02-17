@@ -120,6 +120,15 @@ class QueueFailRequest(BaseModel):
     retryable: bool = Field(False, alias="retryable")
 
 
+class QueueCancelRequest(BaseModel):
+    """Tool arguments for queue.cancel."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: UUID = Field(..., alias="jobId")
+    reason: str | None = Field(None, alias="reason")
+
+
 class QueueListRequest(BaseModel):
     """Tool arguments for queue.list."""
 
@@ -237,6 +246,12 @@ class QueueToolRegistry:
             "Mark a running queue job as failed.",
             QueueFailRequest,
             self._handle_fail,
+        )
+        self._register(
+            "queue.cancel",
+            "Request cancellation for a queue job.",
+            QueueCancelRequest,
+            self._handle_cancel,
         )
         self._register(
             "queue.get",
@@ -384,6 +399,24 @@ class QueueToolRegistry:
         job = await context.service.get_job(payload.job_id)
         if job is None:
             raise AgentJobNotFoundError(payload.job_id)
+        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
+
+    async def _handle_cancel(
+        self,
+        args: BaseModel,
+        context: QueueToolExecutionContext,
+    ) -> dict[str, Any]:
+        if not isinstance(args, QueueCancelRequest):
+            raise ToolArgumentsValidationError(
+                "queue.cancel",
+                detail="Invalid payload type",
+            )
+        payload = args
+        job = await context.service.request_cancel(
+            job_id=payload.job_id,
+            requested_by_user_id=context.user_id,
+            reason=payload.reason,
+        )
         return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
 
     async def _handle_list(

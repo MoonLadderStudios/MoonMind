@@ -37,6 +37,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["initialPath"] == "/tasks"
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["queue"]["list"] == "/api/queue/jobs"
+    assert config["sources"]["queue"]["cancel"] == "/api/queue/jobs/{id}/cancel"
     assert (
         config["sources"]["queue"]["migrationTelemetry"]
         == "/api/queue/telemetry/migration"
