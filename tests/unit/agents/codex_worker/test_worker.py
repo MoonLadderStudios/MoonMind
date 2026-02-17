@@ -1251,6 +1251,7 @@ async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> No
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
+        skill_policy_mode="allowlist",
         allowed_skills=("speckit",),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
@@ -1261,6 +1262,54 @@ async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> No
     assert len(queue.failed) == 1
     assert "skill not allowlisted" in queue.failed[0]
     assert handler.calls == []
+
+
+async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Permissive mode should allow selected skills outside configured allowlist."""
+
+    class _MaterializedWorkspace:
+        def to_payload(self):
+            return {"skills": [{"name": "custom-skill"}]}
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.resolve_run_skill_selection",
+        lambda *, run_id, context: object(),
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
+        lambda *, selection, run_root, cache_root, verify_signatures: _MaterializedWorkspace(),
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="codex_skill",
+        payload={"skillId": "custom-skill", "inputs": {"repo": "Moon/Mind"}},
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        skill_policy_mode="permissive",
+        allowed_skills=("speckit",),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.failed == []
+    assert len(queue.completed) == 1
+    assert handler.calls == ["codex_skill:custom-skill:True"]
 
 
 async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
@@ -1367,6 +1416,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_DOCKER_BINARY", "docker")
     monkeypatch.setenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", "agent_workspaces")
     monkeypatch.setenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
 
     config = CodexWorkerConfig.from_env()
 
@@ -1378,6 +1428,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert str(config.workdir) == "/tmp/moonmind-worker"
     assert config.default_codex_model == "gpt-5-codex"
     assert config.default_codex_effort == "high"
+    assert config.skill_policy_mode == "allowlist"
     assert config.worker_capabilities == ("codex", "git")
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume == "agent_workspaces"
@@ -1402,6 +1453,9 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_DOCKER_BINARY", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MOONMIND_SKILL_POLICY_MODE", raising=False)
+    monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
+    monkeypatch.delenv("SKILL_POLICY_MODE", raising=False)
 
     config = CodexWorkerConfig.from_env()
 
@@ -1410,6 +1464,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.lease_seconds == 120
     assert str(config.workdir) == "var/worker"
     assert config.default_skill == "speckit"
+    assert config.skill_policy_mode == "permissive"
     assert config.allowed_skills == ("speckit",)
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
@@ -1420,6 +1475,16 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume is None
     assert config.container_default_timeout_seconds == 3600
+
+
+async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) -> None:
+    """Invalid policy mode should fail fast during worker startup."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "invalid")
+
+    with pytest.raises(ValueError, match="MOONMIND_SKILL_POLICY_MODE must be one of"):
+        CodexWorkerConfig.from_env()
 
 
 async def test_config_from_env_runtime_mode_controls_default_capabilities(
