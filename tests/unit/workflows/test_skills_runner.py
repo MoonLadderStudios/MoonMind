@@ -49,6 +49,11 @@ def _set_skill_defaults(monkeypatch) -> None:
         raising=False,
     )
     monkeypatch.setattr(
+        "moonmind.workflows.skills.registry.settings.spec_workflow.skill_policy_mode",
+        "allowlist",
+        raising=False,
+    )
+    monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
         ("speckit",),
         raising=False,
@@ -111,6 +116,30 @@ def test_stage_override_respects_allowlist(monkeypatch):
     decision = resolve_stage_execution(
         stage_name="apply_and_publish",
         run_id="run-3",
+        context=context,
+    )
+
+    assert decision.selected_skill == "custom"
+    assert decision.execution_path == "skill"
+
+
+def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
+    _set_skill_defaults(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.registry.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
+        ("speckit",),
+        raising=False,
+    )
+
+    context = {"skill_overrides": {"apply_and_publish": "custom"}}
+    decision = resolve_stage_execution(
+        stage_name="apply_and_publish",
+        run_id="run-3b",
         context=context,
     )
 
