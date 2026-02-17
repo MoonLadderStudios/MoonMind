@@ -24,8 +24,6 @@ _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _STATIC_PATHS = {
     "queue",
     "queue/new",
-    "speckit",
-    "speckit/new",
     "orchestrator",
     "orchestrator/new",
 }
@@ -55,10 +53,7 @@ def _is_allowed_path(path: str) -> bool:
         return False
     if path in _STATIC_PATHS:
         return True
-    return any(
-        _is_dynamic_detail(path, source)
-        for source in ("queue", "speckit", "orchestrator")
-    )
+    return any(_is_dynamic_detail(path, source) for source in ("queue", "orchestrator"))
 
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
@@ -120,7 +115,7 @@ async def task_dashboard_route(
             status_code=404,
             detail={
                 "code": "dashboard_route_not_found",
-                "message": "Dashboard route was not found.",
+                "message": "Dashboard route was not found. Use /tasks/queue or /tasks/orchestrator.",
             },
         )
 

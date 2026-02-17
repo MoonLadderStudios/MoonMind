@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement Strategy 1 with a thin dashboard hosted by the existing API service. Add dashboard routes, one HTML shell template, and static JavaScript/CSS that consume existing Agent Queue, SpecKit, and Orchestrator REST endpoints for list, submit, and detail experiences with polling.
+Implement Strategy 1 with a thin dashboard hosted by the existing API service. Add dashboard routes, one HTML shell template, and static JavaScript/CSS that consume existing Agent Queue and Orchestrator REST endpoints for list, submit, and detail experiences with polling. Represent SpecKit launches as queue tasks selected by skill id and optional skill args.
 
 ## Technical Context
 
@@ -71,7 +71,7 @@ tests/unit/api/routers/
 
 ## Phase 0: Research Plan
 
-1. Confirm current endpoint coverage and payload fields for queue/workflow/orchestrator list, detail, submit, events, and artifacts.
+1. Confirm current endpoint coverage and payload fields for queue/orchestrator list, detail, submit, events, and artifacts, plus queue skill metadata for SpecKit launch flows.
 2. Define a normalized dashboard run model mapping source-specific statuses to common UI states.
 3. Decide route handling strategy (server-rendered shell plus client-side path-driven rendering) that supports `/tasks/...` pages.
 4. Define polling and partial-failure behavior for combined multi-source views.

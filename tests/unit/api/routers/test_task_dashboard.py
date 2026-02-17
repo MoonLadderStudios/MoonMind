@@ -36,7 +36,6 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue")
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
-    assert _is_allowed_path("speckit/abc")
     assert _is_allowed_path("orchestrator/run-1")
 
 
@@ -63,8 +62,6 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         "/tasks/queue",
         "/tasks/queue/new",
-        "/tasks/speckit",
-        "/tasks/speckit/new",
         "/tasks/orchestrator",
         "/tasks/orchestrator/new",
     ):
@@ -76,12 +73,22 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         f"/tasks/queue/{uuid4()}",
-        f"/tasks/speckit/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "task-dashboard-config" in response.text
+
+
+def test_speckit_routes_return_404(client: TestClient) -> None:
+    for path in (
+        "/tasks/speckit",
+        "/tasks/speckit/new",
+        f"/tasks/speckit/{uuid4()}",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
 def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:

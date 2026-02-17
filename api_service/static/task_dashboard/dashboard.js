@@ -385,6 +385,7 @@
           <td><a href="${escapeHtml(row.link)}">${escapeHtml(row.id)}</a></td>
           <td>${escapeHtml(row.queueName || "-")}</td>
           <td>${renderRuntime(row.runtimeMode)}</td>
+          <td>${escapeHtml(row.skillId || "-")}</td>
           <td>${statusBadge(row.source, row.rawStatus)} <span class="small">${escapeHtml(
             row.rawStatus,
           )}</span></td>
@@ -405,6 +406,7 @@
             <th>ID</th>
             <th>Queue</th>
             <th>Runtime</th>
+            <th>Skill</th>
             <th>Status</th>
             <th>Title</th>
             <th>Created</th>
@@ -431,6 +433,7 @@
         payload,
         queueName: defaultQueueName,
         runtimeMode: extractRuntimeFromPayload(payload),
+        skillId: extractSkillFromPayload(payload),
         rawStatus: pick(item, "status") || "queued",
         title:
           pick(task, "instructions") ||
@@ -445,23 +448,6 @@
     });
   }
 
-  function toSpeckitRows(items) {
-    return items.map((item) => ({
-      source: "speckit",
-      sourceLabel: "SpecKit",
-      id: pick(item, "id") || "",
-      queueName: pick(item, "codexQueue") || defaultQueueName,
-      runtimeMode: null,
-      rawStatus: pick(item, "status") || "pending",
-      title:
-        pick(item, "featureKey") || pick(item, "repository") || "SpecKit Run",
-      createdAt: pick(item, "createdAt"),
-      startedAt: pick(item, "startedAt"),
-      finishedAt: pick(item, "finishedAt"),
-      link: `/tasks/speckit/${encodeURIComponent(String(pick(item, "id") || ""))}`,
-    }));
-  }
-
   function toOrchestratorRows(runs) {
     return runs.map((run) => ({
       source: "orchestrator",
@@ -469,6 +455,7 @@
       id: pick(run, "runId") || "",
       queueName: pick(run, "queueName") || "-",
       runtimeMode: null,
+      skillId: null,
       rawStatus: pick(run, "status") || "pending",
       title:
         pick(run, "targetService") ||
@@ -494,7 +481,7 @@
   async function renderActivePage() {
     setView(
       "Active Tasks",
-      `Running and queued work across queue, SpecKit, and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+      `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading active runs...</p>",
     );
 
@@ -512,24 +499,6 @@
           source: "queue-queued",
           call: () => fetchJson("/api/queue/jobs?status=queued&limit=200"),
           transform: (payload) => toQueueRows(payload?.items || []),
-        },
-        {
-          source: "speckit-running",
-          call: () =>
-            fetchJson("/api/workflows/speckit/runs?status=running&limit=100"),
-          transform: (payload) => toSpeckitRows(payload?.items || []),
-        },
-        {
-          source: "speckit-pending",
-          call: () =>
-            fetchJson("/api/workflows/speckit/runs?status=pending&limit=100"),
-          transform: (payload) => toSpeckitRows(payload?.items || []),
-        },
-        {
-          source: "speckit-retrying",
-          call: () =>
-            fetchJson("/api/workflows/speckit/runs?status=retrying&limit=100"),
-          transform: (payload) => toSpeckitRows(payload?.items || []),
         },
         {
           source: "orchestrator-running",
@@ -572,7 +541,7 @@
       root.querySelector(".panel")?.remove();
       setView(
         "Active Tasks",
-        `Running and queued work across queue, SpecKit, and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+        `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
         `${notices}${renderRowsTable(sortRows(rows))}`,
       );
     };
@@ -589,6 +558,7 @@
 
     const filterState = {
       runtime: "",
+      skill: "",
       stageStatus: "",
       publishMode: "",
     };
@@ -598,6 +568,13 @@
         if (filterState.runtime) {
           const rowRuntime = String(row.runtimeMode || "").trim().toLowerCase();
           if (rowRuntime !== filterState.runtime) {
+            return false;
+          }
+        }
+
+        if (filterState.skill) {
+          const rowSkill = String(row.skillId || "").trim().toLowerCase();
+          if (!rowSkill.includes(filterState.skill)) {
             return false;
           }
         }
@@ -662,6 +639,13 @@
                 ${runtimeOptions}
               </select>
             </label>
+            <label>Skill
+              <input name="skill" placeholder="auto, speckit-orchestrate, ..." value="${escapeHtml(
+                filterState.skill,
+              )}" />
+            </label>
+          </div>
+          <div class="grid-2">
             <label>Stage Status
               <select name="stageStatus">
                 <option value="">(all)</option>
@@ -710,6 +694,7 @@
         return;
       }
       const runtimeField = filterForm.elements.namedItem("runtime");
+      const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
 
@@ -726,6 +711,12 @@
       if (runtimeField) {
         runtimeField.addEventListener("change", () => {
           filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
+          rerender();
+        });
+      }
+      if (skillField) {
+        skillField.addEventListener("input", () => {
+          filterState.skill = String(skillField.value || "").trim().toLowerCase();
           rerender();
         });
       }
@@ -763,26 +754,6 @@
         `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Task</button></a></div>${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
       );
       attachFilterHandlers(rows, telemetryHtml);
-    };
-
-    startPolling(load, pollIntervals.list);
-  }
-
-  async function renderSpeckitListPage() {
-    setView(
-      "SpecKit Runs",
-      `Recent SpecKit runs. Effective queue: ${defaultQueueName}.`,
-      "<p class='loading'>Loading SpecKit runs...</p>",
-    );
-
-    const load = async () => {
-      const payload = await fetchJson("/api/workflows/speckit/runs?limit=100");
-      const rows = sortRows(toSpeckitRows(payload?.items || []));
-      setView(
-        "SpecKit Runs",
-        `Recent SpecKit runs. Effective queue: ${defaultQueueName}.`,
-        `<div class="actions"><a href="/tasks/speckit/new"><button type="button">New SpecKit Run</button></a></div>${renderRowsTable(rows)}`,
-      );
     };
 
     startPolling(load, pollIntervals.list);
@@ -832,7 +803,7 @@
         <div class="grid-2">
           <label>Skill (optional)
             <input name="skill" value="auto" placeholder="auto" />
-            <span class="small">Use <span class="inline-code">auto</span> for direct execution; provide a skill id to run a skill path.</span>
+            <span class="small">Use <span class="inline-code">auto</span> for direct execution; set a skill id such as <span class="inline-code">speckit-orchestrate</span> for skill-driven runs.</span>
           </label>
           <label>Runtime (optional)
             <select name="runtime">
@@ -841,6 +812,10 @@
             </select>
           </label>
         </div>
+        <label>Skill Args (optional JSON object)
+          <textarea name="skillArgs" placeholder='{"featureKey":"019-remove-speckit-category","forcePhase":"discover","notes":"optional context"}'></textarea>
+          <span class="small">Optional args forwarded to <span class="inline-code">task.skill.args</span>.</span>
+        </label>
         <div class="grid-2">
           <label>Model (optional)
             <input name="model" placeholder="runtime default" />
@@ -954,6 +929,22 @@
       }
 
       const skillId = String(formData.get("skill") || "").trim() || "auto";
+      const skillArgsRaw = String(formData.get("skillArgs") || "").trim();
+      let skillArgs = {};
+      if (skillArgsRaw) {
+        try {
+          const parsed = JSON.parse(skillArgsRaw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Skill args must be a JSON object.");
+          }
+          skillArgs = parsed;
+        } catch (error) {
+          message.className = "notice error";
+          message.textContent =
+            "Skill Args must be valid JSON object text (for example: {\"featureKey\":\"...\"}).";
+          return;
+        }
+      }
       const model = String(formData.get("model") || "").trim() || null;
       const effort = String(formData.get("effort") || "").trim() || null;
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
@@ -968,7 +959,7 @@
         targetRuntime: runtimeMode,
         task: {
           instructions,
-          skill: { id: skillId, args: {} },
+          skill: { id: skillId, args: skillArgs },
           runtime: { mode: runtimeMode, model, effort },
           git: { startingBranch, newBranch },
           publish: {
@@ -1004,83 +995,6 @@
         message.textContent =
           "Failed to create queue task: " +
           String(error?.message || "request failed");
-      }
-    });
-  }
-
-  function renderSpeckitSubmitPage() {
-    setView(
-      "Submit SpecKit Run",
-      "Trigger a SpecKit workflow run.",
-      `
-      <form id="speckit-submit-form">
-        <label>Repository (owner/repo)
-          <input name="repository" placeholder="owner/repo" required />
-        </label>
-        <div class="grid-2">
-          <label>Feature Key
-            <input name="featureKey" placeholder="optional" />
-          </label>
-          <label>Force Phase
-            <select name="forcePhase">
-              <option value="">(auto)</option>
-              <option value="discover">discover</option>
-              <option value="submit">submit</option>
-              <option value="apply">apply</option>
-              <option value="publish">publish</option>
-            </select>
-          </label>
-        </div>
-        <label>Notes
-          <textarea name="notes" placeholder="optional notes"></textarea>
-        </label>
-        <div class="actions">
-          <button type="submit">Create SpecKit Run</button>
-          <a href="/tasks/speckit"><button class="secondary" type="button">Cancel</button></a>
-        </div>
-        <p class="small" id="speckit-submit-message"></p>
-      </form>
-      `,
-    );
-
-    const form = document.getElementById("speckit-submit-form");
-    const message = document.getElementById("speckit-submit-message");
-    if (!form || !message) {
-      return;
-    }
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      message.className = "small";
-      message.textContent = "Submitting...";
-
-      const formData = new FormData(form);
-      const body = {
-        repository: String(formData.get("repository") || "").trim(),
-      };
-      const featureKey = String(formData.get("featureKey") || "").trim();
-      const forcePhase = String(formData.get("forcePhase") || "").trim();
-      const notes = String(formData.get("notes") || "").trim();
-      if (featureKey) {
-        body.featureKey = featureKey;
-      }
-      if (forcePhase) {
-        body.forcePhase = forcePhase;
-      }
-      if (notes) {
-        body.notes = notes;
-      }
-
-      try {
-        const created = await fetchJson("/api/workflows/speckit/runs", {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-        window.location.href = `/tasks/speckit/${encodeURIComponent(created.id)}`;
-      } catch (error) {
-        console.error("speckit submit failed", error);
-        message.className = "notice error";
-        message.textContent = "Failed to create SpecKit run.";
       }
     });
   }
@@ -1347,93 +1261,6 @@
       .join("");
   }
 
-  async function renderSpeckitDetailPage(runId) {
-    setView(
-      "SpecKit Run Detail",
-      `Run ${runId}`,
-      "<p class='loading'>Loading SpecKit run...</p>",
-    );
-
-    const load = async () => {
-      try {
-        const [run, tasksPayload, artifactsPayload] = await Promise.all([
-          fetchJson(endpoint("/api/workflows/speckit/runs/{id}", { id: runId })),
-          fetchJson(endpoint("/api/workflows/speckit/runs/{id}/tasks", { id: runId })),
-          fetchJson(endpoint("/api/workflows/speckit/runs/{id}/artifacts", { id: runId })),
-        ]);
-
-        const tasks = tasksPayload?.tasks || [];
-        const artifacts = artifactsPayload?.artifacts || [];
-        const taskRows = tasks
-          .map(
-            (task) => `
-              <tr>
-                <td>${escapeHtml(pick(task, "taskName") || "")}</td>
-                <td>${statusBadge("speckit", pick(task, "status"))}</td>
-                <td>${escapeHtml(String(pick(task, "attempt") || "-"))}</td>
-                <td>${formatTimestamp(pick(task, "startedAt"))}</td>
-                <td>${formatTimestamp(pick(task, "finishedAt"))}</td>
-              </tr>
-            `,
-          )
-          .join("");
-
-        setView(
-          "SpecKit Run Detail",
-          `Run ${runId}`,
-          `
-            <div class="grid-2">
-              <div class="card"><strong>Status:</strong> ${statusBadge("speckit", pick(
-                run,
-                "status",
-              ))}</div>
-              <div class="card"><strong>Repository:</strong> ${escapeHtml(
-                pick(run, "repository") || "-",
-              )}</div>
-              <div class="card"><strong>Feature Key:</strong> ${escapeHtml(
-                pick(run, "featureKey") || "-",
-              )}</div>
-              <div class="card"><strong>Queue:</strong> <span class="inline-code">${escapeHtml(
-                pick(run, "codexQueue") || defaultQueueName,
-              )}</span></div>
-              <div class="card"><strong>Started:</strong> ${formatTimestamp(
-                pick(run, "startedAt"),
-              )}</div>
-              <div class="card"><strong>Preflight:</strong> ${escapeHtml(
-                pick(run, "codexPreflightStatus") || "-",
-              )}</div>
-            </div>
-            <div class="stack">
-              <section>
-                <h3>Tasks</h3>
-                <table>
-                  <thead><tr><th>Task</th><th>Status</th><th>Attempt</th><th>Started</th><th>Finished</th></tr></thead>
-                  <tbody>${taskRows || "<tr><td colspan='5' class='small'>No task rows.</td></tr>"}</tbody>
-                </table>
-              </section>
-              <section>
-                <h3>Artifacts</h3>
-                <table>
-                  <thead><tr><th>Name/Path</th><th>Size</th><th>Type</th><th>Reference</th></tr></thead>
-                  <tbody>${renderArtifactsRows(artifacts) || "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"}</tbody>
-                </table>
-              </section>
-            </div>
-          `,
-        );
-      } catch (error) {
-        console.error("speckit detail load failed", error);
-        setView(
-          "SpecKit Run Detail",
-          `Run ${runId}`,
-          "<div class='notice error'>Failed to load run detail.</div>",
-        );
-      }
-    };
-
-    startPolling(load, pollIntervals.detail);
-  }
-
   async function renderOrchestratorDetailPage(runId) {
     setView(
       "Orchestrator Run Detail",
@@ -1528,7 +1355,6 @@
     activateNav(pathname);
 
     const queueDetailMatch = pathname.match(/^\/tasks\/queue\/([^/]+)$/);
-    const speckitDetailMatch = pathname.match(/^\/tasks\/speckit\/([^/]+)$/);
     const orchestratorDetailMatch = pathname.match(
       /^\/tasks\/orchestrator\/([^/]+)$/,
     );
@@ -1541,10 +1367,6 @@
       await renderQueueListPage();
       return;
     }
-    if (pathname === "/tasks/speckit") {
-      await renderSpeckitListPage();
-      return;
-    }
     if (pathname === "/tasks/orchestrator") {
       await renderOrchestratorListPage();
       return;
@@ -1554,10 +1376,6 @@
       renderQueueSubmitPage();
       return;
     }
-    if (pathname === "/tasks/speckit/new") {
-      renderSpeckitSubmitPage();
-      return;
-    }
     if (pathname === "/tasks/orchestrator/new") {
       renderOrchestratorSubmitPage();
       return;
@@ -1565,10 +1383,6 @@
 
     if (queueDetailMatch) {
       await renderQueueDetailPage(queueDetailMatch[1]);
-      return;
-    }
-    if (speckitDetailMatch) {
-      await renderSpeckitDetailPage(speckitDetailMatch[1]);
       return;
     }
     if (orchestratorDetailMatch) {

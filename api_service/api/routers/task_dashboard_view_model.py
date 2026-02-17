@@ -30,17 +30,6 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "cancelled": "cancelled",
         "dead_letter": "failed",
     },
-    "speckit": {
-        "queued": "queued",
-        "pending": "queued",
-        "retrying": "queued",
-        "running": "running",
-        "in_progress": "running",
-        "succeeded": "succeeded",
-        "no_work": "succeeded",
-        "failed": "failed",
-        "cancelled": "cancelled",
-    },
     "orchestrator": {
         "pending": "queued",
         "running": "running",
@@ -111,13 +100,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifacts": "/api/queue/jobs/{id}/artifacts",
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
                 "migrationTelemetry": "/api/queue/telemetry/migration",
-            },
-            "speckit": {
-                "list": "/api/workflows/speckit/runs",
-                "create": "/api/workflows/speckit/runs",
-                "detail": "/api/workflows/speckit/runs/{id}",
-                "tasks": "/api/workflows/speckit/runs/{id}/tasks",
-                "artifacts": "/api/workflows/speckit/runs/{id}/artifacts",
             },
             "orchestrator": {
                 "list": "/orchestrator/runs",

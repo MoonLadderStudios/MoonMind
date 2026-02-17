@@ -214,7 +214,7 @@ The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring bro
 
 ### Agent queue Codex worker
 
-MoonMind also includes a standalone queue worker daemon for `/api/queue/*` jobs (`codex_exec` / `codex_skill`):
+MoonMind also includes a standalone queue worker daemon for `/api/queue/*` jobs (canonical `task`, plus legacy `codex_exec` / `codex_skill`):
 
 - Compose service: `codex-worker` (started by default via `docker compose up -d`).
 - CLI entrypoint: `moonmind-codex-worker`.

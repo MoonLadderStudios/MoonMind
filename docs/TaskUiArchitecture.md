@@ -11,7 +11,7 @@ Define a web UI architecture for MoonMind that lets users:
 - Submit new Tasks with typed controls.
 - See currently running and queued work.
 - Inspect logs/events and artifacts per execution.
-- Monitor Agent Queue jobs, SpecKit workflow runs, and Orchestrator runs from one UI surface.
+- Monitor Agent Queue jobs and Orchestrator runs from one UI surface, with SpecKit workloads represented as queue tasks using skill selection.
 
 Execution semantics are defined by `docs/TaskArchitecture.md`; this document defines how the UI maps to those contracts.
 
@@ -32,7 +32,7 @@ Execution semantics are defined by `docs/TaskArchitecture.md`; this document def
 
 ## 3. Existing Backend Capabilities
 
-As of 2026-02-16, MoonMind already exposes submit plus monitor primitives for all three systems.
+As of 2026-02-16, MoonMind already exposes submit plus monitor primitives for queue and orchestrator dashboard categories, while SpecKit APIs remain available for backend workflows.
 
 ### 3.1 Agent Queue (`/api/queue`)
 
@@ -51,12 +51,7 @@ Status model supports dashboard needs: `queued`, `running`, `succeeded`, `failed
 
 Implemented in `api_service/api/routers/workflows.py`.
 
-- `POST /api/workflows/speckit/runs` creates workflow runs.
-- `GET /api/workflows/speckit/runs` lists runs.
-- `GET /api/workflows/speckit/runs/{run_id}` returns run detail with optional tasks and artifacts.
-- `GET /api/workflows/speckit/runs/{run_id}/tasks` returns task timeline.
-- `GET /api/workflows/speckit/runs/{run_id}/artifacts` returns artifacts.
-- `POST /api/workflows/speckit/runs/{run_id}/retry` retries failed runs.
+These endpoints continue to support backend workflow operations, but the dashboard no longer exposes a dedicated SpecKit category. Operators launch SpecKit behavior from queue task submissions by selecting a SpecKit skill id and optional skill args.
 
 ### 3.3 Orchestrator (`/orchestrator`)
 
@@ -91,13 +86,10 @@ Prepare for Strategy 3 and Strategy 5 by implementing a frontend normalization l
 
 Use a dedicated dashboard app with route groups:
 
-- `/tasks` unified running view (aggregated client-side from all three systems).
+- `/tasks` unified running view (aggregated client-side from queue and orchestrator).
 - `/tasks/queue` list of Agent Queue jobs.
 - `/tasks/queue/new` submit typed Task job (`type="task"`).
 - `/tasks/queue/:jobId` job detail with events and artifacts.
-- `/tasks/speckit` list of SpecKit runs.
-- `/tasks/speckit/new` submit SpecKit run.
-- `/tasks/speckit/:runId` run detail with task timeline and artifacts.
 - `/tasks/orchestrator` list of Orchestrator runs.
 - `/tasks/orchestrator/new` submit Orchestrator run.
 - `/tasks/orchestrator/:runId` run detail with plan steps, approvals, retry, artifacts.
@@ -118,6 +110,7 @@ Queue submit is a typed Task form, not a raw payload editor.
 
 - `instructions` (required)
 - `skill` (optional, default `auto`)
+- `skillArgs` (optional JSON object, default `{}`)
 - `runtime` (optional, default system runtime)
 - `model` (optional)
 - `effort` (optional)
@@ -171,8 +164,6 @@ UI performs parallel fetches and merges rows client-side.
 
 - Queue running: `GET /api/queue/jobs?status=running&limit=200`
 - Queue queued: `GET /api/queue/jobs?status=queued&limit=200`
-- SpecKit running: `GET /api/workflows/speckit/runs?status=running&limit=100`
-- SpecKit pending/retrying: `GET /api/workflows/speckit/runs?status=pending&limit=100` and `status=retrying`
 - Orchestrator running: `GET /orchestrator/runs?status=running&limit=100`
 - Orchestrator pending approval: `GET /orchestrator/runs?status=awaiting_approval&limit=100`
 
@@ -186,7 +177,7 @@ UI performs parallel fetches and merges rows client-side.
 
 ```ts
 export type UnifiedRun = {
-  source: "queue" | "speckit" | "orchestrator";
+  source: "queue" | "orchestrator";
   id: string;
   title: string;
   status: "queued" | "running" | "awaiting_action" | "succeeded" | "failed" | "cancelled";
@@ -202,7 +193,6 @@ export type UnifiedRun = {
 Normalization rules:
 
 - Queue `queued -> queued`, `running -> running`, `succeeded -> succeeded`, `failed|dead_letter -> failed`, `cancelled -> cancelled`.
-- SpecKit `pending|retrying -> queued`, `running -> running`, `succeeded|no_work -> succeeded`, `failed -> failed`, `cancelled -> cancelled`.
 - Orchestrator `pending -> queued`, `running -> running`, `awaiting_approval -> awaiting_action`, `succeeded|rolled_back -> succeeded`, `failed -> failed`.
 
 ## 9. Realtime Strategy

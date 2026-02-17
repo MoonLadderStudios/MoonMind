@@ -27,21 +27,21 @@
 
 ---
 
-## Phase 3: User Story 1 - Monitor Active Work Across Systems (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 - Monitor Active Work Across Queue and Orchestrator (Priority: P1) 🎯 MVP
 
-**Goal**: Render consolidated and source list pages that monitor active work across queue/workflow/orchestrator systems.
+**Goal**: Render consolidated and source list pages that monitor active work across queue/orchestrator systems.
 
 **Independent Test**: Open `/tasks` and source list routes, verify rows render from source APIs, normalized statuses are displayed, and updates occur during polling.
 
 ### Tests for User Story 1
 
 - [X] T009 [P] [US1] Add unit tests for status normalization and source mapping in `tests/unit/api/routers/test_task_dashboard_view_model.py`.
-- [X] T010 [P] [US1] Add route tests for `/tasks`, `/tasks/queue`, `/tasks/speckit`, and `/tasks/orchestrator` shell rendering in `tests/unit/api/routers/test_task_dashboard.py`.
+- [X] T010 [P] [US1] Add route tests for `/tasks`, `/tasks/queue`, and `/tasks/orchestrator` shell rendering in `tests/unit/api/routers/test_task_dashboard.py`.
 
 ### Implementation for User Story 1
 
 - [X] T011 [US1] Implement consolidated active-work fetch and render flow in `api_service/static/task_dashboard/dashboard.js`.
-- [X] T012 [US1] Implement queue/speckit/orchestrator list page fetch and render flow in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T012 [US1] Implement queue/orchestrator list page fetch and render flow in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T013 [US1] Implement polling scheduler with visibility pause/resume behavior in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T014 [US1] Implement partial-failure per-source error handling and status indicators in `api_service/static/task_dashboard/dashboard.js` and `api_service/static/task_dashboard/dashboard.css`.
 
@@ -49,45 +49,57 @@
 
 ---
 
-## Phase 4: User Story 2 - Submit New Queue, Workflow, and Orchestrator Runs (Priority: P1)
+## Phase 4: User Story 2 - Submit New Queue and Orchestrator Runs (Priority: P1)
 
-**Goal**: Provide submit forms for all three systems with validation feedback and navigation to detail pages on success.
+**Goal**: Provide submit forms for queue and orchestrator systems with validation feedback and navigation to detail pages on success.
 
 **Independent Test**: Submit one valid payload for each source and verify created IDs and redirect-to-detail behavior; submit invalid payloads and confirm errors preserve form inputs.
 
 ### Tests for User Story 2
 
-- [X] T015 [P] [US2] Add route tests for `/tasks/queue/new`, `/tasks/speckit/new`, and `/tasks/orchestrator/new` shell rendering in `tests/unit/api/routers/test_task_dashboard.py`.
+- [X] T015 [P] [US2] Add route tests for `/tasks/queue/new` and `/tasks/orchestrator/new` shell rendering in `tests/unit/api/routers/test_task_dashboard.py`.
 
 ### Implementation for User Story 2
 
 - [X] T016 [US2] Implement queue submit form rendering and POST flow in `api_service/static/task_dashboard/dashboard.js`.
-- [X] T017 [US2] Implement SpecKit submit form rendering and POST flow in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T017 [US2] Implement queue skill submit enhancements (`task.skill.id` + JSON args) in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T018 [US2] Implement Orchestrator submit form rendering and POST flow in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T019 [US2] Implement submit error handling and form-value retention behavior in `api_service/static/task_dashboard/dashboard.js`.
 
-**Checkpoint**: Submit flows work for all three sources with robust validation feedback.
+**Checkpoint**: Submit flows work for queue/orchestrator sources with robust validation feedback.
 
 ---
 
 ## Phase 5: User Story 3 - Inspect Execution Details, Events, and Artifacts (Priority: P2)
 
-**Goal**: Provide detail pages for queue/workflow/orchestrator including metadata, timeline/event data, and artifacts.
+**Goal**: Provide detail pages for queue/orchestrator including metadata, timeline/event data, and artifacts.
 
 **Independent Test**: Open detail routes for each source and confirm records, timeline/event data, and artifact lists render; verify queue event polling uses incremental cursor.
 
 ### Tests for User Story 3
 
-- [X] T020 [P] [US3] Add route tests for `/tasks/queue/{job_id}`, `/tasks/speckit/{run_id}`, and `/tasks/orchestrator/{run_id}` shell rendering in `tests/unit/api/routers/test_task_dashboard.py`.
+- [X] T020 [P] [US3] Add route tests for `/tasks/queue/{job_id}` and `/tasks/orchestrator/{run_id}` shell rendering in `tests/unit/api/routers/test_task_dashboard.py`.
 
 ### Implementation for User Story 3
 
 - [X] T021 [US3] Implement queue detail data, incremental event polling, and artifact list/download-link rendering in `api_service/static/task_dashboard/dashboard.js`.
-- [X] T022 [US3] Implement SpecKit detail task/artifact metadata rendering in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T022 [US3] Remove dedicated SpecKit detail/list/submit views and expose SpecKit workloads through queue skill metadata in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T023 [US3] Implement Orchestrator detail step/artifact metadata rendering in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T024 [US3] Add detail-page layout and artifact/download styling in `api_service/static/task_dashboard/dashboard.css` and `api_service/templates/task_dashboard.html`.
 
-**Checkpoint**: Detail pages support operational diagnosis across all three systems.
+**Checkpoint**: Detail pages support operational diagnosis across queue and orchestrator systems.
+
+---
+
+## Phase 7: Category Consolidation Remediation
+
+**Purpose**: Remove SpecKit as a standalone dashboard category and complete queue-skill migration UX/docs.
+
+- [X] T028 [P] Remove SpecKit navigation copy/routes from `api_service/templates/task_dashboard.html` and `api_service/api/routers/task_dashboard.py`.
+- [X] T029 [P] Remove SpecKit dashboard source/status config from `api_service/api/routers/task_dashboard_view_model.py`.
+- [X] T030 Update consolidated/list/route rendering to queue + orchestrator and add queue skill column/filter in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T031 Add optional queue submit `skillArgs` JSON handling and validation in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T032 Update documentation/spec artifacts to remove legacy SpecKit category route references and document queue skill launch path in `docs/TaskUiArchitecture.md`, `docs/TaskUiStrategy1ThinDashboard.md`, and `specs/017-thin-dashboard-ui/*`.
 
 ---
 

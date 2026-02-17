@@ -13,12 +13,8 @@ def test_normalize_status_maps_queue_dead_letter_to_failed() -> None:
     assert normalize_status("queue", "dead_letter") == "failed"
 
 
-def test_normalize_status_maps_speckit_retrying_to_queued() -> None:
+def test_normalize_status_maps_removed_speckit_to_fallback_queued() -> None:
     assert normalize_status("speckit", "retrying") == "queued"
-
-
-def test_normalize_status_maps_speckit_in_progress_to_running() -> None:
-    assert normalize_status("speckit", "in_progress") == "running"
 
 
 def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
@@ -44,7 +40,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         config["sources"]["queue"]["migrationTelemetry"]
         == "/api/queue/telemetry/migration"
     )
-    assert config["sources"]["speckit"]["create"] == "/api/workflows/speckit/runs"
+    assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]

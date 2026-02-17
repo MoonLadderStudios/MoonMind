@@ -83,7 +83,7 @@ class CodexWorkerConfig:
     default_claude_effort: str | None = None
     gemini_binary: str = "gemini"
     claude_binary: str = "claude"
-    worker_capabilities: tuple[str, ...] = ("codex", "git")
+    worker_capabilities: tuple[str, ...] = ("codex", "git", "gh")
     vault_address: str | None = None
     vault_token: str | None = None
     vault_token_file: Path | None = None
@@ -236,9 +236,9 @@ class CodexWorkerConfig:
             )
         else:
             if worker_runtime == "universal":
-                worker_capabilities = ("codex", "gemini", "claude", "git")
+                worker_capabilities = ("codex", "gemini", "claude", "git", "gh")
             else:
-                worker_capabilities = (worker_runtime, "git")
+                worker_capabilities = (worker_runtime, "git", "gh")
 
         vault_address = str(source.get("MOONMIND_VAULT_ADDR", "")).strip() or None
         vault_token_file_raw = str(source.get("MOONMIND_VAULT_TOKEN_FILE", "")).strip()
