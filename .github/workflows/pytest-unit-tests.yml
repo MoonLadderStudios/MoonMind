@@ -44,7 +44,7 @@ jobs:
       continue-on-error: true
     - name: Commit changes
       id: auto_commit
-      uses: stefanzweifel/git-auto-commit-action@v5
+      uses: stefanzweifel/git-auto-commit-action@v7
       with:
         commit_message: "style: auto-fixes from pre-commit"
     - name: Fail if pre-commit failed and no changes were auto-fixed
