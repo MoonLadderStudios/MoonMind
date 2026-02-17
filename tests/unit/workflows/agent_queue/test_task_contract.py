@@ -82,6 +82,132 @@ def test_normalize_task_payload_container_enabled_adds_docker_capability() -> No
     assert normalized["task"]["container"]["enabled"] is True
 
 
+def test_normalize_task_payload_accepts_steps_schema() -> None:
+    """Canonical tasks should preserve valid ordered task.steps entries."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "Run step flow",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "inspect", "instructions": "Inspect current behavior"},
+                    {
+                        "title": "Apply patch",
+                        "skill": {"id": "speckit", "args": {"phase": "patch"}},
+                    },
+                ],
+            },
+        },
+    )
+
+    assert len(normalized["task"]["steps"]) == 2
+    assert normalized["task"]["steps"][0]["id"] == "inspect"
+    assert normalized["task"]["steps"][1]["skill"]["id"] == "speckit"
+
+
+def test_normalize_task_payload_derives_step_skill_required_capabilities() -> None:
+    """Step-level skill required capabilities should be merged into job policy."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "Run step flow",
+                "skill": {
+                    "id": "speckit",
+                    "args": {},
+                    "requiredCapabilities": ["qdrant"],
+                },
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "steps": [
+                    {
+                        "id": "unity-build",
+                        "skill": {
+                            "id": "unity",
+                            "args": {},
+                            "requiredCapabilities": ["docker", "gpu"],
+                        },
+                    }
+                ],
+            },
+        },
+    )
+
+    assert normalized["requiredCapabilities"] == [
+        "codex",
+        "git",
+        "gh",
+        "qdrant",
+        "docker",
+        "gpu",
+    ]
+
+
+def test_normalize_task_payload_rejects_forbidden_step_override_fields() -> None:
+    """Task steps may not define task-scoped runtime/publish/repo controls."""
+
+    with pytest.raises(
+        TaskContractError,
+        match="task.steps entries may not define task-scoped overrides",
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Run tests",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                    "steps": [
+                        {
+                            "id": "bad-step",
+                            "instructions": "should fail",
+                            "runtime": {"mode": "gemini"},
+                        }
+                    ],
+                },
+            },
+        )
+
+
+def test_normalize_task_payload_rejects_steps_with_container_execution() -> None:
+    """First rollout should reject explicit task.steps with enabled task.container."""
+
+    with pytest.raises(
+        TaskContractError,
+        match="task.steps is not supported when task.container.enabled=true",
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Run tests in container",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                    "container": {
+                        "enabled": True,
+                        "image": "python:3.11",
+                        "command": ["python", "--version"],
+                    },
+                    "steps": [
+                        {"id": "step-1", "instructions": "Do work"},
+                    ],
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_rejects_enabled_container_without_image() -> None:
     """Container spec validation should fail when enabled image is missing."""
 

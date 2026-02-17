@@ -384,6 +384,50 @@ class TaskContainerSelection(BaseModel):
         return self
 
 
+class TaskStepSpec(BaseModel):
+    """Optional execution step contained within a canonical task payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    id: str | None = Field(None, alias="id")
+    title: str | None = Field(None, alias="title")
+    instructions: str | None = Field(None, alias="instructions")
+    skill: TaskSkillSelection | None = Field(None, alias="skill")
+
+    @field_validator("id", "title", "instructions", mode="before")
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_forbidden_step_overrides(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        payload = dict(value)
+        forbidden = {
+            "runtime",
+            "targetRuntime",
+            "target_runtime",
+            "model",
+            "effort",
+            "repository",
+            "repo",
+            "git",
+            "publish",
+            "container",
+        }
+        blocked = sorted(
+            key for key in payload.keys() if str(key).strip() in forbidden
+        )
+        if blocked:
+            formatted = ", ".join(blocked)
+            raise TaskContractError(
+                f"task.steps entries may not define task-scoped overrides: {formatted}"
+            )
+        return payload
+
+
 class TaskExecutionSpec(BaseModel):
     """Main task execution body."""
 
@@ -402,6 +446,7 @@ class TaskExecutionSpec(BaseModel):
     publish: TaskPublishSelection = Field(
         default_factory=TaskPublishSelection, alias="publish"
     )
+    steps: list[TaskStepSpec] = Field(default_factory=list, alias="steps")
     container: TaskContainerSelection | None = Field(None, alias="container")
 
     @field_validator("instructions", mode="before")
@@ -430,6 +475,25 @@ class TaskExecutionSpec(BaseModel):
             if isinstance(legacy_runtime, str) and legacy_runtime.strip():
                 payload["runtime"] = {"mode": legacy_runtime}
         return payload
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _normalize_steps(cls, value: object) -> list[object]:
+        if value is None or value == "":
+            return []
+        if not isinstance(value, list):
+            raise TaskContractError("task.steps must be a list")
+        return list(value)
+
+    @model_validator(mode="after")
+    def _validate_container_steps_compatibility(self) -> "TaskExecutionSpec":
+        if self.container is None:
+            return self
+        if self.container.enabled and self.steps:
+            raise TaskContractError(
+                "task.steps is not supported when task.container.enabled=true"
+            )
+        return self
 
 
 class CanonicalTaskPayload(BaseModel):
@@ -739,6 +803,17 @@ def build_canonical_task_view(
     skill_caps = skill_node.get("requiredCapabilities")
     if isinstance(skill_caps, list):
         required.extend(skill_caps)
+
+    steps_node = (canonical.get("task") or {}).get("steps")
+    if isinstance(steps_node, list):
+        for step_raw in steps_node:
+            if not isinstance(step_raw, Mapping):
+                continue
+            step_skill_raw = step_raw.get("skill")
+            step_skill = step_skill_raw if isinstance(step_skill_raw, Mapping) else {}
+            step_skill_caps = step_skill.get("requiredCapabilities")
+            if isinstance(step_skill_caps, list):
+                required.extend(step_skill_caps)
 
     container_node = (canonical.get("task") or {}).get("container")
     container = container_node if isinstance(container_node, Mapping) else {}

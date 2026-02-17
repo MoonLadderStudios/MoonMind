@@ -1,92 +1,108 @@
 # Task Steps System
 
-Status: Draft
+Status: Draft (Design Target)
 Owners: MoonMind Engineering
-Last Updated: 2026-02-16
+Last Updated: 2026-02-17
 
 ## 1. Purpose
 
-Introduce a **Task Steps** layer for MoonMind Tasks so a single Task run can execute an ordered sequence of **steps**, where each step is executed as though it were a separate queued “message” to the chosen runtime (Codex / Gemini / Claude), while preserving:
+Define the Task Steps extension for MoonMind queue Tasks so one `type="task"` job can execute an ordered sequence of steps, where each step is one runtime invocation (Codex / Gemini / Claude), while preserving:
 
 - One Task = one queue job (single claim, single workspace, single publish decision)
-- One set of task-level controls (runtime, model, effort, repo, branches, publish) applied to the entire run
-- Step-level optional overrides for:
-  - `instructions` (optional)
-  - `skill` selection (optional)
+- One set of task-level controls (runtime, model, effort, repo, branches, publish) for the entire run
+- Optional step-level overrides for:
+  - `instructions`
+  - `skill`
 
-This document is declarative: it defines steady-state contracts, invariants, and expected execution semantics.
-
----
-
-## 2. Definitions
-
-**Task**
-A user-submitted unit of work represented as a single `type="task"` Agent Queue job.
-
-**Step**
-An ordered execution unit within a Task. Each step results in **one runtime invocation** (“one message”) executed against the same job workspace.
-
-**Task Run**
-The full lifecycle of a Task job from claim → prepare → execute (all steps) → publish (optional) → complete/fail.
-
-**Step Execution**
-One runtime invocation (Codex CLI, Gemini CLI, Claude Code, etc.) with a step-specific prompt assembled by MoonMind.
+This is a declarative design document for steady-state behavior and rollout constraints.
 
 ---
 
-## 3. Goals and Non-Goals
+## 2. Current-State Snapshot (2026-02-17)
+
+Implemented today:
+
+- Canonical `type="task"` payload normalization is in place.
+- Wrapper stages exist and run in order: `moonmind.task.prepare` -> `moonmind.task.execute` -> `moonmind.task.publish`.
+- Queue task publish default is `pr` (contract + `/tasks/queue/new` UI default).
+- Cooperative cancellation is implemented for running jobs (`cancel` request + worker `cancel/ack`).
+- Container execution mode exists under `task.container` and currently runs as a single execute-stage flow.
+
+Not implemented yet:
+
+- `task.steps[]` contract and server validation.
+- Per-step execute loop and per-step events/artifacts.
+- Queue submit UI steps editor.
+
+This document specifies the target behavior and clarifies integration with the current runtime.
+
+---
+
+## 3. Definitions
+
+**Task**  
+A user-submitted unit of work represented as one `type="task"` Agent Queue job.
+
+**Step**  
+An ordered execution unit inside a Task. Each step maps to exactly one runtime invocation.
+
+**Task Run**  
+The full job lifecycle from claim -> prepare -> execute (all steps) -> publish (optional) -> terminal state.
+
+**Step Execution**  
+One runtime invocation with a step-specific assembled prompt.
+
+---
+
+## 4. Goals and Non-Goals
 
 ### Goals
-1. Allow a Task to execute **N steps sequentially** in a single worker claim/session.
-2. Each step may optionally provide:
-   - step-specific instructions
-   - step-specific skill selection
-3. Task-level settings apply to the whole run:
-   - `repository`, `git.startingBranch`, `git.newBranch`
-   - `runtime.mode`, `runtime.model`, `runtime.effort`
-   - `publish.mode`, PR settings, etc.
-4. Preserve the wrapper stage model:
-   - Prepare stage sets up workspace + branch
-   - Execute stage runs all steps
-   - Publish stage commits/pushes/PR (if enabled)
-5. Provide clear observability:
-   - job events show step start/finish/failure
-   - artifacts include per-step logs and optional per-step patches
 
-### Non-Goals (for this document)
-- Live “edit steps while running” interactive continuation (future work)
-- Parallel step execution
-- Step-level publish/commit (publish is task-level only)
-- Replacing orchestrator plans; this is specific to queue Tasks
+1. Execute `N` steps sequentially in one worker claim/session.
+2. Allow optional step-specific `instructions` and `skill` overrides.
+3. Keep repository, branches, runtime, and publish settings task-scoped.
+4. Preserve wrapper-stage contract for prepare/execute/publish.
+5. Provide step-level observability through events and artifacts.
+6. Preserve current cancellation guarantees during multi-step execution.
+
+### Non-Goals
+
+- Live step editing while a Task is running.
+- Parallel step execution.
+- Step-level publish/commit (publish remains task-scoped).
+- Replacing orchestrator plans.
+- Step execution for `task.container.enabled=true` in the first rollout.
 
 ---
 
-## 4. High-Level Architecture
+## 5. High-Level Architecture
 
-### 4.1 One Task Job, Many Steps
-A Task remains a single Agent Queue job. The worker claims the job once and executes the full step sequence in-order.
+### 5.1 One Task Job, Many Steps
 
-This preserves “same device” semantics naturally: all steps run on the worker that holds the lease.
+A Task remains one queue job claimed once by one worker. The worker executes steps in order in one workspace.
 
-### 4.2 Wrapper Stages Remain the Outer Contract
-The Task still executes as:
+### 5.2 Wrapper Stages Remain the Outer Contract
+
+The outer stage contract remains:
 
 1. `moonmind.task.prepare`
-2. `moonmind.task.execute` (runs Step 1..N)
-3. `moonmind.task.publish` (conditional / may skip)
+2. `moonmind.task.execute` (runs Step 1..N internally)
+3. `moonmind.task.publish` (conditional)
 
-Steps are **internal** to the execute stage.
+Steps are internal to execute stage, not new queue jobs.
 
 ---
 
-## 5. Canonical Payload Contract Extension
+## 6. Canonical Payload Contract Extension
 
-### 5.1 Add `task.steps[]` (Optional)
-Extend the canonical Task execution object with an optional `steps` array.
+### 6.1 Add `task.steps[]` (Optional)
 
-If `steps` is omitted or empty, the Task behaves exactly as today: it is treated as a single-step Task derived from `task.instructions` and `task.skill`.
+Extend the canonical Task payload with optional `task.steps`.
 
-### 5.2 Step Schema
+- If omitted or empty: implicit single-step behavior (current semantics).
+- If provided: execute steps in listed order.
+
+### 6.2 Step Schema
 
 ```json
 {
@@ -98,47 +114,43 @@ If `steps` is omitted or empty, the Task behaves exactly as today: it is treated
     "args": {}
   }
 }
-````
+```
 
 Field rules:
 
-* `id` (optional): UI-generated stable identifier for referencing events/artifacts. If omitted, the worker uses `index`-based ids.
-* `title` (optional): UI-only convenience label (may be included in payload for display).
-* `instructions` (optional): step directive text. If missing, the step inherits the task objective only.
-* `skill` (optional):
+- `id` optional; if absent, worker generates index-based ID.
+- `title` optional display metadata.
+- `instructions` optional; absent means objective-only continuation.
+- `skill` optional; absent means inherit task-level `task.skill`.
+- Step-level runtime/model/effort/repo/publish are not allowed.
 
-  * If missing, the step inherits task-level `task.skill`.
-  * If present, it overrides only for this step.
-* Step-level runtime/model/effort/repo/publish are not allowed. All of those remain task-level.
+### 6.3 Task-Level Instructions Stay Required
 
-### 5.3 Task-Level Instructions Still Required
+`task.instructions` remains required and represents the run objective.
 
-`task.instructions` remains the required “Task Objective” and applies to the entire run.
+### 6.4 Backward Compatibility
 
-Steps optionally add or refine instructions per message.
+- Existing tasks without `task.steps` must continue to run unchanged.
+- Producers are not required to send `task.steps`.
+- Legacy `codex_exec` / `codex_skill` normalization behavior remains unchanged.
 
-### 5.4 Backward Compatibility
+### 6.5 Publish Default Clarification
 
-* Existing payloads without `task.steps` continue to work unchanged.
-* The normalization layer may materialize an implicit single step at execution time for convenience, but MUST NOT require producers to send steps.
+For canonical `type="task"` jobs, omitted `task.publish.mode` defaults to `pr`.
+Task Steps must preserve this default.
 
 ---
 
-## 6. Step Prompt Assembly
+## 7. Step Prompt Assembly
 
-Each step produces one runtime invocation prompt assembled as:
+Each step assembles one runtime invocation prompt with:
 
-**Effective Skill**
+- Effective skill: `step.skill.id` -> `task.skill.id` -> `auto`
+- Effective instructions:
+  - always include Task Objective (`task.instructions`)
+  - append Step Instructions when present
 
-* `step.skill.id` if present else `task.skill.id` else `auto`
-
-**Effective Instructions**
-
-* Always include the **Task Objective** (`task.instructions`)
-* If `step.instructions` is present, include it as **Step Instructions**
-* If `step.instructions` is missing, the prompt uses Task Objective plus a deterministic “continue” header
-
-### 6.1 Deterministic Prompt Template (Runtime-Neutral)
+### 7.1 Deterministic Runtime-Neutral Prompt Template
 
 ```
 MOONMIND TASK OBJECTIVE:
@@ -151,9 +163,9 @@ EFFECTIVE SKILL:
 {effectiveSkillId}
 
 WORKSPACE:
-- Repo is checked out and on the effective working branch already.
+- Repo is already checked out on the working branch.
 - Do NOT commit or push. Publish is handled by MoonMind publish stage.
-- Skills are available under: .agents/skills/ and .gemini/skills/ (symlinks to job skills workspace).
+- Skills are available via .agents/skills and .gemini/skills links.
 - Write logs to stdout/stderr; MoonMind captures them.
 ```
 
@@ -166,135 +178,123 @@ Use the selected skill's files under .agents/skills/{skill}/ as the procedure fo
 
 ---
 
-## 7. Worker Execution Semantics
+## 8. Worker Execution Semantics
 
-### 7.1 Prepare Stage (Unchanged Outer Purpose; Extended Skill Materialization)
+### 8.1 Prepare Stage
 
-Prepare stage responsibilities remain:
+Prepare responsibilities remain:
 
-* Create job workspace directories (`repo/`, `home/`, `skills_active/`, `artifacts/`)
-* Clone repo, resolve default branch, compute effective working branch
-* Materialize skills and create skill links
-* Write `task_context.json`
+- Create workspace directories (`repo/`, `home/`, `skills_active/`, `artifacts/`)
+- Clone/fetch repo and resolve branches
+- Materialize skills and links
+- Write `task_context.json`
 
-**Change for TaskSteps:**
+Task Steps extension:
 
-* Materialize the **union of all skills referenced** by:
+- Materialize union of non-`auto` skills referenced by:
+  - `task.skill.id`
+  - `task.steps[*].skill.id`
+- If union is empty, keep shared skill links behavior.
 
-  * `task.skill.id` (if not `auto`)
-  * `task.steps[*].skill.id` (if not `auto`)
-* If union is empty (all `auto`), still ensure shared skill links exist (as today).
+### 8.2 Execute Stage
 
-### 7.2 Execute Stage (New: Runs Step Loop)
+Execute stage behavior:
 
-Execute stage MUST:
-
-1. Resolve the step list:
-
-   * If `task.steps` is present and non-empty → use it
-   * Else → create an implicit single step:
-
-     * instructions: null
-     * skill: inherit task.skill
+1. Resolve steps list:
+   - use `task.steps` if non-empty
+   - otherwise create implicit single step
 2. For each step in order:
+   - emit `task.step.started`
+   - invoke runtime once with assembled prompt
+   - write step logs (and optional step patch)
+   - emit `task.step.finished` or `task.step.failed`
+3. On first step failure:
+   - fail execute stage immediately
+   - do not run remaining steps
+   - do not run publish stage
 
-   * Emit `task.step.started`
-   * Invoke runtime adapter once (one “message”) with assembled prompt
-   * Capture stdout/stderr to step log artifacts
-   * Optionally compute and store a per-step patch (recommended)
-   * Emit `task.step.finished` on success OR `task.step.failed` on failure
-3. If a step fails:
+### 8.3 Cancellation Semantics (Must Preserve Current Behavior)
 
-   * The execute stage fails immediately (no further steps)
-   * Publish stage behavior is governed by task publish mode:
+While running steps, worker must preserve current cooperative cancellation behavior:
 
-     * Recommended default: **do not publish on execute failure**
+- detect cancellation requests from heartbeat payload (`cancelRequestedAt`)
+- interrupt command execution where possible
+- stop before next step when cancellation is set
+- acknowledge via `/api/queue/jobs/{jobId}/cancel/ack`
+- avoid success/failure completion transitions after cancellation acknowledgement
 
-### 7.3 Publish Stage (Once per Task Run)
+### 8.4 Publish Stage
 
-Publish stage occurs once after all steps succeed, using the existing publish mode semantics:
+Publish runs once per Task run after all steps succeed:
 
-* `none`: skip
-* `branch`: commit + push
-* `pr`: commit + push + PR
+- `none`: skip
+- `branch`: commit + push
+- `pr`: commit + push + PR
 
-Steps MUST NOT commit/push. The prompt template reinforces this constraint.
+Defaults:
 
----
-
-## 8. Events and Artifacts
-
-### 8.1 New Required Events (Step Timeline)
-
-Workers MUST emit:
-
-* `task.steps.plan` (count + ids)
-* `task.step.started`
-* `task.step.finished`
-* `task.step.failed`
-
-Event payload fields (minimum):
-
-* `stepIndex` (0-based)
-* `stepId` (from payload or generated)
-* `effectiveSkill` (`auto` or concrete)
-* `hasStepInstructions` (bool)
-* `summary` (optional small summary string)
-
-### 8.2 Step Artifacts (Recommended)
-
-For each step `i`:
-
-* `logs/steps/step-000{i}.log`
-* `patches/steps/step-000{i}.patch` (optional but recommended)
-
-Plus existing task artifacts:
-
-* `logs/prepare.log`
-* `logs/execute.log` (may become the aggregate “execute stage” log)
-* `logs/publish.log` (when publish enabled or “skipped” is recorded)
-* `patches/changes.patch` (final diff snapshot)
-* `task_context.json`
-* `publish_result.json` (when publish enabled)
+- For canonical task payloads, default publish mode remains `pr`.
 
 ---
 
-## 9. Task Dashboard UI Changes
+## 9. Events and Artifacts
 
-### 9.1 Queue Submit UI: Add Steps Editor
+### 9.1 Required Step Events
 
-The Queue Submit form (`/tasks/queue/new`) adds a **Steps** section.
+Add/emit:
 
-UI behavior:
+- `task.steps.plan` (step count + IDs)
+- `task.step.started`
+- `task.step.finished`
+- `task.step.failed`
 
-* Task-level fields remain the same:
+Payload minimum:
 
-  * repository, runtime, model, effort, publish mode, branches, etc.
-* Add a Steps editor with:
+- `stepIndex` (0-based)
+- `stepId`
+- `effectiveSkill`
+- `hasStepInstructions`
+- `summary` (optional)
 
-  * “Add Step” button
-  * Step list with:
+Note: existing wrapper stage events remain required (`moonmind.task.prepare`, `moonmind.task.execute`, `moonmind.task.publish`).
 
-    * optional step instructions textarea
-    * optional skill dropdown
-    * remove step
-    * reorder step up/down (optional but recommended)
+### 9.2 Step Artifacts (Recommended)
 
-### 9.2 Defaults and Ergonomics
+Per step `i`:
 
-* By default, the form shows **one step**.
-* The existing required “Instructions” field becomes the **Task Objective** (`task.instructions`).
-* Each step initially defaults to:
+- `logs/steps/step-000{i}.log`
+- `patches/steps/step-000{i}.patch` (optional)
 
-  * `instructions`: empty (inherits objective)
-  * `skill`: empty (inherits task-level skill or defaults to auto)
-* Submission validation:
+Existing task artifacts continue:
 
-  * `task.instructions` is required (objective)
-  * `steps` may be empty; empty means implicit single-step mode
-  * If steps exist, the UI SHOULD prevent steps that are completely blank (no instructions and no skill override), but backend may treat them as “continue” steps if present.
+- `logs/prepare.log`
+- `logs/execute.log`
+- `logs/publish.log`
+- `patches/changes.patch`
+- `task_context.json`
+- `publish_result.json`
 
-### 9.3 Payload Emitted by UI (Example)
+---
+
+## 10. Task Dashboard UI Changes
+
+### 10.1 Queue Submit UI (`/tasks/queue/new`)
+
+Current state: no steps editor exists yet.
+
+Target changes:
+
+- Add a Steps section with add/remove and optional reorder controls.
+- Keep existing task-level fields unchanged.
+- Keep publish default as `pr` in UI.
+
+### 10.2 Defaults and Validation
+
+- Task Objective (`task.instructions`) stays required.
+- `steps` may be empty (implicit single step).
+- If steps exist, UI should prevent completely blank steps where practical.
+
+### 10.3 Example Payload
 
 ```json
 {
@@ -319,104 +319,86 @@ UI behavior:
           "id": "step-2",
           "title": "Generate spec using Speckit",
           "skill": { "id": "speckit", "args": {} }
-        },
-        {
-          "id": "step-3",
-          "title": "Implement code + tests",
-          "instructions": "Implement the code changes and update unit tests.",
-          "skill": { "id": "auto", "args": {} }
         }
       ],
       "git": { "startingBranch": null, "newBranch": null },
-      "publish": { "mode": "branch", "prBaseBranch": null, "commitMessage": null, "prTitle": null, "prBody": null }
+      "publish": { "mode": "pr", "prBaseBranch": null, "commitMessage": null, "prTitle": null, "prBody": null }
     }
   }
 }
 ```
 
-Notes:
+---
 
-* UI may omit `requiredCapabilities`; server normalization derives it.
-* Model/effort/repo/publish are task-level only (apply to all steps).
+## 11. Server and Contract Changes
 
-### 9.4 Queue Detail UI Enhancements (Recommended)
+### 11.1 Task Contract Models
 
-On `/tasks/queue/:jobId`, render a Step timeline by parsing job events:
+Add:
 
-* Show N steps, current step index, per-step status
-* Link step logs/patches if present
+- `TaskStepSpec`
+- `task.steps: list[TaskStepSpec] = []`
+
+### 11.2 Capability Derivation
+
+Preserve existing derivation and extend for steps:
+
+- runtime capability
+- `git`
+- `gh` when publish mode is `pr`
+- `docker` when `task.container.enabled=true`
+- union of `requiredCapabilities` from:
+  - `task.skill.requiredCapabilities`
+  - `task.steps[*].skill.requiredCapabilities`
 
 ---
 
-## 10. Server and Contract Changes
+## 12. Worker Notes (Codex First)
 
-### 10.1 Task Contract Models
+### 12.1 Runtime Execution
 
-Extend the canonical Task payload validation with:
+- Codex path: one `codex exec` invocation per step, same repo/workspace.
+- Gemini/Claude paths follow same one-step/one-invocation contract.
 
-* `TaskStepSpec`
-* `task.steps: list[TaskStepSpec] = []`
+### 12.2 Skill Routing
 
-### 10.2 Capability Derivation
+For each step where effective skill is non-auto:
 
-Update capability derivation to include:
+- resolve via skill-first path for that step
+- capture step-level metadata in events
 
-* runtime capability
-* `git`
-* `gh` when publish mode is `pr`
-* union of `requiredCapabilities` declared by:
+### 12.3 Container Tasks
 
-  * `task.skill.requiredCapabilities`
-  * `task.steps[*].skill.requiredCapabilities`
+First rollout recommendation:
 
----
-
-## 11. Worker Implementation Notes (Codex First)
-
-### 11.1 Codex Step Execution
-
-Codex adapter will execute each step as one `codex exec ... <prompt>` invocation, in the same repo directory, without re-cloning.
-
-### 11.2 Skill Handling Per Step
-
-If `effectiveSkillId != auto`, execute step via the skill path (skill-first) for that step:
-
-* Materialize all step skills during prepare
-* Invoke the skill-compatible handler per step
-* Record step-level execution metadata in step events
+- reject `task.steps` when `task.container.enabled=true` (explicit validation), or
+- document container+steps as unsupported until explicit design is added.
 
 ---
 
-## 12. Security
+## 13. Security
 
-* No raw secrets in payloads, events, or artifacts.
-* Step prompts must not include secrets.
-* Skill args are treated as untrusted; redact token-like strings from logs/artifacts (existing redaction applies).
-
----
-
-## 13. Migration Strategy
-
-1. Add `task.steps` as optional, keeping existing `task.instructions` and `task.skill`.
-2. Update worker to:
-
-   * materialize union of skills
-   * iterate steps in execute stage
-3. Update dashboard submit UI to support adding steps.
-4. Update docs and tests.
+- Do not emit raw secrets in payloads, events, logs, or artifacts.
+- Treat step prompts and step skill args as untrusted input.
+- Keep existing redaction behavior for token-like values.
 
 ---
 
-## 14. Open Questions
+## 14. Migration Strategy
 
-1. Should a completely blank step be treated as a no-op, or rejected?
-2. Do we want step-level retry (re-run only the failed step) in the future?
-3. Should publish stage be allowed to run when steps fail (default: no)?
-4. Do we want a future “interactive add steps while running” endpoint to append steps to a running job?
+1. Add optional `task.steps` schema and validation.
+2. Update worker prepare to materialize union of referenced step skills.
+3. Implement execute-stage step loop and step events/artifacts.
+4. Integrate cancellation checks at step boundaries.
+5. Add queue submit UI steps editor (preserving publish default `pr`).
+6. Add tests for contract normalization, worker flow, cancellation, and UI payload emission.
 
-```
+---
 
-Key implementation alignment notes (why this fits MoonMind today):
-- Queue job creation already normalizes payloads server-side (so adding `task.steps` is safe and doesn’t require producers to perfectly compute `requiredCapabilities`) :contentReference[oaicite:3]{index=3}.
-- Current capability derivation includes runtime + `git` and adds `gh` for PR publishing; the steps system extends this by unioning step-skill capabilities :contentReference[oaicite:4]{index=4}.
-- Current worker prepare stage materializes only one selected skill when `selected_skill != "auto"`; TaskSteps requires materializing the union of step skills instead :contentReference[oaicite:5]{index=5}.
+## 15. Open Questions
+
+1. Should blank steps be rejected or treated as explicit "continue" steps?
+2. Should failed runs ever allow publish (current guidance: no)?
+3. For container tasks, should steps be unsupported or represented as sequential container commands?
+4. Should future retry modes support "retry failed step only"?
+5. Do we want a future endpoint for appending steps to a running job?
