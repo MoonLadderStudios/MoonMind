@@ -84,6 +84,7 @@ class CodexWorkerConfig:
     legacy_job_types_enabled: bool = True
     worker_runtime: str = "codex"
     default_skill: str = "speckit"
+    skill_policy_mode: str = "permissive"
     allowed_skills: tuple[str, ...] = ("speckit",)
     default_codex_model: str | None = None
     default_codex_effort: str | None = None
@@ -154,6 +155,24 @@ class CodexWorkerConfig:
             ).strip()
             or "speckit"
         )
+        skill_policy_mode = (
+            str(
+                source.get(
+                    "MOONMIND_SKILL_POLICY_MODE",
+                    source.get(
+                        "SPEC_WORKFLOW_SKILL_POLICY_MODE",
+                        source.get("SKILL_POLICY_MODE", "permissive"),
+                    ),
+                )
+            )
+            .strip()
+            .lower()
+            or "permissive"
+        )
+        if skill_policy_mode not in {"permissive", "allowlist"}:
+            raise ValueError(
+                "MOONMIND_SKILL_POLICY_MODE must be one of: permissive, allowlist"
+            )
         allowed_skills_csv = str(
             source.get(
                 "MOONMIND_ALLOWED_SKILLS",
@@ -301,6 +320,7 @@ class CodexWorkerConfig:
             legacy_job_types_enabled=legacy_job_types_enabled,
             worker_runtime=worker_runtime,
             default_skill=default_skill,
+            skill_policy_mode=skill_policy_mode,
             allowed_skills=allowed_skills,
             default_codex_model=default_codex_model,
             default_codex_effort=default_codex_effort,
@@ -772,29 +792,30 @@ class CodexWorker:
                 }
             )
         )
-        disallowed = sorted(
-            skill
-            for skill in selected_skills
-            if skill not in self._config.allowed_skills
-        )
-        if disallowed:
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Skill is not allowlisted for this worker",
-                payload={
-                    "jobType": job.type,
-                    "selectedSkills": disallowed,
-                    **skill_meta,
-                },
+        if self._config.skill_policy_mode == "allowlist":
+            disallowed = sorted(
+                skill
+                for skill in selected_skills
+                if skill not in self._config.allowed_skills
             )
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=f"skill not allowlisted: {', '.join(disallowed)}",
-                retryable=False,
-            )
-            return True
+            if disallowed:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="error",
+                    message="Skill is not allowlisted for this worker",
+                    payload={
+                        "jobType": job.type,
+                        "selectedSkills": disallowed,
+                        **skill_meta,
+                    },
+                )
+                await self._queue_client.fail_job(
+                    job_id=job.id,
+                    worker_id=self._config.worker_id,
+                    error_message=f"skill not allowlisted: {', '.join(disallowed)}",
+                    retryable=False,
+                )
+                return True
 
         heartbeat_stop = asyncio.Event()
         cancel_requested_event = asyncio.Event()
