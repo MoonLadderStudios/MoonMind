@@ -146,6 +146,44 @@ def _resolve_local_source(skill_name: str) -> str | None:
     return None
 
 
+def _discover_local_skill_names() -> tuple[str, ...]:
+    """Discover skill names from configured local and legacy mirrors."""
+
+    cfg = settings.spec_workflow
+    roots = (
+        Path(cfg.skills_local_mirror_root),
+        Path(cfg.skills_legacy_mirror_root),
+    )
+    discovered: list[str] = []
+    seen: set[str] = set()
+
+    for root in roots:
+        base = root.expanduser()
+        if not base.is_absolute():
+            base = (Path.cwd() / base).resolve()
+        if not base.is_dir():
+            continue
+        try:
+            entries = sorted(base.iterdir(), key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            if not (entry / "SKILL.md").is_file():
+                continue
+            try:
+                skill_name = validate_skill_name(entry.name)
+            except SkillResolutionError:
+                continue
+            if skill_name in seen:
+                continue
+            seen.add(skill_name)
+            discovered.append(skill_name)
+
+    return tuple(discovered)
+
+
 def _resolve_source_uri(
     *,
     skill_name: str,
@@ -198,11 +236,19 @@ def resolve_run_skill_selection(
         raw_selection = queue_profile
         selection_source = "queue_profile"
     else:
-        allowed = tuple(settings.spec_workflow.allowed_skills or ())
-        default = settings.spec_workflow.default_skill
-        if default and default not in allowed:
-            allowed = (*allowed, default)
-        raw_selection = allowed
+        cfg = settings.spec_workflow
+        default = cfg.default_skill
+        if cfg.skill_policy_mode == "allowlist":
+            allowed = tuple(cfg.allowed_skills or ())
+            if default and default not in allowed:
+                allowed = (*allowed, default)
+            raw_selection = allowed
+        else:
+            auto_selection: list[str] = []
+            if default:
+                auto_selection.append(default)
+            auto_selection.extend(_discover_local_skill_names())
+            raw_selection = tuple(dict.fromkeys(auto_selection))
         selection_source = "global_default"
 
     normalized = _normalize_skill_selection(raw_selection)
