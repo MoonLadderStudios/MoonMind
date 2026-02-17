@@ -16,13 +16,37 @@ export CODEX_CONFIG_PATH="${CODEX_CONFIG_PATH:-$CODEX_HOME/config.toml}"
 
 TOKEN_PATH_DEFAULT="${CODEX_HOME}/moonmind_worker_token"
 TOKEN_PATH="${MOONMIND_WORKER_TOKEN_FILE:-$TOKEN_PATH_DEFAULT}"
+TOKEN_POLICY_PATH_DEFAULT="${TOKEN_PATH}.policy"
+TOKEN_POLICY_PATH="${MOONMIND_WORKER_TOKEN_POLICY_FILE:-$TOKEN_POLICY_PATH_DEFAULT}"
 BOOTSTRAP="$(lower "${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}")"
+ALLOWED_TYPES_RAW="${MOONMIND_WORKER_ALLOWED_TYPES:-task,codex_exec,codex_skill}"
+CAPABILITIES_RAW="${MOONMIND_WORKER_CAPABILITIES:-}"
+normalize_csv() {
+  printf '%s' "$1" | tr -d '[:space:]'
+}
+desired_token_policy="allowed_types=$(normalize_csv "$ALLOWED_TYPES_RAW");capabilities=$(normalize_csv "$CAPABILITIES_RAW")"
 
 if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
-  token_file_value="$(tr -d '\r\n' <"$TOKEN_PATH")"
-  if [[ -n "$token_file_value" ]]; then
-    export MOONMIND_WORKER_TOKEN="$token_file_value"
-    log "Loaded worker token from $TOKEN_PATH"
+  should_load_cached_token=true
+  if [[ "$BOOTSTRAP" == "true" ]]; then
+    if [[ ! -f "$TOKEN_POLICY_PATH" ]]; then
+      should_load_cached_token=false
+      log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; rotating token."
+    else
+      cached_token_policy="$(tr -d '\r\n' <"$TOKEN_POLICY_PATH")"
+      if [[ "$cached_token_policy" != "$desired_token_policy" ]]; then
+        should_load_cached_token=false
+        log "Cached worker token policy does not match configured allowed types/capabilities; rotating token."
+      fi
+    fi
+  fi
+
+  if [[ "$should_load_cached_token" == "true" ]]; then
+    token_file_value="$(tr -d '\r\n' <"$TOKEN_PATH")"
+    if [[ -n "$token_file_value" ]]; then
+      export MOONMIND_WORKER_TOKEN="$token_file_value"
+      log "Loaded worker token from $TOKEN_PATH"
+    fi
   fi
 fi
 
@@ -48,7 +72,7 @@ allowed_types = [
     item.strip()
     for item in os.environ.get(
         "MOONMIND_WORKER_ALLOWED_TYPES",
-        "codex_exec,codex_skill",
+        "task,codex_exec,codex_skill",
     ).split(",")
     if item.strip()
 ]
@@ -125,6 +149,8 @@ PY
   export MOONMIND_WORKER_TOKEN="$worker_token"
   printf '%s\n' "$worker_token" >"$TOKEN_PATH"
   chmod 600 "$TOKEN_PATH"
+  printf '%s\n' "$desired_token_policy" >"$TOKEN_POLICY_PATH"
+  chmod 600 "$TOKEN_POLICY_PATH"
   log "Persisted worker token to $TOKEN_PATH"
 fi
 

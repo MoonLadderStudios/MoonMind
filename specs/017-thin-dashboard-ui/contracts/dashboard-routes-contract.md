@@ -12,9 +12,6 @@ All routes serve the same dashboard shell template while preserving unique URLs.
 - `GET /tasks/queue`
 - `GET /tasks/queue/new`
 - `GET /tasks/queue/{job_id}`
-- `GET /tasks/speckit`
-- `GET /tasks/speckit/new`
-- `GET /tasks/speckit/{run_id}`
 - `GET /tasks/orchestrator`
 - `GET /tasks/orchestrator/new`
 - `GET /tasks/orchestrator/{run_id}`

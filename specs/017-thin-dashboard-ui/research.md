@@ -18,7 +18,7 @@
 
 ## Decision 3: Normalize source statuses in frontend adapter
 
-- **Decision**: Implement a frontend normalization layer (`DashboardRun`) that maps queue/workflow/orchestrator statuses to a common display status.
+- **Decision**: Implement a frontend normalization layer (`DashboardRun`) that maps queue/orchestrator statuses to a common display status and exposes queue skill ids for SpecKit task discovery.
 - **Rationale**: Enables one consolidated running view without backend schema changes.
 - **Alternatives considered**:
   - Add a unified backend runs API now: rejected for MVP because Strategy 1 should avoid backend re-modeling.

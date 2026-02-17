@@ -20,7 +20,6 @@ Use Strategy 1: Thin Dashboard UI over existing REST endpoints.
 MoonMind already has submit/list/detail primitives for:
 
 - Agent Queue (`/api/queue/*`)
-- SpecKit workflows (`/api/workflows/speckit/*`)
 - Orchestrator runs (`/orchestrator/*`)
 
 ## 2. Scope
@@ -29,7 +28,7 @@ MoonMind already has submit/list/detail primitives for:
 
 - Dedicated dashboard web app for task operations.
 - Views for running, queued, and historical work.
-- Typed submit forms for Agent Queue Tasks, SpecKit runs, and Orchestrator runs.
+- Typed submit forms for Agent Queue Tasks and Orchestrator runs.
 - Detail pages with logs/events and artifacts.
 - Polling-based refresh.
 
@@ -51,16 +50,7 @@ MoonMind already has submit/list/detail primitives for:
 - `GET /api/queue/jobs/{job_id}/artifacts`
 - `GET /api/queue/jobs/{job_id}/artifacts/{artifact_id}/download`
 
-### 3.2 SpecKit
-
-- `POST /api/workflows/speckit/runs`
-- `GET /api/workflows/speckit/runs?status=&limit=&cursor=`
-- `GET /api/workflows/speckit/runs/{run_id}`
-- `GET /api/workflows/speckit/runs/{run_id}/tasks`
-- `GET /api/workflows/speckit/runs/{run_id}/artifacts`
-- `POST /api/workflows/speckit/runs/{run_id}/retry`
-
-### 3.3 Orchestrator
+### 3.2 Orchestrator
 
 - `POST /orchestrator/runs`
 - `GET /orchestrator/runs?status=&service=&limit=&offset=`
@@ -77,9 +67,6 @@ MoonMind already has submit/list/detail primitives for:
 - `/tasks/queue` Agent Queue list.
 - `/tasks/queue/new` create queue Task job (`type="task"`).
 - `/tasks/queue/:jobId` queue job details.
-- `/tasks/speckit` SpecKit run list.
-- `/tasks/speckit/new` create SpecKit run.
-- `/tasks/speckit/:runId` SpecKit run details.
 - `/tasks/orchestrator` Orchestrator run list.
 - `/tasks/orchestrator/new` create Orchestrator run.
 - `/tasks/orchestrator/:runId` Orchestrator run details.
@@ -96,7 +83,7 @@ MoonMind already has submit/list/detail primitives for:
 
 ```ts
 export type DashboardRun = {
-  source: "queue" | "speckit" | "orchestrator";
+  source: "queue" | "orchestrator";
   id: string;
   displayName: string;
   normalizedStatus: "queued" | "running" | "awaiting_action" | "succeeded" | "failed" | "cancelled";
@@ -116,9 +103,6 @@ Client fan-out with parallel fetches:
 
 - `GET /api/queue/jobs?status=running&limit=200`
 - `GET /api/queue/jobs?status=queued&limit=200`
-- `GET /api/workflows/speckit/runs?status=running&limit=100`
-- `GET /api/workflows/speckit/runs?status=pending&limit=100`
-- `GET /api/workflows/speckit/runs?status=retrying&limit=100`
 - `GET /orchestrator/runs?status=running&limit=100`
 - `GET /orchestrator/runs?status=pending&limit=100`
 - `GET /orchestrator/runs?status=awaiting_approval&limit=100`
@@ -137,6 +121,7 @@ Typed UI fields (only `instructions` required):
 
 - `instructions`
 - `skill` (default `auto`)
+- `skillArgs` (optional JSON object; default `{}`)
 - `runtime` (default deployment runtime)
 - `model`
 - `effort`
@@ -178,14 +163,7 @@ must never carry raw token values.
 - `GET /api/queue/jobs/{job_id}/events?after=<lastSeenTimestamp>&limit=200`
 - `GET /api/queue/jobs/{job_id}/artifacts`
 
-### 6.4 SpecKit Submit (`/tasks/speckit/new`)
-
-- `repository: owner/repo`
-- `featureKey?: string`
-- `forcePhase?: discover|submit|apply|publish`
-- `notes?: string`
-
-### 6.5 Orchestrator Submit (`/tasks/orchestrator/new`)
+### 6.4 Orchestrator Submit (`/tasks/orchestrator/new`)
 
 - `instruction: string`
 - `targetService: string`
