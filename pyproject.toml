@@ -60,7 +60,7 @@ SQLAlchemy = "~=2.0.46"
 docker = "~=7.1.0"
 "fastapi-users" = { version = "~=15.0.4", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
-alembic = "~=1.16.2"
+alembic = "~=1.18.4"
 sqlalchemy-utils = "~=0.42.1"
 cryptography = "~=46.0.5"
 psycopg2-binary = "~=2.9.11"
