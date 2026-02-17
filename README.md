@@ -91,10 +91,10 @@ MoonMind now supports run-scoped worker skills, including private skill definiti
 
 1. Add a private skill artifact in the local mirror:
 
-- Mirror root: `.agents/skills/skills`
+- Mirror root: `.agents/skills/local` (local-only, gitignored)
 
 ```text
-.agents/skills/skills/
+.agents/skills/local/
   my-private-scan/
     SKILL.md
     ... (skill implementation files)
@@ -113,7 +113,8 @@ description: Private project-specific scan helper skill
 
 - For spec workflow/Celery/Gemini workers, set in `.env`:
 
-  - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/skills`
+  - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
+  - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills/skills` (optional compatibility fallback)
   - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
   - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"`
   - `SPEC_WORKFLOW_DEFAULT_SKILL=my-private-scan` (optional)
@@ -177,7 +178,8 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (default `speckit`).
 - `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `SPEC_WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
 - `SPEC_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`).
-- `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/skills`).
+- `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`).
+- `SPEC_SKILLS_LEGACY_MIRROR_ROOT` – Compatibility fallback mirror root checked after the local mirror (default `.agents/skills/skills`).
 - `SPEC_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (default `false`).
 - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).

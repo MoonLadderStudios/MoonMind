@@ -306,9 +306,9 @@ class SpecWorkflowSettings(BaseSettings):
         description="Optional registry profile/URI for skill source resolution.",
     )
     skills_local_mirror_root: str = Field(
-        ".agents/skills/skills",
+        ".agents/skills/local",
         env="SPEC_SKILLS_LOCAL_MIRROR_ROOT",
-        description="Default local skill mirror directory used for source resolution.",
+        description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
         ".agents/skills/skills",

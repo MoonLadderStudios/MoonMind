@@ -117,7 +117,7 @@ def test_validate_shared_skills_mirror_strict_resolves_relative_to_repo_root(
     logger = logging.getLogger("worker-startup-test")
 
     repo_root = tmp_path / "repo"
-    mirror_root = repo_root / ".agents" / "skills" / "skills"
+    mirror_root = repo_root / ".agents" / "skills" / "local"
     skill = mirror_root / "speckit"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
@@ -131,7 +131,7 @@ def test_validate_shared_skills_mirror_strict_resolves_relative_to_repo_root(
 
     resolved = validate_shared_skills_mirror(
         worker_name="codex",
-        mirror_root=".agents/skills/skills",
+        mirror_root=".agents/skills/local",
         repo_root=str(repo_root),
         strict=True,
         logger=logger,
