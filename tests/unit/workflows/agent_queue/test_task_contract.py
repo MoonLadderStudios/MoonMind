@@ -84,6 +84,82 @@ def test_normalize_task_payload_rejects_enabled_container_without_image() -> Non
         )
 
 
+def test_normalize_task_payload_rejects_reserved_container_env_keys() -> None:
+    """Task container env may not override reserved worker metadata keys."""
+
+    with pytest.raises(TaskContractError, match="reserved key"):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Run tests in container",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                    "container": {
+                        "enabled": True,
+                        "image": "python:3.11",
+                        "command": ["python", "--version"],
+                        "env": {"ARTIFACT_DIR": "/tmp/hijack"},
+                    },
+                },
+            },
+        )
+
+
+def test_normalize_task_payload_rejects_invalid_cache_volume_name() -> None:
+    """Cache volume names should reject mount-string metacharacter injection."""
+
+    with pytest.raises(TaskContractError, match="cacheVolumes\\[\\].name"):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Run tests in container",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                    "container": {
+                        "enabled": True,
+                        "image": "python:3.11",
+                        "command": ["python", "--version"],
+                        "cacheVolumes": [
+                            {"name": "cache,readonly=true", "target": "/cache"}
+                        ],
+                    },
+                },
+            },
+        )
+
+
+def test_normalize_task_payload_rejects_invalid_cache_volume_target() -> None:
+    """Cache volume targets must be absolute paths without commas."""
+
+    with pytest.raises(TaskContractError, match="cacheVolumes\\[\\].target"):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Run tests in container",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                    "container": {
+                        "enabled": True,
+                        "image": "python:3.11",
+                        "command": ["python", "--version"],
+                        "cacheVolumes": [
+                            {"name": "cache_volume", "target": "relative/cache"}
+                        ],
+                    },
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_accepts_vault_auth_refs() -> None:
     """Canonical task payload should preserve validated auth secret refs."""
 

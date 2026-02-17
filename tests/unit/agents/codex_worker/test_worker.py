@@ -624,6 +624,7 @@ async def test_run_once_task_container_executes_generic_docker_path(
                     "enabled": True,
                     "image": "mcr.microsoft.com/dotnet/sdk:8.0",
                     "command": ["bash", "-lc", "dotnet --info"],
+                    "env": {"NUGET_AUTH_TOKEN": "secret-token-value"},
                 },
             },
         },
@@ -661,6 +662,8 @@ async def test_run_once_task_container_executes_generic_docker_path(
     content = execute_log.read_text(encoding="utf-8")
     assert "docker run" in content
     assert "mcr.microsoft.com/dotnet/sdk:8.0" in content
+    assert "--env NUGET_AUTH_TOKEN" in content
+    assert "secret-token-value" not in content
 
 
 async def test_run_once_task_container_supports_distinct_images(
@@ -783,7 +786,15 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
 
     recorded_commands: list[tuple[str, ...]] = []
 
-    async def fake_run_stage_command(command, *, cwd, log_path, check=True, env=None):
+    async def fake_run_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+    ):
         recorded_commands.append(tuple(str(item) for item in command))
         if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
             await asyncio.sleep(1.2)
@@ -800,6 +811,72 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     assert "timed out" in queue.failed[0]
     assert handler.calls == []
     assert any(cmd[:2] == ("docker", "stop") for cmd in recorded_commands)
+
+
+async def test_run_once_task_container_precreates_artifact_subdir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Container artifact subdir should exist before docker run starts."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "container": {
+                    "enabled": True,
+                    "image": "alpine:3.20",
+                    "command": ["sh", "-lc", "echo ok"],
+                    "artifactsSubdir": "container/custom",
+                },
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_capabilities=("codex", "git", "docker"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    async def fake_run_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+    ):
+        if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
+            artifact_root = (
+                tmp_path / str(job.id) / "artifacts" / "container" / "custom"
+            )
+            assert artifact_root.exists()
+            assert artifact_root.is_dir()
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", fake_run_stage_command)
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
 
 
 async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> None:

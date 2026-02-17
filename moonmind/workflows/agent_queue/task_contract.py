@@ -26,6 +26,8 @@ SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 
 
 class TaskContractError(ValueError):
@@ -241,6 +243,12 @@ class TaskContainerCacheVolume(BaseModel):
         cleaned = _clean_optional_str(value)
         if not cleaned:
             raise TaskContractError("task.container.cacheVolumes[].name is required")
+        if "," in cleaned or "=" in cleaned:
+            raise TaskContractError(
+                "task.container.cacheVolumes[].name contains invalid characters"
+            )
+        if not _CONTAINER_VOLUME_NAME_PATTERN.fullmatch(cleaned):
+            raise TaskContractError("task.container.cacheVolumes[].name has invalid format")
         return cleaned
 
     @field_validator("target", mode="before")
@@ -249,6 +257,14 @@ class TaskContainerCacheVolume(BaseModel):
         cleaned = _clean_optional_str(value)
         if not cleaned:
             raise TaskContractError("task.container.cacheVolumes[].target is required")
+        if "," in cleaned:
+            raise TaskContractError(
+                "task.container.cacheVolumes[].target may not contain ','"
+            )
+        if not cleaned.startswith("/"):
+            raise TaskContractError(
+                "task.container.cacheVolumes[].target must be an absolute path"
+            )
         return cleaned
 
 
@@ -317,6 +333,12 @@ class TaskContainerSelection(BaseModel):
             key = _clean_optional_str(raw_key)
             if key is None:
                 continue
+            if "=" in key:
+                raise TaskContractError("task.container.env keys may not contain '='")
+            if key.upper() in _CONTAINER_RESERVED_ENV_KEYS:
+                raise TaskContractError(
+                    f"task.container.env may not override reserved key '{key}'"
+                )
             normalized[key] = _clean_str(raw_value)
         return normalized or None
 

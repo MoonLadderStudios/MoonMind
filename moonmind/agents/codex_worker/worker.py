@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import shutil
 import socket
 from contextlib import suppress
@@ -54,6 +55,10 @@ from moonmind.workflows.skills.workspace_links import (
 from moonmind.workflows.speckit_celery.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
+
+_CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
+_CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 
 
 class QueueClientError(RuntimeError):
@@ -1646,16 +1651,29 @@ class CodexWorker:
         log_path: Path,
         check: bool = True,
         env: Mapping[str, str] | None = None,
+        redaction_values: tuple[str, ...] = (),
     ) -> CommandResult:
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
+            merged_redaction_values = tuple(
+                dict.fromkeys(
+                    [
+                        value
+                        for value in (
+                            *self._dynamic_redaction_values,
+                            *redaction_values,
+                        )
+                        if value
+                    ]
+                )
+            )
             return await runner(
                 command,
                 cwd=cwd,
                 log_path=log_path,
                 check=check,
                 env=dict(env) if env is not None else None,
-                redaction_values=tuple(self._dynamic_redaction_values),
+                redaction_values=merged_redaction_values,
             )
         self._append_stage_log(log_path, f"$ {' '.join(command)}")
         return CommandResult(tuple(command), 0, "", "")
@@ -1939,6 +1957,12 @@ class CodexWorker:
             key = str(raw_key).strip()
             if not key:
                 continue
+            if "=" in key:
+                raise ValueError("task.container.env keys may not contain '='")
+            if key.upper() in _CONTAINER_RESERVED_ENV_KEYS:
+                raise ValueError(
+                    f"task.container.env may not override reserved key '{key}'"
+                )
             normalized_env[key] = str(raw_value)
 
         cache_volumes: list[ContainerCacheVolume] = []
@@ -1951,7 +1975,12 @@ class CodexWorker:
                 target = str(item.get("target") or "").strip()
                 if not name or not target:
                     continue
-                cache_volumes.append(ContainerCacheVolume(name=name, target=target))
+                cache_volumes.append(
+                    ContainerCacheVolume(
+                        name=self._sanitize_container_volume_name(name),
+                        target=self._sanitize_container_volume_target(target),
+                    )
+                )
 
         return ContainerTaskSpec(
             image=image,
@@ -1971,13 +2000,39 @@ class CodexWorker:
         candidate = str(value or "").strip().strip("/")
         if not candidate:
             return "container"
-        parts = [
-            segment for segment in candidate.split("/") if segment and segment != "."
-        ]
+        parts = [segment for segment in candidate.split("/") if segment and segment != "."]
         if any(segment == ".." for segment in parts):
             raise ValueError("task.container.artifactsSubdir may not contain '..'")
         normalized = "/".join(parts)
         return normalized or "container"
+
+    @staticmethod
+    def _sanitize_container_volume_name(name: str) -> str:
+        cleaned = str(name).strip()
+        if not cleaned:
+            raise ValueError("task.container.cacheVolumes[].name is required")
+        if "," in cleaned or "=" in cleaned:
+            raise ValueError(
+                "task.container.cacheVolumes[].name contains invalid characters"
+            )
+        if not _CONTAINER_VOLUME_NAME_PATTERN.fullmatch(cleaned):
+            raise ValueError("task.container.cacheVolumes[].name has invalid format")
+        return cleaned
+
+    @staticmethod
+    def _sanitize_container_volume_target(target: str) -> str:
+        cleaned = str(target).strip()
+        if not cleaned:
+            raise ValueError("task.container.cacheVolumes[].target is required")
+        if "," in cleaned:
+            raise ValueError(
+                "task.container.cacheVolumes[].target may not contain ','"
+            )
+        if not cleaned.startswith("/"):
+            raise ValueError(
+                "task.container.cacheVolumes[].target must be an absolute path"
+            )
+        return cleaned
 
     @staticmethod
     def _container_command_summary(command: Sequence[str]) -> str:
@@ -2023,7 +2078,7 @@ class CodexWorker:
         repository: str,
         prepared: PreparedTaskWorkspace,
         container_spec: ContainerTaskSpec,
-    ) -> tuple[list[str], str, str]:
+    ) -> tuple[list[str], str, str, dict[str, str]]:
         workspace_root = self._config.workdir
         if not workspace_root.is_absolute():
             raise ValueError(
@@ -2094,17 +2149,17 @@ class CodexWorker:
         command.extend(["--workdir", workdir])
 
         run_env = {
+            **container_spec.env,
             "ARTIFACT_DIR": artifact_dir_in_container,
             "JOB_ID": str(job_id),
             "REPOSITORY": repository,
-            **container_spec.env,
         }
         for key in sorted(run_env):
-            command.extend(["-e", f"{key}={run_env[key]}"])
+            command.extend(["--env", key])
 
         command.append(container_spec.image)
         command.extend(container_spec.command)
-        return command, container_name, artifact_dir_in_container
+        return command, container_name, artifact_dir_in_container, run_env
 
     async def _run_container_execute_stage(
         self,
@@ -2120,9 +2175,9 @@ class CodexWorker:
 
         run_command: list[str] = []
         container_name = f"mm-task-{job_id}"
-        artifact_dir_in_container = str(
-            prepared.artifacts_dir / container_spec.artifacts_subdir
-        )
+        artifact_root = prepared.artifacts_dir / container_spec.artifacts_subdir
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        artifact_dir_in_container = str(artifact_root)
         run_result: CommandResult | None = None
         timed_out = False
         error_message: str | None = None
@@ -2147,7 +2202,7 @@ class CodexWorker:
                 cwd=prepared.repo_dir,
                 log_path=prepared.execute_log_path,
             )
-            run_command, container_name, artifact_dir_in_container = (
+            run_command, container_name, artifact_dir_in_container, run_env = (
                 self._build_container_run_command(
                     job_id=job_id,
                     repository=repository,
@@ -2155,34 +2210,37 @@ class CodexWorker:
                     container_spec=container_spec,
                 )
             )
+            run_command_env = dict(environ)
+            run_command_env.update(run_env)
             run_result = await asyncio.wait_for(
                 self._run_stage_command(
                     run_command,
                     cwd=prepared.repo_dir,
                     log_path=prepared.execute_log_path,
                     check=False,
+                    env=run_command_env,
+                    redaction_values=tuple(
+                        value for value in run_env.values() if value
+                    ),
                 ),
                 timeout=float(container_spec.timeout_seconds),
             )
             if run_result.returncode != 0:
-                detail = (run_result.stderr or run_result.stdout).strip()
-                tail = detail.splitlines()[-1] if detail else ""
-                error_message = (
-                    f"container command failed ({run_result.returncode}): {tail}"
-                    if tail
-                    else f"container command failed ({run_result.returncode})"
-                )
+                error_message = f"container command failed ({run_result.returncode})"
         except asyncio.TimeoutError:
             timed_out = True
             error_message = (
                 f"container execution timed out after {container_spec.timeout_seconds}s"
             )
             with suppress(Exception):
-                await self._run_stage_command(
-                    [self._config.docker_binary, "stop", container_name],
-                    cwd=prepared.repo_dir,
-                    log_path=prepared.execute_log_path,
-                    check=False,
+                await asyncio.wait_for(
+                    self._run_stage_command(
+                        [self._config.docker_binary, "stop", container_name],
+                        cwd=prepared.repo_dir,
+                        log_path=prepared.execute_log_path,
+                        check=False,
+                    ),
+                    timeout=_CONTAINER_STOP_TIMEOUT_SECONDS,
                 )
             run_result = CommandResult(
                 command=tuple(run_command),
@@ -2200,7 +2258,9 @@ class CodexWorker:
             )
 
         finished_at = datetime.now(UTC)
-        duration_seconds = max(0.0, (finished_at - started_at).total_seconds())
+        duration_seconds = max(
+            0.0, (finished_at - started_at).total_seconds()
+        )
         exit_code = run_result.returncode if run_result is not None else None
         succeeded = bool(run_result is not None and run_result.returncode == 0) and (
             not timed_out

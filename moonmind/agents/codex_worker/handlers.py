@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -525,7 +526,20 @@ class CodexExecHandler:
                 f"failed to execute command '{command[0]}': {exc}"
             ) from exc
 
-        stdout_bytes, stderr_bytes = await process.communicate()
+        try:
+            stdout_bytes, stderr_bytes = await process.communicate()
+        except asyncio.CancelledError:
+            # Ensure the subprocess is reaped when callers cancel this coroutine.
+            with suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                with suppress(ProcessLookupError):
+                    process.kill()
+                with suppress(Exception):
+                    await process.wait()
+            raise
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 

@@ -289,7 +289,7 @@ services:
       - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_WORKER_TOKEN_DESCRIPTION:-Docker Compose codex worker}
       - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
       - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
-      - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_CONTAINER_WORKSPACE_VOLUME:-agent_workspaces}
+      - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
       - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
       - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
@@ -447,6 +447,7 @@ volumes:
   rabbitmq-data:
   speckit_workspaces:
   agent_workspaces:
+    name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   gemini_auth_volume:
