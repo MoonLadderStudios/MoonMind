@@ -19,6 +19,7 @@ TOKEN_PATH="${MOONMIND_WORKER_TOKEN_FILE:-$TOKEN_PATH_DEFAULT}"
 TOKEN_POLICY_PATH_DEFAULT="${TOKEN_PATH}.policy"
 TOKEN_POLICY_PATH="${MOONMIND_WORKER_TOKEN_POLICY_FILE:-$TOKEN_POLICY_PATH_DEFAULT}"
 BOOTSTRAP="$(lower "${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}")"
+ENFORCE_TOKEN_POLICY="$(lower "${MOONMIND_WORKER_ENFORCE_TOKEN_POLICY:-false}")"
 ALLOWED_TYPES_RAW="${MOONMIND_WORKER_ALLOWED_TYPES:-task,codex_exec,codex_skill}"
 CAPABILITIES_RAW="${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh}"
 normalize_csv() {
@@ -26,17 +27,46 @@ normalize_csv() {
 }
 desired_token_policy="allowed_types=$(normalize_csv "$ALLOWED_TYPES_RAW");capabilities=$(normalize_csv "$CAPABILITIES_RAW")"
 
+persist_token_policy_marker() {
+  local policy_dir
+  policy_dir="$(dirname "$TOKEN_POLICY_PATH")"
+  if ! mkdir -p "$policy_dir"; then
+    log "Failed to create worker token policy directory $policy_dir"
+    return 1
+  fi
+  if ! printf '%s\n' "$desired_token_policy" >"$TOKEN_POLICY_PATH"; then
+    log "Failed to persist worker token policy marker at $TOKEN_POLICY_PATH"
+    return 1
+  fi
+  if ! chmod 600 "$TOKEN_POLICY_PATH"; then
+    log "Failed to set permissions on worker token policy marker at $TOKEN_POLICY_PATH"
+    return 1
+  fi
+  return 0
+}
+
 if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
   should_load_cached_token=true
+  refresh_policy_marker=false
   if [[ "$BOOTSTRAP" == "true" ]]; then
     if [[ ! -f "$TOKEN_POLICY_PATH" ]]; then
-      should_load_cached_token=false
-      log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; rotating token."
+      if [[ "$ENFORCE_TOKEN_POLICY" == "true" ]]; then
+        should_load_cached_token=false
+        log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; rotating token because MOONMIND_WORKER_ENFORCE_TOKEN_POLICY=true."
+      else
+        refresh_policy_marker=true
+        log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; loading cached token for backward compatibility."
+      fi
     else
       cached_token_policy="$(tr -d '\r\n' <"$TOKEN_POLICY_PATH")"
       if [[ "$cached_token_policy" != "$desired_token_policy" ]]; then
-        should_load_cached_token=false
-        log "Cached worker token policy does not match configured allowed types/capabilities; rotating token."
+        if [[ "$ENFORCE_TOKEN_POLICY" == "true" ]]; then
+          should_load_cached_token=false
+          log "Cached worker token policy does not match configured allowed types/capabilities; rotating token because MOONMIND_WORKER_ENFORCE_TOKEN_POLICY=true."
+        else
+          refresh_policy_marker=true
+          log "Cached worker token policy does not match configured allowed types/capabilities; loading cached token to avoid startup disruption."
+        fi
       fi
     fi
   fi
@@ -46,13 +76,18 @@ if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
     if [[ -n "$token_file_value" ]]; then
       export MOONMIND_WORKER_TOKEN="$token_file_value"
       log "Loaded worker token from $TOKEN_PATH"
+      if [[ "$refresh_policy_marker" == "true" ]]; then
+        if persist_token_policy_marker; then
+          log "Refreshed worker token policy marker at $TOKEN_POLICY_PATH"
+        fi
+      fi
     fi
   fi
 fi
 
 if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && "$BOOTSTRAP" == "true" ]]; then
   log "No MOONMIND_WORKER_TOKEN provided; requesting a worker token from MoonMind API."
-  mkdir -p "$(dirname "$TOKEN_PATH")"
+  mkdir -p "$(dirname "$TOKEN_PATH")" "$(dirname "$TOKEN_POLICY_PATH")"
   worker_token="$(
     python - <<'PY'
 import json
@@ -78,7 +113,7 @@ allowed_types = [
 ]
 capabilities = [
     item.strip()
-    for item in os.environ.get("MOONMIND_WORKER_CAPABILITIES", "").split(",")
+    for item in os.environ.get("MOONMIND_WORKER_CAPABILITIES", "codex,git,gh").split(",")
     if item.strip()
 ]
 
@@ -149,8 +184,9 @@ PY
   export MOONMIND_WORKER_TOKEN="$worker_token"
   printf '%s\n' "$worker_token" >"$TOKEN_PATH"
   chmod 600 "$TOKEN_PATH"
-  printf '%s\n' "$desired_token_policy" >"$TOKEN_POLICY_PATH"
-  chmod 600 "$TOKEN_POLICY_PATH"
+  if persist_token_policy_marker; then
+    :
+  fi
   log "Persisted worker token to $TOKEN_PATH"
 fi
 
