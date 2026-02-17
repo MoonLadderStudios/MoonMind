@@ -53,10 +53,7 @@ def _is_allowed_path(path: str) -> bool:
         return False
     if path in _STATIC_PATHS:
         return True
-    return any(
-        _is_dynamic_detail(path, source)
-        for source in ("queue", "orchestrator")
-    )
+    return any(_is_dynamic_detail(path, source) for source in ("queue", "orchestrator"))
 
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
