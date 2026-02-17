@@ -159,6 +159,31 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_MAX_BYTES", raising=False)
 
+    def test_task_default_baselines(self):
+        """Task defaults should provide stable queue execution baselines."""
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.codex_model == "gpt-5.3-codex"
+        assert settings.codex_effort == "high"
+        assert settings.github_repository == "MoonLadderStudios/MoonMind"
+
+    def test_task_default_env_overrides(self, monkeypatch):
+        """Task defaults should accept explicit env overrides."""
+
+        monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
+        monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+        monkeypatch.setenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.codex_model == "gpt-custom-codex"
+        assert settings.codex_effort == "medium"
+        assert settings.github_repository == "Example/Repo"
+
+        monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
+        monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
     def test_skills_defaults(self):
         """Skills-first settings should have stable defaults."""
 

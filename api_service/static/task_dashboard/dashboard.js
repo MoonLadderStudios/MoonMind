@@ -40,8 +40,42 @@
     (supportedTaskRuntimes.includes("codex")
       ? "codex"
       : supportedTaskRuntimes[0] || "codex");
+  const configuredModelDefaults =
+    systemConfig.defaultTaskModelByRuntime &&
+    typeof systemConfig.defaultTaskModelByRuntime === "object" &&
+    !Array.isArray(systemConfig.defaultTaskModelByRuntime)
+      ? systemConfig.defaultTaskModelByRuntime
+      : {};
+  const configuredEffortDefaults =
+    systemConfig.defaultTaskEffortByRuntime &&
+    typeof systemConfig.defaultTaskEffortByRuntime === "object" &&
+    !Array.isArray(systemConfig.defaultTaskEffortByRuntime)
+      ? systemConfig.defaultTaskEffortByRuntime
+      : {};
+  function resolveRuntimeDefault(defaultsByRuntime, runtime) {
+    const runtimeKey = String(runtime || "").trim().toLowerCase();
+    if (!runtimeKey) {
+      return "";
+    }
+    const value = defaultsByRuntime[runtimeKey];
+    return value ? String(value).trim() : "";
+  }
+  const codexDefaultTaskModel =
+    resolveRuntimeDefault(configuredModelDefaults, "codex") ||
+    String(systemConfig.defaultTaskModel || "").trim();
+  const codexDefaultTaskEffort =
+    resolveRuntimeDefault(configuredEffortDefaults, "codex") ||
+    String(systemConfig.defaultTaskEffort || "").trim();
+  const defaultTaskModel = resolveRuntimeDefault(
+    { ...configuredModelDefaults, codex: codexDefaultTaskModel },
+    defaultTaskRuntime,
+  );
+  const defaultTaskEffort = resolveRuntimeDefault(
+    { ...configuredEffortDefaults, codex: codexDefaultTaskEffort },
+    defaultTaskRuntime,
+  );
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
-  const lastRepositoryStorageKey = "moonmind.task.lastRepository";
+  const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
   const pollers = [];
 
@@ -266,25 +300,26 @@
     return supportedTaskRuntimes.includes(normalized) ? normalized : "";
   }
 
-  function getLastUsedRepository() {
-    try {
-      const value = window.localStorage.getItem(lastRepositoryStorageKey);
-      return String(value || "").trim();
-    } catch (_error) {
-      return "";
+  function isValidRepositoryInput(value) {
+    const candidate = String(value || "").trim();
+    if (!candidate) {
+      return false;
     }
-  }
-
-  function setLastUsedRepository(repository) {
-    const value = String(repository || "").trim();
-    if (!value) {
-      return;
+    if (ownerRepoPattern.test(candidate)) {
+      return true;
     }
-    try {
-      window.localStorage.setItem(lastRepositoryStorageKey, value);
-    } catch (_error) {
-      // Storage failures should never block task submission.
+    if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+      try {
+        const parsed = new URL(candidate);
+        if (!parsed.hostname || parsed.pathname === "/" || !parsed.pathname) {
+          return false;
+        }
+        return !parsed.username && !parsed.password;
+      } catch (_error) {
+        return false;
+      }
     }
+    return candidate.startsWith("git@");
   }
 
   function deriveRequiredCapabilities({ runtimeMode, publishMode }) {
@@ -783,11 +818,12 @@
     const runtimeOptions = supportedTaskRuntimes
       .map(
         (runtime) =>
-          `<option value="${escapeHtml(runtime)}">${escapeHtml(runtime)}</option>`,
+          `<option value="${escapeHtml(runtime)}" ${
+            runtime === defaultTaskRuntime ? "selected" : ""
+          }>${escapeHtml(runtime)}</option>`,
       )
       .join("");
-    const lastRepository = getLastUsedRepository();
-    const repositoryFallback = lastRepository || defaultRepository;
+    const repositoryFallback = defaultRepository;
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`
       : "Set a repository in this form (no system default repository is configured).";
@@ -805,9 +841,8 @@
             <input name="skill" value="auto" placeholder="auto" />
             <span class="small">Use <span class="inline-code">auto</span> for direct execution; set a skill id such as <span class="inline-code">speckit-orchestrate</span> for skill-driven runs.</span>
           </label>
-          <label>Runtime (optional)
+          <label>Runtime
             <select name="runtime">
-              <option value="">(system default: ${escapeHtml(defaultTaskRuntime)})</option>
               ${runtimeOptions}
             </select>
           </label>
@@ -817,16 +852,16 @@
           <span class="small">Optional args forwarded to <span class="inline-code">task.skill.args</span>.</span>
         </label>
         <div class="grid-2">
-          <label>Model (optional)
-            <input name="model" placeholder="runtime default" />
+          <label>Model
+            <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
           </label>
-          <label>Effort (optional)
-            <input name="effort" placeholder="runtime default" />
+          <label>Effort
+            <input name="effort" value="${escapeHtml(defaultTaskEffort)}" placeholder="runtime default" />
           </label>
         </div>
-        <label>GitHub Repo (optional)
-          <input name="repository" placeholder="owner/repo" />
-          <span class="small">${escapeHtml(repositoryHint)}</span>
+        <label>GitHub Repo
+          <input name="repository" value="${escapeHtml(repositoryFallback)}" placeholder="owner/repo" />
+          <span class="small">${escapeHtml(repositoryHint)} Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or git@&lt;host&gt;:&lt;path&gt; (token-free).</span>
         </label>
         <div class="grid-2">
           <label>Starting Branch (optional)
@@ -870,6 +905,43 @@
     if (!form || !message) {
       return;
     }
+    const runtimeSelect = form.querySelector('select[name="runtime"]');
+    const modelInputElement = form.querySelector('input[name="model"]');
+    const effortInputElement = form.querySelector('input[name="effort"]');
+    const runtimeModelDefaults = {
+      ...configuredModelDefaults,
+      codex: codexDefaultTaskModel,
+    };
+    const runtimeEffortDefaults = {
+      ...configuredEffortDefaults,
+      codex: codexDefaultTaskEffort,
+    };
+    let activeDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, defaultTaskRuntime);
+    let activeDefaultEffort = resolveRuntimeDefault(
+      runtimeEffortDefaults,
+      defaultTaskRuntime,
+    );
+    const applyRuntimeDefaults = (runtime) => {
+      if (!modelInputElement || !effortInputElement) {
+        return;
+      }
+      const nextDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, runtime);
+      const nextDefaultEffort = resolveRuntimeDefault(runtimeEffortDefaults, runtime);
+      if (modelInputElement.value.trim() === activeDefaultModel) {
+        modelInputElement.value = nextDefaultModel;
+      }
+      if (effortInputElement.value.trim() === activeDefaultEffort) {
+        effortInputElement.value = nextDefaultEffort;
+      }
+      activeDefaultModel = nextDefaultModel;
+      activeDefaultEffort = nextDefaultEffort;
+    };
+    if (runtimeSelect) {
+      runtimeSelect.addEventListener("change", (event) => {
+        const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
+        applyRuntimeDefaults(nextRuntime || defaultTaskRuntime);
+      });
+    }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -885,11 +957,17 @@
       }
 
       const repositoryInput = String(formData.get("repository") || "").trim();
-      const repository = repositoryInput || getLastUsedRepository() || defaultRepository;
+      const repository = repositoryInput || defaultRepository;
       if (!repository) {
         message.className = "notice error";
         message.textContent =
           "Repository is required because no system default repository is configured.";
+        return;
+      }
+      if (!isValidRepositoryInput(repository)) {
+        message.className = "notice error";
+        message.textContent =
+          "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).";
         return;
       }
 
@@ -987,7 +1065,6 @@
           method: "POST",
           body: JSON.stringify(requestBody),
         });
-        setLastUsedRepository(repository);
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);
