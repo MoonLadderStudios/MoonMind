@@ -69,7 +69,7 @@ gitpython = "~=3.1.42"
 toml = "~=0.10.2"
 pydantic-extra-types = "~=2.10.1"
 structlog = "~=24.1.0"
-pytest = { version = "~=8.4.1", optional = true }
+pytest = { version = "~=8.4.2", optional = true }
 pytest-mock = { version = "~=3.14.1", optional = true }
 pytest-asyncio = { version = "^0.23.7", optional = true }
 
