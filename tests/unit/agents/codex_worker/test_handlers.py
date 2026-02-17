@@ -183,6 +183,7 @@ async def test_run_command_cancellation_reaps_subprocess(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "cancel.log"
+    started = asyncio.Event()
 
     class FakeProcess:
         def __init__(self) -> None:
@@ -192,6 +193,7 @@ async def test_run_command_cancellation_reaps_subprocess(
             self.waited = False
 
         async def communicate(self):
+            started.set()
             await asyncio.sleep(3600)
             return (b"", b"")
 
@@ -221,7 +223,7 @@ async def test_run_command_cancellation_reaps_subprocess(
             check=False,
         )
     )
-    await asyncio.sleep(0)
+    await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -237,6 +239,7 @@ async def test_run_command_cancel_event_interrupts_subprocess(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "cancel-event.log"
+    started = asyncio.Event()
 
     class FakeProcess:
         def __init__(self) -> None:
@@ -246,6 +249,7 @@ async def test_run_command_cancel_event_interrupts_subprocess(
             self.waited = False
 
         async def communicate(self):
+            started.set()
             await asyncio.sleep(3600)
             return (b"", b"")
 
@@ -277,7 +281,7 @@ async def test_run_command_cancel_event_interrupts_subprocess(
             cancel_event=cancel_event,
         )
     )
-    await asyncio.sleep(0)
+    await asyncio.wait_for(started.wait(), timeout=1)
     cancel_event.set()
     with pytest.raises(CommandCancelledError):
         await task
