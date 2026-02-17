@@ -1,21 +1,16 @@
-# MoonMind Memory Architecture (Desired State, Phased)
+# MoonMind Memory Architecture
 
-Status: Proposed  
-Last Updated: 2026-02-13  
-Scope: Chat, RAG, Spec workflow, orchestrator, and agent queue memory behavior
+## Goals
 
-## 1) Intent
+- Manage more context than can fit in a single context window (Beads, LlamaIndex)
+- Learn from mistakes (Beads, Ledger)
+- Build project context naturally (Mem0)
+- Preserve decisions, clarifications, and conclusions (Mem0)
+- Stratify context by significance (Mem0)
 
-MoonMind needs a memory architecture that:
 
-- Preserves current behavior by default.
-- Improves retrieval quality and cross-run continuity.
-- Keeps security and auditability first-class.
-- Can be rolled out incrementally with runtime feature flags.
 
-This document replaces the prior 3-phase draft with a more granular phase model that is safe to adopt in production.
-
-## 2) Current Project Context
+## Relevant Tools Already in Use
 
 MoonMind already has the right base primitives:
 
@@ -82,23 +77,12 @@ Observed capabilities:
 - Celery reliability controls (`acks_late`, retries, backoff) fit idempotent memory pipelines.
 - RabbitMQ quorum queues are the modern replicated queue model; dead-letter and delivery-limit behavior can be configured for safer retries.
 
-Architecture implications:
-
-- Phase 2 event ingest and Phase 5 consolidation run as dedicated queue workloads.
-- Memory jobs stay isolated from latency-sensitive chat paths.
-- Retry and lease behavior align with existing workflow patterns in MoonMind.
-
 ### 3.5 Object storage (artifact and snapshot durability)
 
 Observed capabilities:
 
 - S3 provides strong consistency and versioning controls useful for artifact immutability and recovery workflows.
 - Qdrant snapshot flows can integrate with S3-compatible storage.
-
-Architecture implications:
-
-- Phase 2 stores raw artifacts by reference, not inline memory payload.
-- Phase 7 includes backup and recovery drills across Postgres + Qdrant + artifact store.
 
 ## 4) Architecture Invariants
 
@@ -112,21 +96,8 @@ These invariants apply to all phases:
 
 ## 5) Phase Model (Expanded)
 
-The architecture is split into 8 phases.  
+The architecture is split into 8 phases.
 Each phase is valid in isolation (only that phase enabled) and in cumulative rollout mode.
-
-### Phase Overview
-
-| Phase | Name | Main outcome |
-|---|---|---|
-| 0 | Compatibility Baseline | Current MoonMind behavior, no new memory features required |
-| 1 | Namespace and Policy Envelope | Uniform access policy and namespace identity |
-| 2 | Episodic Ledger | Durable action history across workflows, queue, orchestrator |
-| 3 | Semantic Memory Foundation | Metadata-rich dense retrieval with isolation filters |
-| 4 | Hybrid Retrieval and Reranking | Higher retrieval quality (dense + lexical + rerank) |
-| 5 | Consolidation and Canonical Registry | Summaries, reflections, approved truths |
-| 6 | Personal and Team Memory | Scoped personalization and cross-agent continuity |
-| 7 | Reliability, Retention, and Recovery | Backup/replay/retention hardening and compliance controls |
 
 ## 6) Feature Flag Contract
 
@@ -498,3 +469,362 @@ S3:
 
 - Strong consistency: https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel
 - Versioning: https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html
+
+
+
+## 3) Memory Planes (Types)
+
+MoonMind memory is split into three orthogonal planes:
+
+| Plane | Primary question it answers | Source of truth | Typical objects | Leading option(s) |
+|---|---|---|---|---|
+| A) Planning Memory (Beads) | “What should we do next, and what blocks it?” | Repo-scoped planning graph | epics/tasks, deps, claims/ownership, discovered follow-ups | **Beads** (steveyegge/beads) |
+| B) Task History Memory | “What happened last time we tried this?” | Append-only run ledger + artifacts | runs, digests, error signatures, fix patterns, outcomes | **Run Ledger + Digests + Fix Library** |
+| C) Long-Term Memory | “What do we know / how do we do this?” | Canonical registry + semantic store (and/or Mem0) | decisions, conventions, playbooks, preferences, knowledge summaries | **Native (Qdrant + Postgres)** and/or **Mem0** |
+
+### 3.1 How the planes compose in the runtime
+
+
+Recommended default composition for a new task run:
+
+1) **Planning prefetch (Plane A)**: if a task is linked to a Beads issue, load the issue + deps + current “ready” siblings.
+2) **History prefetch (Plane B)**: retrieve similar run digests, and any matching error-signature playbooks.
+3) **Long-term prefetch (Plane C)**: prefer canonical statements + curated summaries; then fall back to semantic retrieval.
+4) Execute the selected skill (spec/build/implement/test).
+5) **Writeback**
+   - Update Beads issue state (claimed/closed + discovered follow-ups).
+   - Append to run ledger + store artifacts.
+   - Generate digest + error signature updates.
+   - Optionally promote to canonical memory (human-gated).
+
+### 3.2 Plane boundaries and non-goals
+
+- Planning memory is NOT semantic recall. It is a task/dependency graph.
+- Task history is NOT canonical truth. It is evidence + outcomes + “what worked”.
+- Long-term memory is NOT raw logs. It is curated, provenance-backed knowledge.
+
+## 4) Plane A: Planning Memory (Beads)
+
+### 4.1 Purpose
+
+Planning memory provides durable, distributed “next-step” state:
+
+- break work into issues
+- encode dependencies and blockers
+- enable safe multi-agent claiming
+- allow “discovered work” to be captured as new nodes
+- keep planning repo-local and reviewable (git-native)
+
+### 4.2 Leading option: Beads
+
+Use Beads as the repo-scoped planning graph that agents can read/write.
+
+**MoonMind integration contract (recommended)**
+
+- Add optional `planning_ref` to tasks/runs:
+  - `planning_system = beads`
+  - `planning_repo = <repo>`
+  - `planning_id = <beads_issue_id>`
+- In the worker:
+  - pre-run: `beads.get_issue(planning_id)` + deps + “ready” siblings (context pack)
+  - start-run: `beads.claim(planning_id, run_id)`
+  - end-run: `beads.close(planning_id, outcome)` and `beads.create(discovered_followups[])`
+
+**Operational stance**
+- Prefer calling Beads via CLI (JSON output) from workers that already have shell access.
+- Treat Beads writes as best-effort and idempotent (do not block the run on Beads).
+
+### 4.3 Alternatives within Plane A
+
+| Option | Pros | Cons | When to pick |
+|---|---|---|---|
+| Beads | git-native, dependency graph, agent-friendly | introduces a new repo-local substrate | when you want agents to manage multi-step plans autonomously |
+| GitHub Issues/Projects | familiar UI + integrations | not repo-local; API friction; weaker offline/distributed workflows | when humans already live in GitHub issues |
+| Spec Kit `plan.md`/`tasks.md` as planning | already in-repo | harder to compute “ready”; harder to claim/merge | when you want minimal new tooling |
+| MoonMind internal DAG (DB) | unified control plane | not git-native; harder to review/merge per repo | when you need centralized multi-repo planning |
+
+### 4.4 Persistence + distributed systems options for Plane A
+
+**Persistence backends**
+- **Git-backed repo branch (recommended)**: keep Beads state in the repo under a dedicated branch (e.g. `beads-sync`) to reduce merge conflicts with code changes.
+- **SQL-backed local store**: Beads can be backed by a local DB (e.g., SQLite) for dev simplicity; treat the serialized Beads dataset as the artifact committed to git.
+- **Versioned SQL store (team mode)**: use a versioned SQL backend (e.g. Dolt-style workflows) if you want DB-level merges and history alongside git workflows.
+
+**Distributed patterns**
+- **Many agents / many machines**: each worker uses its own clone (preferred), pulls the Beads branch, claims work, and pushes updates.
+- **Worktrees**: avoid background/daemonized “auto commit/push” patterns if worktrees share state; prefer explicit, no-daemon CLI calls in the worker.
+- **Conflict model**: accept occasional merge conflicts and resolve via git; keep Beads payloads small and stable to limit conflict frequency.
+
+**Reliability**
+- Beads updates must never be a hard dependency for chat/workflows.
+- If Beads is down or conflicts, runs proceed; the worker records a ledger event noting the planning write failure.
+
+## 5) Plane B: Task History Memory (Run Ledger + Digests + Fix Patterns)
+
+### 5.1 Purpose
+
+Task history memory turns “runs” into durable, queryable evidence:
+
+- auditability (what happened)
+- replayability (what changed, what commands ran, what tests ran)
+- learning loops (what fixes worked)
+- retrieval (have we tried this before?)
+
+### 5.2 Leading option: Run Ledger (Postgres) + Artifact Store + Digest Index
+
+**Record an append-only Run Ledger (source of truth)**
+- Postgres tables store structured run fields (IDs, refs, runtime/model, outcome, touched scope).
+- Large artifacts (logs, patches, test reports) are stored in an artifact store and referenced by URI.
+
+**Generate a Run Digest (semantic retrieval)**
+- After each run, a background job creates a compact digest:
+  - intent, result, key changes, decisions, gotchas, next steps
+- Embed/index the digest (NOT raw logs) for fast “what happened last time?” retrieval.
+
+**Maintain an Error Signature → Fix Pattern library (procedural memory)**
+- Derive `error_signature` from logs (regex + heuristics + optional LLM extraction).
+- Store “fix playbooks” keyed by signature:
+  - what worked, constraints, environment notes, links to runs/PRs.
+
+### 5.3 Alternatives within Plane B
+
+| Option | Pros | Cons | When to pick |
+|---|---|---|---|
+| Postgres ledger + artifacts + digest index (recommended) | strongest provenance + analytics + replay | more plumbing than “just mem0” | when correctness and debugging matter (game-dev CI, UE builds) |
+| “Mem0 only” (no ledger) | fastest integration | weak audit trail; hard to replay | only for small personal workflows |
+| Observability/log platforms (ELK/OTel) as history | strong logs/search | not tailored for “runs” semantics | complementary, not a replacement |
+
+### 5.4 Persistence + distributed systems options for Plane B
+
+**Persistence**
+- **Postgres (recommended)**:
+  - append-only tables, `jsonb` for semi-structured payloads
+  - partition monthly by `project_id` for long retention
+  - RLS for deny-by-default and namespace isolation
+- **Artifact store**:
+  - dev: local filesystem under `var/artifacts/...`
+  - prod: S3-compatible object store with versioning + lifecycle policies
+- **Digest index**:
+  - Qdrant collection with strict payload filters (namespace/project/repo)
+  - snapshots to object storage for recovery
+
+**Distributed patterns**
+- Run ledger writes are **idempotent** and keyed by `run_id`.
+- Digest generation runs on a dedicated Celery queue; retry-safe jobs re-check `run_id` state.
+- RabbitMQ quorum queues recommended for replicated queue durability.
+- If Qdrant is unavailable, store digests in Postgres and backfill embeddings later (fail-open).
+
+## 6) Plane C: Long-Term Memory (Canonical + Semantic + Personal/Team)
+
+### 6.1 Purpose
+
+Long-term memory is where MoonMind stores stable knowledge that should be reused:
+
+- canonical “how we do X” decisions and conventions
+- curated summaries and reflections
+- team/user preferences (scoped)
+- procedural playbooks (where they generalize beyond single error signatures)
+
+### 6.2 Leading options for Plane C
+
+#### Option C1 (Native): Qdrant + Postgres (Canonical Registry) + Consolidation Workers
+
+This follows the existing Phase 3–6 design:
+
+- semantic retrieval records in Qdrant (dense/hybrid, with strict metadata filters)
+- canonical registry in Postgres with human-gated approval
+- consolidation workers that create summaries/rollups
+- personal/team preferences stored in scoped namespaces
+- thread checkpoints for long-running multi-agent continuity
+
+#### Option C2 (Mem0-backed): Mem0 as the memory “API layer”, backed by your stores
+
+Use Mem0 as a standardized memory interface, but keep the Run Ledger as source of truth.
+
+- Run digests can be written as episodic memories (with metadata filters for repo/project)
+- promoted “Project Memory” becomes semantic/canonical memories with `canon=true`
+- procedural memories can store fix playbooks beyond a single run
+- underlying persistence still remains Postgres + vector store (Qdrant) + artifact pointers
+
+**Policy note**
+Even with Mem0, keep:
+- provenance pointers (run_id, commit_sha, PR URL, artifact URIs)
+- review gating for canon memory
+- namespace partitioning to avoid contamination
+
+### 6.3 Extensions / additional options (within Plane C)
+
+| Option | Adds | Why it might matter |
+|---|---|---|
+| GraphRAG / Knowledge-Graph RAG | relationship-aware retrieval over docs | improves “big picture” answers across many design docs |
+| Dedicated graph DB (Neo4j/Memgraph) | deep multi-hop queries | if dependency reasoning becomes a primary workload |
+| LlamaIndex KG indexes | quick KG experiments | if you already rely heavily on LlamaIndex orchestration |
+
+### 6.4 Persistence + distributed systems options for Plane C
+
+**Native (C1)**
+- Postgres canonical tables (replicated/managed DB options).
+- Qdrant single-node (dev) → clustered (team/prod) with snapshot/restore drills.
+- Consolidation jobs on Celery; isolate from chat latency paths.
+
+**Mem0-backed (C2)**
+- Mem0 service can be deployed as:
+  - single instance (dev) with Postgres + Qdrant
+  - horizontally scaled stateless API layer (prod), using shared persistence
+- Vector store options:
+  - Qdrant (already in stack)
+  - alternative managed vector stores if needed later
+- Optional graph store:
+  - if Mem0 graph memory is enabled, use a graph DB appropriate to scale and ops constraints.
+
+## 7) Tool Research and Design Implications
+
+(Keep existing sections 3.1–3.5 unchanged, renumbered here if desired.)
+Additions:
+
+### 7.6 Beads (planning substrate)
+
+Architecture implications:
+
+- Beads is a repo-scoped distributed planning layer; it should be treated as an optional plane.
+- MoonMind should integrate via an adapter that emits/consumes stable JSON for agents.
+- Beads should not be a hard dependency for executing tasks.
+
+### 7.7 Mem0 (memory orchestration layer)
+
+Architecture implications:
+
+- Mem0 can sit above the native stores to unify “add/search/update” memory operations.
+- MoonMind should keep run ledger + artifacts as source of truth, and store pointers + digests in Mem0.
+- Canonical memory should remain review-gated regardless of which memory API layer is used.
+
+## 8) Architecture Invariants
+
+These invariants apply to all phases and all planes:
+
+- Every read/write is namespace-scoped.
+- Every memory-derived answer/action has provenance.
+- Raw logs remain in artifact storage by default; memory stores summaries and metadata.
+- Canonical memory writes are review-gated.
+- Memory failure cannot take down core chat or workflow operation.
+- Planning memory (Beads) is repo-scoped and must not create cross-namespace leakage.
+
+## 9) Phase Model (Expanded)
+
+The existing Phase 0–7 model remains the safe rollout strategy.
+
+Important nuance:
+- Phases primarily describe the rollout for Plane B (task history) and Plane C (long-term).
+- Plane A (Beads) is orthogonal and can be enabled independently, but benefits from Phase 1 policy envelopes and Phase 2+ ledger linking.
+
+### Phase Overview
+
+| Phase | Name | Main outcome |
+|---|---|---|
+| 0 | Compatibility Baseline | Current MoonMind behavior, no new memory features required |
+| 1 | Namespace and Policy Envelope | Uniform access policy and namespace identity |
+| 2 | Episodic Ledger | Durable action history across workflows, queue, orchestrator |
+| 3 | Semantic Memory Foundation | Metadata-rich dense retrieval with isolation filters |
+| 4 | Hybrid Retrieval and Reranking | Higher retrieval quality (dense + lexical + rerank) |
+| 5 | Consolidation and Canonical Registry | Summaries, reflections, approved truths |
+| 6 | Personal and Team Memory | Scoped personalization and cross-agent continuity |
+| 7 | Reliability, Retention, and Recovery | Backup/replay/retention hardening and compliance controls |
+
+## 10) Feature Flag Contract
+
+Keep existing memory phase flags, and add plane toggles.
+
+Existing:
+- `MEMORY_MODE=off|phase`
+- `MEMORY_PHASE=<0..7>`
+- `MEMORY_PHASE_STRATEGY=cumulative|isolated`
+- `MEMORY_FAIL_OPEN=true|false` (default `true`)
+
+Plane toggles (new):
+- `PLANNING_MODE=off|beads`
+- `TASK_HISTORY_MODE=off|ledger` (defaults to `ledger` when `MEMORY_PHASE>=2`)
+- `LONG_TERM_MODE=off|native|mem0` (defaults to `native` when `MEMORY_PHASE>=3`)
+
+Notes:
+- `PLANNING_MODE=beads` can be enabled even when `MEMORY_MODE=off`.
+- `LONG_TERM_MODE=mem0` does not remove the need for the ledger/artifact stores; it changes the memory API layer.
+
+## 11) Plane + Phase mapping (new)
+
+| Plane | Minimum safe phase | Why |
+|---|---:|---|
+| Planning (Beads) | 0 (better with 1/2) | can run repo-local; Phase 1 adds scope/policy; Phase 2 adds run linkage |
+| Task History | 2 | requires the episodic ledger + artifact refs |
+| Long-Term | 3 (better with 5/6) | requires semantic store + filters; consolidation/personalization later |
+
+## 12) Component-to-Phase Mapping
+
+(Keep existing table; add the Beads adapter as orthogonal.)
+
+Add row:
+- `Beads planning adapter` | Plane A (orthogonal) | Adds planning context; does not alter baseline retrieval.
+
+## 13) Detailed Phase Specifications
+
+(Keep existing Phase 0–7 sections unchanged, but cross-reference the planes where relevant.)
+
+- Phase 2 now explicitly covers Plane B: Run Ledger + artifacts + digests.
+- Phase 5 consolidation can produce Plane C summaries AND optionally generate “promotion candidates” from Plane B digests.
+- Phase 6 personal/team memory lives in Plane C but can incorporate user preferences about planning/task history inclusion.
+
+## 14) API and Schema Contracts (Target)
+
+Add plane-specific contracts.
+
+### 14.1 Planning (Plane A)
+- `PlanningRef`
+  - `planning_system`, `repo`, `planning_id`
+  - `linked_task_id`, `linked_run_id`, `linked_pr_url`
+
+### 14.2 Task history (Plane B)
+- `TaskRun` (ledger)
+  - `run_id`, `task_id`, `thread_id`
+  - `repo`, `base_branch`, `head_branch`, `commit_sha`, `pr_url`
+  - `worker_runtime`, `model`, `effort`
+  - `status`, `error_signature`
+  - `files_changed[]`, `tests_run[]`, `commands[]`
+  - `artifact_refs[]`
+- `RunDigest`
+  - `run_id`, `intent`, `result`, `changes`, `decisions`, `gotchas`, `next_steps`
+- `FixPattern`
+  - `error_signature`, `fix_steps[]`, `evidence_run_ids[]`, `evidence_refs[]`
+
+### 14.3 Long-term (Plane C)
+(Keep `MemoryRecord`, `MemorySummary`, `CanonicalMemory`, `memory_preferences`, `thread_checkpoints` concepts as-is.)
+
+## 15) Implementation Hooks in MoonMind
+
+Keep existing likely integration points, plus:
+
+- Planning adapter:
+  - new `moonmind/planning/beads_adapter.py` (or equivalent)
+  - worker “pre-run context” and “post-run writeback” hooks
+
+- Task history:
+  - new post-run digest Celery task
+  - error signature extraction step
+  - fix-pattern store upsert
+
+## 16) Operational SLO and Quality Gates
+
+Keep existing SLOs; add:
+
+- Planning updates are best-effort; failures must not fail runs.
+- History digest jobs are backlog-tolerant; failure alerts but no user-facing hard failure.
+- Canonical promotion remains human-gated; measure “false canon” rate.
+
+## 17) References (Primary Sources)
+
+Keep existing references, and add:
+
+- Beads: https://github.com/steveyegge/beads
+- Mem0 docs: https://docs.mem0.ai/
+- Mem0 repo: https://github.com/mem0ai/mem0
+```
+
+If you want, I can also provide a **patch-style diff** against the current file, but the above is designed to be a clean “drop-in replacement” that preserves your existing phase model while making the **three memory types** first-class.
