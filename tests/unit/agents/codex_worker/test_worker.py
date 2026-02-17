@@ -715,7 +715,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.legacy_job_types_enabled is True
     assert config.worker_runtime == "codex"
     assert config.allowed_types == ("task", "codex_exec", "codex_skill")
-    assert config.worker_capabilities == ("codex", "git")
+    assert config.worker_capabilities == ("codex", "git", "gh")
 
 
 async def test_config_from_env_runtime_mode_controls_default_capabilities(
@@ -730,7 +730,7 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
     config = CodexWorkerConfig.from_env()
 
     assert config.worker_runtime == "universal"
-    assert config.worker_capabilities == ("codex", "gemini", "claude", "git")
+    assert config.worker_capabilities == ("codex", "gemini", "claude", "git", "gh")
 
 
 async def test_config_from_env_disables_legacy_job_types_when_flag_is_off(
