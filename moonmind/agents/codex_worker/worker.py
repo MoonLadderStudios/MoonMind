@@ -1971,7 +1971,9 @@ class CodexWorker:
         candidate = str(value or "").strip().strip("/")
         if not candidate:
             return "container"
-        parts = [segment for segment in candidate.split("/") if segment and segment != "."]
+        parts = [
+            segment for segment in candidate.split("/") if segment and segment != "."
+        ]
         if any(segment == ".." for segment in parts):
             raise ValueError("task.container.artifactsSubdir may not contain '..'")
         normalized = "/".join(parts)
@@ -2198,9 +2200,7 @@ class CodexWorker:
             )
 
         finished_at = datetime.now(UTC)
-        duration_seconds = max(
-            0.0, (finished_at - started_at).total_seconds()
-        )
+        duration_seconds = max(0.0, (finished_at - started_at).total_seconds())
         exit_code = run_result.returncode if run_result is not None else None
         succeeded = bool(run_result is not None and run_result.returncode == 0) and (
             not timed_out
