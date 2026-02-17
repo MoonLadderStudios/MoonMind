@@ -285,6 +285,15 @@ class SpecWorkflowSettings(BaseSettings):
         env="SPEC_WORKFLOW_PUBLISH_SKILL",
         description="Optional skill override for publish stage.",
     )
+    skill_policy_mode: str = Field(
+        "permissive",
+        env=(
+            "SPEC_WORKFLOW_SKILL_POLICY_MODE",
+            "MOONMIND_SKILL_POLICY_MODE",
+            "SKILL_POLICY_MODE",
+        ),
+        description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces SPEC_WORKFLOW_ALLOWED_SKILLS.",
+    )
     allowed_skills: tuple[str, ...] = Field(
         ("speckit",),
         env="SPEC_WORKFLOW_ALLOWED_SKILLS",
@@ -408,6 +417,18 @@ class SpecWorkflowSettings(BaseSettings):
             return ()
         return tuple(dict.fromkeys(items))
 
+    @field_validator("skill_policy_mode", mode="before")
+    @classmethod
+    def _normalize_skill_policy_mode(cls, value: object) -> str:
+        """Normalize skill policy mode and reject unknown values."""
+
+        normalized = str(value or "").strip().lower() or "permissive"
+        if normalized not in {"permissive", "allowlist"}:
+            raise ValueError(
+                "skill_policy_mode must be one of: permissive, allowlist"
+            )
+        return normalized
+
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Validate agent backend selections after settings load."""
 
@@ -433,7 +454,11 @@ class SpecWorkflowSettings(BaseSettings):
 
         if not self.default_skill:
             self.default_skill = "speckit"
-        if self.default_skill and self.default_skill not in self.allowed_skills:
+        if (
+            self.skill_policy_mode == "allowlist"
+            and self.default_skill
+            and self.default_skill not in self.allowed_skills
+        ):
             self.allowed_skills = tuple(
                 dict.fromkeys((*self.allowed_skills, self.default_skill))
             )
