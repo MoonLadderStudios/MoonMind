@@ -48,6 +48,8 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini", "claude")
     assert config["system"]["defaultTaskModel"]
     assert config["system"]["defaultTaskEffort"]
+    assert config["system"]["defaultTaskModelByRuntime"]["codex"]
+    assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
@@ -58,6 +60,8 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini")
     config = build_runtime_config("/tasks")
     assert config["system"]["defaultTaskRuntime"] == "gemini"
+    assert config["system"]["defaultTaskModel"] == ""
+    assert config["system"]["defaultTaskEffort"] == ""
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
@@ -70,3 +74,5 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultRepository"] == "Octo/Repo"
     assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
     assert config["system"]["defaultTaskEffort"] == "medium"
+    assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
+    assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"

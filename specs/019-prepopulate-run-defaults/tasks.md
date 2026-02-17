@@ -36,7 +36,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T007 [US1] Finalize queue default-resolution logic, enforce `owner/repo` repository format validation, and guard explicit user overrides in `moonmind/workflows/agent_queue/service.py`.
+- [X] T007 [US1] Finalize queue default-resolution logic, enforce token-free repository reference validation, and guard explicit user overrides in `moonmind/workflows/agent_queue/service.py`.
 - [X] T008 [US1] Add/update canonical payload validation coverage for resolved runtime and repository behavior in `tests/unit/workflows/agent_queue/test_task_contract.py`.
 
 **Checkpoint**: Backend queue task creation safely resolves missing fields using settings defaults and preserves explicit overrides.
@@ -56,7 +56,7 @@
 ### Implementation for User Story 2
 
 - [X] T010 [US2] Extend dashboard runtime config with `defaultTaskModel` and `defaultTaskEffort` sourced from settings in `api_service/api/routers/task_dashboard_view_model.py`.
-- [X] T011 [US2] Pre-populate queue submit form runtime/model/effort/repository fields, enforce client-side `owner/repo` validation, and keep fields editable in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T011 [US2] Pre-populate queue submit form runtime/model/effort/repository fields, enforce client-side token-free repository reference validation, and keep fields editable in `api_service/static/task_dashboard/dashboard.js`.
 
 **Checkpoint**: Dashboard queue submit inputs render settings defaults and still support per-run adjustment.
 

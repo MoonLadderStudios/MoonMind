@@ -88,18 +88,22 @@ validate_tasks_scope() {
   fi
 
   local runtime_count validation_count
-  runtime_count="$((
-    $(grep -E '^- \[[ Xx]\] T[0-9]+' "$tasks_file" \
-      | grep -E '(api_service/|moonmind/|celery_worker/|services/|docker-compose\.yaml|docker-compose\.test\.yaml)' \
-      | grep -Ev '(tests/|specs/|docs/)' \
-      | wc -l)
-  ))"
+  runtime_count="$(
+    awk '
+      /^- \[[ Xx]\] T[0-9]+/ &&
+      /(api_service\/|moonmind\/|celery_worker\/|services\/|docker-compose\.yaml|docker-compose\.test\.yaml)/ &&
+      $0 !~ /(tests\/|specs\/|docs\/)/ { count += 1 }
+      END { print count + 0 }
+    ' "$tasks_file"
+  )"
 
-  validation_count="$((
-    $(grep -E '^- \[[ Xx]\] T[0-9]+' "$tasks_file" \
-      | grep -E '(tests/|\./tools/test_unit\.sh|validate-implementation-scope\.sh)' \
-      | wc -l)
-  ))"
+  validation_count="$(
+    awk '
+      /^- \[[ Xx]\] T[0-9]+/ &&
+      /(tests\/|\.\/tools\/test_unit\.sh|validate-implementation-scope\.sh)/ { count += 1 }
+      END { print count + 0 }
+    ' "$tasks_file"
+  )"
 
   if (( runtime_count < 1 )); then
     echo "Scope validation failed: tasks.md must include at least one production runtime file task." >&2

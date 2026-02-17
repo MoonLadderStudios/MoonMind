@@ -53,7 +53,7 @@ As an administrator, I can change defaults in settings and have future run forms
 ### Edge Cases
 
 - Settings store is reachable but one default field is missing; the system should apply a safe fallback for only the missing field.
-- Settings values are present but invalid (for example malformed `owner/repo`); submission should fail fast with a clear validation error.
+- Settings values are present but invalid (for example malformed repository slug/URL); submission should fail fast with a clear validation error.
 - UI loads before settings response completes; fields should avoid displaying misleading values and then update once defaults are available.
 
 ## Requirements *(mandatory)*
@@ -66,7 +66,7 @@ As an administrator, I can change defaults in settings and have future run forms
 - **FR-004**: System MUST pre-populate dashboard run form input boxes from current settings defaults on load.
 - **FR-005**: System MUST allow users to override pre-populated values per run without mutating persisted defaults.
 - **FR-006**: System MUST apply updated settings defaults to future form loads and fallback resolution without requiring code changes.
-- **FR-007**: System MUST validate repository default format as `owner/repo` before run submission.
+- **FR-007**: System MUST validate repository defaults as token-free references (`owner/repo`, `https://...`, or `git@...`) before run submission.
 - **FR-008**: System MUST include automated validation tests that cover default resolution and UI pre-population behavior.
 
 ### Key Entities *(include if feature involves data)*

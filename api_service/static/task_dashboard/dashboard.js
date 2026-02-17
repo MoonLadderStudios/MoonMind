@@ -40,10 +40,42 @@
     (supportedTaskRuntimes.includes("codex")
       ? "codex"
       : supportedTaskRuntimes[0] || "codex");
-  const defaultTaskModel = String(systemConfig.defaultTaskModel || "").trim();
-  const defaultTaskEffort = String(systemConfig.defaultTaskEffort || "").trim();
+  const configuredModelDefaults =
+    systemConfig.defaultTaskModelByRuntime &&
+    typeof systemConfig.defaultTaskModelByRuntime === "object" &&
+    !Array.isArray(systemConfig.defaultTaskModelByRuntime)
+      ? systemConfig.defaultTaskModelByRuntime
+      : {};
+  const configuredEffortDefaults =
+    systemConfig.defaultTaskEffortByRuntime &&
+    typeof systemConfig.defaultTaskEffortByRuntime === "object" &&
+    !Array.isArray(systemConfig.defaultTaskEffortByRuntime)
+      ? systemConfig.defaultTaskEffortByRuntime
+      : {};
+  function resolveRuntimeDefault(defaultsByRuntime, runtime) {
+    const runtimeKey = String(runtime || "").trim().toLowerCase();
+    if (!runtimeKey) {
+      return "";
+    }
+    const value = defaultsByRuntime[runtimeKey];
+    return value ? String(value).trim() : "";
+  }
+  const codexDefaultTaskModel =
+    resolveRuntimeDefault(configuredModelDefaults, "codex") ||
+    String(systemConfig.defaultTaskModel || "").trim();
+  const codexDefaultTaskEffort =
+    resolveRuntimeDefault(configuredEffortDefaults, "codex") ||
+    String(systemConfig.defaultTaskEffort || "").trim();
+  const defaultTaskModel = resolveRuntimeDefault(
+    { ...configuredModelDefaults, codex: codexDefaultTaskModel },
+    defaultTaskRuntime,
+  );
+  const defaultTaskEffort = resolveRuntimeDefault(
+    { ...configuredEffortDefaults, codex: codexDefaultTaskEffort },
+    defaultTaskRuntime,
+  );
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
-  const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+  const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
   const pollers = [];
 
@@ -266,6 +298,28 @@
       return "";
     }
     return supportedTaskRuntimes.includes(normalized) ? normalized : "";
+  }
+
+  function isValidRepositoryInput(value) {
+    const candidate = String(value || "").trim();
+    if (!candidate) {
+      return false;
+    }
+    if (ownerRepoPattern.test(candidate)) {
+      return true;
+    }
+    if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+      try {
+        const parsed = new URL(candidate);
+        if (!parsed.hostname || parsed.pathname === "/" || !parsed.pathname) {
+          return false;
+        }
+        return !parsed.username && !parsed.password;
+      } catch (_error) {
+        return false;
+      }
+    }
+    return candidate.startsWith("git@");
   }
 
   function deriveRequiredCapabilities({ runtimeMode, publishMode }) {
@@ -807,7 +861,7 @@
         </div>
         <label>GitHub Repo
           <input name="repository" value="${escapeHtml(repositoryFallback)}" placeholder="owner/repo" />
-          <span class="small">${escapeHtml(repositoryHint)}</span>
+          <span class="small">${escapeHtml(repositoryHint)} Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or git@&lt;host&gt;:&lt;path&gt; (token-free).</span>
         </label>
         <div class="grid-2">
           <label>Starting Branch (optional)
@@ -851,6 +905,43 @@
     if (!form || !message) {
       return;
     }
+    const runtimeSelect = form.querySelector('select[name="runtime"]');
+    const modelInputElement = form.querySelector('input[name="model"]');
+    const effortInputElement = form.querySelector('input[name="effort"]');
+    const runtimeModelDefaults = {
+      ...configuredModelDefaults,
+      codex: codexDefaultTaskModel,
+    };
+    const runtimeEffortDefaults = {
+      ...configuredEffortDefaults,
+      codex: codexDefaultTaskEffort,
+    };
+    let activeDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, defaultTaskRuntime);
+    let activeDefaultEffort = resolveRuntimeDefault(
+      runtimeEffortDefaults,
+      defaultTaskRuntime,
+    );
+    const applyRuntimeDefaults = (runtime) => {
+      if (!modelInputElement || !effortInputElement) {
+        return;
+      }
+      const nextDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, runtime);
+      const nextDefaultEffort = resolveRuntimeDefault(runtimeEffortDefaults, runtime);
+      if (modelInputElement.value.trim() === activeDefaultModel) {
+        modelInputElement.value = nextDefaultModel;
+      }
+      if (effortInputElement.value.trim() === activeDefaultEffort) {
+        effortInputElement.value = nextDefaultEffort;
+      }
+      activeDefaultModel = nextDefaultModel;
+      activeDefaultEffort = nextDefaultEffort;
+    };
+    if (runtimeSelect) {
+      runtimeSelect.addEventListener("change", (event) => {
+        const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
+        applyRuntimeDefaults(nextRuntime || defaultTaskRuntime);
+      });
+    }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -873,9 +964,10 @@
           "Repository is required because no system default repository is configured.";
         return;
       }
-      if (!repositoryPattern.test(repository)) {
+      if (!isValidRepositoryInput(repository)) {
         message.className = "notice error";
-        message.textContent = "Repository must match owner/repo format.";
+        message.textContent =
+          "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).";
         return;
       }
 

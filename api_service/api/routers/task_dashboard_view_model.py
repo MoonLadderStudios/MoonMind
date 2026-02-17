@@ -86,12 +86,16 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         if configured_runtime in _SUPPORTED_TASK_RUNTIMES
         else _DEFAULT_TASK_RUNTIME
     )
-    default_task_model = (
+    codex_default_model = (
         str(settings.spec_workflow.codex_model or "").strip() or _DEFAULT_CODEX_MODEL
     )
-    default_task_effort = (
+    codex_default_effort = (
         str(settings.spec_workflow.codex_effort or "").strip() or _DEFAULT_CODEX_EFFORT
     )
+    default_task_model_by_runtime = {"codex": codex_default_model}
+    default_task_effort_by_runtime = {"codex": codex_default_effort}
+    default_task_model = default_task_model_by_runtime.get(default_task_runtime, "")
+    default_task_effort = default_task_effort_by_runtime.get(default_task_runtime, "")
     default_repository = (
         str(settings.spec_workflow.github_repository or "").strip()
         or _DEFAULT_REPOSITORY
@@ -131,6 +135,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultTaskRuntime": default_task_runtime,
             "defaultTaskModel": default_task_model,
             "defaultTaskEffort": default_task_effort,
+            "defaultTaskModelByRuntime": default_task_model_by_runtime,
+            "defaultTaskEffortByRuntime": default_task_effort_by_runtime,
             "queueEnv": "MOONMIND_QUEUE",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),

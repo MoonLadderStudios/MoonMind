@@ -9,7 +9,7 @@ Settings-backed defaults consumed by queue API and dashboard runtime config.
 | `defaultTaskRuntime` | enum (`codex` \| `gemini` \| `claude`) | Runtime used when submission omits runtime mode. |
 | `defaultTaskModel` | string | Runtime model default used when model override is omitted. |
 | `defaultTaskEffort` | string | Runtime effort default used when effort override is omitted. |
-| `defaultRepository` | string (`owner/repo`) | Repository used when submission omits repository. |
+| `defaultRepository` | string (token-free slug/URL) | Repository used when submission omits repository. |
 
 ## QueueSubmitFormState
 

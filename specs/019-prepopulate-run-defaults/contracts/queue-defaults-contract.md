@@ -7,7 +7,7 @@
 - `defaultTaskRuntime` (string, supported runtime)
 - `defaultTaskModel` (string)
 - `defaultTaskEffort` (string)
-- `defaultRepository` (string, `owner/repo`)
+- `defaultRepository` (string, token-free `owner/repo`, `https://...`, or `git@...`)
 
 ## 2. Queue Submit UI Contract
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from moonmind.config.settings import settings
@@ -127,12 +128,27 @@ class AgentQueueService:
         return text or None
 
     @classmethod
-    def _validate_owner_repo(cls, repository: str) -> None:
-        """Validate repository values follow ``owner/repo`` format."""
+    def _validate_repository_reference(cls, repository: str) -> None:
+        """Validate repository values align with accepted worker clone formats."""
 
         if _OWNER_REPO_PATTERN.fullmatch(repository):
             return
-        raise AgentQueueValidationError("repository must match owner/repo format")
+        if repository.startswith("http://") or repository.startswith("https://"):
+            parsed = urlsplit(repository)
+            if parsed.username is not None or parsed.password is not None:
+                raise AgentQueueValidationError(
+                    "repository URL must not include embedded credentials"
+                )
+            if not parsed.netloc or not parsed.path or parsed.path == "/":
+                raise AgentQueueValidationError(
+                    "repository URL must include a host and repository path"
+                )
+            return
+        if repository.startswith("git@"):
+            return
+        raise AgentQueueValidationError(
+            "repository must be owner/repo, https://<host>/<path>, or git@<host>:<path>"
+        )
 
     def _enrich_task_payload_defaults(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Fill missing canonical task payload fields from configured defaults."""
@@ -146,7 +162,7 @@ class AgentQueueService:
                 self._clean_optional_str(settings.spec_workflow.github_repository)
                 or _DEFAULT_REPOSITORY
             )
-        self._validate_owner_repo(repository)
+        self._validate_repository_reference(repository)
         enriched["repository"] = repository
 
         task_node = enriched.get("task")
