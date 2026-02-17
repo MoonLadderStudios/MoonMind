@@ -91,6 +91,7 @@ def validate_shared_skills_mirror(
     *,
     worker_name: str,
     mirror_root: str | None,
+    legacy_mirror_root: str | None = None,
     repo_root: str | None = None,
     strict: bool,
     logger: logging.Logger,
@@ -100,47 +101,72 @@ def validate_shared_skills_mirror(
     if not strict:
         return None
 
-    raw = (mirror_root or "").strip()
-    if not raw:
+    repo_raw = (repo_root or "").strip()
+    base_path = Path.cwd().resolve()
+    if repo_raw:
+        repo_path = Path(repo_raw).expanduser()
+        if not repo_path.is_absolute():
+            repo_path = (Path.cwd() / repo_path).resolve()
+        base_path = repo_path.resolve()
+
+    raw_roots: list[str] = []
+    primary_raw = (mirror_root or "").strip()
+    legacy_raw = (legacy_mirror_root or "").strip()
+    if primary_raw:
+        raw_roots.append(primary_raw)
+    if legacy_raw and legacy_raw != primary_raw:
+        raw_roots.append(legacy_raw)
+
+    if not raw_roots:
         raise RuntimeError("Shared skills mirror root is required in strict mode.")
 
-    mirror_path = Path(raw).expanduser()
-    if not mirror_path.is_absolute():
-        base_path = Path.cwd().resolve()
-        repo_raw = (repo_root or "").strip()
-        if repo_raw:
-            repo_path = Path(repo_raw).expanduser()
-            if not repo_path.is_absolute():
-                repo_path = (Path.cwd() / repo_path).resolve()
-            base_path = repo_path.resolve()
-        mirror_path = (base_path / mirror_path).resolve()
+    resolved_roots: list[Path] = []
+    for raw in raw_roots:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = (base_path / candidate).resolve()
+        resolved_roots.append(candidate.resolve())
 
-    if not mirror_path.exists():
-        raise RuntimeError(f"Shared skills mirror root does not exist: {mirror_path}")
-    if not mirror_path.is_dir():
-        raise RuntimeError(
-            f"Shared skills mirror root is not a directory: {mirror_path}"
+    errors: list[str] = []
+    for index, mirror_path in enumerate(resolved_roots):
+        if not mirror_path.exists():
+            errors.append(f"does not exist: {mirror_path}")
+            continue
+        if not mirror_path.is_dir():
+            errors.append(f"is not a directory: {mirror_path}")
+            continue
+
+        skill_dirs = [
+            child
+            for child in mirror_path.iterdir()
+            if child.is_dir() and (child / "SKILL.md").is_file()
+        ]
+        if not skill_dirs:
+            errors.append(f"contains no valid skills: {mirror_path}")
+            continue
+
+        fallback_used = index > 0
+        logger.info(
+            "Shared skills mirror validated for %s worker: %s (%d skills)",
+            worker_name,
+            mirror_path,
+            len(skill_dirs),
+            extra={
+                "worker_name": worker_name,
+                "skills_mirror_root": str(mirror_path),
+                "skills_mirror_count": len(skill_dirs),
+                "skills_mirror_fallback_used": fallback_used,
+                "skills_mirror_checked_roots": [str(path) for path in resolved_roots],
+            },
         )
+        return mirror_path
 
-    skill_dirs = [
-        child
-        for child in mirror_path.iterdir()
-        if child.is_dir() and (child / "SKILL.md").is_file()
-    ]
-    if not skill_dirs:
-        raise RuntimeError(
-            f"Shared skills mirror root contains no valid skills: {mirror_path}"
-        )
+    if len(resolved_roots) == 1:
+        message = errors[0] if errors else f"invalid mirror root: {resolved_roots[0]}"
+        raise RuntimeError(f"Shared skills mirror root {message}")
 
-    logger.info(
-        "Shared skills mirror validated for %s worker: %s (%d skills)",
-        worker_name,
-        mirror_path,
-        len(skill_dirs),
-        extra={
-            "worker_name": worker_name,
-            "skills_mirror_root": str(mirror_path),
-            "skills_mirror_count": len(skill_dirs),
-        },
+    checked = ", ".join(str(path) for path in resolved_roots)
+    details = "; ".join(errors) if errors else "no valid mirror roots found"
+    raise RuntimeError(
+        f"Shared skills mirror validation failed for roots [{checked}]: {details}"
     )
-    return mirror_path
