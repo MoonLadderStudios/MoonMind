@@ -41,6 +41,11 @@ def skills_mirror(tmp_path, monkeypatch):
 def test_resolve_run_skill_selection_uses_global_defaults(skills_mirror, monkeypatch):
     mirror, _ = skills_mirror
     monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "allowlist",
+        raising=False,
+    )
+    monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
         ("speckit",),
         raising=False,
@@ -56,6 +61,39 @@ def test_resolve_run_skill_selection_uses_global_defaults(skills_mirror, monkeyp
     assert resolved.selection_source == "global_default"
     assert [skill.skill_name for skill in resolved.skills] == ["speckit"]
     assert resolved.skills[0].source_uri == (mirror / "speckit").resolve().as_uri()
+
+
+def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
+    skills_mirror, monkeypatch
+):
+    mirror, legacy = skills_mirror
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        ("speckit",),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+
+    resolved = resolve_run_skill_selection(run_id="run-1b", context={})
+
+    assert resolved.selection_source == "global_default"
+    assert [skill.skill_name for skill in resolved.skills] == [
+        "speckit",
+        "docs-lint",
+        "legacy",
+    ]
+    assert resolved.skills[0].source_uri == (mirror / "speckit").resolve().as_uri()
+    assert resolved.skills[1].source_uri == (mirror / "docs-lint").resolve().as_uri()
+    assert resolved.skills[2].source_uri == (legacy / "legacy").resolve().as_uri()
 
 
 def test_resolve_run_skill_selection_prefers_job_override(skills_mirror):
