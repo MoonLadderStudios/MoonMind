@@ -175,6 +175,60 @@ async def test_run_command_redacts_sensitive_log_output(
     assert "[REDACTED]" in text
 
 
+async def test_run_command_cancellation_reaps_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Cancellation should terminate and reap child processes."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "cancel.log"
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.terminated = False
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self):
+            await asyncio.sleep(3600)
+            return (b"", b"")
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.waited = True
+            self.returncode = -15 if self.terminated else -9
+            return self.returncode
+
+    process = FakeProcess()
+
+    async def fake_exec(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    task = asyncio.create_task(
+        handler._run_command(
+            ["sleep", "60"],
+            cwd=tmp_path,
+            log_path=log_path,
+            check=False,
+        )
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.terminated is True
+    assert process.waited is True
+
+
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     """Handler should run core codex_exec command sequence."""
 

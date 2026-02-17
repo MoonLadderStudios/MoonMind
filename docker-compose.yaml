@@ -285,10 +285,12 @@ services:
       - MOONMIND_WORKER_TOKEN=${MOONMIND_WORKER_TOKEN:-}
       - MOONMIND_WORKER_BOOTSTRAP_TOKEN=${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}
       - MOONMIND_WORKER_ALLOWED_TYPES=${MOONMIND_WORKER_ALLOWED_TYPES:-task,codex_exec,codex_skill}
-      - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh}
+      - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker}
       - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_WORKER_TOKEN_DESCRIPTION:-Docker Compose codex worker}
       - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
-      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/workspace/agent_jobs}
+      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
+      - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
+      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
       - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
       - MOONMIND_WORKER_RETRY_ENABLED=${MOONMIND_WORKER_RETRY_ENABLED:-true}
@@ -298,6 +300,7 @@ services:
       - DEFAULT_EMBEDDING_PROVIDER=${MOONMIND_WORKER_EMBEDDING_PROVIDER_OVERRIDE:-disabled}
     volumes:
       - .:/workspace
+      - agent_workspaces:/work/agent_jobs
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - speckit_workspaces:/work/runs
       - ./var/artifacts:/workspace/var/artifacts
@@ -306,6 +309,8 @@ services:
       /workspace/tools/start-codex-worker.sh
     depends_on:
       api:
+        condition: service_started
+      docker-proxy:
         condition: service_started
     networks:
       - local-network
@@ -441,6 +446,8 @@ volumes:
   keycloak-data:
   rabbitmq-data:
   speckit_workspaces:
+  agent_workspaces:
+    name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   gemini_auth_volume:
