@@ -191,6 +191,7 @@ class TestSpecWorkflowSettings:
         assert settings.skills_enabled is True
         assert settings.skills_canary_percent == 100
         assert settings.default_skill == "speckit"
+        assert settings.skill_policy_mode == "permissive"
         assert settings.allowed_skills == ("speckit",)
 
     def test_skills_overrides(self):
@@ -212,16 +213,30 @@ class TestSpecWorkflowSettings:
         assert settings.submit_skill == "custom"
 
     def test_default_skill_is_added_to_allowlist(self):
-        """Configured default skill should always be allowlisted."""
+        """Allowlist mode should include default skill in allowlist."""
 
         settings = SpecWorkflowSettings(
             _env_file=None,
+            skill_policy_mode="allowlist",
             default_skill="custom-default",
             allowed_skills=("speckit",),
         )
 
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("speckit", "custom-default")
+
+    def test_permissive_mode_does_not_modify_allowlist(self):
+        """Permissive mode should not force default skill into allowlist."""
+
+        settings = SpecWorkflowSettings(
+            _env_file=None,
+            skill_policy_mode="permissive",
+            default_skill="custom-default",
+            allowed_skills=("speckit",),
+        )
+
+        assert settings.default_skill == "custom-default"
+        assert settings.allowed_skills == ("speckit",)
 
     def test_app_settings_defaults_codex_queue_to_celery_default(
         self, app_settings_defaults
