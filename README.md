@@ -16,9 +16,7 @@ MoonMind exposes all of this through:
 - **Model Context Protocol (MCP)** so external agents can treat MoonMind as a standardized model and tools backend.
 - **Apps and manifests** that describe higher-level workflows declaratively and can be invoked from CLIs, agents, or CI.
 
-## Quick Start
-
-This section guides you through a one-click deployment of MoonMind using Docker Compose. The default stack includes the UI (Open-WebUI), API backend, Qdrant, RabbitMQ/Postgres dependencies, Celery/orchestrator services, and the `moonmind-codex-worker` daemon for `/api/queue` jobs.
+## Quick Start with Codex
 
 **Prerequisites:**
 
@@ -28,15 +26,10 @@ This section guides you through a one-click deployment of MoonMind using Docker 
     ```bash
     cp .env-template .env
     ```
-    Review the `.env` file and fill in any necessary API keys or configuration values if you plan to use services like OpenAI, Google, Confluence, etc.
-    For the fastest Codex-worker + Gemini-embedding path, make sure these are set:
-    - `GOOGLE_API_KEY=<your_google_api_key>`
-    - `DEFAULT_EMBEDDING_PROVIDER=google`
-    - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
+    For a fast Codex launch:
     - `CODEX_ENV=prod`
-    - `CODEX_MODEL=gpt-5-codex`
+    - `CODEX_MODEL=gpt-5.3-codex`
     - `GITHUB_TOKEN=<github_pat_with_repo_access>`
-    The shared Docker image for the API, orchestrator, and Celery workers already bundles the Gemini CLI; set `GOOGLE_API_KEY` in `.env` so the CLI can authenticate during development (you can verify with `tools/verify-gemini.sh`).
 
 **Running MoonMind:**
 
