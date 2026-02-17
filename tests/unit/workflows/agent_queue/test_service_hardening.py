@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
@@ -183,6 +184,69 @@ async def test_create_task_job_derives_runtime_capabilities(tmp_path: Path) -> N
     assert job.payload["targetRuntime"] == "codex"
     assert job.payload["task"]["runtime"]["mode"] == "codex"
     assert job.payload["requiredCapabilities"] == ["codex", "git", "gh"]
+
+
+async def test_create_task_job_applies_settings_defaults_for_missing_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task creation should resolve missing repository/model/effort from settings."""
+
+    monkeypatch.setattr(
+        settings.spec_workflow,
+        "github_repository",
+        "MoonLadderStudios/MoonMind",
+    )
+    monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-5.3-codex")
+    monkeypatch.setattr(settings.spec_workflow, "codex_effort", "high")
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "branch"},
+                    },
+                },
+            )
+
+    assert job.payload["repository"] == "MoonLadderStudios/MoonMind"
+    assert job.payload["targetRuntime"] == "codex"
+    assert job.payload["task"]["runtime"]["model"] == "gpt-5.3-codex"
+    assert job.payload["task"]["runtime"]["effort"] == "high"
+
+
+async def test_create_task_job_rejects_invalid_repository_format(
+    tmp_path: Path,
+) -> None:
+    """Task creation should fail fast on malformed owner/repo values."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="owner/repo format",
+            ):
+                await service.create_job(
+                    job_type="task",
+                    payload={
+                        "repository": "invalid-repo-format",
+                        "task": {
+                            "instructions": "Run task",
+                            "runtime": {"mode": "codex"},
+                            "git": {"startingBranch": None, "newBranch": None},
+                            "publish": {"mode": "none"},
+                        },
+                    },
+                )
 
 
 async def test_create_task_job_preserves_auth_secret_refs(tmp_path: Path) -> None:

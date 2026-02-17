@@ -40,8 +40,10 @@
     (supportedTaskRuntimes.includes("codex")
       ? "codex"
       : supportedTaskRuntimes[0] || "codex");
+  const defaultTaskModel = String(systemConfig.defaultTaskModel || "").trim();
+  const defaultTaskEffort = String(systemConfig.defaultTaskEffort || "").trim();
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
-  const lastRepositoryStorageKey = "moonmind.task.lastRepository";
+  const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
   const pollers = [];
 
@@ -264,27 +266,6 @@
       return "";
     }
     return supportedTaskRuntimes.includes(normalized) ? normalized : "";
-  }
-
-  function getLastUsedRepository() {
-    try {
-      const value = window.localStorage.getItem(lastRepositoryStorageKey);
-      return String(value || "").trim();
-    } catch (_error) {
-      return "";
-    }
-  }
-
-  function setLastUsedRepository(repository) {
-    const value = String(repository || "").trim();
-    if (!value) {
-      return;
-    }
-    try {
-      window.localStorage.setItem(lastRepositoryStorageKey, value);
-    } catch (_error) {
-      // Storage failures should never block task submission.
-    }
   }
 
   function deriveRequiredCapabilities({ runtimeMode, publishMode }) {
@@ -783,11 +764,12 @@
     const runtimeOptions = supportedTaskRuntimes
       .map(
         (runtime) =>
-          `<option value="${escapeHtml(runtime)}">${escapeHtml(runtime)}</option>`,
+          `<option value="${escapeHtml(runtime)}" ${
+            runtime === defaultTaskRuntime ? "selected" : ""
+          }>${escapeHtml(runtime)}</option>`,
       )
       .join("");
-    const lastRepository = getLastUsedRepository();
-    const repositoryFallback = lastRepository || defaultRepository;
+    const repositoryFallback = defaultRepository;
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`
       : "Set a repository in this form (no system default repository is configured).";
@@ -805,9 +787,8 @@
             <input name="skill" value="auto" placeholder="auto" />
             <span class="small">Use <span class="inline-code">auto</span> for direct execution; set a skill id such as <span class="inline-code">speckit-orchestrate</span> for skill-driven runs.</span>
           </label>
-          <label>Runtime (optional)
+          <label>Runtime
             <select name="runtime">
-              <option value="">(system default: ${escapeHtml(defaultTaskRuntime)})</option>
               ${runtimeOptions}
             </select>
           </label>
@@ -817,15 +798,15 @@
           <span class="small">Optional args forwarded to <span class="inline-code">task.skill.args</span>.</span>
         </label>
         <div class="grid-2">
-          <label>Model (optional)
-            <input name="model" placeholder="runtime default" />
+          <label>Model
+            <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
           </label>
-          <label>Effort (optional)
-            <input name="effort" placeholder="runtime default" />
+          <label>Effort
+            <input name="effort" value="${escapeHtml(defaultTaskEffort)}" placeholder="runtime default" />
           </label>
         </div>
-        <label>GitHub Repo (optional)
-          <input name="repository" placeholder="owner/repo" />
+        <label>GitHub Repo
+          <input name="repository" value="${escapeHtml(repositoryFallback)}" placeholder="owner/repo" />
           <span class="small">${escapeHtml(repositoryHint)}</span>
         </label>
         <div class="grid-2">
@@ -885,11 +866,16 @@
       }
 
       const repositoryInput = String(formData.get("repository") || "").trim();
-      const repository = repositoryInput || getLastUsedRepository() || defaultRepository;
+      const repository = repositoryInput || defaultRepository;
       if (!repository) {
         message.className = "notice error";
         message.textContent =
           "Repository is required because no system default repository is configured.";
+        return;
+      }
+      if (!repositoryPattern.test(repository)) {
+        message.className = "notice error";
+        message.textContent = "Repository must match owner/repo format.";
         return;
       }
 
@@ -987,7 +973,6 @@
           method: "POST",
           body: JSON.stringify(requestBody),
         });
-        setLastUsedRepository(repository);
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);

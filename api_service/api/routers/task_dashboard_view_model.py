@@ -16,6 +16,10 @@ _POLL_INTERVALS_MS = {
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "universal")
 _SUPPORTED_TASK_RUNTIMES = ("codex", "gemini", "claude")
+_DEFAULT_TASK_RUNTIME = "codex"
+_DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
+_DEFAULT_CODEX_EFFORT = "high"
+_DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "queue": {
@@ -80,7 +84,17 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     default_task_runtime = (
         configured_runtime
         if configured_runtime in _SUPPORTED_TASK_RUNTIMES
-        else "codex"
+        else _DEFAULT_TASK_RUNTIME
+    )
+    default_task_model = (
+        str(settings.spec_workflow.codex_model or "").strip() or _DEFAULT_CODEX_MODEL
+    )
+    default_task_effort = (
+        str(settings.spec_workflow.codex_effort or "").strip() or _DEFAULT_CODEX_EFFORT
+    )
+    default_repository = (
+        str(settings.spec_workflow.github_repository or "").strip()
+        or _DEFAULT_REPOSITORY
     )
 
     return {
@@ -113,8 +127,10 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         "system": {
             "defaultQueue": settings.spec_workflow.codex_queue
             or settings.celery.default_queue,
-            "defaultRepository": settings.spec_workflow.github_repository,
+            "defaultRepository": default_repository,
             "defaultTaskRuntime": default_task_runtime,
+            "defaultTaskModel": default_task_model,
+            "defaultTaskEffort": default_task_effort,
             "queueEnv": "MOONMIND_QUEUE",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),

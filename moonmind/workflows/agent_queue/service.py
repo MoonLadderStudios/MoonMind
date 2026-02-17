@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -29,6 +30,11 @@ from moonmind.workflows.agent_queue.task_contract import (
 logger = logging.getLogger(__name__)
 _SUPPORTED_QUEUE_JOB_TYPES = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
 _TELEMETRY_EVENT_FETCH_LIMIT = 100000
+_DEFAULT_TASK_RUNTIME = "codex"
+_DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
+_DEFAULT_CODEX_EFFORT = "high"
+_DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
+_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class AgentQueueValidationError(ValueError):
@@ -113,6 +119,66 @@ class AgentQueueService:
             int(retry_backoff_max_seconds),
         )
 
+    @staticmethod
+    def _clean_optional_str(value: object) -> str | None:
+        """Return trimmed string or ``None`` for blank values."""
+
+        text = str(value).strip() if value is not None else ""
+        return text or None
+
+    @classmethod
+    def _validate_owner_repo(cls, repository: str) -> None:
+        """Validate repository values follow ``owner/repo`` format."""
+
+        if _OWNER_REPO_PATTERN.fullmatch(repository):
+            return
+        raise AgentQueueValidationError("repository must match owner/repo format")
+
+    def _enrich_task_payload_defaults(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Fill missing canonical task payload fields from configured defaults."""
+
+        enriched = dict(payload)
+        repository = self._clean_optional_str(
+            enriched.get("repository") or enriched.get("repo")
+        )
+        if repository is None:
+            repository = (
+                self._clean_optional_str(settings.spec_workflow.github_repository)
+                or _DEFAULT_REPOSITORY
+            )
+        self._validate_owner_repo(repository)
+        enriched["repository"] = repository
+
+        task_node = enriched.get("task")
+        task = dict(task_node) if isinstance(task_node, dict) else {}
+        runtime_node = task.get("runtime")
+        runtime = dict(runtime_node) if isinstance(runtime_node, dict) else {}
+
+        runtime_mode = (
+            self._clean_optional_str(runtime.get("mode"))
+            or self._clean_optional_str(enriched.get("targetRuntime"))
+            or self._clean_optional_str(enriched.get("target_runtime"))
+            or _DEFAULT_TASK_RUNTIME
+        ).lower()
+        runtime["mode"] = runtime_mode
+        enriched["targetRuntime"] = runtime_mode
+
+        if runtime_mode == "codex":
+            if self._clean_optional_str(runtime.get("model")) is None:
+                runtime["model"] = (
+                    self._clean_optional_str(settings.spec_workflow.codex_model)
+                    or _DEFAULT_CODEX_MODEL
+                )
+            if self._clean_optional_str(runtime.get("effort")) is None:
+                runtime["effort"] = (
+                    self._clean_optional_str(settings.spec_workflow.codex_effort)
+                    or _DEFAULT_CODEX_EFFORT
+                )
+
+        task["runtime"] = runtime
+        enriched["task"] = task
+        return enriched
+
     async def create_job(
         self,
         *,
@@ -136,6 +202,8 @@ class AgentQueueService:
             raise AgentQueueValidationError("maxAttempts must be >= 1")
 
         normalized_payload = dict(payload or {})
+        if candidate_type == CANONICAL_TASK_JOB_TYPE:
+            normalized_payload = self._enrich_task_payload_defaults(normalized_payload)
         try:
             normalized_payload = normalize_queue_job_payload(
                 job_type=candidate_type,

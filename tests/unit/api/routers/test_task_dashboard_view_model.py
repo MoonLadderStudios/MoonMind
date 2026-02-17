@@ -7,6 +7,7 @@ from api_service.api.routers.task_dashboard_view_model import (
     normalize_status,
     status_maps,
 )
+from moonmind.config.settings import settings
 
 
 def test_normalize_status_maps_queue_dead_letter_to_failed() -> None:
@@ -45,6 +46,8 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini", "claude")
+    assert config["system"]["defaultTaskModel"]
+    assert config["system"]["defaultTaskEffort"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
@@ -55,3 +58,15 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini")
     config = build_runtime_config("/tasks")
     assert config["system"]["defaultTaskRuntime"] == "gemini"
+
+
+def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
+    monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["defaultRepository"] == "Octo/Repo"
+    assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
+    assert config["system"]["defaultTaskEffort"] == "medium"

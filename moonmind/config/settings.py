@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -170,7 +170,24 @@ class SpecWorkflowSettings(BaseSettings):
         "001-celery-chain-workflow", env="SPEC_WORKFLOW_DEFAULT_FEATURE_KEY"
     )
     codex_environment: Optional[str] = Field(None, env="CODEX_ENV")
-    codex_model: Optional[str] = Field(None, env="CODEX_MODEL")
+    codex_model: Optional[str] = Field(
+        "gpt-5.3-codex",
+        env=("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
+        validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
+    )
+    codex_effort: Optional[str] = Field(
+        "high",
+        env=(
+            "MOONMIND_CODEX_EFFORT",
+            "CODEX_MODEL_REASONING_EFFORT",
+            "MODEL_REASONING_EFFORT",
+        ),
+        validation_alias=AliasChoices(
+            "MOONMIND_CODEX_EFFORT",
+            "CODEX_MODEL_REASONING_EFFORT",
+            "MODEL_REASONING_EFFORT",
+        ),
+    )
     codex_profile: Optional[str] = Field(None, env="CODEX_PROFILE")
     codex_shards: int = Field(
         3,
@@ -195,7 +212,9 @@ class SpecWorkflowSettings(BaseSettings):
         description="Override container image for Codex login status checks.",
     )
     github_repository: Optional[str] = Field(
-        None, env="SPEC_WORKFLOW_GITHUB_REPOSITORY"
+        "MoonLadderStudios/MoonMind",
+        env="SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        validation_alias=AliasChoices("SPEC_WORKFLOW_GITHUB_REPOSITORY"),
     )
     github_token: Optional[str] = Field(None, env="SPEC_WORKFLOW_GITHUB_TOKEN")
     test_mode: bool = Field(False, env="SPEC_WORKFLOW_TEST_MODE")
@@ -320,6 +339,7 @@ class SpecWorkflowSettings(BaseSettings):
         "celery_result_backend",
         "codex_environment",
         "codex_model",
+        "codex_effort",
         "codex_profile",
         "codex_queue",
         "codex_volume_name",
@@ -417,6 +437,12 @@ class SpecWorkflowSettings(BaseSettings):
             self.allowed_skills = tuple(
                 dict.fromkeys((*self.allowed_skills, self.default_skill))
             )
+        if not self.codex_model:
+            self.codex_model = "gpt-5.3-codex"
+        if not self.codex_effort:
+            self.codex_effort = "high"
+        if not self.github_repository:
+            self.github_repository = "MoonLadderStudios/MoonMind"
 
         if allowed and self.agent_backend not in allowed:
             allowed_display = ", ".join(allowed)

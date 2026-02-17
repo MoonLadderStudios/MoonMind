@@ -104,6 +104,23 @@ def test_normalize_task_payload_rejects_invalid_runtime() -> None:
         )
 
 
+def test_normalize_task_payload_requires_repository() -> None:
+    """Canonical task payloads still require repository after normalization."""
+
+    with pytest.raises(TaskContractError, match="repository"):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "task": {
+                    "instructions": "Run tests",
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "branch"},
+                },
+            },
+        )
+
+
 def test_normalize_legacy_exec_payload_adds_task_contract_fields() -> None:
     """Legacy codex_exec jobs should keep legacy keys and gain canonical fields."""
 
