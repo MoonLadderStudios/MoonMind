@@ -109,21 +109,23 @@ description: Private project-specific scan helper skill
 ---
 ```
 
-2. Point workers at private skills and allowlist them:
+2. Point workers at private skills and choose policy mode:
 
 - For spec workflow/Celery/Gemini workers, set in `.env`:
 
   - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
   - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills/skills` (optional compatibility fallback)
   - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
-  - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"`
+  - `SPEC_WORKFLOW_SKILL_POLICY_MODE=permissive` (default; auto-accept resolvable skills without allowlist maintenance)
+  - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (only enforced when `SPEC_WORKFLOW_SKILL_POLICY_MODE=allowlist`)
   - `SPEC_WORKFLOW_DEFAULT_SKILL=my-private-scan` (optional)
   - `SPEC_WORKFLOW_DISCOVER_SKILL=my-private-scan` / `SPEC_WORKFLOW_SUBMIT_SKILL=my-private-scan` / `SPEC_WORKFLOW_PUBLISH_SKILL=my-private-scan` (optional per-stage selection)
 
 - For standalone `moonmind-codex-worker`, also use:
 
   - `MOONMIND_DEFAULT_SKILL=my-private-scan`
-  - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit`
+  - `MOONMIND_SKILL_POLICY_MODE=permissive` (default; set `allowlist` to enforce worker allowlists)
+  - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit` (only enforced when `MOONMIND_SKILL_POLICY_MODE=allowlist`)
 
 3. Source private skills from external locations when needed.
 
@@ -143,7 +145,7 @@ skill_sources:
 
 These mappings are consumed from workflow job context as `skill_selection` + `skill_sources` when your orchestration path submits runs through the workflow context payload.
 
-4. Enqueue `codex_skill` jobs with an allowlisted `skillId` to route via worker selection metadata:
+4. Enqueue `codex_skill` jobs with a `skillId` to route via worker selection metadata (must be allowlisted only when policy mode is `allowlist`):
 
 ```json
 {
@@ -175,7 +177,8 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `SPEC_WORKFLOW_CODEX_QUEUE` – Codex queue name (default `codex`).
 - `SPEC_WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`).
 - `SPEC_WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`).
-- `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (default `speckit`).
+- `SPEC_WORKFLOW_SKILL_POLICY_MODE` – Skill policy mode (`permissive` default, `allowlist` for strict enforcement).
+- `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (enforced when policy mode is `allowlist`).
 - `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `SPEC_WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
 - `SPEC_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`).
 - `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`).
