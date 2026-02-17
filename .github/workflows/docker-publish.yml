@@ -13,7 +13,7 @@ jobs:
       packages: write # Needed to push to GHCR
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -38,7 +38,7 @@ jobs:
           # Ensure image name is lowercase as per Docker recommendations
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: . # Setting context to root, Dockerfile path will be relative to this
           file: ./api_service/Dockerfile
