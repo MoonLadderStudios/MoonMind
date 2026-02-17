@@ -19,7 +19,7 @@ jobs:
       with:
         ref: ${{ github.head_ref || github.ref }}
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: '3.12'
     - name: Install system dependencies
@@ -63,7 +63,7 @@ jobs:
   #   - name: Check out code
   #     uses: actions/checkout@v3
   #   - name: Set up Python
-  #     uses: actions/setup-python@v4
+  #     uses: actions/setup-python@v6
   #     with:
   #       python-version: '3.12'
   #   - name: Cache pip dependencies
