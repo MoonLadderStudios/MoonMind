@@ -96,3 +96,22 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+
+
+def test_skills_api_returns_available_skill_ids(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.list_available_skill_names",
+        lambda: ("speckit", "speckit-orchestrate"),
+    )
+
+    response = client.get("/api/tasks/skills")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {"id": "speckit"},
+            {"id": "speckit-orchestrate"},
+        ]
+    }

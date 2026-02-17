@@ -16,6 +16,7 @@ from .resolver import (
     ResolvedSkill,
     RunSkillSelection,
     SkillResolutionError,
+    list_available_skill_names,
     resolve_run_skill_selection,
 )
 from .runner import execute_stage
@@ -33,6 +34,7 @@ __all__ = [
     "ResolvedSkill",
     "RunSkillSelection",
     "SkillResolutionError",
+    "list_available_skill_names",
     "resolve_run_skill_selection",
     "MaterializedSkill",
     "MaterializedSkillWorkspace",

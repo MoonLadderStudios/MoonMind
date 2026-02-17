@@ -184,6 +184,59 @@ def _discover_local_skill_names() -> tuple[str, ...]:
     return tuple(discovered)
 
 
+def list_available_skill_names() -> tuple[str, ...]:
+    """List currently resolvable skill names for dashboard/task selection UX."""
+
+    cfg = settings.spec_workflow
+    allowlisted = set(cfg.allowed_skills or ())
+    candidates: list[str] = []
+
+    default_skill = str(cfg.default_skill or "").strip()
+    if default_skill:
+        candidates.append(default_skill)
+
+    candidates.extend(_discover_local_skill_names())
+
+    # Include explicit allowlist entries so builtin skills (for example `speckit`)
+    # still surface even when they are not mirrored locally.
+    candidates.extend(str(item).strip() for item in (cfg.allowed_skills or ()))
+
+    discovered: list[str] = []
+    seen: set[str] = set()
+    for raw_name in candidates:
+        if not raw_name:
+            continue
+        try:
+            skill_name = validate_skill_name(raw_name)
+        except SkillResolutionError:
+            continue
+
+        if skill_name in seen:
+            continue
+
+        if (
+            cfg.skill_policy_mode == "allowlist"
+            and allowlisted
+            and skill_name not in allowlisted
+        ):
+            continue
+
+        try:
+            _resolve_source_uri(
+                skill_name=skill_name,
+                version="local",
+                declared_source=None,
+                source_overrides=None,
+            )
+        except SkillResolutionError:
+            continue
+
+        seen.add(skill_name)
+        discovered.append(skill_name)
+
+    return tuple(discovered)
+
+
 def _resolve_source_uri(
     *,
     skill_name: str,

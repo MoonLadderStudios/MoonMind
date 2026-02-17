@@ -78,6 +78,7 @@
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
   const pollers = [];
+  let cachedAvailableSkillIds = null;
 
   function stopPolling() {
     while (pollers.length > 0) {
@@ -328,6 +329,44 @@
       .map((item) => item.trim().toLowerCase())
       .filter(Boolean);
     return Array.from(new Set(parts));
+  }
+
+  async function loadAvailableSkillIds() {
+    if (cachedAvailableSkillIds) {
+      return cachedAvailableSkillIds;
+    }
+
+    const skillsEndpoint = queueSourceConfig.skills || "/api/tasks/skills";
+    try {
+      const payload = await fetchJson(skillsEndpoint);
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const discovered = items
+        .map((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) {
+            return "";
+          }
+          const value = pick(item, "id", "name", "skill");
+          return value ? String(value).trim() : "";
+        })
+        .filter(Boolean);
+      cachedAvailableSkillIds = Array.from(new Set(["auto", ...discovered]));
+    } catch (error) {
+      console.error("skills list load failed", error);
+      cachedAvailableSkillIds = ["auto"];
+    }
+
+    return cachedAvailableSkillIds;
+  }
+
+  function populateSkillDatalist(datalistId, skillIds) {
+    const node = document.getElementById(datalistId);
+    if (!node) {
+      return;
+    }
+    const options = (Array.isArray(skillIds) && skillIds.length > 0 ? skillIds : ["auto"])
+      .map((skillId) => `<option value="${escapeHtml(skillId)}"></option>`)
+      .join("");
+    node.innerHTML = options;
   }
 
   function deriveRequiredCapabilities({
@@ -853,7 +892,7 @@
         </label>
         <div class="grid-2">
           <label>Skill (optional)
-            <input name="skill" value="auto" placeholder="auto" />
+            <input name="skill" value="auto" placeholder="auto" list="queue-skill-options" />
             <span class="small">Use <span class="inline-code">auto</span> for direct execution; set a skill id such as <span class="inline-code">speckit-orchestrate</span> for skill-driven runs.</span>
           </label>
           <label>Runtime
@@ -862,6 +901,9 @@
             </select>
           </label>
         </div>
+        <datalist id="queue-skill-options">
+          <option value="auto"></option>
+        </datalist>
         <label>Skill Args (optional JSON object)
           <textarea name="skillArgs" placeholder='{"featureKey":"019-remove-speckit-category","forcePhase":"discover","notes":"optional context"}'></textarea>
           <span class="small">Optional args forwarded to <span class="inline-code">task.skill.args</span>.</span>
@@ -1013,7 +1055,7 @@
                 <label>Skill (optional)
                   <input data-step-field="skillId" data-step-index="${index}" value="${escapeHtml(
                     step.skillId,
-                  )}" placeholder="auto, speckit-orchestrate, ..." />
+                  )}" placeholder="auto, speckit-orchestrate, ..." list="queue-skill-options" />
                 </label>
                 <label>Skill Required Capabilities (optional CSV)
                   <input data-step-field="skillRequiredCapabilities" data-step-index="${index}" value="${escapeHtml(
@@ -1109,6 +1151,9 @@
       });
     }
     renderStepEditor();
+    loadAvailableSkillIds().then((skillIds) => {
+      populateSkillDatalist("queue-skill-options", skillIds);
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
