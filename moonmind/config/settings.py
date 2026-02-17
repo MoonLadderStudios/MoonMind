@@ -424,9 +424,7 @@ class SpecWorkflowSettings(BaseSettings):
 
         normalized = str(value or "").strip().lower() or "permissive"
         if normalized not in {"permissive", "allowlist"}:
-            raise ValueError(
-                "skill_policy_mode must be one of: permissive, allowlist"
-            )
+            raise ValueError("skill_policy_mode must be one of: permissive, allowlist")
         return normalized
 
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
