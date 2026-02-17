@@ -98,9 +98,7 @@ def test_validate_shared_skills_mirror_strict_fails_for_missing_root():
         )
 
 
-def test_validate_shared_skills_mirror_strict_allows_legacy_fallback(
-    caplog, tmp_path
-):
+def test_validate_shared_skills_mirror_strict_allows_legacy_fallback(caplog, tmp_path):
     logger = logging.getLogger("worker-startup-test")
     caplog.set_level(logging.INFO)
 
