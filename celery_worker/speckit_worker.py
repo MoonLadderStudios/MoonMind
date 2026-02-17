@@ -319,6 +319,7 @@ def _validate_shared_skills_profile() -> None:
     validate_shared_skills_mirror(
         worker_name="codex",
         mirror_root=settings.spec_workflow.skills_local_mirror_root,
+        legacy_mirror_root=settings.spec_workflow.skills_legacy_mirror_root,
         repo_root=settings.spec_workflow.repo_root,
         strict=settings.spec_workflow.skills_validate_local_mirror,
         logger=logger,

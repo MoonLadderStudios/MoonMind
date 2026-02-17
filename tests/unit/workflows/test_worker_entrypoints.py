@@ -98,6 +98,32 @@ def test_validate_shared_skills_mirror_strict_fails_for_missing_root():
         )
 
 
+def test_validate_shared_skills_mirror_strict_allows_legacy_fallback(caplog, tmp_path):
+    logger = logging.getLogger("worker-startup-test")
+    caplog.set_level(logging.INFO)
+
+    repo_root = tmp_path / "repo"
+    legacy_root = repo_root / ".agents" / "skills" / "skills"
+    legacy_skill = legacy_root / "speckit"
+    legacy_skill.mkdir(parents=True)
+    (legacy_skill / "SKILL.md").write_text(
+        "---\nname: speckit\ndescription: test\n---\n",
+        encoding="utf-8",
+    )
+
+    resolved = validate_shared_skills_mirror(
+        worker_name="gemini",
+        mirror_root=".agents/skills/local",
+        legacy_mirror_root=".agents/skills/skills",
+        repo_root=str(repo_root),
+        strict=True,
+        logger=logger,
+    )
+
+    assert resolved == legacy_root.resolve()
+    assert "Shared skills mirror validated" in caplog.text
+
+
 def test_validate_shared_skills_mirror_non_strict_skips_checks():
     logger = logging.getLogger("worker-startup-test")
 
@@ -117,7 +143,7 @@ def test_validate_shared_skills_mirror_strict_resolves_relative_to_repo_root(
     logger = logging.getLogger("worker-startup-test")
 
     repo_root = tmp_path / "repo"
-    mirror_root = repo_root / ".agents" / "skills" / "skills"
+    mirror_root = repo_root / ".agents" / "skills" / "local"
     skill = mirror_root / "speckit"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
@@ -131,7 +157,7 @@ def test_validate_shared_skills_mirror_strict_resolves_relative_to_repo_root(
 
     resolved = validate_shared_skills_mirror(
         worker_name="codex",
-        mirror_root=".agents/skills/skills",
+        mirror_root=".agents/skills/local",
         repo_root=str(repo_root),
         strict=True,
         logger=logger,
