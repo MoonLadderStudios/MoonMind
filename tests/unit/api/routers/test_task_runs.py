@@ -18,6 +18,7 @@ from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.service import (
+    AgentQueueJobAuthorizationError,
     LiveSessionNotFoundError,
     LiveSessionStateError,
 )
@@ -155,6 +156,19 @@ def test_get_live_session_returns_404_when_missing(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "live_session_not_found"
+
+
+def test_get_live_session_unauthorized_maps_403(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    service.get_live_session.side_effect = AgentQueueJobAuthorizationError("denied")
+
+    response = test_client.get(f"/api/task-runs/{task_run_id}/live-session")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "job_not_authorized"
 
 
 def test_get_live_session_worker_endpoint_success(

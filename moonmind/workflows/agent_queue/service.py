@@ -50,6 +50,10 @@ class AgentQueueAuthorizationError(RuntimeError):
     """Raised when authenticated workers exceed allowed policy scope."""
 
 
+class AgentQueueJobAuthorizationError(RuntimeError):
+    """Raised when authenticated users attempt to access unauthorized jobs."""
+
+
 class LiveSessionNotFoundError(AgentQueueValidationError):
     """Raised when a task run has no persisted live-session state."""
 
@@ -700,11 +704,20 @@ class AgentQueueService:
         )
 
     async def get_live_session(
-        self, *, task_run_id: UUID
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None = None,
     ) -> models.TaskRunLiveSession | None:
         """Fetch current live session state for a task run."""
 
-        await self._repository.require_job(task_run_id)
+        if actor_user_id is None:
+            await self._repository.require_job(task_run_id)
+        else:
+            await self._assert_task_run_user_access(
+                task_run_id=task_run_id,
+                actor_user_id=actor_user_id,
+            )
         return await self._repository.get_live_session(task_run_id=task_run_id)
 
     async def create_live_session(
@@ -715,7 +728,10 @@ class AgentQueueService:
     ) -> models.TaskRunLiveSession:
         """Create or enable live session tracking for a task run."""
 
-        await self._repository.require_job(task_run_id)
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+        )
         existing = await self._repository.get_live_session(task_run_id=task_run_id)
         if existing is not None and existing.status in {
             models.AgentJobLiveSessionStatus.STARTING,
@@ -866,7 +882,10 @@ class AgentQueueService:
     ) -> LiveSessionWriteGrant:
         """Grant temporary RW reveal for an active live session."""
 
-        await self._repository.require_job(task_run_id)
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+        )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
             raise LiveSessionNotFoundError("live session is not enabled for this task")
@@ -930,7 +949,10 @@ class AgentQueueService:
     ) -> models.TaskRunLiveSession:
         """Revoke live session access and mark it terminally revoked."""
 
-        await self._repository.require_job(task_run_id)
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+        )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
             raise LiveSessionNotFoundError("live session is not enabled for this task")
@@ -969,6 +991,10 @@ class AgentQueueService:
             raise AgentQueueValidationError(
                 "action must be one of: pause, resume, takeover"
             )
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+        )
 
         if normalized == "pause":
             job = await self._repository.set_job_live_control(
@@ -1020,6 +1046,10 @@ class AgentQueueService:
             raise AgentQueueValidationError("message must be a non-empty string")
         if len(normalized_message) > 4000:
             raise AgentQueueValidationError("message must be 4000 chars or fewer")
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+        )
 
         event = await self._repository.append_control_event(
             task_run_id=task_run_id,
@@ -1265,6 +1295,23 @@ class AgentQueueService:
                 return
         raise AgentQueueAuthorizationError(
             f"worker '{worker_id}' does not own task run {task_run_id}"
+        )
+
+    async def _assert_task_run_user_access(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+    ) -> models.AgentJob:
+        """Require actor user ownership for live-session and control operations."""
+
+        if actor_user_id is None:
+            raise AgentQueueJobAuthorizationError("authenticated user id is required")
+        job = await self._repository.require_job(task_run_id)
+        if actor_user_id in {job.created_by_user_id, job.requested_by_user_id}:
+            return job
+        raise AgentQueueJobAuthorizationError(
+            f"user '{actor_user_id}' is not authorized for task run {task_run_id}"
         )
 
     async def _load_events_by_job(

@@ -97,7 +97,10 @@ async def get_live_session(
     """Fetch current live session state and RO attach metadata."""
 
     try:
-        live = await service.get_live_session(task_run_id=task_run_id)
+        live = await service.get_live_session(
+            task_run_id=task_run_id,
+            actor_user_id=getattr(_user, "id", None),
+        )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
 

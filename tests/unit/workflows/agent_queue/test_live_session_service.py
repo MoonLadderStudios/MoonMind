@@ -17,6 +17,7 @@ from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthorizationError,
+    AgentQueueJobAuthorizationError,
     AgentQueueService,
     LiveSessionNotFoundError,
     LiveSessionStateError,
@@ -47,6 +48,7 @@ async def queue_db(tmp_path: Path):
 async def _create_task_job(service: AgentQueueService) -> models.AgentJob:
     """Create one minimal canonical task job for live-session tests."""
 
+    owner_user_id = uuid4()
     return await service.create_job(
         job_type="task",
         payload={
@@ -58,6 +60,8 @@ async def _create_task_job(service: AgentQueueService) -> models.AgentJob:
                 "publish": {"mode": "none"},
             },
         },
+        created_by_user_id=owner_user_id,
+        requested_by_user_id=owner_user_id,
     )
 
 
@@ -92,7 +96,7 @@ async def test_create_live_session_is_idempotent_when_already_ready(
             before = await service.get_live_session(task_run_id=job.id)
             repeat = await service.create_live_session(
                 task_run_id=job.id,
-                actor_user_id=uuid4(),
+                actor_user_id=job.requested_by_user_id,
             )
 
     assert before is not None
@@ -182,7 +186,7 @@ async def test_grant_live_session_write_hides_web_link_when_allow_web_disabled(
             monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
             grant = await service.grant_live_session_write(
                 task_run_id=job.id,
-                actor_user_id=uuid4(),
+                actor_user_id=job.requested_by_user_id,
                 ttl_minutes=15,
             )
 
@@ -256,7 +260,7 @@ async def test_grant_live_session_write_raises_specific_not_found_error(
             with pytest.raises(LiveSessionNotFoundError):
                 await service.grant_live_session_write(
                     task_run_id=job.id,
-                    actor_user_id=uuid4(),
+                    actor_user_id=job.requested_by_user_id,
                     ttl_minutes=15,
                 )
 
@@ -285,6 +289,79 @@ async def test_grant_live_session_write_raises_specific_state_error(
             with pytest.raises(LiveSessionStateError):
                 await service.grant_live_session_write(
                     task_run_id=job.id,
-                    actor_user_id=uuid4(),
+                    actor_user_id=job.requested_by_user_id,
                     ttl_minutes=15,
+                )
+
+
+async def test_live_session_user_operations_reject_non_owner_actor(
+    tmp_path: Path,
+) -> None:
+    """User-owned live-session endpoints must reject actors outside job ownership."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
+
+            owner_user_id = job.requested_by_user_id
+            assert owner_user_id is not None
+            other_user_id = uuid4()
+
+            await service.create_live_session(
+                task_run_id=job.id,
+                actor_user_id=owner_user_id,
+            )
+            await service.report_live_session(
+                task_run_id=job.id,
+                worker_id="worker-1",
+                worker_hostname="host-1",
+                status=models.AgentJobLiveSessionStatus.READY,
+                provider=models.AgentJobLiveSessionProvider.TMATE,
+                attach_ro="ssh ro",
+                attach_rw="ssh rw",
+                web_ro="https://web-ro.example",
+                web_rw="https://web-rw.example",
+                tmate_session_name="mm-test",
+                tmate_socket_path="/tmp/moonmind/tmate/test.sock",
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+            )
+
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.get_live_session(
+                    task_run_id=job.id,
+                    actor_user_id=other_user_id,
+                )
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.create_live_session(
+                    task_run_id=job.id,
+                    actor_user_id=other_user_id,
+                )
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.grant_live_session_write(
+                    task_run_id=job.id,
+                    actor_user_id=other_user_id,
+                    ttl_minutes=15,
+                )
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.revoke_live_session(
+                    task_run_id=job.id,
+                    actor_user_id=other_user_id,
+                    reason="unauthorized",
+                )
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.apply_control_action(
+                    task_run_id=job.id,
+                    actor_user_id=other_user_id,
+                    action="pause",
+                )
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.append_operator_message(
+                    task_run_id=job.id,
+                    actor_user_id=other_user_id,
+                    message="should fail",
                 )
