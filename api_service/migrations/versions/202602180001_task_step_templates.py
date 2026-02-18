@@ -73,9 +73,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.ForeignKeyConstraint(
-            ["created_by"], ["user.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["created_by"], ["user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "slug", "scope_type", "scope_ref", name="uq_task_step_template_slug_scope"
@@ -137,9 +135,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["template_id"], ["task_step_templates.id"], ondelete="CASCADE"
         ),
-        sa.ForeignKeyConstraint(
-            ["reviewed_by"], ["user.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["reviewed_by"], ["user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "template_id", "version", name="uq_task_step_template_version_label"
@@ -172,7 +168,9 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.ForeignKeyConstraint(["template_id"], ["task_step_templates.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["template_id"], ["task_step_templates.id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["user.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", "template_id", name="uq_task_template_favorite"),
@@ -196,7 +194,9 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.ForeignKeyConstraint(
-            ["template_version_id"], ["task_step_template_versions.id"], ondelete="CASCADE"
+            ["template_version_id"],
+            ["task_step_template_versions.id"],
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(["user_id"], ["user.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -218,7 +218,8 @@ def downgrade() -> None:
     op.drop_table("task_step_template_recents")
 
     op.drop_index(
-        "ix_task_step_template_favorites_user", table_name="task_step_template_favorites"
+        "ix_task_step_template_favorites_user",
+        table_name="task_step_template_favorites",
     )
     op.drop_table("task_step_template_favorites")
 
