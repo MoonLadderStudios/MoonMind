@@ -651,9 +651,9 @@ class AgentQueueRepository:
         if attach_rw is not None:
             live.attach_rw_encrypted = attach_rw
         if web_ro is not None:
-            live.web_ro = web_ro
+            live.web_ro = web_ro or None
         if web_rw is not None:
-            live.web_rw_encrypted = web_rw
+            live.web_rw_encrypted = web_rw or None
         if rw_granted_until is not None:
             live.rw_granted_until = rw_granted_until
         if last_heartbeat_at is not None:

@@ -21,8 +21,8 @@ docker compose exec -T api alembic -c /app/api_service/migrations/alembic.ini up
 ## 4. Validate scope gates
 
 ```bash
-.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime
-.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main
+bash .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime
+bash .specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main
 ```
 
 ## 5. Manual queue dashboard smoke flow

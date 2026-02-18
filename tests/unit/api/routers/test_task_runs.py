@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from api_service.api.routers.agent_queue import _WorkerRequestAuth
 from api_service.api.routers.task_runs import _get_service, _require_worker_auth, router
 from api_service.auth_providers import get_current_user
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 
 
@@ -173,6 +174,47 @@ def test_grant_live_session_write_success(
     assert response.status_code == 200
     assert response.json()["attachRw"] == "ssh rw"
     service.grant_live_session_write.assert_awaited_once()
+
+
+def test_get_live_session_hides_web_ro_when_allow_web_disabled(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    live = _build_live_session(task_run_id=task_run_id)
+    live.web_ro = "https://web-ro.example"
+    service.get_live_session.return_value = live
+    monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
+
+    response = test_client.get(f"/api/task-runs/{task_run_id}/live-session")
+
+    assert response.status_code == 200
+    assert response.json()["session"]["webRo"] is None
+
+
+def test_grant_live_session_write_hides_web_rw_when_allow_web_disabled(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    live = _build_live_session(task_run_id=task_run_id)
+    service.grant_live_session_write.return_value = SimpleNamespace(
+        session=live,
+        attach_rw="ssh rw",
+        web_rw="https://web-rw.example",
+        granted_until=datetime.now(UTC),
+    )
+    monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
+
+    response = test_client.post(
+        f"/api/task-runs/{task_run_id}/live-session/grant-write",
+        json={"ttlMinutes": 15},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["webRw"] is None
 
 
 def test_apply_control_action_success(client: tuple[TestClient, AsyncMock]) -> None:

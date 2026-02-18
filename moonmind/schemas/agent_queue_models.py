@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 
 
@@ -278,6 +279,12 @@ class TaskRunLiveSessionModel(BaseModel):
     last_heartbeat_at: Optional[datetime] = Field(None, alias="lastHeartbeatAt")
     error_message: Optional[str] = Field(None, alias="errorMessage")
 
+    @model_validator(mode="after")
+    def _apply_web_visibility_policy(self) -> "TaskRunLiveSessionModel":
+        if not settings.spec_workflow.live_session_allow_web:
+            self.web_ro = None
+        return self
+
 
 class TaskRunLiveSessionResponse(BaseModel):
     """Response envelope for task-run live session fetch/create operations."""
@@ -296,6 +303,12 @@ class TaskRunLiveSessionWriteGrantResponse(BaseModel):
     attach_rw: str = Field(..., alias="attachRw")
     web_rw: Optional[str] = Field(None, alias="webRw")
     granted_until: datetime = Field(..., alias="grantedUntil")
+
+    @model_validator(mode="after")
+    def _apply_web_visibility_policy(self) -> "TaskRunLiveSessionWriteGrantResponse":
+        if not settings.spec_workflow.live_session_allow_web:
+            self.web_rw = None
+        return self
 
 
 class TaskRunControlEventModel(BaseModel):

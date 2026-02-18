@@ -47,6 +47,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskRunLiveSessionWriteGrantResponse'
+        '404':
+          description: Task run not found
+        '422':
+          description: Invalid grant request or live session not in a grantable state
   /api/task-runs/{taskRunId}/live-session/revoke:
     post:
       summary: Revoke live session
@@ -65,6 +69,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskRunLiveSessionResponse'
+        '404':
+          description: Task run not found
+        '422':
+          description: Invalid revoke request or live session not enabled
   /api/task-runs/{taskRunId}/control:
     post:
       summary: Apply control action
@@ -83,6 +91,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueueJob'
+        '404':
+          description: Task run not found
+        '422':
+          description: Invalid control action payload
   /api/task-runs/{taskRunId}/operator-messages:
     post:
       summary: Submit operator message
@@ -101,6 +113,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskRunControlEvent'
+        '404':
+          description: Task run not found
+        '422':
+          description: Invalid operator message payload
   /api/task-runs/{taskRunId}/live-session/report:
     post:
       summary: Worker report/update hook
@@ -165,7 +181,7 @@ components:
       enum: [tmate]
     TaskRunLiveSession:
       type: object
-      additionalProperties: true
+      additionalProperties: false
       properties:
         id:
           type: string
@@ -285,7 +301,7 @@ components:
       required: [workerId, status]
     TaskRunControlEvent:
       type: object
-      additionalProperties: true
+      additionalProperties: false
       properties:
         id:
           type: string
@@ -307,7 +323,7 @@ components:
       required: [id, taskRunId, action, createdAt]
     QueueJob:
       type: object
-      additionalProperties: true
+      additionalProperties: false
       properties:
         id:
           type: string

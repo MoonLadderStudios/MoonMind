@@ -707,6 +707,14 @@ class AgentQueueService:
     ) -> models.TaskRunLiveSession:
         """Create or enable live session tracking for a task run."""
 
+        await self._repository.require_job(task_run_id)
+        existing = await self._repository.get_live_session(task_run_id=task_run_id)
+        if existing is not None and existing.status in {
+            models.AgentJobLiveSessionStatus.STARTING,
+            models.AgentJobLiveSessionStatus.READY,
+        }:
+            return existing
+
         provider = self._resolve_live_session_provider()
         now = datetime.now(UTC)
         ttl_minutes = max(1, int(settings.spec_workflow.live_session_ttl_minutes))
@@ -762,6 +770,9 @@ class AgentQueueService:
         normalized_worker_id = worker_id.strip()
         if not normalized_worker_id:
             raise AgentQueueValidationError("workerId must be a non-empty string")
+        allow_web = self._live_session_web_allowed()
+        resolved_web_ro = (web_ro or "").strip() if allow_web else ""
+        resolved_web_rw = (web_rw or "").strip() if allow_web else ""
 
         live = await self._repository.upsert_live_session(
             task_run_id=task_run_id,
@@ -771,8 +782,8 @@ class AgentQueueService:
             worker_hostname=(worker_hostname or "").strip() or None,
             attach_ro=(attach_ro or "").strip() or None,
             attach_rw=(attach_rw or "").strip() or None,
-            web_ro=(web_ro or "").strip() or None,
-            web_rw=(web_rw or "").strip() or None,
+            web_ro=resolved_web_ro,
+            web_rw=resolved_web_rw,
             tmate_session_name=(tmate_session_name or "").strip() or None,
             tmate_socket_path=(tmate_socket_path or "").strip() or None,
             expires_at=expires_at,
@@ -832,6 +843,7 @@ class AgentQueueService:
     ) -> LiveSessionWriteGrant:
         """Grant temporary RW reveal for an active live session."""
 
+        await self._repository.require_job(task_run_id)
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
             raise AgentQueueValidationError("live session is not enabled for this task")
@@ -878,7 +890,11 @@ class AgentQueueService:
         return LiveSessionWriteGrant(
             session=updated,
             attach_rw=attach_rw,
-            web_rw=(str(updated.web_rw_encrypted or "").strip() or None),
+            web_rw=(
+                (str(updated.web_rw_encrypted or "").strip() or None)
+                if self._live_session_web_allowed()
+                else None
+            ),
             granted_until=granted_until,
         )
 
@@ -891,6 +907,7 @@ class AgentQueueService:
     ) -> models.TaskRunLiveSession:
         """Revoke live session access and mark it terminally revoked."""
 
+        await self._repository.require_job(task_run_id)
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
             raise AgentQueueValidationError("live session is not enabled for this task")
@@ -1197,6 +1214,10 @@ class AgentQueueService:
         raise AgentQueueValidationError(
             "live session provider must be one of: tmate"
         )
+
+    @staticmethod
+    def _live_session_web_allowed() -> bool:
+        return bool(settings.spec_workflow.live_session_allow_web)
 
     async def _load_events_by_job(
         self,
