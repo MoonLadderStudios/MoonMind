@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from typing import Union
 
 import sqlalchemy as sa
 import sqlalchemy_utils
@@ -13,8 +13,6 @@ from api_service.core.encryption import get_encryption_key
 
 revision: str = "202602180001"
 down_revision: Union[str, None] = "202602170001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 
 AGENT_JOB_LIVE_SESSION_PROVIDER = postgresql.ENUM(
