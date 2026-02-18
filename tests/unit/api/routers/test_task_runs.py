@@ -191,9 +191,7 @@ def test_get_live_session_worker_endpoint_rejects_oidc_auth(
     service.get_live_session.assert_not_awaited()
 
 
-def test_grant_live_session_write_success(
-    client: tuple[TestClient, AsyncMock]
-) -> None:
+def test_grant_live_session_write_success(client: tuple[TestClient, AsyncMock]) -> None:
     test_client, service = client
     task_run_id = uuid4()
     live = _build_live_session(task_run_id=task_run_id)

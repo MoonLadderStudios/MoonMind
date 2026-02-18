@@ -399,7 +399,9 @@ class SpecWorkflowSettings(BaseSettings):
     live_session_max_concurrent_per_worker: int = Field(
         4,
         env="MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
-        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER"),
+        validation_alias=AliasChoices(
+            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER"
+        ),
         description="Maximum concurrent live sessions each worker should provision.",
         ge=1,
         le=64,

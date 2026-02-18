@@ -1032,7 +1032,9 @@ class AgentQueueService:
             level=models.AgentJobEventLevel.INFO,
             message="task.operator.message",
             payload={
-                "actorUserId": str(actor_user_id) if actor_user_id is not None else None,
+                "actorUserId": (
+                    str(actor_user_id) if actor_user_id is not None else None
+                ),
                 "message": normalized_message,
             },
         )
@@ -1231,12 +1233,12 @@ class AgentQueueService:
 
     @staticmethod
     def _resolve_live_session_provider() -> models.AgentJobLiveSessionProvider:
-        provider = str(settings.spec_workflow.live_session_provider or "").strip().lower()
+        provider = (
+            str(settings.spec_workflow.live_session_provider or "").strip().lower()
+        )
         if provider == "tmate" or not provider:
             return models.AgentJobLiveSessionProvider.TMATE
-        raise AgentQueueValidationError(
-            "live session provider must be one of: tmate"
-        )
+        raise AgentQueueValidationError("live session provider must be one of: tmate")
 
     @staticmethod
     def _live_session_web_allowed() -> bool:

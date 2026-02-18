@@ -8,9 +8,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.agent_queue import (
-    _WorkerRequestAuth,
     _require_worker_auth,
     _to_http_exception,
+    _WorkerRequestAuth,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session

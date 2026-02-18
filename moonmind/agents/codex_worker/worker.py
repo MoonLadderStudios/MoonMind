@@ -419,9 +419,7 @@ class CodexWorkerConfig:
             ).strip()
         )
         if live_session_rw_grant_ttl_minutes < 1:
-            raise ValueError(
-                "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1"
-            )
+            raise ValueError("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1")
         live_session_allow_web_raw = (
             str(
                 source.get(
@@ -797,9 +795,7 @@ class QueueApiClient:
             response.raise_for_status()
             return dict(response.json()) if response.content else {}
         except httpx.HTTPError as exc:
-            raise QueueClientError(
-                f"queue API request failed: {path}: {exc}"
-            ) from exc
+            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
     async def upload_artifact(
         self,
@@ -3782,7 +3778,9 @@ class CodexWorker:
                 if cancel_requested_at:
                     cancel_event.set()
                 payload_node = payload.get("payload")
-                payload_mapping = payload_node if isinstance(payload_node, Mapping) else {}
+                payload_mapping = (
+                    payload_node if isinstance(payload_node, Mapping) else {}
+                )
                 live_control_node = payload_mapping.get("liveControl")
                 live_control = (
                     live_control_node if isinstance(live_control_node, Mapping) else {}

@@ -1450,7 +1450,9 @@ async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmat
     stage_commands: list[tuple[str, ...]] = []
     quiet_commands: list[tuple[str, ...]] = []
 
-    monkeypatch.setattr("moonmind.agents.codex_worker.worker.shutil.which", lambda _: "tmate")
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.shutil.which", lambda _: "tmate"
+    )
 
     async def _capture_stage_command(
         command,

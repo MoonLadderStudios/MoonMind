@@ -637,18 +637,19 @@ class AgentQueueRepository:
             live.status = status
         if ready_at is not None:
             live.ready_at = ready_at
-        elif (
-            status is models.AgentJobLiveSessionStatus.READY
-            and live.ready_at is None
-        ):
+        elif status is models.AgentJobLiveSessionStatus.READY and live.ready_at is None:
             live.ready_at = now
         if ended_at is not None:
             live.ended_at = ended_at
-        elif status in {
-            models.AgentJobLiveSessionStatus.REVOKED,
-            models.AgentJobLiveSessionStatus.ENDED,
-            models.AgentJobLiveSessionStatus.ERROR,
-        } and live.ended_at is None:
+        elif (
+            status
+            in {
+                models.AgentJobLiveSessionStatus.REVOKED,
+                models.AgentJobLiveSessionStatus.ENDED,
+                models.AgentJobLiveSessionStatus.ERROR,
+            }
+            and live.ended_at is None
+        ):
             live.ended_at = now
         if expires_at is not None:
             live.expires_at = expires_at
