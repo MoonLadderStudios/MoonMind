@@ -188,7 +188,9 @@ async def test_list_events_rejects_after_event_id_without_after(tmp_path: Path) 
                 )
 
 
-async def test_list_events_rejects_before_event_id_without_before(tmp_path: Path) -> None:
+async def test_list_events_rejects_before_event_id_without_before(
+    tmp_path: Path,
+) -> None:
     """Backward pagination cursors require a timestamp component."""
 
     async with queue_db(tmp_path) as session_maker:

@@ -696,7 +696,9 @@ class AgentQueueService:
         if limit < 1 or limit > 500:
             raise AgentQueueValidationError("limit must be between 1 and 500")
         if after is not None and before is not None:
-            raise AgentQueueValidationError("after and before cursors are mutually exclusive")
+            raise AgentQueueValidationError(
+                "after and before cursors are mutually exclusive"
+            )
         if after_event_id is not None and after is None:
             raise AgentQueueValidationError("afterEventId requires after timestamp")
         if before_event_id is not None and before is None:
