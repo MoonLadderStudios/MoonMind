@@ -8,8 +8,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202602180001"
-down_revision: Union[str, None] = "202602170001"
+revision: str = "202602180002"
+down_revision: Union[str, None] = "202602180001"
 
 
 TASK_TEMPLATE_SCOPE_TYPE = postgresql.ENUM(
