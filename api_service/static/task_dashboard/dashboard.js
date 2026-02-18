@@ -971,7 +971,6 @@
         <div class="card">
           <div class="actions">
             <strong>Steps</strong>
-            <button type="button" id="queue-step-add">Add Step</button>
           </div>
           <span class="small">Step 1 is required and defines default task instructions + skill. Add more steps for multi-step runs.</span>
           <div id="queue-steps-list"></div>
@@ -1037,7 +1036,6 @@
     const modelInputElement = form.querySelector('input[name="model"]');
     const effortInputElement = form.querySelector('input[name="effort"]');
     const stepsList = document.getElementById("queue-steps-list");
-    const addStepButton = document.getElementById("queue-step-add");
     const runtimeModelDefaults = {
       ...configuredModelDefaults,
       codex: codexDefaultTaskModel,
@@ -1158,7 +1156,12 @@
           `;
         })
         .join("");
-      stepsList.innerHTML = rows;
+      const addStepButtonRow = `
+        <div class="actions queue-step-add">
+          <button type="button" data-step-action="add">Add Step</button>
+        </div>
+      `;
+      stepsList.innerHTML = rows + addStepButtonRow;
     };
     const readStepIndex = (target) => {
       if (!(target instanceof HTMLElement)) {
@@ -1174,12 +1177,6 @@
       }
       return index;
     };
-    if (addStepButton) {
-      addStepButton.addEventListener("click", () => {
-        stepState.push(createStepStateEntry());
-        renderStepEditor();
-      });
-    }
     if (stepsList) {
       stepsList.addEventListener("click", (event) => {
         const target = event.target;
@@ -1188,6 +1185,11 @@
         }
         const action = target.getAttribute("data-step-action");
         if (!action) {
+          return;
+        }
+        if (action === "add") {
+          stepState.push(createStepStateEntry());
+          renderStepEditor();
           return;
         }
         const index = readStepIndex(target);
