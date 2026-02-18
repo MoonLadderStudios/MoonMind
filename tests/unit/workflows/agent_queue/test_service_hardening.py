@@ -188,6 +188,61 @@ async def test_list_events_rejects_after_event_id_without_after(tmp_path: Path) 
                 )
 
 
+async def test_list_events_rejects_before_event_id_without_before(tmp_path: Path) -> None:
+    """Backward pagination cursors require a timestamp component."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            first = await service.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="first",
+            )
+
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="beforeEventId requires before timestamp",
+            ):
+                await service.list_events(
+                    job_id=job.id,
+                    before_event_id=first.id,
+                )
+
+
+async def test_list_events_rejects_combined_after_and_before(tmp_path: Path) -> None:
+    """Forward and backward cursors cannot be applied in one request."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            first = await service.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="first",
+            )
+
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="after and before cursors are mutually exclusive",
+            ):
+                await service.list_events(
+                    job_id=job.id,
+                    after=first.created_at,
+                    before=first.created_at,
+                )
+
+
 async def test_create_task_job_derives_runtime_capabilities(tmp_path: Path) -> None:
     """Canonical task jobs should derive required capabilities automatically."""
 

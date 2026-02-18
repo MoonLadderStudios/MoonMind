@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, and_, func, or_, select, update
@@ -555,6 +555,9 @@ class AgentQueueRepository:
         limit: int = 200,
         after: Optional[datetime] = None,
         after_event_id: UUID | None = None,
+        before: Optional[datetime] = None,
+        before_event_id: UUID | None = None,
+        sort: Literal["asc", "desc"] = "asc",
     ) -> list[models.AgentJobEvent]:
         """Return ordered events for one queue job with optional cursor."""
 
@@ -577,11 +580,30 @@ class AgentQueueRepository:
             )
         elif after is not None:
             stmt = stmt.where(models.AgentJobEvent.created_at > after)
+        if before is not None and before_event_id is not None:
+            stmt = stmt.where(
+                or_(
+                    models.AgentJobEvent.created_at < before,
+                    and_(
+                        models.AgentJobEvent.created_at == before,
+                        models.AgentJobEvent.id < before_event_id,
+                    ),
+                )
+            )
+        elif before is not None:
+            stmt = stmt.where(models.AgentJobEvent.created_at < before)
 
-        stmt = stmt.order_by(
-            models.AgentJobEvent.created_at.asc(),
-            models.AgentJobEvent.id.asc(),
-        ).limit(limit)
+        if sort == "desc":
+            stmt = stmt.order_by(
+                models.AgentJobEvent.created_at.desc(),
+                models.AgentJobEvent.id.desc(),
+            )
+        else:
+            stmt = stmt.order_by(
+                models.AgentJobEvent.created_at.asc(),
+                models.AgentJobEvent.id.asc(),
+            )
+        stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
