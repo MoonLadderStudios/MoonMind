@@ -29,6 +29,7 @@ from moonmind.workflows.agent_queue.repositories import (
 )
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
+    AgentQueueJobAuthorizationError,
     AgentQueueValidationError,
 )
 
@@ -287,6 +288,20 @@ def test_get_job_live_session_not_found_maps_404(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "live_session_not_found"
+
+
+def test_get_job_live_session_unauthorized_maps_403(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """GET /jobs/{id}/live-session should map ownership check failures to 403."""
+
+    test_client, service = client
+    service.get_live_session.side_effect = AgentQueueJobAuthorizationError("denied")
+
+    response = test_client.get(f"/api/queue/jobs/{uuid4()}/live-session")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "job_not_authorized"
 
 
 def test_grant_job_live_session_write_success(

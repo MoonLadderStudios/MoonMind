@@ -74,6 +74,7 @@ from moonmind.workflows.agent_queue.repositories import (
 )
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
+    AgentQueueJobAuthorizationError,
     AgentQueueAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
@@ -200,6 +201,14 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             detail={
                 "code": "worker_auth_failed",
                 "message": "Worker authentication failed.",
+            },
+        )
+    if isinstance(exc, AgentQueueJobAuthorizationError):
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "job_not_authorized",
+                "message": "User is not authorized for this job.",
             },
         )
     if isinstance(exc, AgentQueueAuthorizationError):
@@ -588,18 +597,25 @@ async def create_job_live_session(
 async def get_job_live_session(
     job_id: UUID,
     service: AgentQueueService = Depends(_get_service),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
 ) -> TaskRunLiveSessionResponse:
     """Fetch live session state for one queue task run."""
 
     try:
-        live = await service.get_live_session(task_run_id=job_id)
-        if live is None:
-            raise LiveSessionNotFoundError(
-                "Live session is not enabled for this task run."
-            )
+        live = await service.get_live_session(
+            task_run_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+        )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
+    if live is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "live_session_not_found",
+                "message": "Live session is not enabled for this task run.",
+            },
+        )
     return TaskRunLiveSessionResponse(
         session=TaskRunLiveSessionModel.model_validate(live),
     )

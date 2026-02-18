@@ -492,6 +492,22 @@
     return resolved;
   }
 
+  function sanitizeExternalHttpUrl(candidate) {
+    const raw = String(candidate || "").trim();
+    if (!raw) {
+      return "";
+    }
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "";
+      }
+      return parsed.href;
+    } catch (_error) {
+      return "";
+    }
+  }
+
   async function fetchJson(url, options = {}) {
     const response = await fetch(url, {
       credentials: "include",
@@ -538,19 +554,13 @@
     const code = String(error?.code || "")
       .trim()
       .toLowerCase();
-    const message = String(error?.message || "")
-      .trim()
-      .toLowerCase();
     const status = Number(error?.status || 0);
 
-    if (
-      code === "live_session_not_found" ||
-      message.includes("live session is not enabled")
-    ) {
+    if (code === "live_session_not_found") {
       return "disabled";
     }
 
-    if (status === 404 && (message === "not found" || message === "404 not found")) {
+    if (status === 404 && !code) {
       return "route_missing";
     }
 
@@ -1762,6 +1772,7 @@
       const liveSessionReady = liveSessionStatus === "ready";
       const liveSessionActionsDisabled = liveSessionRouteMissing;
       const showGrantDetails = Boolean(state.liveSessionRwAttach);
+      const liveSessionRwWebUrl = sanitizeExternalHttpUrl(state.liveSessionRwWeb);
       const liveSessionSection = job
         ? `
             <section>
@@ -1795,8 +1806,8 @@
                   ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
                       state.liveSessionRwAttach,
                     )}</span>${
-                      state.liveSessionRwWeb
-                        ? ` | Web: <a href="${escapeHtml(state.liveSessionRwWeb)}" target="_blank" rel="noreferrer">open</a>`
+                      liveSessionRwWebUrl
+                        ? ` | Web: <a href="${escapeHtml(liveSessionRwWebUrl)}" target="_blank" rel="noreferrer">open</a>`
                         : ""
                     }</p>`
                   : ""
@@ -1815,22 +1826,14 @@
                 <button type="button" id="queue-live-revoke" ${
                   liveSessionCreated && !liveSessionActionsDisabled ? "" : "disabled"
                 }>Revoke Session</button>
-                <button type="button" id="queue-live-pause" ${
-                  liveSessionActionsDisabled ? "disabled" : ""
-                }>${
+                <button type="button" id="queue-live-pause">${
                   pauseActive ? "Resume" : "Pause"
                 }</button>
-                <button type="button" id="queue-live-takeover" ${
-                  liveSessionActionsDisabled ? "disabled" : ""
-                }>Takeover</button>
+                <button type="button" id="queue-live-takeover">Takeover</button>
               </div>
               <div class="actions">
-                <input id="queue-operator-message" placeholder="Send operator message..." ${
-                  liveSessionActionsDisabled ? "disabled" : ""
-                } />
-                <button type="button" id="queue-operator-send" ${
-                  liveSessionActionsDisabled ? "disabled" : ""
-                }>Send</button>
+                <input id="queue-operator-message" placeholder="Send operator message..." />
+                <button type="button" id="queue-operator-send">Send</button>
               </div>
             </section>
           `
