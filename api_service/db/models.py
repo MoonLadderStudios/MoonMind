@@ -273,7 +273,10 @@ class TaskStepTemplate(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     versions: Mapped[list["TaskStepTemplateVersion"]] = relationship(
@@ -339,7 +342,10 @@ class TaskStepTemplateVersion(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     template: Mapped[TaskStepTemplate] = relationship(
@@ -381,16 +387,16 @@ class TaskStepTemplateRecent(Base):
     """Tracks most recent template applications per user."""
 
     __tablename__ = "task_step_template_recents"
-    __table_args__ = (
-        Index("ix_task_step_template_recents_user", "user_id"),
-    )
+    __table_args__ = (Index("ix_task_step_template_recents_user", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
     template_version_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("task_step_template_versions.id", ondelete="CASCADE"), nullable=False
+        Uuid,
+        ForeignKey("task_step_template_versions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     applied_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -399,6 +405,7 @@ class TaskStepTemplateRecent(Base):
     template_version: Mapped[TaskStepTemplateVersion] = relationship(
         "TaskStepTemplateVersion", back_populates="recents"
     )
+
 
 class TaskStepTemplate(Base):
     """Top-level catalog entry for reusable task step templates."""
@@ -433,7 +440,9 @@ class TaskStepTemplate(Base):
     )
     latest_version_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
-        ForeignKey("task_step_template_versions.id", use_alter=True, ondelete="SET NULL"),
+        ForeignKey(
+            "task_step_template_versions.id", use_alter=True, ondelete="SET NULL"
+        ),
         nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -444,7 +453,10 @@ class TaskStepTemplate(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     versions: Mapped[list["TaskStepTemplateVersion"]] = relationship(
@@ -510,7 +522,10 @@ class TaskStepTemplateVersion(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     template: Mapped[TaskStepTemplate] = relationship(
@@ -552,16 +567,16 @@ class TaskStepTemplateRecent(Base):
     """Tracks most recent template applications per user."""
 
     __tablename__ = "task_step_template_recents"
-    __table_args__ = (
-        Index("ix_task_step_template_recents_user", "user_id"),
-    )
+    __table_args__ = (Index("ix_task_step_template_recents_user", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
     template_version_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("task_step_template_versions.id", ondelete="CASCADE"), nullable=False
+        Uuid,
+        ForeignKey("task_step_template_versions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     applied_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -570,6 +585,7 @@ class TaskStepTemplateRecent(Base):
     template_version: Mapped[TaskStepTemplateVersion] = relationship(
         "TaskStepTemplateVersion", back_populates="recents"
     )
+
 
 class OrchestratorPlanStep(str, enum.Enum):
     """Supported steps inside an orchestrator ActionPlan."""
