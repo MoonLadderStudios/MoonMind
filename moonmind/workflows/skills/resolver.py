@@ -137,7 +137,10 @@ def _project_root() -> Path:
         if (parent / "pyproject.toml").is_file() or (parent / ".git").exists():
             return parent
     # Fallback for packaged environments without repository markers.
-    return current.parents[3]
+    parent_count = len(current.parents)
+    if parent_count == 0:
+        return Path.cwd()
+    return current.parents[min(3, parent_count - 1)]
 
 
 def _resolve_base_repo_path() -> Path:

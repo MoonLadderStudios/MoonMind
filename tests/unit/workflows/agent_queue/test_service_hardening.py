@@ -161,6 +161,33 @@ async def test_append_and_list_events_with_after_cursor(tmp_path: Path) -> None:
     assert events[0].id == second.id
 
 
+async def test_list_events_rejects_after_event_id_without_after(tmp_path: Path) -> None:
+    """Composite event cursors require a timestamp component."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            first = await service.append_event(
+                job_id=job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="first",
+            )
+
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="afterEventId requires after timestamp",
+            ):
+                await service.list_events(
+                    job_id=job.id,
+                    after_event_id=first.id,
+                )
+
+
 async def test_create_task_job_derives_runtime_capabilities(tmp_path: Path) -> None:
     """Canonical task jobs should derive required capabilities automatically."""
 

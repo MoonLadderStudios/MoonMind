@@ -417,6 +417,30 @@ def test_list_job_events_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert payload["items"][0]["message"] == "progress"
 
 
+def test_list_job_events_forwards_composite_cursor(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Polling endpoint should forward after + afterEventId cursor fields."""
+
+    test_client, service = client
+    job_id = uuid4()
+    after = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    after_event_id = uuid4()
+    service.list_events.return_value = []
+
+    response = test_client.get(
+        f"/api/queue/jobs/{job_id}/events?limit=50&after={after}&afterEventId={after_event_id}"
+    )
+
+    assert response.status_code == 200
+    service.list_events.assert_awaited_once()
+    kwargs = service.list_events.await_args.kwargs
+    assert kwargs["job_id"] == job_id
+    assert kwargs["limit"] == 50
+    assert kwargs["after_event_id"] == after_event_id
+    assert kwargs["after"] is not None
+
+
 @pytest.mark.asyncio
 async def test_stream_job_events_sse_emits_queue_event(
     client: tuple[TestClient, AsyncMock]
@@ -433,14 +457,8 @@ async def test_stream_job_events_sse_emits_queue_event(
         payload={"pct": 25},
         created_at=datetime.now(UTC),
     )
-    call_count = 0
-
-    async def fake_list_events(*, job_id, limit, after):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return [event]
-        return []
+    async def fake_list_events(*, job_id, limit, after, after_event_id):
+        return [event] if after is None and after_event_id is None else []
 
     service.list_events.side_effect = fake_list_events
 
@@ -450,12 +468,13 @@ async def test_stream_job_events_sse_emits_queue_event(
 
         async def is_disconnected(self) -> bool:
             self.checks += 1
-            return self.checks > 1
+            return self.checks > 2
 
     response = await stream_job_events(
         job_id=job_id,
         request=FakeRequest(),
         after=None,
+        after_event_id=None,
         limit=200,
         poll_interval_ms=1000,
         service=service,

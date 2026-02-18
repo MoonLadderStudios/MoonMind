@@ -592,18 +592,42 @@ class CodexExecHandler:
                 with suppress(Exception):
                     await process.wait()
 
+        stream_log_buffers: dict[str, str] = {"stdout": "", "stderr": ""}
+
+        def _write_redacted_log_block(text: str) -> None:
+            normalized = text.replace("\r", "")
+            for line in normalized.splitlines():
+                redacted_line = self._redact_text(
+                    line, extra_redaction_values=redaction_values
+                )
+                if redacted_line:
+                    self._append_log(log_path, redacted_line)
+
+        def _flush_stream_log_buffer(stream: str, *, force: bool) -> None:
+            pending = stream_log_buffers.get(stream, "")
+            if not pending:
+                return
+            if force:
+                flush_text = pending
+                stream_log_buffers[stream] = ""
+            else:
+                last_newline = pending.rfind("\n")
+                if last_newline < 0:
+                    return
+                flush_text = pending[:last_newline]
+                stream_log_buffers[stream] = pending[last_newline + 1 :]
+            if flush_text:
+                _write_redacted_log_block(flush_text)
+
         async def _emit_output(stream: str, text: str) -> None:
-            redacted_text = self._redact_text(
-                text.rstrip("\n"),
-                extra_redaction_values=redaction_values,
-            )
-            if redacted_text:
-                self._append_log(log_path, redacted_text)
+            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + text
+            _flush_stream_log_buffer(stream, force=False)
             if output_chunk_callback is not None:
                 with suppress(Exception):
                     await output_chunk_callback(stream, text)
 
         async def _emit_stream_closed(stream: str) -> None:
+            _flush_stream_log_buffer(stream, force=True)
             if output_chunk_callback is not None:
                 with suppress(Exception):
                     await output_chunk_callback(stream, None)
@@ -701,6 +725,12 @@ class CodexExecHandler:
                     )
                     if cancel_task in done and cancel_event is not None:
                         await _terminate_process()
+                        stdout_task.cancel()
+                        stderr_task.cancel()
+                        with suppress(asyncio.CancelledError, Exception):
+                            await asyncio.gather(stdout_task, stderr_task)
+                        with suppress(asyncio.CancelledError, Exception):
+                            await wait_task
                         raise CommandCancelledError(
                             f"command cancelled: {' '.join(command)}"
                         )
@@ -710,7 +740,7 @@ class CodexExecHandler:
                 await _terminate_process()
                 stdout_task.cancel()
                 stderr_task.cancel()
-                with suppress(Exception):
+                with suppress(asyncio.CancelledError, Exception):
                     await asyncio.gather(stdout_task, stderr_task)
                 raise
             finally:

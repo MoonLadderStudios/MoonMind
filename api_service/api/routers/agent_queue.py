@@ -642,6 +642,7 @@ async def list_job_events(
     job_id: UUID,
     *,
     after: Optional[datetime] = Query(None, alias="after"),
+    after_event_id: UUID | None = Query(None, alias="afterEventId"),
     limit: int = Query(200, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -649,7 +650,12 @@ async def list_job_events(
     """List queue job events for polling-based progress updates."""
 
     try:
-        events = await service.list_events(job_id=job_id, limit=limit, after=after)
+        events = await service.list_events(
+            job_id=job_id,
+            limit=limit,
+            after=after,
+            after_event_id=after_event_id,
+        )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return JobEventListResponse(items=[_serialize_event(event) for event in events])
@@ -661,6 +667,7 @@ async def stream_job_events(
     request: Request,
     *,
     after: Optional[datetime] = Query(None, alias="after"),
+    after_event_id: UUID | None = Query(None, alias="afterEventId"),
     limit: int = Query(200, ge=1, le=500),
     poll_interval_ms: int = Query(1000, alias="pollIntervalMs", ge=100, le=10000),
     service: AgentQueueService = Depends(_get_service),
@@ -669,7 +676,8 @@ async def stream_job_events(
     """Stream queue job events as Server-Sent Events with incremental cursor polling."""
 
     async def _event_stream() -> AsyncIterator[str]:
-        cursor = after
+        cursor_after = after
+        cursor_after_event_id = after_event_id
         poll_seconds = float(poll_interval_ms) / 1000.0
         keepalive_seconds = max(5.0, poll_seconds * 3.0)
         loop = asyncio.get_running_loop()
@@ -679,7 +687,10 @@ async def stream_job_events(
                 break
             try:
                 events = await service.list_events(
-                    job_id=job_id, limit=limit, after=cursor
+                    job_id=job_id,
+                    limit=limit,
+                    after=cursor_after,
+                    after_event_id=cursor_after_event_id,
                 )
             except Exception as exc:  # pragma: no cover - thin mapping layer
                 http_exc = _to_http_exception(exc)
@@ -704,7 +715,8 @@ async def stream_job_events(
                         f"id: {serialized['id']}\n"
                         f"data: {json.dumps(serialized, ensure_ascii=True)}\n\n"
                     )
-                    cursor = event.created_at
+                    cursor_after = event.created_at
+                    cursor_after_event_id = event.id
                 continue
 
             now = loop.time()

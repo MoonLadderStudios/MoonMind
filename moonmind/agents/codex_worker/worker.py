@@ -3179,7 +3179,29 @@ class CodexWorker:
         git_user_name: str | None = None,
         git_user_email: str | None = None,
     ) -> dict[str, str] | None:
-        command_env = dict(environ)
+        inherited_keys = (
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "SHELL",
+            "SSH_AUTH_SOCK",
+            "SYSTEMROOT",
+            "COMSPEC",
+            "PATHEXT",
+            "WINDIR",
+        )
+        command_env: dict[str, str] = {}
+        for key in inherited_keys:
+            value = environ.get(key)
+            if value:
+                command_env[key] = value
         configured = False
 
         if token:

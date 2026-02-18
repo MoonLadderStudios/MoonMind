@@ -1542,6 +1542,7 @@
       events: [],
       eventIds: new Set(),
       after: null,
+      afterEventId: null,
       outputFilter: "all",
       followOutput: true,
       eventsTransport: "polling",
@@ -1564,6 +1565,7 @@
         state.eventIds.add(eventId);
         state.events.push(event);
         state.after = pick(event, "createdAt") || state.after;
+        state.afterEventId = eventId;
         changed = true;
       });
 
@@ -1867,9 +1869,14 @@
     };
 
     const loadEvents = async () => {
-      const query = state.after
-        ? `?after=${encodeURIComponent(state.after)}&limit=200`
-        : "?limit=200";
+      const queryParams = ["limit=200"];
+      if (state.after) {
+        queryParams.push(`after=${encodeURIComponent(state.after)}`);
+      }
+      if (state.afterEventId) {
+        queryParams.push(`afterEventId=${encodeURIComponent(state.afterEventId)}`);
+      }
+      const query = `?${queryParams.join("&")}`;
       try {
         const payload = await fetchJson(
           endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
@@ -1904,9 +1911,14 @@
         return;
       }
 
-      const query = state.after
-        ? `?after=${encodeURIComponent(state.after)}&limit=200`
-        : "?limit=200";
+      const queryParams = ["limit=200"];
+      if (state.after) {
+        queryParams.push(`after=${encodeURIComponent(state.after)}`);
+      }
+      if (state.afterEventId) {
+        queryParams.push(`afterEventId=${encodeURIComponent(state.afterEventId)}`);
+      }
+      const query = `?${queryParams.join("&")}`;
       const streamUrl = endpoint(streamTemplate, { id: jobId }) + query;
       state.eventsTransport = "sse";
       state.eventsTransportStatus = "connecting";

@@ -664,15 +664,21 @@ class AgentQueueService:
         job_id: UUID,
         limit: int = 200,
         after: Optional[datetime] = None,
+        after_event_id: UUID | None = None,
     ) -> list[models.AgentJobEvent]:
         """List queue events for one job."""
 
         if limit < 1 or limit > 500:
             raise AgentQueueValidationError("limit must be between 1 and 500")
+        if after_event_id is not None and after is None:
+            raise AgentQueueValidationError("afterEventId requires after timestamp")
         if after is not None and after.tzinfo is None:
             after = after.replace(tzinfo=UTC)
         return await self._repository.list_events(
-            job_id=job_id, limit=limit, after=after
+            job_id=job_id,
+            limit=limit,
+            after=after,
+            after_event_id=after_event_id,
         )
 
     async def issue_worker_token(

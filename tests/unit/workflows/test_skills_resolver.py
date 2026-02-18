@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+import moonmind.workflows.skills.resolver as skills_resolver
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,
@@ -300,3 +303,9 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
         "local-tool",
         "speckit-orchestrate",
     )
+
+
+def test_project_root_fallback_handles_shallow_paths(monkeypatch):
+    monkeypatch.setattr(skills_resolver, "__file__", "/x.py", raising=False)
+
+    assert skills_resolver._project_root() == Path("/")
