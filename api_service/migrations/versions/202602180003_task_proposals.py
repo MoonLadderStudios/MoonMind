@@ -51,7 +51,12 @@ def upgrade() -> None:
         sa.Column("title", sa.String(length=256), nullable=False),
         sa.Column("summary", sa.Text(), nullable=False),
         sa.Column("category", sa.String(length=64), nullable=True),
-        sa.Column("tags", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'[]'::jsonb")),
+        sa.Column(
+            "tags",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
         sa.Column("repository", sa.String(length=255), nullable=False),
         sa.Column(
             "task_create_request",
@@ -59,7 +64,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("proposed_by_worker_id", sa.String(length=255), nullable=True),
-        sa.Column("proposed_by_user_id", sa.Uuid(), sa.ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "proposed_by_user_id",
+            sa.Uuid(),
+            sa.ForeignKey("user.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column(
             "origin_source",
             postgresql.ENUM(name="taskproposaloriginsource", create_type=False),
@@ -73,10 +83,25 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'{}'::jsonb"),
         ),
-        sa.Column("promoted_job_id", sa.Uuid(), sa.ForeignKey("agent_jobs.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "promoted_job_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_jobs.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("promoted_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("promoted_by_user_id", sa.Uuid(), sa.ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("decided_by_user_id", sa.Uuid(), sa.ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "promoted_by_user_id",
+            sa.Uuid(),
+            sa.ForeignKey("user.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "decided_by_user_id",
+            sa.Uuid(),
+            sa.ForeignKey("user.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("decision_note", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
@@ -90,7 +115,9 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
             nullable=False,
         ),
-        sa.UniqueConstraint("promoted_job_id", name="uq_task_proposals_promoted_job_id"),
+        sa.UniqueConstraint(
+            "promoted_job_id", name="uq_task_proposals_promoted_job_id"
+        ),
     )
     op.create_index(
         "ix_task_proposals_status_created",

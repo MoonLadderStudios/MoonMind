@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import Select, and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.task_proposals import models

@@ -1,9 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.task_proposals.models import (
@@ -151,7 +151,9 @@ async def test_dismiss_proposal_updates_status() -> None:
 async def test_promote_proposal_accepts_task_override() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(return_value={"repository": "Moon/Repo"})
+    queue.normalize_task_job_payload = MagicMock(
+        return_value={"repository": "Moon/Repo"}
+    )
     job = SimpleNamespace(id=uuid4())
     queue.create_job = AsyncMock(return_value=job)
     proposal = SimpleNamespace(

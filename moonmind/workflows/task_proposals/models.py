@@ -72,9 +72,7 @@ class TaskProposal(Base):
             "snoozed_until",
             postgresql_where=text("snoozed_until IS NOT NULL"),
         ),
-        UniqueConstraint(
-            "promoted_job_id", name="uq_task_proposals_promoted_job_id"
-        ),
+        UniqueConstraint("promoted_job_id", name="uq_task_proposals_promoted_job_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -112,7 +110,9 @@ class TaskProposal(Base):
     task_create_request: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
-    proposed_by_worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    proposed_by_worker_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
     proposed_by_user_id: Mapped[UUID | None] = mapped_column(
         Uuid,
         ForeignKey("user.id", ondelete="SET NULL"),

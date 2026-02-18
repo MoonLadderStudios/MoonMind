@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4

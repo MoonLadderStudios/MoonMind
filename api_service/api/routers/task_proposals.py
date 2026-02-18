@@ -47,7 +47,9 @@ async def _get_service(
     return get_task_proposal_service(session)
 
 
-def _build_task_preview(task_request: dict[str, object]) -> TaskProposalTaskPreview | None:
+def _build_task_preview(
+    task_request: dict[str, object]
+) -> TaskProposalTaskPreview | None:
     payload = task_request.get("payload") if isinstance(task_request, dict) else None
     if not isinstance(payload, dict):
         return None
@@ -72,12 +74,22 @@ def _build_task_preview(task_request: dict[str, object]) -> TaskProposalTaskPrev
     new_branch = git.get("newBranch")
     instructions = task.get("instructions") or payload.get("instruction")
 
-    runtime_value = (str(runtime_mode).strip() or None) if runtime_mode is not None else None
+    runtime_value = (
+        (str(runtime_mode).strip() or None) if runtime_mode is not None else None
+    )
     skill_value = (str(skill_id).strip() or None) if skill_id is not None else None
-    publish_value = (str(publish_mode).strip() or None) if publish_mode is not None else None
-    starting_value = (str(starting_branch).strip() or None) if starting_branch is not None else None
-    new_branch_value = (str(new_branch).strip() or None) if new_branch is not None else None
-    instructions_value = (str(instructions).strip() or None) if instructions is not None else None
+    publish_value = (
+        (str(publish_mode).strip() or None) if publish_mode is not None else None
+    )
+    starting_value = (
+        (str(starting_branch).strip() or None) if starting_branch is not None else None
+    )
+    new_branch_value = (
+        (str(new_branch).strip() or None) if new_branch is not None else None
+    )
+    instructions_value = (
+        (str(instructions).strip() or None) if instructions is not None else None
+    )
 
     return TaskProposalTaskPreview(
         repository=repository,
@@ -159,13 +171,19 @@ async def _resolve_actor(
         try:
             policy: WorkerAuthPolicy = await service.resolve_worker_token(worker_token)
         except TaskProposalValidationError as exc:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code": "worker_not_authorized", "message": str(exc)}) from exc
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "worker_not_authorized", "message": str(exc)},
+            ) from exc
         return None, policy.worker_id
     if user is not None:
         return getattr(user, "id", None), None
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail={"code": "authentication_required", "message": "User or worker authentication is required."},
+        detail={
+            "code": "authentication_required",
+            "message": "User or worker authentication is required.",
+        },
     )
 
 
@@ -195,7 +213,10 @@ async def create_proposal(
             proposed_by_user_id=proposed_by_user_id,
         )
     except TaskProposalValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_proposal", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_proposal", "message": str(exc)},
+        ) from exc
     return _serialize_proposal(proposal)
 
 
@@ -223,13 +244,19 @@ async def list_proposals(
             try:
                 status_value = TaskProposalStatus(normalized_status)
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_status", "message": str(exc)}) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"code": "invalid_status", "message": str(exc)},
+                ) from exc
     origin_value = None
     if origin_source:
         try:
             origin_value = TaskProposalOriginSource(origin_source.lower())
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_origin", "message": str(exc)}) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_origin", "message": str(exc)},
+            ) from exc
     try:
         proposals, next_cursor = await service.list_proposals(
             status=status_value,
@@ -242,7 +269,10 @@ async def list_proposals(
             only_snoozed=only_snoozed,
         )
     except TaskProposalValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_request", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
     items = [_serialize_proposal(item) for item in proposals]
     return TaskProposalListResponse(items=items, next_cursor=next_cursor)
 
@@ -258,7 +288,10 @@ async def get_proposal(
     try:
         proposal = await service.get_proposal(proposal_id)
     except TaskProposalError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "proposal_not_found", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
     similar_rows: list[TaskProposal] | None = None
     if include_similars:
         similar_rows = await service.get_similar_proposals(proposal)
@@ -269,7 +302,9 @@ async def get_proposal(
 async def promote_proposal(
     *,
     proposal_id: UUID,
-    payload: TaskProposalPromoteRequest = Body(default_factory=TaskProposalPromoteRequest),
+    payload: TaskProposalPromoteRequest = Body(
+        default_factory=TaskProposalPromoteRequest
+    ),
     service: TaskProposalService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> TaskProposalPromoteResponse:
@@ -288,11 +323,20 @@ async def promote_proposal(
             task_create_request_override=override_payload,
         )
     except TaskProposalStatusError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "invalid_state", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
     except TaskProposalValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_request", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
     except TaskProposalError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "proposal_not_found", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
     return TaskProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
         job=JobModel.model_validate(job),
@@ -303,7 +347,9 @@ async def promote_proposal(
 async def dismiss_proposal(
     *,
     proposal_id: UUID,
-    payload: TaskProposalDismissRequest = Body(default_factory=TaskProposalDismissRequest),
+    payload: TaskProposalDismissRequest = Body(
+        default_factory=TaskProposalDismissRequest
+    ),
     service: TaskProposalService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> TaskProposalModel:
@@ -314,9 +360,15 @@ async def dismiss_proposal(
             note=payload.note,
         )
     except TaskProposalStatusError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "invalid_state", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
     except TaskProposalError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "proposal_not_found", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
     return _serialize_proposal(proposal)
 
 
@@ -335,11 +387,20 @@ async def update_priority(
             updated_by_user_id=getattr(user, "id"),
         )
     except TaskProposalStatusError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "invalid_state", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
     except TaskProposalValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_request", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
     except TaskProposalError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "proposal_not_found", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
     return _serialize_proposal(proposal)
 
 
@@ -359,11 +420,20 @@ async def snooze_proposal(
             user_id=getattr(user, "id"),
         )
     except TaskProposalStatusError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "invalid_state", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
     except TaskProposalValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": "invalid_request", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
     except TaskProposalError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "proposal_not_found", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
     return _serialize_proposal(proposal)
 
 
@@ -380,7 +450,13 @@ async def unsnooze_proposal(
             user_id=getattr(user, "id"),
         )
     except TaskProposalStatusError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "invalid_state", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
     except TaskProposalError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "proposal_not_found", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
     return _serialize_proposal(proposal)

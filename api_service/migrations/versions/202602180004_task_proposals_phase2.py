@@ -51,11 +51,15 @@ def upgrade() -> None:
 
     op.add_column(
         "task_proposals",
-        sa.Column("dedup_key", sa.String(length=512), nullable=False, server_default=""),
+        sa.Column(
+            "dedup_key", sa.String(length=512), nullable=False, server_default=""
+        ),
     )
     op.add_column(
         "task_proposals",
-        sa.Column("dedup_hash", sa.String(length=64), nullable=False, server_default=""),
+        sa.Column(
+            "dedup_hash", sa.String(length=64), nullable=False, server_default=""
+        ),
     )
     op.add_column(
         "task_proposals",
@@ -144,10 +148,16 @@ def upgrade() -> None:
         sa.column("dedup_key", sa.String),
         sa.column("dedup_hash", sa.String),
     )
-    result = bind.execute(sa.select(task_proposals.c.id, task_proposals.c.repository, task_proposals.c.title))
+    result = bind.execute(
+        sa.select(
+            task_proposals.c.id, task_proposals.c.repository, task_proposals.c.title
+        )
+    )
     rows = result.fetchall()
     for row in rows:
-        dedup_key, dedup_hash = _compute_dedup_key(row.repository or "", row.title or "")
+        dedup_key, dedup_hash = _compute_dedup_key(
+            row.repository or "", row.title or ""
+        )
         bind.execute(
             task_proposals.update()
             .where(task_proposals.c.id == row.id)

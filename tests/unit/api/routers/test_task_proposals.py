@@ -1,13 +1,13 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock
 
-from api_service.api.routers.task_proposals import router, _get_service
+from api_service.api.routers.task_proposals import _get_service, router
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
@@ -21,11 +21,14 @@ def client() -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
     service = AsyncMock()
     app.include_router(router)
+
     async def _service_override():
         return service
+
     app.dependency_overrides[_get_service] = _service_override
 
     mock_user = SimpleNamespace(id=uuid4(), email="user@example.com", is_active=True)
+
     async def _user_override():
         return mock_user
 
@@ -97,7 +100,9 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
     assert payload["repository"] == "Moon/Repo"
 
 
-def test_create_proposal_with_worker_token(client: tuple[TestClient, AsyncMock]) -> None:
+def test_create_proposal_with_worker_token(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
     test_client, service = client
     proposal = _build_proposal()
     service.create_proposal.return_value = proposal
@@ -191,14 +196,20 @@ def test_promote_proposal_accepts_override_payload(
                 "type": "task",
                 "priority": 0,
                 "maxAttempts": 3,
-                "payload": {"repository": "Moon/Repo", "task": {"instructions": "edit"}},
+                "payload": {
+                    "repository": "Moon/Repo",
+                    "task": {"instructions": "edit"},
+                },
             }
         },
     )
 
     assert response.status_code == 200
     kwargs = service.promote_proposal.await_args.kwargs
-    assert kwargs["task_create_request_override"]["payload"]["task"]["instructions"] == "edit"
+    assert (
+        kwargs["task_create_request_override"]["payload"]["task"]["instructions"]
+        == "edit"
+    )
 
 
 def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock]) -> None:

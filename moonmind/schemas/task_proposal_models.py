@@ -68,9 +68,7 @@ class TaskProposalModel(BaseModel):
     updated_at: datetime = Field(..., alias="updatedAt")
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
-    task_preview: Optional[TaskProposalTaskPreview] = Field(
-        None, alias="taskPreview"
-    )
+    task_preview: Optional[TaskProposalTaskPreview] = Field(None, alias="taskPreview")
     snoozed_until: Optional[datetime] = Field(None, alias="snoozedUntil")
     snoozed_by_user_id: Optional[UUID] = Field(None, alias="snoozedByUserId")
     snooze_note: Optional[str] = Field(None, alias="snoozeNote")

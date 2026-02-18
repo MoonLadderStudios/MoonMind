@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any, Iterable
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -85,8 +85,8 @@ class TaskProposalService:
             if proposal_settings
             else False
         )
-        self._notifications_enabled = (
-            bool(enabled_flag) and bool(self._notification_webhook)
+        self._notifications_enabled = bool(enabled_flag) and bool(
+            self._notification_webhook
         )
         self._similar_limit = 10
 
@@ -142,7 +142,9 @@ class TaskProposalService:
             raise TaskProposalValidationError("category exceeds max length")
         return text
 
-    def _normalize_tags(self, values: list[object] | tuple[object, ...] | None) -> list[str]:
+    def _normalize_tags(
+        self, values: list[object] | tuple[object, ...] | None
+    ) -> list[str]:
         if not values:
             return []
         normalized: list[str] = []
@@ -230,9 +232,7 @@ class TaskProposalService:
                 "taskCreateRequest.payload must be an object"
             )
         try:
-            normalized_payload = self._queue_service.normalize_task_job_payload(
-                payload
-            )
+            normalized_payload = self._queue_service.normalize_task_job_payload(payload)
         except AgentQueueValidationError as exc:
             raise TaskProposalValidationError(str(exc)) from exc
 
@@ -257,9 +257,7 @@ class TaskProposalService:
             return False
         return category.lower() in _NOTIFICATION_CATEGORIES
 
-    def _build_notification_payload(
-        self, proposal: TaskProposal
-    ) -> dict[str, Any]:
+    def _build_notification_payload(self, proposal: TaskProposal) -> dict[str, Any]:
         preview = proposal.task_create_request or {}
         payload = {
             "text": f"[Task Proposal] {proposal.category or 'general'} → {proposal.repository}",
@@ -269,8 +267,16 @@ class TaskProposalService:
                     "title_link": f"/tasks/proposals/{proposal.id}",
                     "text": proposal.summary[:4000],
                     "fields": [
-                        {"title": "Repository", "value": proposal.repository, "short": True},
-                        {"title": "Priority", "value": proposal.review_priority.value, "short": True},
+                        {
+                            "title": "Repository",
+                            "value": proposal.repository,
+                            "short": True,
+                        },
+                        {
+                            "title": "Priority",
+                            "value": proposal.review_priority.value,
+                            "short": True,
+                        },
                     ],
                 }
             ],
@@ -460,7 +466,9 @@ class TaskProposalService:
         proposal = await self._repository.get_proposal_for_update(proposal_id)
         if proposal.status is TaskProposalStatus.PROMOTED:
             if proposal.promoted_job_id is None:
-                raise TaskProposalStatusError("proposal already promoted without job id")
+                raise TaskProposalStatusError(
+                    "proposal already promoted without job id"
+                )
             job = await self._queue_service.get_job(proposal.promoted_job_id)
             if job is None:
                 raise TaskProposalStatusError(
@@ -502,7 +510,9 @@ class TaskProposalService:
         try:
             max_attempts = int(max_attempts)
         except Exception as exc:  # pragma: no cover
-            raise TaskProposalValidationError("maxAttempts override is invalid") from exc
+            raise TaskProposalValidationError(
+                "maxAttempts override is invalid"
+            ) from exc
         if max_attempts < 1:
             raise TaskProposalValidationError("maxAttempts must be >= 1")
 
@@ -578,7 +588,9 @@ class TaskProposalService:
         )
         await self._repository.commit()
         await self._repository.refresh(proposal)
-        logger.info("Updated proposal %s review priority to %s", proposal.id, value.value)
+        logger.info(
+            "Updated proposal %s review priority to %s", proposal.id, value.value
+        )
         return proposal
 
     async def snooze_proposal(
