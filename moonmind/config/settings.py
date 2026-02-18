@@ -108,7 +108,11 @@ class CelerySettings(BaseSettings):
 class SpecWorkflowSettings(BaseSettings):
     """Settings specific to Spec Kit Celery workflows."""
 
-    repo_root: str = Field(".", env="SPEC_WORKFLOW_REPO_ROOT")
+    repo_root: str = Field(
+        ".",
+        env="SPEC_WORKFLOW_REPO_ROOT",
+        validation_alias=AliasChoices("SPEC_WORKFLOW_REPO_ROOT"),
+    )
     tasks_root: str = Field("specs", env="SPEC_WORKFLOW_TASKS_ROOT")
     artifacts_root: str = Field(
         "var/artifacts/spec_workflows",
@@ -333,11 +337,13 @@ class SpecWorkflowSettings(BaseSettings):
     skills_local_mirror_root: str = Field(
         ".agents/skills/local",
         env="SPEC_SKILLS_LOCAL_MIRROR_ROOT",
+        validation_alias=AliasChoices("SPEC_SKILLS_LOCAL_MIRROR_ROOT"),
         description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
         ".agents/skills/skills",
         env="SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+        validation_alias=AliasChoices("SPEC_SKILLS_LEGACY_MIRROR_ROOT"),
         description="Legacy local mirror fallback for backward compatibility.",
     )
     skills_verify_signatures: bool = Field(
@@ -349,6 +355,56 @@ class SpecWorkflowSettings(BaseSettings):
         False,
         env="SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
         description="Enable startup validation of the configured local skill mirror root.",
+    )
+    live_session_enabled_default: bool = Field(
+        True,
+        env="MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",
+        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
+        description="Enable live task sessions by default for queue task runs.",
+    )
+    live_session_provider: str = Field(
+        "tmate",
+        env="MOONMIND_LIVE_SESSION_PROVIDER",
+        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_PROVIDER"),
+        description="Live session provider implementation.",
+    )
+    live_session_ttl_minutes: int = Field(
+        60,
+        env="MOONMIND_LIVE_SESSION_TTL_MINUTES",
+        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_TTL_MINUTES"),
+        description="Default live session lifetime before automatic revocation.",
+        ge=1,
+        le=1440,
+    )
+    live_session_rw_grant_ttl_minutes: int = Field(
+        15,
+        env="MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
+        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES"),
+        description="Default RW reveal grant duration for live sessions.",
+        ge=1,
+        le=240,
+    )
+    live_session_allow_web: bool = Field(
+        False,
+        env="MOONMIND_LIVE_SESSION_ALLOW_WEB",
+        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ALLOW_WEB"),
+        description="Whether tmate web attach URLs are exposed via API responses.",
+    )
+    tmate_server_host: Optional[str] = Field(
+        None,
+        env="MOONMIND_TMATE_SERVER_HOST",
+        validation_alias=AliasChoices("MOONMIND_TMATE_SERVER_HOST"),
+        description="Optional self-hosted tmate relay hostname.",
+    )
+    live_session_max_concurrent_per_worker: int = Field(
+        4,
+        env="MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
+        validation_alias=AliasChoices(
+            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER"
+        ),
+        description="Maximum concurrent live sessions each worker should provision.",
+        ge=1,
+        le=64,
     )
 
     model_config = SettingsConfigDict(
@@ -376,6 +432,8 @@ class SpecWorkflowSettings(BaseSettings):
         "submit_skill",
         "publish_skill",
         "skills_registry_source",
+        "live_session_provider",
+        "tmate_server_host",
         mode="before",
     )
     @classmethod
@@ -443,6 +501,16 @@ class SpecWorkflowSettings(BaseSettings):
         normalized = str(value or "").strip().lower() or "permissive"
         if normalized not in {"permissive", "allowlist"}:
             raise ValueError("skill_policy_mode must be one of: permissive, allowlist")
+        return normalized
+
+    @field_validator("live_session_provider", mode="before")
+    @classmethod
+    def _normalize_live_session_provider(cls, value: object) -> str:
+        """Normalize live session provider and reject unknown values."""
+
+        normalized = str(value or "").strip().lower() or "tmate"
+        if normalized not in {"tmate"}:
+            raise ValueError("live_session_provider must be one of: tmate")
         return normalized
 
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
@@ -715,6 +783,26 @@ class OIDCSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+class FeatureFlagsSettings(BaseSettings):
+    """Feature flag toggles for runtime surfaces."""
+
+    task_template_catalog: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__TASK_TEMPLATE_CATALOG",
+            "TASK_TEMPLATE_CATALOG",
+        ),
+        description="Enable task preset catalog endpoints + UI wiring.",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="FEATURE_FLAGS__",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -734,6 +822,7 @@ class AppSettings(BaseSettings):
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
     spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
+    feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")

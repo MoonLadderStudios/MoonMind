@@ -305,6 +305,55 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     )
 
 
+def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_missing(
+    monkeypatch, tmp_path
+):
+    repo_root = tmp_path / "repo-without-skills"
+    repo_root.mkdir(parents=True)
+
+    cwd_root = tmp_path / "workspace"
+    local_root = cwd_root / ".agents" / "skills" / "local"
+    local_root.mkdir(parents=True)
+    local_skill = local_root / "tactics-test"
+    local_skill.mkdir()
+    (local_skill / "SKILL.md").write_text("name: tactics-test\n", encoding="utf-8")
+
+    monkeypatch.chdir(cwd_root)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.repo_root",
+        str(repo_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        ".agents/skills/local",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        ".agents/skills/skills",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        (),
+        raising=False,
+    )
+
+    assert list_available_skill_names() == ("speckit", "tactics-test")
+
+
 def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     resolver_module = sys.modules[SkillResolutionError.__module__]
     monkeypatch.setattr(resolver_module, "__file__", "/x.py", raising=False)

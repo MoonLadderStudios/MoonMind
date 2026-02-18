@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from moonmind.config.settings import (
     AppSettings,
     AtlassianSettings,
+    FeatureFlagsSettings,
     GoogleSettings,
     OIDCSettings,
     OllamaSettings,
@@ -133,6 +134,26 @@ class TestOIDCSettings:
         monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
 
 
+class TestFeatureFlagsSettings:
+    def test_task_template_catalog_reads_prefixed_env(self, monkeypatch):
+        monkeypatch.setenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", "1")
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog is True
+
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+
+    def test_task_template_catalog_keeps_legacy_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("TASK_TEMPLATE_CATALOG", "1")
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog is True
+
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+
+
 class TestSpecWorkflowSettings:
     def test_agent_job_artifact_defaults(self):
         """Milestone 2 artifact settings should keep stable defaults."""
@@ -199,6 +220,11 @@ class TestSpecWorkflowSettings:
         assert settings.default_skill == "speckit"
         assert settings.skill_policy_mode == "permissive"
         assert settings.allowed_skills == ("speckit",)
+        assert settings.live_session_enabled_default is True
+        assert settings.live_session_provider == "tmate"
+        assert settings.live_session_ttl_minutes == 60
+        assert settings.live_session_rw_grant_ttl_minutes == 15
+        assert settings.live_session_allow_web is False
 
     def test_skills_overrides(self):
         """Skill settings should accept explicit override values."""
@@ -217,6 +243,64 @@ class TestSpecWorkflowSettings:
         assert settings.default_skill == "custom"
         assert settings.allowed_skills == ("speckit", "custom")
         assert settings.submit_skill == "custom"
+
+    def test_skills_mirror_env_overrides(self, monkeypatch):
+        """Skill mirror roots should honor explicit SPEC_SKILLS_* env overrides."""
+
+        monkeypatch.setenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT", "/tmp/skills-local")
+        monkeypatch.setenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT", "/tmp/skills-legacy")
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.skills_local_mirror_root == "/tmp/skills-local"
+        assert settings.skills_legacy_mirror_root == "/tmp/skills-legacy"
+
+        monkeypatch.delenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT", raising=False)
+        monkeypatch.delenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT", raising=False)
+
+    def test_repo_root_env_override(self, monkeypatch):
+        """Spec workflow repo root should honor SPEC_WORKFLOW_REPO_ROOT override."""
+
+        monkeypatch.setenv("SPEC_WORKFLOW_REPO_ROOT", "/tmp/workspace-root")
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.repo_root == "/tmp/workspace-root"
+        monkeypatch.delenv("SPEC_WORKFLOW_REPO_ROOT", raising=False)
+
+    def test_live_session_env_overrides(self, monkeypatch):
+        """Live session settings should honor MOONMIND_LIVE_SESSION_* overrides."""
+
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "tmate")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "90")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES", "25")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", "true")
+        monkeypatch.setenv("MOONMIND_TMATE_SERVER_HOST", "tmate.internal")
+        monkeypatch.setenv(
+            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
+            "7",
+        )
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.live_session_enabled_default is False
+        assert settings.live_session_provider == "tmate"
+        assert settings.live_session_ttl_minutes == 90
+        assert settings.live_session_rw_grant_ttl_minutes == 25
+        assert settings.live_session_allow_web is True
+        assert settings.tmate_server_host == "tmate.internal"
+        assert settings.live_session_max_concurrent_per_worker == 7
+
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", raising=False)
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_PROVIDER", raising=False)
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", raising=False)
+        monkeypatch.delenv(
+            "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
+            raising=False,
+        )
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", raising=False)
+        monkeypatch.delenv("MOONMIND_TMATE_SERVER_HOST", raising=False)
+        monkeypatch.delenv(
+            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
+            raising=False,
+        )
 
     def test_default_skill_is_added_to_allowlist(self):
         """Allowlist mode should include default skill in allowlist."""

@@ -121,6 +121,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
                 "migrationTelemetry": "/api/queue/telemetry/migration",
                 "skills": "/api/tasks/skills",
+                "liveSession": "/api/task-runs/{id}/live-session",
+                "liveSessionGrantWrite": "/api/task-runs/{id}/live-session/grant-write",
+                "liveSessionRevoke": "/api/task-runs/{id}/live-session/revoke",
+                "taskControl": "/api/task-runs/{id}/control",
+                "operatorMessages": "/api/task-runs/{id}/operator-messages",
             },
             "orchestrator": {
                 "list": "/orchestrator/runs",

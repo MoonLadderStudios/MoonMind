@@ -1536,6 +1536,11 @@
       job: null,
       artifacts: [],
       events: [],
+      liveSession: null,
+      liveSessionError: null,
+      liveSessionRwAttach: "",
+      liveSessionRwWeb: "",
+      liveSessionRwGrantedUntil: "",
       eventIds: new Set(),
       after: null,
       afterEventId: null,
@@ -1702,6 +1707,86 @@
           `
         : "<div class='notice error'>Queue job not found.</div>";
 
+      const jobPayload =
+        job && typeof pick(job, "payload") === "object" && !Array.isArray(pick(job, "payload"))
+          ? pick(job, "payload")
+          : {};
+      const liveControl =
+        jobPayload &&
+        typeof pick(jobPayload, "liveControl") === "object" &&
+        !Array.isArray(pick(jobPayload, "liveControl"))
+          ? pick(jobPayload, "liveControl")
+          : {};
+      const pauseActive = Boolean(pick(liveControl, "paused"));
+      const liveSession = state.liveSession;
+      const liveSessionStatus = liveSession
+        ? String(pick(liveSession, "status") || "disabled")
+        : "disabled";
+      const liveSessionCreated = Boolean(liveSession);
+      const liveSessionReady = liveSessionStatus === "ready";
+      const showGrantDetails = Boolean(state.liveSessionRwAttach);
+      const liveSessionSection = job
+        ? `
+            <section>
+              <h3>Live Session</h3>
+              ${
+                state.liveSessionError
+                  ? `<div class="notice error">${escapeHtml(state.liveSessionError)}</div>`
+                  : ""
+              }
+              <div id="queue-live-session-notice"></div>
+              <div class="grid-2">
+                <div class="card"><strong>Status:</strong> ${escapeHtml(liveSessionStatus)}</div>
+                <div class="card"><strong>Provider:</strong> ${escapeHtml(
+                  String(pick(liveSession || {}, "provider") || "tmate"),
+                )}</div>
+                <div class="card"><strong>Ready:</strong> ${formatTimestamp(
+                  pick(liveSession || {}, "readyAt"),
+                )}</div>
+                <div class="card"><strong>Expires:</strong> ${formatTimestamp(
+                  pick(liveSession || {}, "expiresAt"),
+                )}</div>
+                <div class="card"><strong>RO Attach:</strong> ${escapeHtml(
+                  String(pick(liveSession || {}, "attachRo") || "-"),
+                )}</div>
+                <div class="card"><strong>RW Granted Until:</strong> ${formatTimestamp(
+                  state.liveSessionRwGrantedUntil || pick(liveSession || {}, "rwGrantedUntil"),
+                )}</div>
+              </div>
+              ${
+                showGrantDetails
+                  ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
+                      state.liveSessionRwAttach,
+                    )}</span>${
+                      state.liveSessionRwWeb
+                        ? ` | Web: <a href="${escapeHtml(state.liveSessionRwWeb)}" target="_blank" rel="noreferrer">open</a>`
+                        : ""
+                    }</p>`
+                  : ""
+              }
+              <div class="actions">
+                <button type="button" id="queue-live-enable" ${
+                  liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
+                    ? "disabled"
+                    : ""
+                }>Enable Live Session</button>
+                <button type="button" id="queue-live-grant" ${liveSessionReady ? "" : "disabled"}>Grant Write (15m)</button>
+                <button type="button" id="queue-live-revoke" ${
+                  liveSessionCreated ? "" : "disabled"
+                }>Revoke Session</button>
+                <button type="button" id="queue-live-pause">${
+                  pauseActive ? "Resume" : "Pause"
+                }</button>
+                <button type="button" id="queue-live-takeover">Takeover</button>
+              </div>
+              <div class="actions">
+                <input id="queue-operator-message" placeholder="Send operator message..." />
+                <button type="button" id="queue-operator-send">Send</button>
+              </div>
+            </section>
+          `
+        : "";
+
       setView(
         "Queue Job Detail",
         `Job ${jobId}`,
@@ -1713,6 +1798,7 @@
           }>${escapeHtml(cancelButtonLabel)}</button></div>` : ""}
           ${detail}
           <div class="stack">
+            ${liveSessionSection}
             <section>
               <h3>Events</h3>
               <table>
@@ -1803,6 +1889,198 @@
         });
       }
 
+      const liveNotice = document.getElementById("queue-live-session-notice");
+      const setLiveNotice = (text, isError = false) => {
+        if (!liveNotice) {
+          return;
+        }
+        if (!text) {
+          liveNotice.className = "";
+          liveNotice.textContent = "";
+          return;
+        }
+        liveNotice.className = isError ? "notice error" : "notice";
+        liveNotice.textContent = text;
+      };
+
+      const liveEnableButton = document.getElementById("queue-live-enable");
+      if (liveEnableButton) {
+        liveEnableButton.addEventListener("click", async () => {
+          liveEnableButton.disabled = true;
+          setLiveNotice("Enabling live session...");
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({}),
+              },
+            );
+            state.liveSessionRwAttach = "";
+            state.liveSessionRwWeb = "";
+            state.liveSessionRwGrantedUntil = "";
+            await loadDetail();
+            await loadEvents();
+            setLiveNotice("Live session enabled.");
+          } catch (error) {
+            console.error("live session enable failed", error);
+            setLiveNotice("Failed to enable live session.", true);
+            liveEnableButton.disabled = false;
+          }
+        });
+      }
+
+      const liveGrantButton = document.getElementById("queue-live-grant");
+      if (liveGrantButton) {
+        liveGrantButton.addEventListener("click", async () => {
+          liveGrantButton.disabled = true;
+          setLiveNotice("Requesting temporary write access...");
+          try {
+            const grant = await fetchJson(
+              endpoint(
+                queueSourceConfig.liveSessionGrantWrite ||
+                  "/api/task-runs/{id}/live-session/grant-write",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ ttlMinutes: 15 }),
+              },
+            );
+            state.liveSessionRwAttach = String(pick(grant, "attachRw") || "");
+            state.liveSessionRwWeb = String(pick(grant, "webRw") || "");
+            state.liveSessionRwGrantedUntil = String(pick(grant, "grantedUntil") || "");
+            await loadDetail();
+            await loadEvents();
+            setLiveNotice("RW access granted.");
+          } catch (error) {
+            console.error("live session grant failed", error);
+            setLiveNotice("Failed to grant write access.", true);
+            liveGrantButton.disabled = false;
+          }
+        });
+      }
+
+      const liveRevokeButton = document.getElementById("queue-live-revoke");
+      if (liveRevokeButton) {
+        liveRevokeButton.addEventListener("click", async () => {
+          liveRevokeButton.disabled = true;
+          setLiveNotice("Revoking live session...");
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.liveSessionRevoke ||
+                  "/api/task-runs/{id}/live-session/revoke",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ reason: "Revoked from dashboard" }),
+              },
+            );
+            state.liveSessionRwAttach = "";
+            state.liveSessionRwWeb = "";
+            state.liveSessionRwGrantedUntil = "";
+            await loadDetail();
+            await loadEvents();
+            setLiveNotice("Live session revoked.");
+          } catch (error) {
+            console.error("live session revoke failed", error);
+            setLiveNotice("Failed to revoke live session.", true);
+            liveRevokeButton.disabled = false;
+          }
+        });
+      }
+
+      const pauseButton = document.getElementById("queue-live-pause");
+      if (pauseButton) {
+        pauseButton.addEventListener("click", async () => {
+          pauseButton.disabled = true;
+          const action = pauseButton.textContent === "Resume" ? "resume" : "pause";
+          setLiveNotice(action === "pause" ? "Pausing worker..." : "Resuming worker...");
+          try {
+            await fetchJson(
+              endpoint(queueSourceConfig.taskControl || "/api/task-runs/{id}/control", {
+                id: jobId,
+              }),
+              {
+                method: "POST",
+                body: JSON.stringify({ action }),
+              },
+            );
+            await loadDetail();
+            await loadEvents();
+            setLiveNotice(action === "pause" ? "Pause requested." : "Resume requested.");
+          } catch (error) {
+            console.error("task control action failed", error);
+            setLiveNotice("Failed to apply control action.", true);
+            pauseButton.disabled = false;
+          }
+        });
+      }
+
+      const takeoverButton = document.getElementById("queue-live-takeover");
+      if (takeoverButton) {
+        takeoverButton.addEventListener("click", async () => {
+          takeoverButton.disabled = true;
+          setLiveNotice("Requesting takeover...");
+          try {
+            await fetchJson(
+              endpoint(queueSourceConfig.taskControl || "/api/task-runs/{id}/control", {
+                id: jobId,
+              }),
+              {
+                method: "POST",
+                body: JSON.stringify({ action: "takeover" }),
+              },
+            );
+            await loadDetail();
+            await loadEvents();
+            setLiveNotice("Takeover requested.");
+          } catch (error) {
+            console.error("task takeover action failed", error);
+            setLiveNotice("Failed to request takeover.", true);
+            takeoverButton.disabled = false;
+          }
+        });
+      }
+
+      const operatorMessageInput = document.getElementById("queue-operator-message");
+      const operatorSendButton = document.getElementById("queue-operator-send");
+      if (operatorMessageInput && operatorSendButton) {
+        operatorSendButton.addEventListener("click", async () => {
+          const messageText = String(operatorMessageInput.value || "").trim();
+          if (!messageText) {
+            return;
+          }
+          operatorSendButton.disabled = true;
+          setLiveNotice("Sending operator message...");
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.operatorMessages || "/api/task-runs/{id}/operator-messages",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ message: messageText }),
+              },
+            );
+            operatorMessageInput.value = "";
+            await loadEvents();
+            setLiveNotice("Operator message sent.");
+          } catch (error) {
+            console.error("operator message failed", error);
+            setLiveNotice("Failed to send operator message.", true);
+          } finally {
+            operatorSendButton.disabled = false;
+          }
+        });
+      }
+
       const followOutput = document.getElementById("queue-follow-output");
       if (followOutput) {
         followOutput.addEventListener("change", () => {
@@ -1853,13 +2131,33 @@
           fetchJson(endpoint("/api/queue/jobs/{id}", { id: jobId })),
           fetchJson(endpoint("/api/queue/jobs/{id}/artifacts", { id: jobId })),
         ]);
+        let liveSession = null;
+        let liveSessionError = null;
+        try {
+          const livePayload = await fetchJson(
+            endpoint(
+              queueSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
+              { id: jobId },
+            ),
+          );
+          liveSession = pick(livePayload || {}, "session") || null;
+        } catch (error) {
+          const message = String(error?.message || "");
+          if (!message.toLowerCase().includes("live session is not enabled")) {
+            liveSessionError = message || "Live session unavailable.";
+          }
+        }
         state.job = job;
         state.artifacts = artifactsPayload?.items || [];
+        state.liveSession = liveSession;
+        state.liveSessionError = liveSessionError;
         render(null);
       } catch (error) {
         console.error("queue detail load failed", error);
         state.job = null;
         state.artifacts = [];
+        state.liveSession = null;
+        state.liveSessionError = null;
         render("Failed to load queue detail.");
       }
     };
