@@ -133,6 +133,7 @@ services:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
+      - ./.agents:/app/.agents:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - speckit_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
@@ -288,7 +289,7 @@ services:
       - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker}
       - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_WORKER_TOKEN_DESCRIPTION:-Docker Compose codex worker}
       - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
-      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
+      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/workspace/var/agent_jobs}
       - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
       - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
@@ -300,7 +301,6 @@ services:
       - DEFAULT_EMBEDDING_PROVIDER=${MOONMIND_WORKER_EMBEDDING_PROVIDER_OVERRIDE:-disabled}
     volumes:
       - .:/workspace
-      - agent_workspaces:/work/agent_jobs
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - speckit_workspaces:/work/runs
       - ./var/artifacts:/workspace/var/artifacts

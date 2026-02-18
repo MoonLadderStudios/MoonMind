@@ -45,8 +45,26 @@ def _ensure_trailing_newline(content: str) -> str:
     return content if content.endswith("\n") else f"{content}\n"
 
 
+def _enforce_shared_file_permissions(path: Path) -> None:
+    """Ensure config permissions are compatible with shared root/non-root workers."""
+
+    target_mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+    if os.geteuid() == 0:
+        try:
+            parent_gid = path.parent.stat().st_gid
+            os.chown(path, -1, parent_gid)
+        except OSError as exc:
+            raise CodexConfigError(
+                f"Failed to align group ownership for {path}: {exc}"
+            ) from exc
+    try:
+        os.chmod(path, target_mode)
+    except OSError as exc:
+        raise CodexConfigError(f"Failed to set file mode for {path}: {exc}") from exc
+
+
 def _write_secure_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` with owner-only permissions."""
+    """Write ``content`` to ``path`` with strict owner-write/group-read permissions."""
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
@@ -54,7 +72,7 @@ def _write_secure_text(path: Path, content: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
     finally:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        _enforce_shared_file_permissions(path)
 
 
 @dataclass(frozen=True)
@@ -102,6 +120,7 @@ def ensure_codex_config(
 
     # Avoid rewriting the file if nothing changed to reduce inode churn.
     if target_path.exists() and target_path.read_text(encoding="utf-8") == rendered:
+        _enforce_shared_file_permissions(target_path)
         return CodexConfigResult(target_path, merged_config)
 
     _write_secure_text(target_path, rendered)
