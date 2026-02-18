@@ -276,7 +276,7 @@ async def test_run_command_cancellation_reaps_subprocess(
     await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert process.terminated is True
     assert process.waited is True
@@ -347,7 +347,7 @@ async def test_run_command_cancel_event_joins_stream_tasks(
     cancel_event.set()
 
     with pytest.raises(CommandCancelledError):
-        await task
+        _ = await task
 
     assert process.terminated is True
     assert process.stdout.cancelled is True
@@ -406,7 +406,7 @@ async def test_run_command_cancel_event_interrupts_subprocess(
     await asyncio.wait_for(started.wait(), timeout=1)
     cancel_event.set()
     with pytest.raises(CommandCancelledError):
-        await task
+        _ = await task
 
     assert process.terminated is True
     assert process.waited is True
@@ -478,15 +478,7 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -521,15 +513,7 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -563,15 +547,7 @@ async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -611,15 +587,7 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -654,15 +622,7 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -693,15 +653,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:3] == ["git", "status", "--porcelain"]:
@@ -733,9 +685,7 @@ async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
 
-    async def fake_handle(
-        *, job_id, payload, cancel_event=None, output_chunk_callback=None
-    ):
+    async def fake_handle(*, job_id, payload, cancel_event=None, output_chunk_callback=None):
         assert payload["repository"] == "MoonLadderStudios/MoonMind"
         assert payload["instruction"] == "run unit tests"
         assert payload["codex"]["model"] == "gpt-5-codex"
@@ -791,15 +741,7 @@ async def test_handler_publish_commit_failure_returns_failed_result(
     handler = CodexExecHandler(workdir_root=tmp_path)
 
     async def fake_run_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        output_chunk_callback=None,
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")

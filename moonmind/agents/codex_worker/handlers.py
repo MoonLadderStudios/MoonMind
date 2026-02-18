@@ -747,7 +747,7 @@ class CodexExecHandler:
                 if cancel_task is not None:
                     cancel_task.cancel()
                     with suppress(asyncio.CancelledError):
-                        await cancel_task
+                        _ = await cancel_task
 
             stdout = "".join(stdout_chunks)
             stderr = "".join(stderr_chunks)
