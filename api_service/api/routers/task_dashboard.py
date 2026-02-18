@@ -9,10 +9,12 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
+from moonmind.workflows.skills.resolver import list_available_skill_names
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
 
@@ -27,6 +29,18 @@ _STATIC_PATHS = {
     "orchestrator",
     "orchestrator/new",
 }
+
+
+class DashboardSkillOption(BaseModel):
+    """Serializable skill option exposed to dashboard clients."""
+
+    id: str = Field(description="Skill identifier")
+
+
+class DashboardSkillListResponse(BaseModel):
+    """Dashboard response containing available skill options."""
+
+    items: list[DashboardSkillOption]
 
 
 def _is_dynamic_detail(path: str, source: str) -> bool:
@@ -120,6 +134,20 @@ async def task_dashboard_route(
         )
 
     return _render_dashboard(request, f"/tasks/{normalized}")
+
+
+@router.get("/api/tasks/skills", response_model=DashboardSkillListResponse)
+async def list_dashboard_skills(
+    _user: User = Depends(get_current_user()),
+) -> DashboardSkillListResponse:
+    """List currently available skills for task dashboard submission forms."""
+
+    return DashboardSkillListResponse(
+        items=[
+            DashboardSkillOption(id=skill_id)
+            for skill_id in list_available_skill_names()
+        ]
+    )
 
 
 __all__ = ["router", "_is_allowed_path", "_resolve_user_dependency_overrides"]

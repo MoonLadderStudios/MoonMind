@@ -6,6 +6,7 @@ import pytest
 
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
+    list_available_skill_names,
     resolve_run_skill_selection,
 )
 
@@ -159,3 +160,82 @@ def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
             run_id="run-5",
             context={"skill_selection": ["missing:1.0.0"]},
         )
+
+
+def test_list_available_skill_names_permissive_mode_discovers_local_roots(
+    skills_mirror, monkeypatch
+):
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        ("speckit",),
+        raising=False,
+    )
+
+    assert list_available_skill_names() == ("speckit", "docs-lint", "legacy")
+
+
+def test_list_available_skill_names_allowlist_filters_unlisted_local_skills(
+    skills_mirror, monkeypatch
+):
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "allowlist",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        ("speckit", "legacy"),
+        raising=False,
+    )
+
+    assert list_available_skill_names() == ("speckit", "legacy")
+
+
+def test_list_available_skill_names_includes_builtin_speckit_without_local_mirror(
+    monkeypatch, tmp_path
+):
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        str(empty_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        str(empty_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        (),
+        raising=False,
+    )
+
+    assert list_available_skill_names() == ("speckit",)

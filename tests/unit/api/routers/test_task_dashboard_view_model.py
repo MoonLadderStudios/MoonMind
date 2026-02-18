@@ -42,6 +42,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         config["sources"]["queue"]["migrationTelemetry"]
         == "/api/queue/telemetry/migration"
     )
+    assert config["sources"]["queue"]["skills"] == "/api/tasks/skills"
     assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]

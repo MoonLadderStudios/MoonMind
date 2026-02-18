@@ -119,6 +119,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifacts": "/api/queue/jobs/{id}/artifacts",
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
                 "migrationTelemetry": "/api/queue/telemetry/migration",
+                "skills": "/api/tasks/skills",
             },
             "orchestrator": {
                 "list": "/orchestrator/runs",
