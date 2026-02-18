@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from moonmind.workflows.skills.resolver import (
@@ -239,3 +242,71 @@ def test_list_available_skill_names_includes_builtin_speckit_without_local_mirro
     )
 
     assert list_available_skill_names() == ("speckit",)
+
+
+def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
+    monkeypatch, tmp_path
+):
+    repo_root = tmp_path / "repo"
+    local_root = repo_root / ".agents" / "skills" / "local"
+    legacy_root = repo_root / ".agents" / "skills" / "skills"
+    local_root.mkdir(parents=True)
+    legacy_root.mkdir(parents=True)
+
+    local_skill = local_root / "local-tool"
+    local_skill.mkdir()
+    (local_skill / "SKILL.md").write_text("name: local-tool\n", encoding="utf-8")
+
+    legacy_skill = legacy_root / "speckit-orchestrate"
+    legacy_skill.mkdir()
+    (legacy_skill / "SKILL.md").write_text(
+        "name: speckit-orchestrate\n", encoding="utf-8"
+    )
+
+    outside_cwd = tmp_path / "elsewhere"
+    outside_cwd.mkdir()
+    monkeypatch.chdir(outside_cwd)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.repo_root",
+        str(repo_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        ".agents/skills/local",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        ".agents/skills/skills",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        (),
+        raising=False,
+    )
+
+    assert list_available_skill_names() == (
+        "speckit",
+        "local-tool",
+        "speckit-orchestrate",
+    )
+
+
+def test_project_root_fallback_handles_shallow_paths(monkeypatch):
+    resolver_module = sys.modules[SkillResolutionError.__module__]
+    monkeypatch.setattr(resolver_module, "__file__", "/x.py", raising=False)
+
+    assert resolver_module._project_root() == Path("/")

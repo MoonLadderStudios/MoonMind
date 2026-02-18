@@ -173,16 +173,22 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
         monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
         monkeypatch.setenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
+        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
+        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
 
         settings = SpecWorkflowSettings(_env_file=None)
 
         assert settings.codex_model == "gpt-custom-codex"
         assert settings.codex_effort == "medium"
         assert settings.github_repository == "Example/Repo"
+        assert settings.git_user_name == "Nate Sticco"
+        assert settings.git_user_email == "nsticco@gmail.com"
 
         monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
 
     def test_skills_defaults(self):
         """Skills-first settings should have stable defaults."""

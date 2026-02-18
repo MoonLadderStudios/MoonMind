@@ -285,6 +285,14 @@ textarea {
   resize: vertical;
 }
 
+.queue-step-instructions {
+  min-height: 120px;
+}
+
+.queue-step-skill-args {
+  min-height: 90px;
+}
+
 button {
   width: fit-content;
   border: 1px solid transparent;
@@ -328,6 +336,41 @@ button.secondary:hover {
   gap: 0.4rem;
   margin: 0;
   padding-left: 1.15rem;
+}
+
+.queue-live-output-toolbar {
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.queue-inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.queue-inline-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.queue-live-output {
+  margin: 0;
+  border: 1px solid #d5deea;
+  border-radius: 0.72rem;
+  background: #f7fbff;
+  color: #16202e;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.8rem;
+  line-height: 1.38;
+  max-height: 320px;
+  overflow: auto;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 900px) {

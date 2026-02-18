@@ -176,6 +176,56 @@ async def test_run_command_redacts_sensitive_log_output(
     assert "[REDACTED]" in text
 
 
+async def test_run_command_streaming_redacts_tokens_split_across_chunks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Streaming logs should redact secrets even when token text spans chunk boundaries."""
+
+    token = "ghp-split-secret"
+    log_path = tmp_path / "stream-redaction.log"
+    handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader([f"token:{token[:7]}", f"{token[7:]}\n"])
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert token not in text
+    assert "[REDACTED]" in text
+
+
 async def test_run_command_cancellation_reaps_subprocess(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -226,10 +276,82 @@ async def test_run_command_cancellation_reaps_subprocess(
     await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert process.terminated is True
     assert process.waited is True
+
+
+async def test_run_command_cancel_event_joins_stream_tasks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Streaming cancellation should cancel and join stdout/stderr reader tasks."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "cancel-stream.log"
+    cancel_event = asyncio.Event()
+
+    class BlockingReader:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = False
+
+        async def read(self, _size: int) -> bytes:
+            self.started.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.stdout = BlockingReader()
+            self.stderr = BlockingReader()
+            self._wait_gate = asyncio.Event()
+            self.terminated = False
+
+        async def wait(self) -> int:
+            await self._wait_gate.wait()
+            return int(self.returncode or -15)
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = -15
+            self._wait_gate.set()
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self._wait_gate.set()
+
+    process = FakeProcess()
+
+    async def fake_exec(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    task = asyncio.create_task(
+        handler._run_command(
+            ["sleep", "60"],
+            cwd=tmp_path,
+            log_path=log_path,
+            check=False,
+            cancel_event=cancel_event,
+        )
+    )
+    await asyncio.wait_for(process.stdout.started.wait(), timeout=1)
+    await asyncio.wait_for(process.stderr.started.wait(), timeout=1)
+    cancel_event.set()
+
+    with pytest.raises(CommandCancelledError):
+        _ = await task
+
+    assert process.terminated is True
+    assert process.stdout.cancelled is True
+    assert process.stderr.cancelled is True
 
 
 async def test_run_command_cancel_event_interrupts_subprocess(
@@ -284,10 +406,69 @@ async def test_run_command_cancel_event_interrupts_subprocess(
     await asyncio.wait_for(started.wait(), timeout=1)
     cancel_event.set()
     with pytest.raises(CommandCancelledError):
-        await task
+        _ = await task
 
     assert process.terminated is True
     assert process.waited is True
+
+
+async def test_run_command_streaming_forwards_output_chunks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Streaming subprocess reads should forward chunk callbacks per stream."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream.log"
+    callback_events: list[tuple[str, str | None]] = []
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(["line 1\n", "line 2"])
+            self.stderr = FakeReader(["warn 1\n"])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    result = await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "line 1\nline 2"
+    assert result.stderr == "warn 1\n"
+    assert ("stdout", "line 1\n") in callback_events
+    assert ("stdout", "line 2") in callback_events
+    assert ("stderr", "warn 1\n") in callback_events
+    assert ("stdout", None) in callback_events
+    assert ("stderr", None) in callback_events
 
 
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
@@ -297,7 +478,15 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -332,7 +521,15 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -366,7 +563,15 @@ async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -406,7 +611,15 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -441,7 +654,15 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -472,7 +693,15 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         calls.append(list(command))
         if command[:3] == ["git", "status", "--porcelain"]:
@@ -504,7 +733,9 @@ async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
 
-    async def fake_handle(*, job_id, payload):
+    async def fake_handle(
+        *, job_id, payload, cancel_event=None, output_chunk_callback=None
+    ):
         assert payload["repository"] == "MoonLadderStudios/MoonMind"
         assert payload["instruction"] == "run unit tests"
         assert payload["codex"]["model"] == "gpt-5-codex"
@@ -560,7 +791,15 @@ async def test_handler_publish_commit_failure_returns_failed_result(
     handler = CodexExecHandler(workdir_root=tmp_path)
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
     ):
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")

@@ -126,7 +126,9 @@ class FakeHandler:
             raise candidate
         return candidate
 
-    async def handle(self, *, job_id, payload, cancel_event=None):
+    async def handle(
+        self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+    ):
         self.calls.append("codex_exec")
         self.exec_payloads.append(dict(payload))
         return self._next_result()
@@ -139,6 +141,7 @@ class FakeHandler:
         selected_skill,
         fallback=False,
         cancel_event=None,
+        output_chunk_callback=None,
     ):
         self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
         self.skill_payloads.append(dict(payload))
@@ -1274,9 +1277,12 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
         def to_payload(self):
             return {"skills": [{"name": "custom-skill"}]}
 
+    def _resolve_run_skill_selection_stub(*, run_id, context):
+        return object()
+
     monkeypatch.setattr(
         "moonmind.agents.codex_worker.worker.resolve_run_skill_selection",
-        lambda *, run_id, context: object(),
+        _resolve_run_skill_selection_stub,
     )
     monkeypatch.setattr(
         "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
@@ -1353,7 +1359,9 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
     """Worker should acknowledge cancellation and avoid completion/failure transitions."""
 
     class CancelAwareHandler(FakeHandler):
-        async def handle(self, *, job_id, payload, cancel_event=None):
+        async def handle(
+            self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+        ):
             assert cancel_event is not None
             await asyncio.wait_for(cancel_event.wait(), timeout=3.0)
             raise CommandCancelledError("cancelled by request")
@@ -1401,6 +1409,56 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
     )
 
 
+async def test_live_log_chunk_callback_emits_redacted_step_metadata(
+    tmp_path: Path,
+) -> None:
+    """Live log callback should emit redacted log events with step metadata."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        live_log_events_batch_bytes=32,
+        live_log_events_flush_interval_ms=20,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    worker._register_redaction_value("secret-token")
+
+    callback = worker._build_live_log_chunk_callback(
+        job_id=uuid4(),
+        stage="moonmind.task.execute",
+        step_id="step-2",
+        step_index=1,
+    )
+    assert callback is not None
+
+    await callback("stdout", "hello secret-token\n")
+    await callback("stderr", "warn output\n")
+    await callback("stdout", None)
+    await callback("stderr", None)
+
+    emitted = [event for event in queue.events if event["payload"].get("kind") == "log"]
+    assert len(emitted) >= 2
+    assert any(event["payload"].get("stream") == "stdout" for event in emitted)
+    assert any(event["payload"].get("stream") == "stderr" for event in emitted)
+    assert any(event["level"] == "warn" for event in emitted)
+    first_stdout = next(
+        event for event in emitted if event["payload"].get("stream") == "stdout"
+    )
+    assert first_stdout["payload"]["stage"] == "moonmind.task.execute"
+    assert first_stdout["payload"]["stepId"] == "step-2"
+    assert first_stdout["payload"]["stepIndex"] == 1
+    assert "secret-token" not in first_stdout["message"]
+    assert "[REDACTED]" in first_stdout["message"]
+
+
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     """Worker config should respect documented defaults and env overrides."""
 
@@ -1417,6 +1475,8 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", "agent_workspaces")
     monkeypatch.setenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", "1800")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
+    monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
+    monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
 
     config = CodexWorkerConfig.from_env()
 
@@ -1433,6 +1493,8 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume == "agent_workspaces"
     assert config.container_default_timeout_seconds == 1800
+    assert config.git_user_name == "Nate Sticco"
+    assert config.git_user_email == "nsticco@gmail.com"
 
 
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
@@ -1607,6 +1669,69 @@ async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None
 
     assert config.default_codex_model == "gpt-5.3-codex"
     assert config.default_codex_effort == "xhigh"
+
+
+async def test_resolve_task_auth_context_includes_git_identity_without_token(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Git identity settings should be applied even when GitHub token is absent."""
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        git_user_name="Nate Sticco",
+        git_user_email="nsticco@gmail.com",
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    auth_context = await worker._resolve_task_auth_context(
+        canonical_payload={},
+        publish_mode="pr",
+    )
+
+    assert auth_context.repo_auth_source == "none"
+    assert auth_context.publish_auth_source == "none"
+    assert auth_context.repo_command_env is not None
+    assert auth_context.publish_command_env is not None
+    assert auth_context.repo_command_env["GIT_AUTHOR_NAME"] == "Nate Sticco"
+    assert auth_context.repo_command_env["GIT_COMMITTER_NAME"] == "Nate Sticco"
+    assert auth_context.repo_command_env["GIT_AUTHOR_EMAIL"] == "nsticco@gmail.com"
+    assert auth_context.repo_command_env["GIT_COMMITTER_EMAIL"] == "nsticco@gmail.com"
+
+
+async def test_build_command_env_uses_minimal_inherited_environment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", "/tmp/home")
+    monkeypatch.setenv("LANG", "C.UTF-8")
+    monkeypatch.setenv("SECRET_TOKEN", "should-not-leak")
+
+    command_env = CodexWorker._build_command_env(
+        "ghp-example",
+        git_user_name="Nate Sticco",
+        git_user_email="nsticco@gmail.com",
+    )
+
+    assert command_env is not None
+    assert command_env["PATH"] == "/usr/bin"
+    assert command_env["HOME"] == "/tmp/home"
+    assert command_env["LANG"] == "C.UTF-8"
+    assert command_env["GITHUB_TOKEN"] == "ghp-example"
+    assert command_env["GH_TOKEN"] == "ghp-example"
+    assert command_env["GIT_AUTHOR_NAME"] == "Nate Sticco"
+    assert command_env["GIT_AUTHOR_EMAIL"] == "nsticco@gmail.com"
+    assert "SECRET_TOKEN" not in command_env
 
 
 async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> None:

@@ -540,6 +540,7 @@ class AgentQueueRepository:
         job_id: UUID,
         limit: int = 200,
         after: Optional[datetime] = None,
+        after_event_id: UUID | None = None,
     ) -> list[models.AgentJobEvent]:
         """Return ordered events for one queue job with optional cursor."""
 
@@ -550,7 +551,17 @@ class AgentQueueRepository:
         stmt: Select[tuple[models.AgentJobEvent]] = select(models.AgentJobEvent).where(
             models.AgentJobEvent.job_id == job_id
         )
-        if after is not None:
+        if after is not None and after_event_id is not None:
+            stmt = stmt.where(
+                or_(
+                    models.AgentJobEvent.created_at > after,
+                    and_(
+                        models.AgentJobEvent.created_at == after,
+                        models.AgentJobEvent.id > after_event_id,
+                    ),
+                )
+            )
+        elif after is not None:
             stmt = stmt.where(models.AgentJobEvent.created_at > after)
 
         stmt = stmt.order_by(

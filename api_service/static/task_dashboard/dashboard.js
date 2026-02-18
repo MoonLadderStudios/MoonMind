@@ -78,11 +78,22 @@
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
   const pollers = [];
+  const disposers = [];
   let cachedAvailableSkillIds = null;
 
   function stopPolling() {
     while (pollers.length > 0) {
       clearInterval(pollers.pop());
+    }
+    while (disposers.length > 0) {
+      const dispose = disposers.pop();
+      if (typeof dispose === "function") {
+        try {
+          dispose();
+        } catch (error) {
+          console.error("polling disposer failed", error);
+        }
+      }
     }
   }
 
@@ -99,6 +110,12 @@
     run();
     const timer = window.setInterval(run, intervalMs);
     pollers.push(timer);
+  }
+
+  function registerDisposer(disposer) {
+    if (typeof disposer === "function") {
+      disposers.push(disposer);
+    }
   }
 
   function activateNav(pathname) {
@@ -293,6 +310,66 @@
     return "-";
   }
 
+  function getEventPayload(event) {
+    const payload = pick(event, "payload");
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return null;
+    }
+    return payload;
+  }
+
+  function isLogEvent(event) {
+    const payload = getEventPayload(event);
+    return Boolean(payload && pick(payload, "kind") === "log");
+  }
+
+  function eventLevel(event) {
+    return String(pick(event, "level") || "info").trim().toLowerCase();
+  }
+
+  function eventMatchesOutputFilter(event, filter) {
+    const normalizedFilter = String(filter || "all").trim().toLowerCase();
+    if (normalizedFilter === "all") {
+      return true;
+    }
+    if (normalizedFilter === "stages") {
+      return !isLogEvent(event);
+    }
+    if (normalizedFilter === "logs") {
+      return isLogEvent(event);
+    }
+    if (normalizedFilter === "warnings") {
+      const level = eventLevel(event);
+      if (level === "warn" || level === "warning" || level === "error") {
+        return true;
+      }
+      const payload = getEventPayload(event);
+      return Boolean(payload && String(pick(payload, "stream") || "") === "stderr");
+    }
+    return true;
+  }
+
+  function formatLiveOutputLine(event) {
+    const timestamp = formatTimestamp(pick(event, "createdAt"));
+    const level = eventLevel(event);
+    const message = String(pick(event, "message") || "").replaceAll("\r", "");
+    const payload = getEventPayload(event);
+    if (payload && pick(payload, "kind") === "log") {
+      const stream = String(pick(payload, "stream") || "stdout").trim();
+      const stage = String(pick(payload, "stage") || deriveStageFromEvent(event)).trim();
+      return `[${timestamp}] [${stream}] [${stage}] ${message}`;
+    }
+    const stage = deriveStageFromEvent(event);
+    return `[${timestamp}] [${level}] [${stage}] ${message}`;
+  }
+
+  function buildLiveOutput(events, filter) {
+    return events
+      .filter((event) => eventMatchesOutputFilter(event, filter))
+      .map((event) => formatLiveOutputLine(event))
+      .join("\n");
+  }
+
   function normalizeTaskRuntimeInput(value) {
     const normalized = String(value || "").trim().toLowerCase();
     if (!normalized) {
@@ -351,7 +428,7 @@
       cachedAvailableSkillIds = Array.from(new Set(["auto", ...discovered]));
     } catch (error) {
       console.error("skills list load failed", error);
-      cachedAvailableSkillIds = ["auto"];
+      return ["auto"];
     }
 
     return cachedAvailableSkillIds;
@@ -886,39 +963,22 @@
       `Create a typed Task job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
       `
       <form id="queue-submit-form">
-        <label>Instructions
-          <textarea name="instructions" required placeholder="Describe the task to execute against the repository."></textarea>
+        <label>Runtime
+          <select name="runtime">
+            ${runtimeOptions}
+          </select>
         </label>
-        <div class="grid-2">
-          <label>Skill (optional)
-            <input name="skill" value="auto" placeholder="auto" list="queue-skill-options" />
-            <span class="small">Use <span class="inline-code">auto</span> for direct execution; set a skill id such as <span class="inline-code">speckit-orchestrate</span> for skill-driven runs.</span>
-          </label>
-          <label>Runtime
-            <select name="runtime">
-              ${runtimeOptions}
-            </select>
-          </label>
+        <div class="card">
+          <div class="actions">
+            <strong>Steps</strong>
+            <button type="button" id="queue-step-add">Add Step</button>
+          </div>
+          <span class="small">Step 1 is required and defines default task instructions + skill. Add more steps for multi-step runs.</span>
+          <div id="queue-steps-list"></div>
         </div>
         <datalist id="queue-skill-options">
           <option value="auto"></option>
         </datalist>
-        <label>Skill Args (optional JSON object)
-          <textarea name="skillArgs" placeholder='{"featureKey":"019-remove-speckit-category","forcePhase":"discover","notes":"optional context"}'></textarea>
-          <span class="small">Optional args forwarded to <span class="inline-code">task.skill.args</span>.</span>
-        </label>
-        <label>Skill Required Capabilities (optional CSV)
-          <input name="skillRequiredCapabilities" placeholder="docker,qdrant,unity" />
-          <span class="small">Optional values forwarded to <span class="inline-code">task.skill.requiredCapabilities</span> and merged into job <span class="inline-code">requiredCapabilities</span>.</span>
-        </label>
-        <div class="card">
-          <div class="actions">
-            <strong>Steps (optional)</strong>
-            <button type="button" id="queue-step-add">Add Step</button>
-          </div>
-          <span class="small">Steps run in order within one job. Leave empty for implicit single-step behavior.</span>
-          <div id="queue-steps-list"></div>
-        </div>
         <div class="grid-2">
           <label>Model
             <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
@@ -1012,29 +1072,56 @@
         applyRuntimeDefaults(nextRuntime || defaultTaskRuntime);
       });
     }
-    const stepState = [];
+    const createStepStateEntry = (overrides = {}) => ({
+      id: "",
+      title: "",
+      instructions: "",
+      skillId: "",
+      skillArgs: "",
+      skillRequiredCapabilities: "",
+      ...overrides,
+    });
+    const stepState = [createStepStateEntry({ skillId: "auto" })];
+    const ensurePrimaryStep = () => {
+      if (stepState.length === 0) {
+        stepState.push(createStepStateEntry({ skillId: "auto" }));
+      }
+      const primary = stepState[0];
+      if (!String(primary.skillId || "").trim()) {
+        primary.skillId = "auto";
+      }
+    };
     const renderStepEditor = () => {
       if (!stepsList) {
         return;
       }
-      if (stepState.length === 0) {
-        stepsList.innerHTML = "<p class='small'>No explicit steps configured.</p>";
-        return;
-      }
+      ensurePrimaryStep();
       const rows = stepState
         .map((step, index) => {
+          const isPrimaryStep = index === 0;
+          const stepLabel = isPrimaryStep ? " (Required)" : "";
+          const skillLabel = isPrimaryStep ? "Skill" : "Skill (optional)";
+          const skillPlaceholder = isPrimaryStep
+            ? "auto, speckit-orchestrate, ..."
+            : "inherit Step 1 skill";
+          const instructionsLabel = isPrimaryStep ? "Instructions" : "Instructions (optional)";
+          const instructionsPlaceholder = isPrimaryStep
+            ? "Describe the task to execute against the repository."
+            : "Step-specific instructions (leave blank to continue from the task objective).";
+          const upDisabled = isPrimaryStep || index <= 1 ? "disabled" : "";
+          const downDisabled = isPrimaryStep || index === stepState.length - 1 ? "disabled" : "";
+          const removeDisabled = isPrimaryStep ? "disabled" : "";
+          const defaultHint = isPrimaryStep
+            ? "Step 1 skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
+            : "Leave skill blank to inherit Step 1 defaults.";
           return `
             <div class="card" data-step-index="${index}">
               <div class="actions">
-                <strong>Step ${index + 1}</strong>
+                <strong>Step ${index + 1}${stepLabel}</strong>
                 <div>
-                  <button type="button" data-step-action="up" data-step-index="${index}" ${
-                    index === 0 ? "disabled" : ""
-                  }>Up</button>
-                  <button type="button" data-step-action="down" data-step-index="${index}" ${
-                    index === stepState.length - 1 ? "disabled" : ""
-                  }>Down</button>
-                  <button type="button" data-step-action="remove" data-step-index="${index}">Remove</button>
+                  <button type="button" data-step-action="up" data-step-index="${index}" ${upDisabled}>Up</button>
+                  <button type="button" data-step-action="down" data-step-index="${index}" ${downDisabled}>Down</button>
+                  <button type="button" data-step-action="remove" data-step-index="${index}" ${removeDisabled}>Remove</button>
                 </div>
               </div>
               <div class="grid-2">
@@ -1045,25 +1132,29 @@
                   <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
                 </label>
               </div>
-              <label>Instructions (optional)
-                <textarea data-step-field="instructions" data-step-index="${index}" placeholder="Step-specific instructions.">${escapeHtml(
+              <label>${instructionsLabel}
+                <textarea class="queue-step-instructions" data-step-field="instructions" data-step-index="${index}" placeholder="${escapeHtml(
+                  instructionsPlaceholder,
+                )}">${escapeHtml(
                   step.instructions,
                 )}</textarea>
               </label>
               <div class="grid-2">
-                <label>Skill (optional)
+                <label>${skillLabel}
                   <input data-step-field="skillId" data-step-index="${index}" value="${escapeHtml(
                     step.skillId,
-                  )}" placeholder="auto, speckit-orchestrate, ..." list="queue-skill-options" />
+                  )}" placeholder="${escapeHtml(skillPlaceholder)}" list="queue-skill-options" />
+                  <span class="small">${defaultHint}</span>
                 </label>
                 <label>Skill Required Capabilities (optional CSV)
                   <input data-step-field="skillRequiredCapabilities" data-step-index="${index}" value="${escapeHtml(
                     step.skillRequiredCapabilities,
-                  )}" placeholder="docker,qdrant" />
+                  )}" placeholder="docker,qdrant,unity" />
+                  <span class="small">Merged into job <span class="inline-code">requiredCapabilities</span> when provided.</span>
                 </label>
               </div>
               <label>Skill Args (optional JSON object)
-                <textarea data-step-field="skillArgs" data-step-index="${index}" placeholder='{"notes":"optional context"}'>${escapeHtml(
+                <textarea class="queue-step-skill-args" data-step-field="skillArgs" data-step-index="${index}" placeholder='{"notes":"optional context"}'>${escapeHtml(
                   step.skillArgs,
                 )}</textarea>
               </label>
@@ -1089,14 +1180,7 @@
     };
     if (addStepButton) {
       addStepButton.addEventListener("click", () => {
-        stepState.push({
-          id: "",
-          title: "",
-          instructions: "",
-          skillId: "",
-          skillArgs: "",
-          skillRequiredCapabilities: "",
-        });
+        stepState.push(createStepStateEntry());
         renderStepEditor();
       });
     }
@@ -1115,18 +1199,21 @@
           return;
         }
         if (action === "remove") {
+          if (index === 0) {
+            return;
+          }
           stepState.splice(index, 1);
           renderStepEditor();
           return;
         }
-        if (action === "up" && index > 0) {
+        if (action === "up" && index > 1) {
           const current = stepState[index];
           stepState[index] = stepState[index - 1];
           stepState[index - 1] = current;
           renderStepEditor();
           return;
         }
-        if (action === "down" && index < stepState.length - 1) {
+        if (action === "down" && index > 0 && index < stepState.length - 1) {
           const current = stepState[index];
           stepState[index] = stepState[index + 1];
           stepState[index + 1] = current;
@@ -1160,10 +1247,12 @@
       message.textContent = "Submitting...";
 
       const formData = new FormData(form);
-      const instructions = String(formData.get("instructions") || "").trim();
+      ensurePrimaryStep();
+      const primaryStep = stepState[0] || createStepStateEntry({ skillId: "auto" });
+      const instructions = String(primaryStep.instructions || "").trim();
       if (!instructions) {
         message.className = "notice error";
-        message.textContent = "Instructions are required.";
+        message.textContent = "Step 1 instructions are required.";
         return;
       }
 
@@ -1217,10 +1306,10 @@
         return;
       }
 
-      const skillId = String(formData.get("skill") || "").trim() || "auto";
-      const skillArgsRaw = String(formData.get("skillArgs") || "").trim();
+      const skillId = String(primaryStep.skillId || "").trim() || "auto";
+      const skillArgsRaw = String(primaryStep.skillArgs || "").trim();
       const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
-        formData.get("skillRequiredCapabilities"),
+        primaryStep.skillRequiredCapabilities || "",
       );
       let skillArgs = {};
       if (skillArgsRaw) {
@@ -1233,7 +1322,7 @@
         } catch (error) {
           message.className = "notice error";
           message.textContent =
-            "Skill Args must be valid JSON object text (for example: {\"featureKey\":\"...\"}).";
+            "Step 1 Skill Args must be valid JSON object text (for example: {\"featureKey\":\"...\"}).";
           return;
         }
       }
@@ -1241,9 +1330,11 @@
       const effort = String(formData.get("effort") || "").trim() || null;
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
-      const normalizedSteps = [];
+      const primaryStepId = String(primaryStep.id || "").trim();
+      const primaryStepTitle = String(primaryStep.title || "").trim();
+      const additionalSteps = [];
       const stepSkillRequiredCapabilities = [];
-      for (let index = 0; index < stepState.length; index += 1) {
+      for (let index = 1; index < stepState.length; index += 1) {
         const rawStep = stepState[index] || {};
         const stepId = String(rawStep.id || "").trim();
         const stepTitle = String(rawStep.title || "").trim();
@@ -1287,7 +1378,7 @@
         }
         if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
           const skillPayload = {
-            id: stepSkillId || "auto",
+            id: stepSkillId || skillId,
             args: stepSkillArgs,
           };
           if (stepSkillCaps.length > 0) {
@@ -1296,8 +1387,20 @@
           }
           stepPayload.skill = skillPayload;
         }
-        normalizedSteps.push(stepPayload);
+        additionalSteps.push(stepPayload);
       }
+      const includeExplicitSteps =
+        additionalSteps.length > 0 || Boolean(primaryStepId) || Boolean(primaryStepTitle);
+      const normalizedSteps = includeExplicitSteps
+        ? [
+            {
+              ...(primaryStepId ? { id: primaryStepId } : {}),
+              ...(primaryStepTitle ? { title: primaryStepTitle } : {}),
+              instructions,
+            },
+            ...additionalSteps,
+          ]
+        : [];
 
       const payload = {
         repository,
@@ -1434,12 +1537,75 @@
     );
 
     const state = {
+      job: null,
+      artifacts: [],
       events: [],
       eventIds: new Set(),
       after: null,
+      afterEventId: null,
+      outputFilter: "all",
+      followOutput: true,
+      eventsTransport: "polling",
+      eventsTransportStatus: "idle",
+      eventsPollingStarted: false,
     };
 
-    const render = (job, artifacts, events, loadError) => {
+    const appendIncomingEvents = (incomingEvents) => {
+      let changed = false;
+      const ordered = (incomingEvents || []).slice().sort((left, right) => {
+        return (
+          Date.parse(pick(left, "createdAt") || 0) - Date.parse(pick(right, "createdAt") || 0)
+        );
+      });
+      ordered.forEach((event) => {
+        const eventId = String(pick(event, "id") || "");
+        if (!eventId || state.eventIds.has(eventId)) {
+          return;
+        }
+        state.eventIds.add(eventId);
+        state.events.push(event);
+        state.after = pick(event, "createdAt") || state.after;
+        state.afterEventId = eventId;
+        changed = true;
+      });
+
+      const maxEvents = 500;
+      if (state.events.length > maxEvents) {
+        const overflow = state.events.length - maxEvents;
+        const removed = state.events.splice(0, overflow);
+        removed.forEach((event) => {
+          const eventId = String(pick(event, "id") || "");
+          if (eventId) {
+            state.eventIds.delete(eventId);
+          }
+        });
+      }
+      return changed;
+    };
+
+    const resolveFullLogArtifact = (artifacts) => {
+      const allArtifacts = Array.isArray(artifacts) ? artifacts : [];
+      const byPriority = [
+        "logs/execute.log",
+        "logs/codex_exec.log",
+        "logs/steps/step-0000.log",
+      ];
+      for (const name of byPriority) {
+        const exact = allArtifacts.find((artifact) => pick(artifact, "name") === name);
+        if (exact) {
+          return exact;
+        }
+      }
+      return (
+        allArtifacts.find((artifact) => String(pick(artifact, "name") || "").startsWith("logs/")) ||
+        null
+      );
+    };
+
+    const render = (loadError) => {
+      const job = state.job;
+      const artifacts = state.artifacts;
+      const events = state.events;
       const notices = loadError
         ? `<div class="notice error">${escapeHtml(loadError)}</div>`
         : "";
@@ -1461,6 +1627,18 @@
           `,
         )
         .join("");
+
+      const liveOutputText = buildLiveOutput(events, state.outputFilter);
+      const fullLogArtifact = resolveFullLogArtifact(artifacts);
+      const fullLogDownloadUrl = fullLogArtifact
+        ? endpoint("/api/queue/jobs/{id}/artifacts/{artifactId}/download", {
+            id: jobId,
+            artifactId: pick(fullLogArtifact, "id"),
+          })
+        : "";
+      const transportLabel =
+        state.eventsTransport === "sse" ? "SSE" : "Polling";
+      const transportStatus = state.eventsTransportStatus;
 
       const artifactRows = artifacts
         .map((artifact) => {
@@ -1547,6 +1725,41 @@
               </table>
             </section>
             <section>
+              <div class="actions queue-live-output-toolbar">
+                <label class="queue-inline-toggle">
+                  <input type="checkbox" id="queue-follow-output" ${
+                    state.followOutput ? "checked" : ""
+                  } />
+                  Follow output
+                </label>
+                <label class="queue-inline-filter">
+                  Filter
+                  <select id="queue-output-filter">
+                    <option value="all" ${state.outputFilter === "all" ? "selected" : ""}>All</option>
+                    <option value="stages" ${
+                      state.outputFilter === "stages" ? "selected" : ""
+                    }>Stages</option>
+                    <option value="logs" ${state.outputFilter === "logs" ? "selected" : ""}>Logs</option>
+                    <option value="warnings" ${
+                      state.outputFilter === "warnings" ? "selected" : ""
+                    }>Warnings/Errors</option>
+                  </select>
+                </label>
+                <button type="button" class="secondary" id="queue-copy-output">Copy</button>
+                ${
+                  fullLogArtifact
+                    ? `<a href="${escapeHtml(fullLogDownloadUrl)}"><button type="button" class="secondary">Download Full Logs</button></a>`
+                    : "<span class='small'>Download full logs unavailable.</span>"
+                }
+                <span class="small">Live transport: ${escapeHtml(
+                  `${transportLabel} (${transportStatus})`,
+                )}</span>
+              </div>
+              <pre id="queue-live-output" class="queue-live-output">${escapeHtml(
+                liveOutputText || "",
+              )}</pre>
+            </section>
+            <section>
               <h3>Artifacts</h3>
               <table>
                 <thead><tr><th>Name</th><th>Stage</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
@@ -1593,6 +1806,49 @@
           }
         });
       }
+
+      const followOutput = document.getElementById("queue-follow-output");
+      if (followOutput) {
+        followOutput.addEventListener("change", () => {
+          state.followOutput = Boolean(followOutput.checked);
+          if (state.followOutput) {
+            const outputNode = document.getElementById("queue-live-output");
+            if (outputNode) {
+              outputNode.scrollTop = outputNode.scrollHeight;
+            }
+          }
+        });
+      }
+
+      const outputFilter = document.getElementById("queue-output-filter");
+      if (outputFilter) {
+        outputFilter.addEventListener("change", () => {
+          state.outputFilter = String(outputFilter.value || "all");
+          render(null);
+        });
+      }
+
+      const copyOutput = document.getElementById("queue-copy-output");
+      if (copyOutput) {
+        copyOutput.addEventListener("click", async () => {
+          const content = buildLiveOutput(state.events, state.outputFilter);
+          if (!content) {
+            return;
+          }
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(content);
+            }
+          } catch (error) {
+            console.error("copy live output failed", error);
+          }
+        });
+      }
+
+      const outputNode = document.getElementById("queue-live-output");
+      if (outputNode && state.followOutput) {
+        outputNode.scrollTop = outputNode.scrollHeight;
+      }
     };
 
     const loadDetail = async () => {
@@ -1601,44 +1857,122 @@
           fetchJson(endpoint("/api/queue/jobs/{id}", { id: jobId })),
           fetchJson(endpoint("/api/queue/jobs/{id}/artifacts", { id: jobId })),
         ]);
-        render(job, artifactsPayload?.items || [], state.events, null);
+        state.job = job;
+        state.artifacts = artifactsPayload?.items || [];
+        render(null);
       } catch (error) {
         console.error("queue detail load failed", error);
-        render(null, [], state.events, "Failed to load queue detail.");
+        state.job = null;
+        state.artifacts = [];
+        render("Failed to load queue detail.");
       }
     };
 
     const loadEvents = async () => {
-      const query = state.after
-        ? `?after=${encodeURIComponent(state.after)}&limit=200`
-        : "?limit=200";
+      const queryParams = ["limit=200"];
+      if (state.after) {
+        queryParams.push(`after=${encodeURIComponent(state.after)}`);
+      }
+      if (state.afterEventId) {
+        queryParams.push(`afterEventId=${encodeURIComponent(state.afterEventId)}`);
+      }
+      const query = `?${queryParams.join("&")}`;
       try {
         const payload = await fetchJson(
-          endpoint("/api/queue/jobs/{id}/events", { id: jobId }) + query,
+          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
+            query,
         );
-        const incoming = (payload?.items || []).slice().sort((a, b) => {
-          return Date.parse(pick(a, "createdAt") || 0) - Date.parse(pick(b, "createdAt") || 0);
-        });
-        incoming.forEach((event) => {
-          const eventId = String(pick(event, "id") || "");
-          if (!eventId || state.eventIds.has(eventId)) {
-            return;
-          }
-          state.eventIds.add(eventId);
-          state.events.push(event);
-          state.after = pick(event, "createdAt") || state.after;
-        });
-
-        state.events = state.events.slice(-500);
+        if (appendIncomingEvents(payload?.items || [])) {
+          render(null);
+        }
       } catch (error) {
         console.error("queue event poll failed", error);
       }
     };
 
+    const beginPollingEvents = () => {
+      if (state.eventsPollingStarted) {
+        return;
+      }
+      state.eventsPollingStarted = true;
+      state.eventsTransport = "polling";
+      state.eventsTransportStatus = "active";
+      render(null);
+      startPolling(loadEvents, pollIntervals.events);
+    };
+
+    const startEventStream = () => {
+      const streamTemplate =
+        queueSourceConfig.eventsStream || "/api/queue/jobs/{id}/events/stream";
+      if (typeof window.EventSource !== "function") {
+        state.eventsTransport = "polling";
+        state.eventsTransportStatus = "unsupported";
+        beginPollingEvents();
+        return;
+      }
+
+      const queryParams = ["limit=200"];
+      if (state.after) {
+        queryParams.push(`after=${encodeURIComponent(state.after)}`);
+      }
+      if (state.afterEventId) {
+        queryParams.push(`afterEventId=${encodeURIComponent(state.afterEventId)}`);
+      }
+      const query = `?${queryParams.join("&")}`;
+      const streamUrl = endpoint(streamTemplate, { id: jobId }) + query;
+      state.eventsTransport = "sse";
+      state.eventsTransportStatus = "connecting";
+      render(null);
+
+      const source = new window.EventSource(streamUrl);
+      registerDisposer(() => source.close());
+
+      const handleMessage = (rawData) => {
+        if (!rawData) {
+          return;
+        }
+        try {
+          const parsed = JSON.parse(rawData);
+          if (appendIncomingEvents([parsed])) {
+            render(null);
+          }
+        } catch (error) {
+          console.error("queue event stream parse failed", error);
+        }
+      };
+
+      source.addEventListener("open", () => {
+        state.eventsTransport = "sse";
+        state.eventsTransportStatus = "active";
+        render(null);
+      });
+
+      source.addEventListener("queue_event", (event) => {
+        state.eventsTransport = "sse";
+        state.eventsTransportStatus = "active";
+        handleMessage(event.data);
+      });
+
+      source.onmessage = (event) => {
+        state.eventsTransport = "sse";
+        state.eventsTransportStatus = "active";
+        handleMessage(event.data);
+      };
+
+      source.onerror = (error) => {
+        console.error("queue event stream failed; switching to polling", error);
+        state.eventsTransport = "polling";
+        state.eventsTransportStatus = "error";
+        render(null);
+        source.close();
+        beginPollingEvents();
+      };
+    };
+
     await loadDetail();
     await loadEvents();
     startPolling(loadDetail, pollIntervals.detail);
-    startPolling(loadEvents, pollIntervals.events);
+    startEventStream();
   }
 
   function renderArtifactsRows(artifacts, showDownload = false, runId = "") {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -421,6 +421,47 @@ async def test_list_jobs_for_telemetry_and_events_for_jobs(tmp_path):
     assert {job.id for job in jobs} == {older.id, newer.id}
     assert len(events) == 2
     assert {event.message for event in events} == {"older", "newer"}
+
+
+async def test_list_events_supports_composite_after_cursor(tmp_path):
+    """Event paging should include same-timestamp events when id is newer than cursor."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo, job_type="task")
+            await repo.commit()
+
+            created_at = datetime.now(UTC)
+            event_ids = [
+                UUID("00000000-0000-0000-0000-000000000001"),
+                UUID("00000000-0000-0000-0000-000000000002"),
+                UUID("00000000-0000-0000-0000-000000000003"),
+            ]
+            messages = ["first", "second", "third"]
+            for event_id, message in zip(event_ids, messages):
+                session.add(
+                    models.AgentJobEvent(
+                        id=event_id,
+                        job_id=job.id,
+                        level=models.AgentJobEventLevel.INFO,
+                        message=message,
+                        payload=None,
+                        created_at=created_at,
+                        updated_at=created_at,
+                    )
+                )
+            await repo.commit()
+
+            events = await repo.list_events(
+                job_id=job.id,
+                limit=10,
+                after=created_at,
+                after_event_id=event_ids[0],
+            )
+
+    assert [event.id for event in events] == event_ids[1:]
+    assert [event.message for event in events] == ["second", "third"]
 
 
 async def test_request_cancel_queued_job_is_immediate_and_idempotent(tmp_path):

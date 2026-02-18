@@ -1,8 +1,8 @@
 # Task UI Architecture
 
-Status: Proposed  
+Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-16
+Last Updated: 2026-02-18
 
 ## 1. Purpose
 
@@ -32,7 +32,7 @@ Execution semantics are defined by `docs/TaskArchitecture.md`; this document def
 
 ## 3. Existing Backend Capabilities
 
-As of 2026-02-16, MoonMind already exposes submit plus monitor primitives for queue and orchestrator dashboard categories, while SpecKit APIs remain available for backend workflows.
+As of 2026-02-18, MoonMind exposes submit plus monitor primitives for queue and orchestrator dashboard categories, while SpecKit APIs remain available for backend workflows.
 
 ### 3.1 Agent Queue (`/api/queue`)
 
@@ -42,6 +42,7 @@ Implemented in `api_service/api/routers/agent_queue.py`.
 - `GET /api/queue/jobs` lists jobs with `status`, `type`, `limit` filters.
 - `GET /api/queue/jobs/{job_id}` returns one job.
 - `GET /api/queue/jobs/{job_id}/events` returns append-only events with `after` cursor support.
+- `GET /api/queue/jobs/{job_id}/events/stream` streams the same queue events via SSE (`text/event-stream`).
 - `GET /api/queue/jobs/{job_id}/artifacts` lists artifacts.
 - `GET /api/queue/jobs/{job_id}/artifacts/{artifact_id}/download` downloads artifact bytes.
 
@@ -68,7 +69,7 @@ Implemented in `api_service/api/routers/orchestrator.py`.
 
 ### 4.1 Recommendation
 
-Adopt Strategy 1 as the default MVP: a thin dashboard over existing REST APIs, with polling.
+Adopt Strategy 1 as the default MVP: a thin dashboard over existing REST APIs, with polling baseline and SSE on queue detail.
 
 Adopt Strategy 2 for deployment ergonomics: run dashboard as a sidecar service and link from Open-WebUI.
 
@@ -78,7 +79,7 @@ Prepare for Strategy 3 and Strategy 5 by implementing a frontend normalization l
 
 - Fast path to typed Task UX with near-zero backend rework.
 - Keeps backend ownership boundaries unchanged.
-- Supports incremental upgrades (polling to SSE, client fan-out to unified runs endpoint).
+- Supports resilient realtime behavior with SSE primary + polling fallback and client fan-out to unified runs endpoints.
 
 ## 5. UI Information Architecture
 
@@ -171,6 +172,7 @@ UI performs parallel fetches and merges rows client-side.
 
 - Primary data: `GET /api/queue/jobs/{job_id}`
 - Event timeline: `GET /api/queue/jobs/{job_id}/events?after=<timestamp>`
+- Event stream (preferred): `GET /api/queue/jobs/{job_id}/events/stream`
 - Artifacts: `GET /api/queue/jobs/{job_id}/artifacts`
 
 ## 8. Frontend Data Normalization
@@ -197,18 +199,18 @@ Normalization rules:
 
 ## 9. Realtime Strategy
 
-### 9.1 MVP Polling
+### 9.1 Current Behavior
 
 - List pages poll every 5 seconds.
 - Detail pages poll every 2 seconds.
-- Queue events use incremental polling via `after` cursor every 1 second.
+- Queue detail events use SSE (`EventSource`) against `/events/stream` when supported.
+- Queue detail falls back to incremental polling (`after` cursor every 1 second) when SSE is unavailable or errors.
 - Pause polling when document is hidden.
 
-### 9.2 Upgrade Path
+### 9.2 Compatibility
 
-Add SSE endpoint for queue events first:
-
-- `GET /api/queue/jobs/{job_id}/events/stream`
+- Polling endpoint behavior remains backward-compatible for existing clients.
+- SSE uses the same event source/service as polling and does not require schema changes.
 
 ## 10. Authentication and Authorization
 
@@ -240,8 +242,8 @@ Queue mutation endpoints used by workers (`claim`, `heartbeat`, `complete`, `fai
 
 ### Phase 3: Live logs
 
-- Add SSE for queue events.
-- Replace detail-page event polling with `EventSource`.
+- Completed for queue detail: SSE stream endpoint + `EventSource` client path with polling fallback.
+- Future extensions can add SSE to additional pages if needed.
 
 ## 12. Related
 
