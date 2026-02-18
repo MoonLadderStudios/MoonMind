@@ -971,7 +971,6 @@
         <div class="card">
           <div class="actions">
             <strong>Steps</strong>
-            <button type="button" id="queue-step-add">Add Step</button>
           </div>
           <span class="small">Step 1 is required and defines default task instructions + skill. Add more steps for multi-step runs.</span>
           <div id="queue-steps-list"></div>
@@ -1037,7 +1036,6 @@
     const modelInputElement = form.querySelector('input[name="model"]');
     const effortInputElement = form.querySelector('input[name="effort"]');
     const stepsList = document.getElementById("queue-steps-list");
-    const addStepButton = document.getElementById("queue-step-add");
     const runtimeModelDefaults = {
       ...configuredModelDefaults,
       codex: codexDefaultTaskModel,
@@ -1089,6 +1087,7 @@
     };
     const renderStepEditor = () => {
       if (!stepsList) {
+        console.error("[dashboard] #queue-steps-list not found; step editor unavailable");
         return;
       }
       ensurePrimaryStep();
@@ -1158,7 +1157,12 @@
           `;
         })
         .join("");
-      stepsList.innerHTML = rows;
+      const addStepButtonRow = `
+        <div class="actions queue-step-add">
+          <button type="button" data-step-action="add">Add Step</button>
+        </div>
+      `;
+      stepsList.innerHTML = rows + addStepButtonRow;
     };
     const readStepIndex = (target) => {
       if (!(target instanceof HTMLElement)) {
@@ -1174,23 +1178,26 @@
       }
       return index;
     };
-    if (addStepButton) {
-      addStepButton.addEventListener("click", () => {
-        stepState.push(createStepStateEntry());
-        renderStepEditor();
-      });
-    }
     if (stepsList) {
       stepsList.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) {
           return;
         }
-        const action = target.getAttribute("data-step-action");
+        const actionButton = target.closest("[data-step-action]");
+        if (!(actionButton instanceof HTMLElement)) {
+          return;
+        }
+        const action = actionButton.getAttribute("data-step-action");
         if (!action) {
           return;
         }
-        const index = readStepIndex(target);
+        if (action === "add") {
+          stepState.push(createStepStateEntry());
+          renderStepEditor();
+          return;
+        }
+        const index = readStepIndex(actionButton);
         if (index === null) {
           return;
         }
@@ -1218,18 +1225,22 @@
       });
       stepsList.addEventListener("input", (event) => {
         const target = event.target;
-        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+        if (!(target instanceof HTMLElement)) {
           return;
         }
-        const field = target.getAttribute("data-step-field");
+        const fieldInput = target.closest("[data-step-field]");
+        if (!(fieldInput instanceof HTMLInputElement || fieldInput instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        const field = fieldInput.getAttribute("data-step-field");
         if (!field) {
           return;
         }
-        const index = readStepIndex(target);
+        const index = readStepIndex(fieldInput);
         if (index === null) {
           return;
         }
-        stepState[index][field] = target.value || "";
+        stepState[index][field] = fieldInput.value || "";
       });
     }
     renderStepEditor();
