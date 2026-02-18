@@ -17,6 +17,10 @@ from api_service.api.routers.task_runs import _get_service, _require_worker_auth
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.service import (
+    LiveSessionNotFoundError,
+    LiveSessionStateError,
+)
 
 
 def _build_live_session(
@@ -153,6 +157,40 @@ def test_get_live_session_returns_404_when_missing(
     assert response.json()["detail"]["code"] == "live_session_not_found"
 
 
+def test_get_live_session_worker_endpoint_success(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    service.get_live_session.return_value = _build_live_session(task_run_id=task_run_id)
+
+    response = test_client.get(f"/api/task-runs/{task_run_id}/live-session/worker")
+
+    assert response.status_code == 200
+    assert response.json()["session"]["taskRunId"] == str(task_run_id)
+
+
+def test_get_live_session_worker_endpoint_rejects_oidc_auth(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="oidc",
+            worker_id=None,
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=(),
+        )
+    )
+
+    response = test_client.get(f"/api/task-runs/{uuid4()}/live-session/worker")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    service.get_live_session.assert_not_awaited()
+
+
 def test_grant_live_session_write_success(
     client: tuple[TestClient, AsyncMock]
 ) -> None:
@@ -174,6 +212,36 @@ def test_grant_live_session_write_success(
     assert response.status_code == 200
     assert response.json()["attachRw"] == "ssh rw"
     service.grant_live_session_write.assert_awaited_once()
+
+
+def test_grant_live_session_write_maps_live_session_not_found(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    service.grant_live_session_write.side_effect = LiveSessionNotFoundError("missing")
+
+    response = test_client.post(
+        f"/api/task-runs/{uuid4()}/live-session/grant-write",
+        json={"ttlMinutes": 15},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "live_session_not_found"
+
+
+def test_grant_live_session_write_maps_live_session_state_conflict(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    service.grant_live_session_write.side_effect = LiveSessionStateError("not ready")
+
+    response = test_client.post(
+        f"/api/task-runs/{uuid4()}/live-session/grant-write",
+        json={"ttlMinutes": 15},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "live_session_state_conflict"
 
 
 def test_get_live_session_hides_web_ro_when_allow_web_disabled(
@@ -263,3 +331,69 @@ def test_worker_report_rejects_worker_id_mismatch(
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "worker_not_authorized"
     service.report_live_session.assert_not_awaited()
+
+
+def test_worker_heartbeat_rejects_worker_id_mismatch(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+
+    response = test_client.post(
+        f"/api/task-runs/{task_run_id}/live-session/heartbeat",
+        json={"workerId": "worker-2"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    service.heartbeat_live_session.assert_not_awaited()
+
+
+def test_worker_report_rejects_oidc_auth_source(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="oidc",
+            worker_id=None,
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=(),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/task-runs/{task_run_id}/live-session/report",
+        json={"workerId": "worker-1", "status": "starting"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    service.report_live_session.assert_not_awaited()
+
+
+def test_worker_heartbeat_rejects_oidc_auth_source(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="oidc",
+            worker_id=None,
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=(),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/task-runs/{task_run_id}/live-session/heartbeat",
+        json={"workerId": "worker-1"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    service.heartbeat_live_session.assert_not_awaited()

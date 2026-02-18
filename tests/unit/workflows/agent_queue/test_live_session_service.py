@@ -15,7 +15,12 @@ from api_service.db.models import Base
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
-from moonmind.workflows.agent_queue.service import AgentQueueService
+from moonmind.workflows.agent_queue.service import (
+    AgentQueueAuthorizationError,
+    AgentQueueService,
+    LiveSessionNotFoundError,
+    LiveSessionStateError,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -66,6 +71,9 @@ async def test_create_live_session_is_idempotent_when_already_ready(
             repo = AgentQueueRepository(session)
             service = AgentQueueService(repo)
             job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
 
             ready = await service.report_live_session(
                 task_run_id=job.id,
@@ -105,6 +113,9 @@ async def test_report_live_session_clears_web_links_when_allow_web_disabled(
             repo = AgentQueueRepository(session)
             service = AgentQueueService(repo)
             job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
 
             monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", True)
             initial = await service.report_live_session(
@@ -148,6 +159,9 @@ async def test_grant_live_session_write_hides_web_link_when_allow_web_disabled(
             repo = AgentQueueRepository(session)
             service = AgentQueueService(repo)
             job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
 
             monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", True)
             await service.report_live_session(
@@ -174,3 +188,103 @@ async def test_grant_live_session_write_hides_web_link_when_allow_web_disabled(
 
     assert grant.attach_rw == "ssh rw"
     assert grant.web_rw is None
+
+
+async def test_report_live_session_rejects_non_owner_worker(
+    tmp_path: Path,
+) -> None:
+    """Report updates should require the running task owner worker id."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
+
+            with pytest.raises(AgentQueueAuthorizationError):
+                await service.report_live_session(
+                    task_run_id=job.id,
+                    worker_id="worker-2",
+                    worker_hostname="host-2",
+                    status=models.AgentJobLiveSessionStatus.STARTING,
+                    provider=models.AgentJobLiveSessionProvider.TMATE,
+                )
+
+
+async def test_heartbeat_live_session_rejects_non_owner_worker(
+    tmp_path: Path,
+) -> None:
+    """Live-session heartbeats should require the running task owner worker id."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
+            await service.report_live_session(
+                task_run_id=job.id,
+                worker_id="worker-1",
+                worker_hostname="host-1",
+                status=models.AgentJobLiveSessionStatus.STARTING,
+                provider=models.AgentJobLiveSessionProvider.TMATE,
+            )
+
+            with pytest.raises(AgentQueueAuthorizationError):
+                await service.heartbeat_live_session(
+                    task_run_id=job.id,
+                    worker_id="worker-2",
+                )
+
+
+async def test_grant_live_session_write_raises_specific_not_found_error(
+    tmp_path: Path,
+) -> None:
+    """Grant-write should signal missing live session with typed not-found error."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await _create_task_job(service)
+
+            with pytest.raises(LiveSessionNotFoundError):
+                await service.grant_live_session_write(
+                    task_run_id=job.id,
+                    actor_user_id=uuid4(),
+                    ttl_minutes=15,
+                )
+
+
+async def test_grant_live_session_write_raises_specific_state_error(
+    tmp_path: Path,
+) -> None:
+    """Grant-write should signal non-ready sessions with typed state conflict errors."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await _create_task_job(service)
+            job.status = models.AgentJobStatus.RUNNING
+            job.claimed_by = "worker-1"
+            await repo.commit()
+            await service.report_live_session(
+                task_run_id=job.id,
+                worker_id="worker-1",
+                worker_hostname="host-1",
+                status=models.AgentJobLiveSessionStatus.STARTING,
+                provider=models.AgentJobLiveSessionProvider.TMATE,
+            )
+
+            with pytest.raises(LiveSessionStateError):
+                await service.grant_live_session_write(
+                    task_run_id=job.id,
+                    actor_user_id=uuid4(),
+                    ttl_minutes=15,
+                )

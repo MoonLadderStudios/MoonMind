@@ -50,6 +50,14 @@ class AgentQueueAuthorizationError(RuntimeError):
     """Raised when authenticated workers exceed allowed policy scope."""
 
 
+class LiveSessionNotFoundError(AgentQueueValidationError):
+    """Raised when a task run has no persisted live-session state."""
+
+
+class LiveSessionStateError(AgentQueueValidationError):
+    """Raised when the current live-session state cannot satisfy a request."""
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactDownload:
     """Represents a download-ready artifact with file path and metadata."""
@@ -770,6 +778,16 @@ class AgentQueueService:
         normalized_worker_id = worker_id.strip()
         if not normalized_worker_id:
             raise AgentQueueValidationError("workerId must be a non-empty string")
+        await self._assert_live_session_worker_ownership(
+            task_run_id=task_run_id,
+            worker_id=normalized_worker_id,
+            allow_terminal_report=status
+            in {
+                models.AgentJobLiveSessionStatus.REVOKED,
+                models.AgentJobLiveSessionStatus.ENDED,
+                models.AgentJobLiveSessionStatus.ERROR,
+            },
+        )
         allow_web = self._live_session_web_allowed()
         resolved_web_ro = (web_ro or "").strip() if allow_web else ""
         resolved_web_rw = (web_rw or "").strip() if allow_web else ""
@@ -823,9 +841,14 @@ class AgentQueueService:
         normalized_worker_id = worker_id.strip()
         if not normalized_worker_id:
             raise AgentQueueValidationError("workerId must be a non-empty string")
+        await self._assert_live_session_worker_ownership(
+            task_run_id=task_run_id,
+            worker_id=normalized_worker_id,
+            allow_terminal_report=False,
+        )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
-            raise AgentQueueValidationError("live session is not enabled for this task")
+            raise LiveSessionNotFoundError("live session is not enabled for this task")
         updated = await self._repository.upsert_live_session(
             task_run_id=task_run_id,
             worker_id=normalized_worker_id,
@@ -846,12 +869,12 @@ class AgentQueueService:
         await self._repository.require_job(task_run_id)
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
-            raise AgentQueueValidationError("live session is not enabled for this task")
+            raise LiveSessionNotFoundError("live session is not enabled for this task")
         if live.status is not models.AgentJobLiveSessionStatus.READY:
-            raise AgentQueueValidationError("live session is not ready")
+            raise LiveSessionStateError("live session is not ready")
         attach_rw = str(live.attach_rw_encrypted or "").strip()
         if not attach_rw:
-            raise AgentQueueValidationError(
+            raise LiveSessionStateError(
                 "live session does not currently have an RW endpoint"
             )
 
@@ -910,7 +933,7 @@ class AgentQueueService:
         await self._repository.require_job(task_run_id)
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
-            raise AgentQueueValidationError("live session is not enabled for this task")
+            raise LiveSessionNotFoundError("live session is not enabled for this task")
 
         updated = await self._repository.upsert_live_session(
             task_run_id=task_run_id,
@@ -992,17 +1015,17 @@ class AgentQueueService:
     ) -> models.TaskRunControlEvent:
         """Persist and broadcast an operator message for a running task run."""
 
-        detail = message.strip()
-        if not detail:
+        normalized_message = message.strip()
+        if not normalized_message:
             raise AgentQueueValidationError("message must be a non-empty string")
-        if len(detail) > 4000:
+        if len(normalized_message) > 4000:
             raise AgentQueueValidationError("message must be 4000 chars or fewer")
 
         event = await self._repository.append_control_event(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
             action="send_message",
-            metadata_json={"message": detail},
+            metadata_json={"message": normalized_message},
         )
         await self._repository.append_event(
             job_id=task_run_id,
@@ -1010,7 +1033,7 @@ class AgentQueueService:
             message="task.operator.message",
             payload={
                 "actorUserId": str(actor_user_id) if actor_user_id is not None else None,
-                "message": detail,
+                "message": normalized_message,
             },
         )
         await self._repository.commit()
@@ -1218,6 +1241,29 @@ class AgentQueueService:
     @staticmethod
     def _live_session_web_allowed() -> bool:
         return bool(settings.spec_workflow.live_session_allow_web)
+
+    async def _assert_live_session_worker_ownership(
+        self,
+        *,
+        task_run_id: UUID,
+        worker_id: str,
+        allow_terminal_report: bool,
+    ) -> None:
+        """Require active ownership, or prior live-session ownership for terminal reports."""
+
+        job = await self._repository.require_job(task_run_id)
+        if (
+            job.status is models.AgentJobStatus.RUNNING
+            and str(job.claimed_by or "").strip() == worker_id
+        ):
+            return
+        if allow_terminal_report:
+            live = await self._repository.get_live_session(task_run_id=task_run_id)
+            if live is not None and str(live.worker_id or "").strip() == worker_id:
+                return
+        raise AgentQueueAuthorizationError(
+            f"worker '{worker_id}' does not own task run {task_run_id}"
+        )
 
     async def _load_events_by_job(
         self,

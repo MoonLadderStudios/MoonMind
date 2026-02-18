@@ -33,6 +33,9 @@ class FakeQueueClient:
         self.claim_calls: list[dict[str, object]] = []
         self.heartbeats: list[str] = []
         self.heartbeat_payloads: list[dict[str, object]] = []
+        self.live_session_reports: list[dict[str, object]] = []
+        self.live_session_heartbeats: list[str] = []
+        self.live_session_state: dict[str, object] | None = None
         self.completed: list[tuple[str, str | None]] = []
         self.failed: list[str] = []
         self.cancel_acks: list[tuple[str, str | None]] = []
@@ -77,6 +80,27 @@ class FakeQueueClient:
 
     async def fail_job(self, *, job_id, worker_id, error_message, retryable=False):
         self.failed.append(f"{job_id}:{error_message}")
+
+    async def report_live_session(self, **payload):
+        self.live_session_reports.append(dict(payload))
+        status = str(payload.get("status") or "").strip().lower()
+        worker_id = str(payload.get("worker_id") or "").strip() or None
+        if status:
+            self.live_session_state = {
+                "session": {
+                    "status": status,
+                    "workerId": worker_id,
+                }
+            }
+        return self.live_session_state or {}
+
+    async def heartbeat_live_session(self, *, job_id, worker_id):
+        self.live_session_heartbeats.append(str(job_id))
+        return self.live_session_state or {}
+
+    async def get_live_session(self, *, job_id):
+        _ = job_id
+        return self.live_session_state
 
     async def upload_artifact(self, *, job_id, worker_id, artifact):
         self.uploaded.append(artifact.name)
@@ -1351,6 +1375,132 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
         await task
 
     assert len(queue.heartbeats) >= 2
+
+
+async def test_ensure_live_session_started_skips_opt_in_without_request(
+    tmp_path: Path,
+) -> None:
+    """Opt-in mode should not start live sessions when no explicit request exists."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        live_session_enabled_default=False,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    stage_commands: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        stage_commands.append(tuple(command))
+        return CommandResult(tuple(command), 0, "", "")
+
+    worker._run_stage_command = _capture_stage_command  # type: ignore[method-assign]
+
+    await worker._ensure_live_session_started(
+        job_id=uuid4(),
+        log_path=tmp_path / "prepare.log",
+        cwd=tmp_path / "job",
+    )
+
+    assert queue.live_session_reports == []
+    assert stage_commands == []
+    assert worker._active_live_session is None
+
+
+async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmate_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opt-in mode should bootstrap when explicitly requested and keep RW endpoints out of stage commands."""
+
+    queue = FakeQueueClient(jobs=[])
+    queue.live_session_state = {"session": {"status": "starting"}}
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        live_session_enabled_default=False,
+        tmate_server_host="tmate.internal",
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    stage_commands: list[tuple[str, ...]] = []
+    quiet_commands: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr("moonmind.agents.codex_worker.worker.shutil.which", lambda _: "tmate")
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        stage_commands.append(tuple(command))
+        return CommandResult(tuple(command), 0, "", "")
+
+    async def _capture_quiet_command(command, *, cwd):
+        _ = cwd
+        normalized = tuple(command)
+        quiet_commands.append(normalized)
+        if "#{tmate_ssh_ro}" in normalized:
+            return CommandResult(normalized, 0, "ssh ro\n", "")
+        if "#{tmate_ssh}" in normalized:
+            return CommandResult(normalized, 0, "ssh rw\n", "")
+        if "#{tmate_web_ro}" in normalized:
+            return CommandResult(normalized, 0, "https://ro.example\n", "")
+        if "#{tmate_web}" in normalized:
+            return CommandResult(normalized, 0, "https://rw.example\n", "")
+        return CommandResult(normalized, 0, "", "")
+
+    worker._run_stage_command = _capture_stage_command  # type: ignore[method-assign]
+    worker._run_command_without_logging = _capture_quiet_command  # type: ignore[method-assign]
+
+    job_id = uuid4()
+    await worker._ensure_live_session_started(
+        job_id=job_id,
+        log_path=tmp_path / "prepare.log",
+        cwd=tmp_path / "job",
+    )
+
+    assert worker._active_live_session is not None
+    config_path = worker._active_live_session.config_path
+    assert config_path is not None
+    assert config_path.exists()
+    assert all("display" not in command for command in stage_commands)
+    assert any("#{tmate_ssh}" in command for command in quiet_commands)
+    assert any("-f" in command for command in stage_commands)
+    assert any(report.get("status") == "ready" for report in queue.live_session_reports)
+
+    await worker._teardown_live_session(job_id=job_id)
+    assert not config_path.exists()
 
 
 async def test_run_once_acks_cancellation_requested_via_heartbeat(

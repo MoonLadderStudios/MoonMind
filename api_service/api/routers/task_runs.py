@@ -39,6 +39,27 @@ async def _get_service(
     return AgentQueueService(get_agent_queue_repository(session))
 
 
+def _require_worker_token_identity(auth: _WorkerRequestAuth, worker_id: str) -> None:
+    """Require worker-token auth and enforce worker id match for worker callbacks."""
+
+    if auth.auth_source != "worker_token" or not auth.worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_not_authorized",
+                "message": "Worker token authentication is required for this action.",
+            },
+        )
+    if worker_id != auth.worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_not_authorized",
+                "message": "Worker is not authorized for this action.",
+            },
+        )
+
+
 @router.post(
     "/{task_run_id}/live-session",
     response_model=TaskRunLiveSessionResponse,
@@ -75,6 +96,37 @@ async def get_live_session(
 ) -> TaskRunLiveSessionResponse:
     """Fetch current live session state and RO attach metadata."""
 
+    try:
+        live = await service.get_live_session(task_run_id=task_run_id)
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    if live is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "live_session_not_found",
+                "message": "Live session is not enabled for this task run.",
+            },
+        )
+    return TaskRunLiveSessionResponse(
+        session=TaskRunLiveSessionModel.model_validate(live),
+    )
+
+
+@router.get(
+    "/{task_run_id}/live-session/worker",
+    response_model=TaskRunLiveSessionResponse,
+)
+async def get_live_session_for_worker(
+    *,
+    task_run_id: UUID,
+    service: AgentQueueService = Depends(_get_service),
+    auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> TaskRunLiveSessionResponse:
+    """Worker-token-only view of live session state for bootstrap checks."""
+
+    _require_worker_token_identity(auth, auth.worker_id or "")
     try:
         live = await service.get_live_session(task_run_id=task_run_id)
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -211,18 +263,7 @@ async def report_live_session(
 ) -> TaskRunLiveSessionResponse:
     """Worker-authenticated live-session report/update hook."""
 
-    if (
-        auth.auth_source == "worker_token"
-        and auth.worker_id
-        and payload.worker_id != auth.worker_id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "worker_not_authorized",
-                "message": "Worker is not authorized for this action.",
-            },
-        )
+    _require_worker_token_identity(auth, payload.worker_id)
 
     try:
         live = await service.report_live_session(
@@ -260,14 +301,7 @@ async def heartbeat_live_session(
 ) -> TaskRunLiveSessionResponse:
     """Worker-authenticated heartbeat updater for live sessions."""
 
-    if auth.auth_source == "worker_token" and auth.worker_id and worker_id != auth.worker_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "worker_not_authorized",
-                "message": "Worker is not authorized for this action.",
-            },
-        )
+    _require_worker_token_identity(auth, worker_id)
     try:
         live = await service.heartbeat_live_session(
             task_run_id=task_run_id,

@@ -69,6 +69,8 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
+    LiveSessionNotFoundError,
+    LiveSessionStateError,
     QueueMigrationTelemetry,
     WorkerAuthPolicy,
 )
@@ -246,6 +248,22 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             detail={
                 "code": "worker_token_not_found",
                 "message": "The requested worker token was not found.",
+            },
+        )
+    if isinstance(exc, LiveSessionNotFoundError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "live_session_not_found",
+                "message": "Live session is not enabled for this task run.",
+            },
+        )
+    if isinstance(exc, LiveSessionStateError):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "live_session_state_conflict",
+                "message": "Live session is not in a valid state for this action.",
             },
         )
     if isinstance(exc, AgentQueueValidationError):

@@ -117,6 +117,20 @@ class AgentQueueRepository:
             raise AgentJobNotFoundError(job_id)
         return job
 
+    async def require_job_for_update(self, job_id: UUID) -> models.AgentJob:
+        """Return an existing job row under ``FOR UPDATE`` lock or raise not found."""
+
+        stmt: Select[tuple[models.AgentJob]] = (
+            select(models.AgentJob)
+            .where(models.AgentJob.id == job_id)
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        job = result.scalars().first()
+        if job is None:
+            raise AgentJobNotFoundError(job_id)
+        return job
+
     async def list_jobs(
         self,
         *,
@@ -605,7 +619,7 @@ class AgentQueueRepository:
     ) -> models.TaskRunLiveSession:
         """Create or update one live-session row scoped to a task run."""
 
-        await self.require_job(task_run_id)
+        await self.require_job_for_update(task_run_id)
         now = datetime.now(UTC)
         live = await self.get_live_session(task_run_id=task_run_id)
         if live is None:
@@ -634,7 +648,7 @@ class AgentQueueRepository:
             models.AgentJobLiveSessionStatus.REVOKED,
             models.AgentJobLiveSessionStatus.ENDED,
             models.AgentJobLiveSessionStatus.ERROR,
-        }:
+        } and live.ended_at is None:
             live.ended_at = now
         if expires_at is not None:
             live.expires_at = expires_at
