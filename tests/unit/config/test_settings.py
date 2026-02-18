@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from moonmind.config.settings import (
     AppSettings,
     AtlassianSettings,
+    FeatureFlagsSettings,
     GoogleSettings,
     OIDCSettings,
     OllamaSettings,
@@ -131,6 +132,26 @@ class TestOIDCSettings:
 
         monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
         monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
+
+
+class TestFeatureFlagsSettings:
+    def test_task_template_catalog_reads_prefixed_env(self, monkeypatch):
+        monkeypatch.setenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", "1")
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog is True
+
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+
+    def test_task_template_catalog_keeps_legacy_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("TASK_TEMPLATE_CATALOG", "1")
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog is True
+
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
 
 
 class TestSpecWorkflowSettings:
