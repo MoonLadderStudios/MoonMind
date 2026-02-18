@@ -343,9 +343,7 @@ class CodexWorkerConfig:
         )
 
         live_log_events_enabled_raw = (
-            str(source.get("MOONMIND_LIVE_LOG_EVENTS_ENABLED", "true"))
-            .strip()
-            .lower()
+            str(source.get("MOONMIND_LIVE_LOG_EVENTS_ENABLED", "true")).strip().lower()
         )
         live_log_events_enabled = live_log_events_enabled_raw not in {
             "0",
@@ -360,14 +358,10 @@ class CodexWorkerConfig:
         if live_log_events_batch_bytes < 128:
             raise ValueError("MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES must be >= 128")
         live_log_events_flush_interval_ms = int(
-            str(
-                source.get("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS", "200")
-            ).strip()
+            str(source.get("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS", "200")).strip()
         )
         if live_log_events_flush_interval_ms < 10:
-            raise ValueError(
-                "MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10"
-            )
+            raise ValueError("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10")
 
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),

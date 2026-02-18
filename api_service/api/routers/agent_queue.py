@@ -678,7 +678,9 @@ async def stream_job_events(
             if await request.is_disconnected():
                 break
             try:
-                events = await service.list_events(job_id=job_id, limit=limit, after=cursor)
+                events = await service.list_events(
+                    job_id=job_id, limit=limit, after=cursor
+                )
             except Exception as exc:  # pragma: no cover - thin mapping layer
                 http_exc = _to_http_exception(exc)
                 detail = (

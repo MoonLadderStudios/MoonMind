@@ -126,7 +126,9 @@ class FakeHandler:
             raise candidate
         return candidate
 
-    async def handle(self, *, job_id, payload, cancel_event=None, output_chunk_callback=None):
+    async def handle(
+        self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+    ):
         self.calls.append("codex_exec")
         self.exec_payloads.append(dict(payload))
         return self._next_result()
@@ -1354,7 +1356,9 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
     """Worker should acknowledge cancellation and avoid completion/failure transitions."""
 
     class CancelAwareHandler(FakeHandler):
-        async def handle(self, *, job_id, payload, cancel_event=None, output_chunk_callback=None):
+        async def handle(
+            self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+        ):
             assert cancel_event is not None
             await asyncio.wait_for(cancel_event.wait(), timeout=3.0)
             raise CommandCancelledError("cancelled by request")
@@ -1442,7 +1446,9 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
     assert any(event["payload"].get("stream") == "stdout" for event in emitted)
     assert any(event["payload"].get("stream") == "stderr" for event in emitted)
     assert any(event["level"] == "warn" for event in emitted)
-    first_stdout = next(event for event in emitted if event["payload"].get("stream") == "stdout")
+    first_stdout = next(
+        event for event in emitted if event["payload"].get("stream") == "stdout"
+    )
     assert first_stdout["payload"]["stage"] == "moonmind.task.execute"
     assert first_stdout["payload"]["stepId"] == "step-2"
     assert first_stdout["payload"]["stepIndex"] == 1
