@@ -457,6 +457,7 @@ async def test_stream_job_events_sse_emits_queue_event(
         payload={"pct": 25},
         created_at=datetime.now(UTC),
     )
+
     async def fake_list_events(*, job_id, limit, after, after_event_id):
         return [event] if after is None and after_event_id is None else []
 
