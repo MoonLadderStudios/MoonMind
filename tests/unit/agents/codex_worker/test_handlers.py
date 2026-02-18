@@ -290,6 +290,65 @@ async def test_run_command_cancel_event_interrupts_subprocess(
     assert process.waited is True
 
 
+async def test_run_command_streaming_forwards_output_chunks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Streaming subprocess reads should forward chunk callbacks per stream."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream.log"
+    callback_events: list[tuple[str, str | None]] = []
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(["line 1\n", "line 2"])
+            self.stderr = FakeReader(["warn 1\n"])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    result = await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "line 1\nline 2"
+    assert result.stderr == "warn 1\n"
+    assert ("stdout", "line 1\n") in callback_events
+    assert ("stdout", "line 2") in callback_events
+    assert ("stderr", "warn 1\n") in callback_events
+    assert ("stdout", None) in callback_events
+    assert ("stderr", None) in callback_events
+
+
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     """Handler should run core codex_exec command sequence."""
 
@@ -297,7 +356,7 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -332,7 +391,7 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -366,7 +425,7 @@ async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -406,7 +465,7 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -441,7 +500,7 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -472,7 +531,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     calls: list[list[str]] = []
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         calls.append(list(command))
         if command[:3] == ["git", "status", "--porcelain"]:
@@ -504,7 +563,7 @@ async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
 
-    async def fake_handle(*, job_id, payload):
+    async def fake_handle(*, job_id, payload, cancel_event=None, output_chunk_callback=None):
         assert payload["repository"] == "MoonLadderStudios/MoonMind"
         assert payload["instruction"] == "run unit tests"
         assert payload["codex"]["model"] == "gpt-5-codex"
@@ -560,7 +619,7 @@ async def test_handler_publish_commit_failure_returns_failed_result(
     handler = CodexExecHandler(workdir_root=tmp_path)
 
     async def fake_run_command(
-        command, *, cwd, log_path, check=True, cancel_event=None
+        command, *, cwd, log_path, check=True, env=None, redaction_values=(), cancel_event=None, output_chunk_callback=None
     ):
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")

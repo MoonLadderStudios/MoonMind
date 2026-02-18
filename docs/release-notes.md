@@ -1,5 +1,13 @@
 # MoonMind Release Notes
 
+## 2026-02-18 – Queue Live Logs + SSE
+
+### Highlights
+- Added queue events SSE endpoint: `GET /api/queue/jobs/{job_id}/events/stream`.
+- Updated worker runtime to emit throttled/redacted live log chunk events into queue events (`payload.kind = "log"`), including stream and stage metadata.
+- Upgraded Task Dashboard queue detail page with a Live Output panel, follow toggle, filters (`All | Stages | Logs | Warnings/Errors`), copy action, and full-log download linkage.
+- Preserved backward compatibility for polling clients using `GET /api/queue/jobs/{job_id}/events?after=...`.
+
 ## 2025-11-30 – Gemini CLI Availability
 
 ### Highlights

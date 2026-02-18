@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
@@ -17,6 +18,7 @@ from api_service.api.routers.agent_queue import (
     _require_worker_auth,
     _WorkerRequestAuth,
     router,
+    stream_job_events,
 )
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
@@ -413,6 +415,64 @@ def test_list_job_events_success(client: tuple[TestClient, AsyncMock]) -> None:
     payload = response.json()
     assert len(payload["items"]) == 1
     assert payload["items"][0]["message"] == "progress"
+
+
+@pytest.mark.asyncio
+async def test_stream_job_events_sse_emits_queue_event(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """SSE endpoint should emit serialized queue events."""
+
+    _test_client, service = client
+    job_id = uuid4()
+    event = SimpleNamespace(
+        id=uuid4(),
+        job_id=job_id,
+        level=models.AgentJobEventLevel.INFO,
+        message="progress",
+        payload={"pct": 25},
+        created_at=datetime.now(UTC),
+    )
+    call_count = 0
+
+    async def fake_list_events(*, job_id, limit, after):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [event]
+        return []
+
+    service.list_events.side_effect = fake_list_events
+
+    class FakeRequest:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        async def is_disconnected(self) -> bool:
+            self.checks += 1
+            return self.checks > 1
+
+    response = await stream_job_events(
+        job_id=job_id,
+        request=FakeRequest(),
+        after=None,
+        limit=200,
+        poll_interval_ms=1000,
+        service=service,
+        _user=SimpleNamespace(id=uuid4()),
+    )
+
+    chunk = await anext(response.body_iterator)
+    text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+    lines = text.splitlines()
+
+    assert any(line == "event: queue_event" for line in lines)
+    data_line = next(line[6:] for line in lines if line.startswith("data: "))
+    payload = json.loads(data_line)
+    assert payload["id"] == str(event.id)
+    assert payload["jobId"] == str(job_id)
+    if hasattr(response.body_iterator, "aclose"):
+        await response.body_iterator.aclose()
 
 
 def test_create_worker_token_success(client: tuple[TestClient, AsyncMock]) -> None:

@@ -216,6 +216,22 @@ class SpecWorkflowSettings(BaseSettings):
         env="SPEC_WORKFLOW_GITHUB_REPOSITORY",
         validation_alias=AliasChoices("SPEC_WORKFLOW_GITHUB_REPOSITORY"),
     )
+    git_user_name: Optional[str] = Field(
+        None,
+        env=("SPEC_WORKFLOW_GIT_USER_NAME", "MOONMIND_GIT_USER_NAME"),
+        validation_alias=AliasChoices(
+            "SPEC_WORKFLOW_GIT_USER_NAME", "MOONMIND_GIT_USER_NAME"
+        ),
+        description="Optional Git author/committer display name used by worker publish stages.",
+    )
+    git_user_email: Optional[str] = Field(
+        None,
+        env=("SPEC_WORKFLOW_GIT_USER_EMAIL", "MOONMIND_GIT_USER_EMAIL"),
+        validation_alias=AliasChoices(
+            "SPEC_WORKFLOW_GIT_USER_EMAIL", "MOONMIND_GIT_USER_EMAIL"
+        ),
+        description="Optional Git author/committer email used by worker publish stages.",
+    )
     github_token: Optional[str] = Field(None, env="SPEC_WORKFLOW_GITHUB_TOKEN")
     test_mode: bool = Field(False, env="SPEC_WORKFLOW_TEST_MODE")
     agent_backend: str = Field(
@@ -353,6 +369,8 @@ class SpecWorkflowSettings(BaseSettings):
         "codex_queue",
         "codex_volume_name",
         "codex_login_check_image",
+        "git_user_name",
+        "git_user_email",
         "default_skill",
         "discover_skill",
         "submit_skill",

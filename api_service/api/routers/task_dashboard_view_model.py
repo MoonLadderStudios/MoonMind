@@ -116,6 +116,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "detail": "/api/queue/jobs/{id}",
                 "cancel": "/api/queue/jobs/{id}/cancel",
                 "events": "/api/queue/jobs/{id}/events",
+                "eventsStream": "/api/queue/jobs/{id}/events/stream",
                 "artifacts": "/api/queue/jobs/{id}/artifacts",
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
                 "migrationTelemetry": "/api/queue/telemetry/migration",

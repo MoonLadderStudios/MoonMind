@@ -129,6 +129,49 @@ def _file_uri(path: Path) -> str:
     return path.resolve().as_uri()
 
 
+def _project_root() -> Path:
+    """Resolve repository root for stable relative skill mirror paths."""
+
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "pyproject.toml").is_file() or (parent / ".git").exists():
+            return parent
+    # Fallback for packaged environments without repository markers.
+    return current.parents[3]
+
+
+def _resolve_base_repo_path() -> Path:
+    """Resolve base path used for relative skill mirror roots."""
+
+    cfg = settings.spec_workflow
+    project_root = _project_root()
+    raw_repo_root = str(cfg.repo_root or "").strip()
+    if not raw_repo_root:
+        return project_root
+
+    configured = Path(raw_repo_root).expanduser()
+    if configured.is_absolute():
+        return configured.resolve()
+
+    # Prefer repository-relative resolution; retain cwd fallback if explicitly used.
+    repo_relative = (project_root / configured).resolve()
+    cwd_relative = (Path.cwd() / configured).resolve()
+    if repo_relative.exists():
+        return repo_relative
+    if cwd_relative.exists():
+        return cwd_relative
+    return repo_relative
+
+
+def _resolve_mirror_root(raw_root: str | Path) -> Path:
+    """Resolve configured mirror root to an absolute path."""
+
+    candidate = Path(raw_root).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (_resolve_base_repo_path() / candidate).resolve()
+
+
 def _resolve_local_source(skill_name: str) -> str | None:
     cfg = settings.spec_workflow
 
@@ -137,9 +180,7 @@ def _resolve_local_source(skill_name: str) -> str | None:
         Path(cfg.skills_legacy_mirror_root),
     ]
     for root in roots:
-        base = root.expanduser()
-        if not base.is_absolute():
-            base = (Path.cwd() / base).resolve()
+        base = _resolve_mirror_root(root)
         candidate = base / skill_name
         if candidate.is_dir():
             return _file_uri(candidate)
@@ -158,9 +199,7 @@ def _discover_local_skill_names() -> tuple[str, ...]:
     seen: set[str] = set()
 
     for root in roots:
-        base = root.expanduser()
-        if not base.is_absolute():
-            base = (Path.cwd() / base).resolve()
+        base = _resolve_mirror_root(root)
         if not base.is_dir():
             continue
         try:

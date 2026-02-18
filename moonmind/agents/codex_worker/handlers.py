@@ -9,7 +9,7 @@ import shutil
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -52,6 +52,9 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+OutputChunkCallback = Callable[[str, str | None], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +248,7 @@ class CodexExecHandler:
         job_id: UUID,
         payload: Mapping[str, Any],
         cancel_event: asyncio.Event | None = None,
+        output_chunk_callback: OutputChunkCallback | None = None,
     ) -> WorkerExecutionResult:
         """Process a `codex_exec` payload and return a normalized result."""
 
@@ -264,6 +268,7 @@ class CodexExecHandler:
                 job_root=job_root,
                 log_path=log_path,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
 
             await self._run_command(
@@ -271,6 +276,7 @@ class CodexExecHandler:
                 cwd=repo_dir,
                 log_path=log_path,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
 
             diff_result = await self._run_command(
@@ -279,6 +285,7 @@ class CodexExecHandler:
                 log_path=log_path,
                 check=False,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
             patch_path.write_text(diff_result.stdout or "", encoding="utf-8")
 
@@ -303,6 +310,7 @@ class CodexExecHandler:
                 repo_dir=repo_dir,
                 log_path=log_path,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
             summary = "codex_exec completed"
             if publish_note:
@@ -346,6 +354,7 @@ class CodexExecHandler:
         selected_skill: str,
         fallback: bool = False,
         cancel_event: asyncio.Event | None = None,
+        output_chunk_callback: OutputChunkCallback | None = None,
     ) -> WorkerExecutionResult:
         """Process a `codex_skill` payload via skill-first compatibility mapping."""
 
@@ -385,12 +394,14 @@ class CodexExecHandler:
             result = await self.handle(
                 job_id=job_id,
                 payload=mapped_payload,
+                output_chunk_callback=output_chunk_callback,
             )
         else:
             result = await self.handle(
                 job_id=job_id,
                 payload=mapped_payload,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
         if not result.succeeded:
             return result
@@ -413,6 +424,7 @@ class CodexExecHandler:
         job_root: Path,
         log_path: Path,
         cancel_event: asyncio.Event | None = None,
+        output_chunk_callback: OutputChunkCallback | None = None,
     ) -> Path:
         repo_dir = job_root / "repo"
         if payload.workdir_mode == "fresh_clone" and repo_dir.exists():
@@ -430,6 +442,7 @@ class CodexExecHandler:
                 cwd=job_root,
                 log_path=log_path,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
 
         if payload.ref:
@@ -439,12 +452,14 @@ class CodexExecHandler:
                 log_path=log_path,
                 check=False,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
             await self._run_command(
                 [self._git_binary, "checkout", payload.ref],
                 cwd=repo_dir,
                 log_path=log_path,
                 cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
             )
 
         return repo_dir
@@ -457,6 +472,7 @@ class CodexExecHandler:
         repo_dir: Path,
         log_path: Path,
         cancel_event: asyncio.Event | None = None,
+        output_chunk_callback: OutputChunkCallback | None = None,
     ) -> str | None:
         if payload.publish_mode == "none":
             return None
@@ -467,6 +483,7 @@ class CodexExecHandler:
             log_path=log_path,
             check=False,
             cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
         )
         if not status.stdout.strip():
             return "publish skipped: no local changes"
@@ -477,12 +494,14 @@ class CodexExecHandler:
             cwd=repo_dir,
             log_path=log_path,
             cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
         )
         await self._run_command(
             [self._git_binary, "add", "-A"],
             cwd=repo_dir,
             log_path=log_path,
             cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
         )
         await self._run_command(
             [
@@ -494,12 +513,14 @@ class CodexExecHandler:
             cwd=repo_dir,
             log_path=log_path,
             cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
         )
         await self._run_command(
             [self._git_binary, "push", "-u", "origin", branch_name],
             cwd=repo_dir,
             log_path=log_path,
             cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
         )
 
         if payload.publish_mode == "branch":
@@ -524,6 +545,7 @@ class CodexExecHandler:
             cwd=repo_dir,
             log_path=log_path,
             cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
         )
         return f"published PR from {branch_name}"
 
@@ -537,6 +559,7 @@ class CodexExecHandler:
         env: Mapping[str, str] | None = None,
         redaction_values: tuple[str, ...] = (),
         cancel_event: asyncio.Event | None = None,
+        output_chunk_callback: OutputChunkCallback | None = None,
     ) -> CommandResult:
         self._append_log(
             log_path,
@@ -558,36 +581,7 @@ class CodexExecHandler:
                 f"failed to execute command '{command[0]}': {exc}"
             ) from exc
 
-        try:
-            if cancel_event is None:
-                stdout_bytes, stderr_bytes = await process.communicate()
-            else:
-                communicate_task = asyncio.create_task(process.communicate())
-                cancel_task = asyncio.create_task(cancel_event.wait())
-                done, pending = await asyncio.wait(
-                    {communicate_task, cancel_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for pending_task in pending:
-                    pending_task.cancel()
-                if cancel_task in done and cancel_event.is_set():
-                    with suppress(ProcessLookupError):
-                        process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=2.0)
-                    except (asyncio.TimeoutError, ProcessLookupError):
-                        with suppress(ProcessLookupError):
-                            process.kill()
-                        with suppress(Exception):
-                            await process.wait()
-                    with suppress(asyncio.CancelledError, Exception):
-                        await communicate_task
-                    raise CommandCancelledError(
-                        f"command cancelled: {' '.join(command)}"
-                    )
-                stdout_bytes, stderr_bytes = await communicate_task
-        except asyncio.CancelledError:
-            # Ensure the subprocess is reaped when callers cancel this coroutine.
+        async def _terminate_process() -> None:
             with suppress(ProcessLookupError):
                 process.terminate()
             try:
@@ -597,26 +591,136 @@ class CodexExecHandler:
                     process.kill()
                 with suppress(Exception):
                     await process.wait()
-            raise
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
 
-        if stdout:
-            self._append_log(
-                log_path,
-                self._redact_text(
-                    stdout.rstrip("\n"),
-                    extra_redaction_values=redaction_values,
-                ),
+        async def _emit_output(stream: str, text: str) -> None:
+            redacted_text = self._redact_text(
+                text.rstrip("\n"),
+                extra_redaction_values=redaction_values,
             )
-        if stderr:
-            self._append_log(
-                log_path,
-                self._redact_text(
-                    stderr.rstrip("\n"),
-                    extra_redaction_values=redaction_values,
-                ),
+            if redacted_text:
+                self._append_log(log_path, redacted_text)
+            if output_chunk_callback is not None:
+                with suppress(Exception):
+                    await output_chunk_callback(stream, text)
+
+        async def _emit_stream_closed(stream: str) -> None:
+            if output_chunk_callback is not None:
+                with suppress(Exception):
+                    await output_chunk_callback(stream, None)
+
+        stdout_reader = getattr(process, "stdout", None)
+        stderr_reader = getattr(process, "stderr", None)
+        supports_streaming = bool(
+            stdout_reader is not None
+            and stderr_reader is not None
+            and hasattr(stdout_reader, "read")
+            and hasattr(stderr_reader, "read")
+        )
+
+        stdout = ""
+        stderr = ""
+        if not supports_streaming:
+            try:
+                if cancel_event is None:
+                    stdout_bytes, stderr_bytes = await process.communicate()
+                else:
+                    communicate_task = asyncio.create_task(process.communicate())
+                    cancel_task = asyncio.create_task(cancel_event.wait())
+                    done, pending = await asyncio.wait(
+                        {communicate_task, cancel_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for pending_task in pending:
+                        pending_task.cancel()
+                    if cancel_task in done and cancel_event.is_set():
+                        await _terminate_process()
+                        with suppress(asyncio.CancelledError, Exception):
+                            await communicate_task
+                        raise CommandCancelledError(
+                            f"command cancelled: {' '.join(command)}"
+                        )
+                    stdout_bytes, stderr_bytes = await communicate_task
+            except asyncio.CancelledError:
+                await _terminate_process()
+                raise
+
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            stderr = stderr_bytes.decode("utf-8", errors="replace")
+            if stdout:
+                await _emit_output("stdout", stdout)
+            await _emit_stream_closed("stdout")
+            if stderr:
+                await _emit_output("stderr", stderr)
+            await _emit_stream_closed("stderr")
+        else:
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+
+            async def _drain_stream(
+                reader: Any,
+                *,
+                stream_name: str,
+                chunks: list[str],
+            ) -> None:
+                while True:
+                    chunk = await reader.read(1024)
+                    if not chunk:
+                        break
+                    text = chunk.decode("utf-8", errors="replace")
+                    chunks.append(text)
+                    await _emit_output(stream_name, text)
+                await _emit_stream_closed(stream_name)
+
+            stdout_task = asyncio.create_task(
+                _drain_stream(
+                    stdout_reader,
+                    stream_name="stdout",
+                    chunks=stdout_chunks,
+                )
             )
+            stderr_task = asyncio.create_task(
+                _drain_stream(
+                    stderr_reader,
+                    stream_name="stderr",
+                    chunks=stderr_chunks,
+                )
+            )
+            wait_task = asyncio.create_task(process.wait())
+            cancel_task = (
+                asyncio.create_task(cancel_event.wait())
+                if cancel_event is not None
+                else None
+            )
+            try:
+                if cancel_task is None:
+                    await wait_task
+                else:
+                    done, _pending = await asyncio.wait(
+                        {wait_task, cancel_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if cancel_task in done and cancel_event is not None:
+                        await _terminate_process()
+                        raise CommandCancelledError(
+                            f"command cancelled: {' '.join(command)}"
+                        )
+                    await wait_task
+                await asyncio.gather(stdout_task, stderr_task)
+            except asyncio.CancelledError:
+                await _terminate_process()
+                stdout_task.cancel()
+                stderr_task.cancel()
+                with suppress(Exception):
+                    await asyncio.gather(stdout_task, stderr_task)
+                raise
+            finally:
+                if cancel_task is not None:
+                    cancel_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await cancel_task
+
+            stdout = "".join(stdout_chunks)
+            stderr = "".join(stderr_chunks)
 
         result = CommandResult(
             command=tuple(command),

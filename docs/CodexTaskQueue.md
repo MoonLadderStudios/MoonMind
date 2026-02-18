@@ -1,8 +1,8 @@
 # Task Queue Contract and Execution Model
 
-Status: Proposed  
+Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-16
+Last Updated: 2026-02-18
 
 ## 1. Purpose
 
@@ -45,6 +45,7 @@ Queue status model:
 - `POST /api/queue/jobs/{jobId}/fail`
 - `POST /api/queue/jobs/{jobId}/events`
 - `GET /api/queue/jobs/{jobId}/events`
+- `GET /api/queue/jobs/{jobId}/events/stream`
 - `POST /api/queue/jobs/{jobId}/artifacts/upload`
 - `GET /api/queue/jobs/{jobId}/artifacts`
 - `GET /api/queue/jobs/{jobId}/artifacts/{artifactId}/download`
@@ -197,6 +198,12 @@ Required events:
 - resolved defaults (default branch, effective branch)
 - publish outcomes (branch push, PR URL, no-change skip)
 - non-secret failure summaries
+- live log chunk events (`payload.kind = "log"`) with stream metadata (`stdout`/`stderr`)
+
+Queue event consumers support both:
+
+- incremental polling via `GET /api/queue/jobs/{jobId}/events?after=...`
+- SSE streaming via `GET /api/queue/jobs/{jobId}/events/stream`
 
 Required artifacts:
 

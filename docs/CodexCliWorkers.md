@@ -187,7 +187,7 @@ For the remote queue worker path (`/api/queue/*`), the worker daemon now support
 
 - `MOONMIND_WORKER_TOKEN` sent as `X-MoonMind-Worker-Token` for dedicated worker-token auth.
 - `MOONMIND_WORKER_CAPABILITIES` (comma-separated) forwarded in claim requests as `workerCapabilities`.
-- Lifecycle event emission to `POST /api/queue/jobs/{jobId}/events` for polling-based progress visibility.
+- Lifecycle event emission to `POST /api/queue/jobs/{jobId}/events` for polling and SSE-based progress visibility (`GET /api/queue/jobs/{jobId}/events` and `/events/stream`).
 - Canonical Task jobs (`type="task"`) with runtime overrides via `payload.task.runtime.model` and `payload.task.runtime.effort`.
 - Legacy `codex_exec` / `codex_skill` acceptance only as migration compatibility.
 

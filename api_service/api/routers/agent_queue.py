@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -17,10 +20,11 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user, get_current_user_optional
@@ -649,6 +653,73 @@ async def list_job_events(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return JobEventListResponse(items=[_serialize_event(event) for event in events])
+
+
+@router.get("/jobs/{job_id}/events/stream")
+async def stream_job_events(
+    job_id: UUID,
+    request: Request,
+    *,
+    after: Optional[datetime] = Query(None, alias="after"),
+    limit: int = Query(200, ge=1, le=500),
+    poll_interval_ms: int = Query(1000, alias="pollIntervalMs", ge=100, le=10000),
+    service: AgentQueueService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> StreamingResponse:
+    """Stream queue job events as Server-Sent Events with incremental cursor polling."""
+
+    async def _event_stream() -> AsyncIterator[str]:
+        cursor = after
+        poll_seconds = float(poll_interval_ms) / 1000.0
+        keepalive_seconds = max(5.0, poll_seconds * 3.0)
+        loop = asyncio.get_running_loop()
+        last_keepalive = loop.time()
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                events = await service.list_events(job_id=job_id, limit=limit, after=cursor)
+            except Exception as exc:  # pragma: no cover - thin mapping layer
+                http_exc = _to_http_exception(exc)
+                detail = (
+                    http_exc.detail
+                    if isinstance(http_exc.detail, dict)
+                    else {"message": str(http_exc.detail)}
+                )
+                yield (
+                    "event: error\n"
+                    f"data: {json.dumps(detail, ensure_ascii=True)}\n\n"
+                )
+                break
+
+            if events:
+                for event in events:
+                    serialized = _serialize_event(event).model_dump(
+                        mode="json", by_alias=True
+                    )
+                    yield (
+                        "event: queue_event\n"
+                        f"id: {serialized['id']}\n"
+                        f"data: {json.dumps(serialized, ensure_ascii=True)}\n\n"
+                    )
+                    cursor = event.created_at
+                continue
+
+            now = loop.time()
+            if now - last_keepalive >= keepalive_seconds:
+                yield ": keep-alive\n\n"
+                last_keepalive = now
+            await asyncio.sleep(poll_seconds)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

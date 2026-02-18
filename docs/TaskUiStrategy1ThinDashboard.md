@@ -1,8 +1,8 @@
 # Task UI Technical Design - Strategy 1 Thin Dashboard
 
-Status: Proposed  
+Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-16
+Last Updated: 2026-02-18
 
 ## 1. Decision
 
@@ -30,11 +30,11 @@ MoonMind already has submit/list/detail primitives for:
 - Views for running, queued, and historical work.
 - Typed submit forms for Agent Queue Tasks and Orchestrator runs.
 - Detail pages with logs/events and artifacts.
-- Polling-based refresh.
+- Polling-based refresh and SSE live events on queue detail.
 
 ### Out of Scope
 
-- SSE/WebSocket implementation in MVP.
+- WebSocket implementation for queue events (SSE covers current realtime requirements).
 - Unified backend `runs` table.
 - Worker/fleet heartbeat model redesign.
 - Open-WebUI plugin internals.
@@ -47,6 +47,7 @@ MoonMind already has submit/list/detail primitives for:
 - `GET /api/queue/jobs?status=&type=&limit=`
 - `GET /api/queue/jobs/{job_id}`
 - `GET /api/queue/jobs/{job_id}/events?after=&limit=`
+- `GET /api/queue/jobs/{job_id}/events/stream`
 - `GET /api/queue/jobs/{job_id}/artifacts`
 - `GET /api/queue/jobs/{job_id}/artifacts/{artifact_id}/download`
 
@@ -161,6 +162,7 @@ must never carry raw token values.
 
 - `GET /api/queue/jobs/{job_id}`
 - `GET /api/queue/jobs/{job_id}/events?after=<lastSeenTimestamp>&limit=200`
+- `GET /api/queue/jobs/{job_id}/events/stream`
 - `GET /api/queue/jobs/{job_id}/artifacts`
 
 ### 6.4 Orchestrator Submit (`/tasks/orchestrator/new`)
@@ -174,7 +176,8 @@ must never carry raw token values.
 
 - Aggregated/list pages: poll every 5 seconds.
 - Detail pages: poll every 2 seconds.
-- Queue events: poll every 1 second with `after` cursor.
+- Queue events: use SSE stream as primary transport on queue detail.
+- Queue events fallback: poll every 1 second with `after` cursor when SSE is unavailable/errors.
 - Suspend polling when tab is hidden.
 - Apply exponential backoff on `429`/`5xx`.
 

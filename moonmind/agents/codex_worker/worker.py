@@ -9,6 +9,7 @@ import logging
 import re
 import shutil
 import socket
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,7 @@ from moonmind.agents.codex_worker.handlers import (
     CodexExecHandler,
     CommandCancelledError,
     CommandResult,
+    OutputChunkCallback,
     WorkerExecutionResult,
 )
 from moonmind.agents.codex_worker.secret_refs import (
@@ -104,6 +106,11 @@ class CodexWorkerConfig:
     vault_namespace: str | None = None
     vault_allowed_mounts: tuple[str, ...] = ("kv",)
     vault_timeout_seconds: float = 10.0
+    git_user_name: str | None = None
+    git_user_email: str | None = None
+    live_log_events_enabled: bool = True
+    live_log_events_batch_bytes: int = 4096
+    live_log_events_flush_interval_ms: int = 200
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CodexWorkerConfig":
@@ -309,6 +316,59 @@ class CodexWorkerConfig:
         )
         if vault_timeout_seconds <= 0:
             raise ValueError("MOONMIND_VAULT_TIMEOUT_SECONDS must be > 0")
+
+        git_user_name = (
+            str(
+                source.get(
+                    "MOONMIND_GIT_USER_NAME",
+                    source.get(
+                        "SPEC_WORKFLOW_GIT_USER_NAME",
+                        settings.spec_workflow.git_user_name or "",
+                    ),
+                )
+            ).strip()
+            or None
+        )
+        git_user_email = (
+            str(
+                source.get(
+                    "MOONMIND_GIT_USER_EMAIL",
+                    source.get(
+                        "SPEC_WORKFLOW_GIT_USER_EMAIL",
+                        settings.spec_workflow.git_user_email or "",
+                    ),
+                )
+            ).strip()
+            or None
+        )
+
+        live_log_events_enabled_raw = (
+            str(source.get("MOONMIND_LIVE_LOG_EVENTS_ENABLED", "true"))
+            .strip()
+            .lower()
+        )
+        live_log_events_enabled = live_log_events_enabled_raw not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }
+        live_log_events_batch_bytes = int(
+            str(source.get("MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES", "4096")).strip()
+        )
+        if live_log_events_batch_bytes < 128:
+            raise ValueError("MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES must be >= 128")
+        live_log_events_flush_interval_ms = int(
+            str(
+                source.get("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS", "200")
+            ).strip()
+        )
+        if live_log_events_flush_interval_ms < 10:
+            raise ValueError(
+                "MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10"
+            )
+
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
             worker_id=worker_id,
@@ -340,6 +400,11 @@ class CodexWorkerConfig:
             vault_namespace=vault_namespace,
             vault_allowed_mounts=vault_allowed_mounts,
             vault_timeout_seconds=vault_timeout_seconds,
+            git_user_name=git_user_name,
+            git_user_email=git_user_email,
+            live_log_events_enabled=live_log_events_enabled,
+            live_log_events_batch_bytes=live_log_events_batch_bytes,
+            live_log_events_flush_interval_ms=live_log_events_flush_interval_ms,
         )
 
 
@@ -1878,6 +1943,108 @@ class CodexWorker:
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"[{timestamp}] {self._redact_text(line)}\n")
 
+    @staticmethod
+    def _infer_stage_from_log_path(log_path: Path) -> str:
+        name = log_path.name.lower()
+        if name == "prepare.log":
+            return "moonmind.task.prepare"
+        if name == "publish.log":
+            return "moonmind.task.publish"
+        return "moonmind.task.execute"
+
+    @staticmethod
+    def _step_index_from_log_path(log_path: Path) -> int | None:
+        match = re.search(r"step-(\d+)\.log$", str(log_path))
+        if not match:
+            return None
+        return int(match.group(1))
+
+    @staticmethod
+    def _job_id_from_log_path(log_path: Path) -> UUID | None:
+        for part in log_path.parts:
+            with suppress(ValueError):
+                return UUID(part)
+        return None
+
+    def _build_live_log_chunk_callback(
+        self,
+        *,
+        job_id: UUID,
+        stage: str,
+        step_id: str | None = None,
+        step_index: int | None = None,
+    ) -> OutputChunkCallback | None:
+        if not self._config.live_log_events_enabled:
+            return None
+
+        batch_limit = max(128, int(self._config.live_log_events_batch_bytes))
+        flush_interval_seconds = max(
+            0.01,
+            float(self._config.live_log_events_flush_interval_ms) / 1000.0,
+        )
+        buffers: dict[str, str] = {"stdout": "", "stderr": ""}
+        last_flush_monotonic = time.monotonic()
+
+        async def _flush_stream(stream: str, *, force: bool = False) -> None:
+            nonlocal last_flush_monotonic
+            pending = buffers.get(stream, "")
+            if not pending:
+                return
+
+            while pending:
+                if not force and len(pending) < batch_limit and "\n" not in pending:
+                    break
+                if len(pending) <= batch_limit:
+                    emit = pending
+                    pending = ""
+                else:
+                    newline_index = pending.rfind("\n", 0, batch_limit)
+                    if newline_index > 0:
+                        emit = pending[: newline_index + 1]
+                        pending = pending[newline_index + 1 :]
+                    else:
+                        emit = pending[:batch_limit]
+                        pending = pending[batch_limit:]
+                if not emit.strip():
+                    continue
+                payload: dict[str, Any] = {
+                    "kind": "log",
+                    "stream": stream,
+                    "stage": stage,
+                }
+                if step_id:
+                    payload["stepId"] = step_id
+                if step_index is not None:
+                    payload["stepIndex"] = step_index
+                await self._emit_event(
+                    job_id=job_id,
+                    level="warn" if stream == "stderr" else "info",
+                    message=emit,
+                    payload=payload,
+                )
+                last_flush_monotonic = time.monotonic()
+            buffers[stream] = pending
+
+        async def _on_output_chunk(stream: str, text: str | None) -> None:
+            if stream not in buffers:
+                return
+            if text is None:
+                await _flush_stream(stream, force=True)
+                return
+            if not text:
+                return
+            buffers[stream] = f"{buffers[stream]}{text}"
+            now = time.monotonic()
+            interval_elapsed = (now - last_flush_monotonic) >= flush_interval_seconds
+            if (
+                "\n" in buffers[stream]
+                or len(buffers[stream]) >= batch_limit
+                or interval_elapsed
+            ):
+                await _flush_stream(stream, force=interval_elapsed)
+
+        return _on_output_chunk
+
     async def _resolve_default_branch(
         self,
         *,
@@ -1967,6 +2134,14 @@ class CodexWorker:
             raise JobCancellationRequested(
                 "cancellation requested before command start"
             )
+        live_log_callback: OutputChunkCallback | None = None
+        inferred_job_id = self._job_id_from_log_path(log_path)
+        if inferred_job_id is not None:
+            live_log_callback = self._build_live_log_chunk_callback(
+                job_id=inferred_job_id,
+                stage=self._infer_stage_from_log_path(log_path),
+                step_index=self._step_index_from_log_path(log_path),
+            )
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
             merged_redaction_values = tuple(
@@ -1989,6 +2164,7 @@ class CodexWorker:
                 env=dict(env) if env is not None else None,
                 redaction_values=merged_redaction_values,
                 cancel_event=effective_cancel_event,
+                output_chunk_callback=live_log_callback,
             )
         self._append_stage_log(log_path, f"$ {' '.join(command)}")
         return CommandResult(tuple(command), 0, "", "")
@@ -2197,6 +2373,12 @@ class CodexWorker:
             try:
                 if runtime_mode == "codex":
                     if step.effective_skill_id != "auto":
+                        step_log_callback = self._build_live_log_chunk_callback(
+                            job_id=job_id,
+                            stage="moonmind.task.execute",
+                            step_id=step.step_id,
+                            step_index=step.step_index,
+                        )
                         step_result = await self._codex_exec_handler.handle_skill(
                             job_id=job_id,
                             payload=self._build_skill_payload(
@@ -2214,6 +2396,7 @@ class CodexWorker:
                             selected_skill=step.effective_skill_id,
                             fallback=step.effective_skill_id != "speckit",
                             cancel_event=cancel_event,
+                            output_chunk_callback=step_log_callback,
                         )
                     else:
                         exec_payload = self._build_exec_payload(
@@ -2233,10 +2416,17 @@ class CodexWorker:
                             codex_overrides["effort"] = runtime_effort
                         if codex_overrides:
                             exec_payload["codex"] = codex_overrides
+                        step_log_callback = self._build_live_log_chunk_callback(
+                            job_id=job_id,
+                            stage="moonmind.task.execute",
+                            step_id=step.step_id,
+                            step_index=step.step_index,
+                        )
                         step_result = await self._codex_exec_handler.handle(
                             job_id=job_id,
                             payload=exec_payload,
                             cancel_event=cancel_event,
+                            output_chunk_callback=step_log_callback,
                         )
                 else:
                     command = self._build_non_codex_runtime_command(
@@ -2928,7 +3118,11 @@ class CodexWorker:
             auth_ref=repo_auth_ref,
             purpose="repository",
         )
-        repo_env = self._build_command_env(repo_token) if repo_token else None
+        repo_env = self._build_command_env(
+            repo_token,
+            git_user_name=self._config.git_user_name,
+            git_user_email=self._config.git_user_email,
+        )
 
         publish_source: str | None = None
         publish_env: dict[str, str] | None = None
@@ -2938,9 +3132,12 @@ class CodexWorker:
                 auth_ref=publish_ref,
                 purpose="publish",
             )
-            if publish_token:
-                publish_env = self._build_command_env(publish_token)
-            else:
+            publish_env = self._build_command_env(
+                publish_token,
+                git_user_name=self._config.git_user_name,
+                git_user_email=self._config.git_user_email,
+            )
+            if publish_env is None:
                 publish_env = repo_env
                 publish_source = repo_source
 
@@ -2982,12 +3179,34 @@ class CodexWorker:
         return (None, "none")
 
     @staticmethod
-    def _build_command_env(token: str) -> dict[str, str]:
+    def _build_command_env(
+        token: str | None,
+        *,
+        git_user_name: str | None = None,
+        git_user_email: str | None = None,
+    ) -> dict[str, str] | None:
         command_env = dict(environ)
-        command_env["GITHUB_TOKEN"] = token
-        command_env["GH_TOKEN"] = token
-        command_env["GIT_TERMINAL_PROMPT"] = "0"
-        return command_env
+        configured = False
+
+        if token:
+            command_env["GITHUB_TOKEN"] = token
+            command_env["GH_TOKEN"] = token
+            command_env["GIT_TERMINAL_PROMPT"] = "0"
+            configured = True
+
+        git_name = str(git_user_name or "").strip()
+        if git_name:
+            command_env["GIT_AUTHOR_NAME"] = git_name
+            command_env["GIT_COMMITTER_NAME"] = git_name
+            configured = True
+
+        git_email = str(git_user_email or "").strip()
+        if git_email:
+            command_env["GIT_AUTHOR_EMAIL"] = git_email
+            command_env["GIT_COMMITTER_EMAIL"] = git_email
+            configured = True
+
+        return command_env if configured else None
 
     def _register_redaction_value(self, value: str | None) -> None:
         candidate = str(value or "").strip()
