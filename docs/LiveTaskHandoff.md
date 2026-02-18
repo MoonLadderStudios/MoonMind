@@ -117,7 +117,7 @@ Install `tmate`, `tmux` (optional because tmate embeds tmux), `openssh-client` (
 
 ### 8.2 Directory Layout
 
-Each run keeps artifacts under `var/runs/<run_id>/`, including:
+Each run keeps live-session artifacts under the workflow artifact root (`var/artifacts/spec_workflows/<run_id>/` by default, or the configured artifact directory), including:
 
 - `operator_inbox.jsonl` — append-only JSON lines for dashboard messages.
 - `transcript.log` — optional tmux transcript capture.
@@ -138,6 +138,7 @@ tmate -S "$SOCK" set -g remain-on-exit on
 tmate -S "$SOCK" set -g history-limit 200000
 
 tmate -S "$SOCK" split-window -h -t "${SESSION}:0"
+tmate -S "$SOCK" split-window -v -t "${SESSION}:0.0"
 tmate -S "$SOCK" split-window -v -t "${SESSION}:0.1"
 
 # Pane assignments: agent runtime, task log, operator inbox, operator shell.
@@ -224,4 +225,3 @@ Pane 2 tails `operator_inbox.jsonl`, so RO observers and the agent itself can se
 - **Transcript capture** via `tmux pipe-pane` or `script` into `transcript.log` for post-mortems.
 - **"Needs Operator" flag**: allow agents to request help, highlighting runs in the dashboard and prompting session enablement.
 - **Self-hosted tmate relay**: improves availability and control over outbound SSH dependencies.
-
