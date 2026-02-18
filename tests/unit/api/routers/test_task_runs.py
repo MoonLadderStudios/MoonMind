@@ -152,9 +152,7 @@ def test_get_live_session_returns_404_when_missing(
     assert response.json()["detail"]["code"] == "live_session_not_found"
 
 
-def test_grant_live_session_write_success(
-    client: tuple[TestClient, AsyncMock]
-) -> None:
+def test_grant_live_session_write_success(client: tuple[TestClient, AsyncMock]) -> None:
     test_client, service = client
     task_run_id = uuid4()
     live = _build_live_session(task_run_id=task_run_id)

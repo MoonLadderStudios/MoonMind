@@ -138,7 +138,9 @@ class WorkerReportTaskRunLiveSessionRequest(BaseModel):
     worker_id: str = Field(..., alias="workerId")
     worker_hostname: Optional[str] = Field(None, alias="workerHostname")
     status: models.AgentJobLiveSessionStatus = Field(..., alias="status")
-    provider: Optional[models.AgentJobLiveSessionProvider] = Field(None, alias="provider")
+    provider: Optional[models.AgentJobLiveSessionProvider] = Field(
+        None, alias="provider"
+    )
     attach_ro: Optional[str] = Field(None, alias="attachRo")
     attach_rw: Optional[str] = Field(None, alias="attachRw")
     web_ro: Optional[str] = Field(None, alias="webRo")

@@ -47,7 +47,9 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         == "/api/queue/telemetry/migration"
     )
     assert config["sources"]["queue"]["skills"] == "/api/tasks/skills"
-    assert config["sources"]["queue"]["liveSession"] == "/api/task-runs/{id}/live-session"
+    assert (
+        config["sources"]["queue"]["liveSession"] == "/api/task-runs/{id}/live-session"
+    )
     assert (
         config["sources"]["queue"]["liveSessionGrantWrite"]
         == "/api/task-runs/{id}/live-session/grant-write"

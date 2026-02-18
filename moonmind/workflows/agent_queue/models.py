@@ -362,8 +362,12 @@ class TaskRunLiveSession(Base):
         EncryptedType(Text, get_encryption_key),
         nullable=True,
     )
-    rw_granted_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    rw_granted_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

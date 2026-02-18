@@ -99,7 +99,9 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_task_run_live_sessions"),
-        sa.UniqueConstraint("task_run_id", name="uq_task_run_live_sessions_task_run_id"),
+        sa.UniqueConstraint(
+            "task_run_id", name="uq_task_run_live_sessions_task_run_id"
+        ),
     )
     op.create_index(
         "ix_task_run_live_sessions_status_expires_at",

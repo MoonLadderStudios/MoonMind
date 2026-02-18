@@ -8,9 +8,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.agent_queue import (
-    _WorkerRequestAuth,
     _require_worker_auth,
     _to_http_exception,
+    _WorkerRequestAuth,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
@@ -260,7 +260,11 @@ async def heartbeat_live_session(
 ) -> TaskRunLiveSessionResponse:
     """Worker-authenticated heartbeat updater for live sessions."""
 
-    if auth.auth_source == "worker_token" and auth.worker_id and worker_id != auth.worker_id:
+    if (
+        auth.auth_source == "worker_token"
+        and auth.worker_id
+        and worker_id != auth.worker_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

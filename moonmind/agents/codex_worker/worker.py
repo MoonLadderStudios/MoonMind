@@ -419,9 +419,7 @@ class CodexWorkerConfig:
             ).strip()
         )
         if live_session_rw_grant_ttl_minutes < 1:
-            raise ValueError(
-                "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1"
-            )
+            raise ValueError("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1")
         live_session_allow_web_raw = (
             str(
                 source.get(
@@ -2470,32 +2468,80 @@ class CodexWorker:
 
         try:
             await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "new-session", "-d", "-s", session_name],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "new-session",
+                    "-d",
+                    "-s",
+                    session_name,
+                ],
                 cwd=cwd,
                 log_path=log_path,
             )
             await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "set", "-g", "remain-on-exit", "on"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "set",
+                    "-g",
+                    "remain-on-exit",
+                    "on",
+                ],
                 cwd=cwd,
                 log_path=log_path,
             )
             await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "set", "-g", "history-limit", "200000"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "set",
+                    "-g",
+                    "history-limit",
+                    "200000",
+                ],
                 cwd=cwd,
                 log_path=log_path,
             )
             await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "split-window", "-h", "-t", f"{session_name}:0"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "split-window",
+                    "-h",
+                    "-t",
+                    f"{session_name}:0",
+                ],
                 cwd=cwd,
                 log_path=log_path,
             )
             await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "split-window", "-v", "-t", f"{session_name}:0.0"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "split-window",
+                    "-v",
+                    "-t",
+                    f"{session_name}:0.0",
+                ],
                 cwd=cwd,
                 log_path=log_path,
             )
             await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "split-window", "-v", "-t", f"{session_name}:0.1"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "split-window",
+                    "-v",
+                    "-t",
+                    f"{session_name}:0.1",
+                ],
                 cwd=cwd,
                 log_path=log_path,
             )
@@ -2505,7 +2551,14 @@ class CodexWorker:
                 log_path=log_path,
             )
             ssh_ro_result = await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "display", "-p", "#{tmate_ssh_ro}"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "display",
+                    "-p",
+                    "#{tmate_ssh_ro}",
+                ],
                 cwd=cwd,
                 log_path=log_path,
                 check=False,
@@ -2517,7 +2570,14 @@ class CodexWorker:
                 check=False,
             )
             web_ro_result = await self._run_stage_command(
-                [tmate_binary, "-S", str(socket_path), "display", "-p", "#{tmate_web_ro}"],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(socket_path),
+                    "display",
+                    "-p",
+                    "#{tmate_web_ro}",
+                ],
                 cwd=cwd,
                 log_path=log_path,
                 check=False,
@@ -2574,7 +2634,14 @@ class CodexWorker:
                 )
             with suppress(Exception):
                 await self._run_stage_command(
-                    [tmate_binary, "-S", str(socket_path), "kill-session", "-t", session_name],
+                    [
+                        tmate_binary,
+                        "-S",
+                        str(socket_path),
+                        "kill-session",
+                        "-t",
+                        session_name,
+                    ],
                     cwd=cwd,
                     log_path=log_path,
                     check=False,
@@ -2591,7 +2658,14 @@ class CodexWorker:
         tmate_binary = shutil.which("tmate") or "tmate"
         with suppress(Exception):
             await self._run_stage_command(
-                [tmate_binary, "-S", str(live.socket_path), "kill-session", "-t", live.session_name],
+                [
+                    tmate_binary,
+                    "-S",
+                    str(live.socket_path),
+                    "kill-session",
+                    "-t",
+                    live.session_name,
+                ],
                 cwd=live.socket_path.parent,
                 log_path=live.log_path,
                 check=False,
@@ -3716,9 +3790,11 @@ class CodexWorker:
                     if isinstance(payload_node, Mapping)
                     else None
                 )
-                paused = bool(live_control.get("paused")) if isinstance(
-                    live_control, Mapping
-                ) else False
+                paused = (
+                    bool(live_control.get("paused"))
+                    if isinstance(live_control, Mapping)
+                    else False
+                )
                 if paused:
                     effective_pause_event.set()
                 else:

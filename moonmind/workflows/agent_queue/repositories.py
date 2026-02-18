@@ -623,10 +623,7 @@ class AgentQueueRepository:
             live.status = status
         if ready_at is not None:
             live.ready_at = ready_at
-        elif (
-            status is models.AgentJobLiveSessionStatus.READY
-            and live.ready_at is None
-        ):
+        elif status is models.AgentJobLiveSessionStatus.READY and live.ready_at is None:
             live.ready_at = now
         if ended_at is not None:
             live.ended_at = ended_at
