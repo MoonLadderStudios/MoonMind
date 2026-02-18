@@ -1081,14 +1081,10 @@
       skillRequiredCapabilities: "",
       ...overrides,
     });
-    const stepState = [createStepStateEntry({ skillId: "auto" })];
+    const stepState = [createStepStateEntry()];
     const ensurePrimaryStep = () => {
       if (stepState.length === 0) {
-        stepState.push(createStepStateEntry({ skillId: "auto" }));
-      }
-      const primary = stepState[0];
-      if (!String(primary.skillId || "").trim()) {
-        primary.skillId = "auto";
+        stepState.push(createStepStateEntry());
       }
     };
     const renderStepEditor = () => {
@@ -1102,7 +1098,7 @@
           const stepLabel = isPrimaryStep ? " (Required)" : "";
           const skillLabel = isPrimaryStep ? "Skill" : "Skill (optional)";
           const skillPlaceholder = isPrimaryStep
-            ? "auto, speckit-orchestrate, ..."
+            ? "auto (default), speckit-orchestrate, ..."
             : "inherit Step 1 skill";
           const instructionsLabel = isPrimaryStep ? "Instructions" : "Instructions (optional)";
           const instructionsPlaceholder = isPrimaryStep
@@ -1248,7 +1244,7 @@
 
       const formData = new FormData(form);
       ensurePrimaryStep();
-      const primaryStep = stepState[0] || createStepStateEntry({ skillId: "auto" });
+      const primaryStep = stepState[0] || createStepStateEntry();
       const instructions = String(primaryStep.instructions || "").trim();
       if (!instructions) {
         message.className = "notice error";
