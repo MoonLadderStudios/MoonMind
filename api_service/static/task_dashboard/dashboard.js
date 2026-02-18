@@ -1087,6 +1087,7 @@
     };
     const renderStepEditor = () => {
       if (!stepsList) {
+        console.error("[dashboard] #queue-steps-list not found; step editor unavailable");
         return;
       }
       ensurePrimaryStep();
@@ -1183,7 +1184,11 @@
         if (!(target instanceof HTMLElement)) {
           return;
         }
-        const action = target.getAttribute("data-step-action");
+        const actionButton = target.closest("[data-step-action]");
+        if (!(actionButton instanceof HTMLElement)) {
+          return;
+        }
+        const action = actionButton.getAttribute("data-step-action");
         if (!action) {
           return;
         }
@@ -1192,7 +1197,7 @@
           renderStepEditor();
           return;
         }
-        const index = readStepIndex(target);
+        const index = readStepIndex(actionButton);
         if (index === null) {
           return;
         }
@@ -1220,18 +1225,22 @@
       });
       stepsList.addEventListener("input", (event) => {
         const target = event.target;
-        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+        if (!(target instanceof HTMLElement)) {
           return;
         }
-        const field = target.getAttribute("data-step-field");
+        const fieldInput = target.closest("[data-step-field]");
+        if (!(fieldInput instanceof HTMLInputElement || fieldInput instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        const field = fieldInput.getAttribute("data-step-field");
         if (!field) {
           return;
         }
-        const index = readStepIndex(target);
+        const index = readStepIndex(fieldInput);
         if (index === null) {
           return;
         }
-        stepState[index][field] = target.value || "";
+        stepState[index][field] = fieldInput.value || "";
       });
     }
     renderStepEditor();
