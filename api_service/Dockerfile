@@ -263,6 +263,10 @@ RUN apt-get update && \
         git \
         gh \
         curl \
+        ca-certificates \
+        openssh-client \
+        tmux \
+        tmate \
         gnupg \
         nodejs && \
     install -m 0755 -d /etc/apt/keyrings && \

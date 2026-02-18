@@ -50,6 +50,14 @@ class AgentQueueAuthorizationError(RuntimeError):
     """Raised when authenticated workers exceed allowed policy scope."""
 
 
+class LiveSessionNotFoundError(AgentQueueValidationError):
+    """Raised when a task run has no persisted live-session state."""
+
+
+class LiveSessionStateError(AgentQueueValidationError):
+    """Raised when the current live-session state cannot satisfy a request."""
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactDownload:
     """Represents a download-ready artifact with file path and metadata."""
@@ -76,6 +84,16 @@ class WorkerTokenIssueResult:
 
     token_record: models.AgentWorkerToken
     raw_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSessionWriteGrant:
+    """RW reveal response returned by grant-write operations."""
+
+    session: models.TaskRunLiveSession
+    attach_rw: str
+    web_rw: str | None
+    granted_until: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -681,6 +699,348 @@ class AgentQueueService:
             after_event_id=after_event_id,
         )
 
+    async def get_live_session(
+        self, *, task_run_id: UUID
+    ) -> models.TaskRunLiveSession | None:
+        """Fetch current live session state for a task run."""
+
+        await self._repository.require_job(task_run_id)
+        return await self._repository.get_live_session(task_run_id=task_run_id)
+
+    async def create_live_session(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+    ) -> models.TaskRunLiveSession:
+        """Create or enable live session tracking for a task run."""
+
+        await self._repository.require_job(task_run_id)
+        existing = await self._repository.get_live_session(task_run_id=task_run_id)
+        if existing is not None and existing.status in {
+            models.AgentJobLiveSessionStatus.STARTING,
+            models.AgentJobLiveSessionStatus.READY,
+        }:
+            return existing
+
+        provider = self._resolve_live_session_provider()
+        now = datetime.now(UTC)
+        ttl_minutes = max(1, int(settings.spec_workflow.live_session_ttl_minutes))
+        live = await self._repository.upsert_live_session(
+            task_run_id=task_run_id,
+            provider=provider,
+            status=models.AgentJobLiveSessionStatus.STARTING,
+            expires_at=now + timedelta(minutes=ttl_minutes),
+            error_message="",
+        )
+        await self._repository.append_control_event(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            action="create_session",
+            metadata_json={
+                "provider": provider.value,
+                "expiresAt": (
+                    live.expires_at.isoformat() if live.expires_at is not None else None
+                ),
+            },
+        )
+        await self._repository.append_event(
+            job_id=task_run_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="task.live_session",
+            payload={
+                "status": "starting",
+                "provider": provider.value,
+            },
+        )
+        await self._repository.commit()
+        return live
+
+    async def report_live_session(
+        self,
+        *,
+        task_run_id: UUID,
+        worker_id: str,
+        worker_hostname: str | None,
+        status: models.AgentJobLiveSessionStatus,
+        provider: models.AgentJobLiveSessionProvider | None = None,
+        attach_ro: str | None = None,
+        attach_rw: str | None = None,
+        web_ro: str | None = None,
+        web_rw: str | None = None,
+        tmate_session_name: str | None = None,
+        tmate_socket_path: str | None = None,
+        expires_at: datetime | None = None,
+        error_message: str | None = None,
+    ) -> models.TaskRunLiveSession:
+        """Worker-side report/update hook for live session lifecycle and links."""
+
+        normalized_worker_id = worker_id.strip()
+        if not normalized_worker_id:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        await self._assert_live_session_worker_ownership(
+            task_run_id=task_run_id,
+            worker_id=normalized_worker_id,
+            allow_terminal_report=status
+            in {
+                models.AgentJobLiveSessionStatus.REVOKED,
+                models.AgentJobLiveSessionStatus.ENDED,
+                models.AgentJobLiveSessionStatus.ERROR,
+            },
+        )
+        allow_web = self._live_session_web_allowed()
+        resolved_web_ro = (web_ro or "").strip() if allow_web else ""
+        resolved_web_rw = (web_rw or "").strip() if allow_web else ""
+
+        live = await self._repository.upsert_live_session(
+            task_run_id=task_run_id,
+            provider=provider or self._resolve_live_session_provider(),
+            status=status,
+            worker_id=normalized_worker_id,
+            worker_hostname=(worker_hostname or "").strip() or None,
+            attach_ro=(attach_ro or "").strip() or None,
+            attach_rw=(attach_rw or "").strip() or None,
+            web_ro=resolved_web_ro,
+            web_rw=resolved_web_rw,
+            tmate_session_name=(tmate_session_name or "").strip() or None,
+            tmate_socket_path=(tmate_socket_path or "").strip() or None,
+            expires_at=expires_at,
+            last_heartbeat_at=datetime.now(UTC),
+            error_message=(error_message or "").strip() or None,
+        )
+        await self._repository.append_event(
+            job_id=task_run_id,
+            level=(
+                models.AgentJobEventLevel.ERROR
+                if status is models.AgentJobLiveSessionStatus.ERROR
+                else models.AgentJobEventLevel.INFO
+            ),
+            message="task.live_session.reported",
+            payload={
+                "status": status.value,
+                "provider": live.provider.value,
+                "workerId": normalized_worker_id,
+                "attachRo": bool(live.attach_ro),
+                "attachRw": bool(live.attach_rw_encrypted),
+                "webRo": bool(live.web_ro),
+                "webRw": bool(live.web_rw_encrypted),
+                "error": live.error_message,
+            },
+        )
+        await self._repository.commit()
+        return live
+
+    async def heartbeat_live_session(
+        self,
+        *,
+        task_run_id: UUID,
+        worker_id: str,
+    ) -> models.TaskRunLiveSession:
+        """Update live-session heartbeat timestamp."""
+
+        normalized_worker_id = worker_id.strip()
+        if not normalized_worker_id:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        await self._assert_live_session_worker_ownership(
+            task_run_id=task_run_id,
+            worker_id=normalized_worker_id,
+            allow_terminal_report=False,
+        )
+        live = await self._repository.get_live_session(task_run_id=task_run_id)
+        if live is None:
+            raise LiveSessionNotFoundError("live session is not enabled for this task")
+        updated = await self._repository.upsert_live_session(
+            task_run_id=task_run_id,
+            worker_id=normalized_worker_id,
+            last_heartbeat_at=datetime.now(UTC),
+        )
+        await self._repository.commit()
+        return updated
+
+    async def grant_live_session_write(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+        ttl_minutes: int | None = None,
+    ) -> LiveSessionWriteGrant:
+        """Grant temporary RW reveal for an active live session."""
+
+        await self._repository.require_job(task_run_id)
+        live = await self._repository.get_live_session(task_run_id=task_run_id)
+        if live is None:
+            raise LiveSessionNotFoundError("live session is not enabled for this task")
+        if live.status is not models.AgentJobLiveSessionStatus.READY:
+            raise LiveSessionStateError("live session is not ready")
+        attach_rw = str(live.attach_rw_encrypted or "").strip()
+        if not attach_rw:
+            raise LiveSessionStateError(
+                "live session does not currently have an RW endpoint"
+            )
+
+        now = datetime.now(UTC)
+        requested_ttl = (
+            int(ttl_minutes)
+            if ttl_minutes is not None
+            else int(settings.spec_workflow.live_session_rw_grant_ttl_minutes)
+        )
+        effective_ttl = max(1, min(requested_ttl, 240))
+        granted_until = now + timedelta(minutes=effective_ttl)
+        updated = await self._repository.upsert_live_session(
+            task_run_id=task_run_id,
+            rw_granted_until=granted_until,
+            last_heartbeat_at=now,
+        )
+        await self._repository.append_control_event(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            action="grant_rw",
+            metadata_json={
+                "ttlMinutes": effective_ttl,
+                "grantedUntil": granted_until.isoformat(),
+            },
+        )
+        await self._repository.append_event(
+            job_id=task_run_id,
+            level=models.AgentJobEventLevel.WARN,
+            message="task.live_session.grant_write",
+            payload={
+                "grantedUntil": granted_until.isoformat(),
+                "ttlMinutes": effective_ttl,
+            },
+        )
+        await self._repository.commit()
+        return LiveSessionWriteGrant(
+            session=updated,
+            attach_rw=attach_rw,
+            web_rw=(
+                (str(updated.web_rw_encrypted or "").strip() or None)
+                if self._live_session_web_allowed()
+                else None
+            ),
+            granted_until=granted_until,
+        )
+
+    async def revoke_live_session(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+        reason: str | None = None,
+    ) -> models.TaskRunLiveSession:
+        """Revoke live session access and mark it terminally revoked."""
+
+        await self._repository.require_job(task_run_id)
+        live = await self._repository.get_live_session(task_run_id=task_run_id)
+        if live is None:
+            raise LiveSessionNotFoundError("live session is not enabled for this task")
+
+        updated = await self._repository.upsert_live_session(
+            task_run_id=task_run_id,
+            status=models.AgentJobLiveSessionStatus.REVOKED,
+            rw_granted_until=datetime.now(UTC),
+        )
+        await self._repository.append_control_event(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            action="revoke_session",
+            metadata_json={"reason": (reason or "").strip() or None},
+        )
+        await self._repository.append_event(
+            job_id=task_run_id,
+            level=models.AgentJobEventLevel.WARN,
+            message="task.live_session.revoked",
+            payload={"reason": (reason or "").strip() or None},
+        )
+        await self._repository.commit()
+        return updated
+
+    async def apply_control_action(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+        action: str,
+    ) -> models.AgentJob:
+        """Apply pause/resume/takeover controls to a task run."""
+
+        normalized = action.strip().lower()
+        if normalized not in {"pause", "resume", "takeover"}:
+            raise AgentQueueValidationError(
+                "action must be one of: pause, resume, takeover"
+            )
+
+        if normalized == "pause":
+            job = await self._repository.set_job_live_control(
+                task_run_id=task_run_id,
+                paused=True,
+                last_action=normalized,
+            )
+        elif normalized == "resume":
+            job = await self._repository.set_job_live_control(
+                task_run_id=task_run_id,
+                paused=False,
+                takeover=False,
+                last_action=normalized,
+            )
+        else:
+            job = await self._repository.set_job_live_control(
+                task_run_id=task_run_id,
+                paused=True,
+                takeover=True,
+                last_action=normalized,
+            )
+
+        await self._repository.append_control_event(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            action=normalized,
+            metadata_json={"action": normalized},
+        )
+        await self._repository.append_event(
+            job_id=task_run_id,
+            level=models.AgentJobEventLevel.WARN,
+            message="task.control",
+            payload={"action": normalized},
+        )
+        await self._repository.commit()
+        return job
+
+    async def append_operator_message(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+        message: str,
+    ) -> models.TaskRunControlEvent:
+        """Persist and broadcast an operator message for a running task run."""
+
+        normalized_message = message.strip()
+        if not normalized_message:
+            raise AgentQueueValidationError("message must be a non-empty string")
+        if len(normalized_message) > 4000:
+            raise AgentQueueValidationError("message must be 4000 chars or fewer")
+
+        event = await self._repository.append_control_event(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            action="send_message",
+            metadata_json={"message": normalized_message},
+        )
+        await self._repository.append_event(
+            job_id=task_run_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="task.operator.message",
+            payload={
+                "actorUserId": (
+                    str(actor_user_id) if actor_user_id is not None else None
+                ),
+                "message": normalized_message,
+            },
+        )
+        await self._repository.commit()
+        return event
+
     async def issue_worker_token(
         self,
         *,
@@ -870,6 +1230,42 @@ class AgentQueueService:
     def _hash_token(raw_token: str) -> str:
         digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         return f"sha256:{digest}"
+
+    @staticmethod
+    def _resolve_live_session_provider() -> models.AgentJobLiveSessionProvider:
+        provider = (
+            str(settings.spec_workflow.live_session_provider or "").strip().lower()
+        )
+        if provider == "tmate" or not provider:
+            return models.AgentJobLiveSessionProvider.TMATE
+        raise AgentQueueValidationError("live session provider must be one of: tmate")
+
+    @staticmethod
+    def _live_session_web_allowed() -> bool:
+        return bool(settings.spec_workflow.live_session_allow_web)
+
+    async def _assert_live_session_worker_ownership(
+        self,
+        *,
+        task_run_id: UUID,
+        worker_id: str,
+        allow_terminal_report: bool,
+    ) -> None:
+        """Require active ownership, or prior live-session ownership for terminal reports."""
+
+        job = await self._repository.require_job(task_run_id)
+        if (
+            job.status is models.AgentJobStatus.RUNNING
+            and str(job.claimed_by or "").strip() == worker_id
+        ):
+            return
+        if allow_terminal_report:
+            live = await self._repository.get_live_session(task_run_id=task_run_id)
+            if live is not None and str(live.worker_id or "").strip() == worker_id:
+                return
+        raise AgentQueueAuthorizationError(
+            f"worker '{worker_id}' does not own task run {task_run_id}"
+        )
 
     async def _load_events_by_job(
         self,

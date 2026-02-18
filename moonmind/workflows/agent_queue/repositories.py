@@ -117,6 +117,20 @@ class AgentQueueRepository:
             raise AgentJobNotFoundError(job_id)
         return job
 
+    async def require_job_for_update(self, job_id: UUID) -> models.AgentJob:
+        """Return an existing job row under ``FOR UPDATE`` lock or raise not found."""
+
+        stmt: Select[tuple[models.AgentJob]] = (
+            select(models.AgentJob)
+            .where(models.AgentJob.id == job_id)
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        job = result.scalars().first()
+        if job is None:
+            raise AgentJobNotFoundError(job_id)
+        return job
+
     async def list_jobs(
         self,
         *,
@@ -570,6 +584,153 @@ class AgentQueueRepository:
         ).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_live_session(
+        self, *, task_run_id: UUID
+    ) -> models.TaskRunLiveSession | None:
+        """Return one live-session row for the task run when present."""
+
+        stmt: Select[tuple[models.TaskRunLiveSession]] = select(
+            models.TaskRunLiveSession
+        ).where(models.TaskRunLiveSession.task_run_id == task_run_id)
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
+
+    async def upsert_live_session(
+        self,
+        *,
+        task_run_id: UUID,
+        provider: models.AgentJobLiveSessionProvider | None = None,
+        status: models.AgentJobLiveSessionStatus | None = None,
+        ready_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        worker_id: str | None = None,
+        worker_hostname: str | None = None,
+        tmate_session_name: str | None = None,
+        tmate_socket_path: str | None = None,
+        attach_ro: str | None = None,
+        attach_rw: str | None = None,
+        web_ro: str | None = None,
+        web_rw: str | None = None,
+        rw_granted_until: datetime | None = None,
+        last_heartbeat_at: datetime | None = None,
+        error_message: str | None = None,
+    ) -> models.TaskRunLiveSession:
+        """Create or update one live-session row scoped to a task run."""
+
+        await self.require_job_for_update(task_run_id)
+        now = datetime.now(UTC)
+        live = await self.get_live_session(task_run_id=task_run_id)
+        if live is None:
+            live = models.TaskRunLiveSession(
+                id=uuid4(),
+                task_run_id=task_run_id,
+                provider=(provider or models.AgentJobLiveSessionProvider.TMATE),
+                status=(status or models.AgentJobLiveSessionStatus.DISABLED),
+            )
+            self._session.add(live)
+
+        if provider is not None:
+            live.provider = provider
+        if status is not None:
+            live.status = status
+        if ready_at is not None:
+            live.ready_at = ready_at
+        elif status is models.AgentJobLiveSessionStatus.READY and live.ready_at is None:
+            live.ready_at = now
+        if ended_at is not None:
+            live.ended_at = ended_at
+        elif (
+            status
+            in {
+                models.AgentJobLiveSessionStatus.REVOKED,
+                models.AgentJobLiveSessionStatus.ENDED,
+                models.AgentJobLiveSessionStatus.ERROR,
+            }
+            and live.ended_at is None
+        ):
+            live.ended_at = now
+        if expires_at is not None:
+            live.expires_at = expires_at
+        if worker_id is not None:
+            live.worker_id = worker_id
+        if worker_hostname is not None:
+            live.worker_hostname = worker_hostname
+        if tmate_session_name is not None:
+            live.tmate_session_name = tmate_session_name
+        if tmate_socket_path is not None:
+            live.tmate_socket_path = tmate_socket_path
+        if attach_ro is not None:
+            live.attach_ro = attach_ro
+        if attach_rw is not None:
+            live.attach_rw_encrypted = attach_rw
+        if web_ro is not None:
+            live.web_ro = web_ro or None
+        if web_rw is not None:
+            live.web_rw_encrypted = web_rw or None
+        if rw_granted_until is not None:
+            live.rw_granted_until = rw_granted_until
+        if last_heartbeat_at is not None:
+            live.last_heartbeat_at = last_heartbeat_at
+        if error_message is not None:
+            live.error_message = error_message
+        live.updated_at = now
+        await self._session.flush()
+        return live
+
+    async def append_control_event(
+        self,
+        *,
+        task_run_id: UUID,
+        actor_user_id: UUID | None,
+        action: str,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> models.TaskRunControlEvent:
+        """Append one control/audit event for the task run."""
+
+        await self.require_job(task_run_id)
+        now = datetime.now(UTC)
+        event = models.TaskRunControlEvent(
+            id=uuid4(),
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            metadata_json=metadata_json,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(event)
+        await self._session.flush()
+        return event
+
+    async def set_job_live_control(
+        self,
+        *,
+        task_run_id: UUID,
+        paused: bool | None = None,
+        takeover: bool | None = None,
+        last_action: str | None = None,
+    ) -> models.AgentJob:
+        """Upsert live control flags in the queue payload for worker heartbeat reads."""
+
+        now = datetime.now(UTC)
+        job = await self.require_job(task_run_id)
+        payload = dict(job.payload or {})
+        raw_control = payload.get("liveControl")
+        control = dict(raw_control) if isinstance(raw_control, dict) else {}
+        if paused is not None:
+            control["paused"] = bool(paused)
+        if takeover is not None:
+            control["takeover"] = bool(takeover)
+        if last_action:
+            control["lastAction"] = last_action
+        control["updatedAt"] = now.isoformat()
+        payload["liveControl"] = control
+        job.payload = payload
+        job.updated_at = now
+        await self._session.flush()
+        return job
 
     async def list_jobs_for_telemetry(
         self,

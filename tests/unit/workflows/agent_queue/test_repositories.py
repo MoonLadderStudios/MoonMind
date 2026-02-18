@@ -598,3 +598,35 @@ async def test_expired_running_job_with_cancel_request_is_not_requeued(tmp_path)
 
     assert job.status is models.AgentJobStatus.CANCELLED
     assert job.finished_at is not None
+
+
+async def test_upsert_live_session_sets_ended_at_only_once(tmp_path):
+    """Terminal upserts should preserve first ended_at timestamp."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo, job_type="task")
+            await repo.commit()
+
+            await repo.upsert_live_session(
+                task_run_id=job.id,
+                status=models.AgentJobLiveSessionStatus.STARTING,
+            )
+            await repo.commit()
+            first_terminal = await repo.upsert_live_session(
+                task_run_id=job.id,
+                status=models.AgentJobLiveSessionStatus.ERROR,
+            )
+            first_ended_at = first_terminal.ended_at
+            await repo.commit()
+            assert first_ended_at is not None
+
+            await asyncio.sleep(0.01)
+            second_terminal = await repo.upsert_live_session(
+                task_run_id=job.id,
+                status=models.AgentJobLiveSessionStatus.ENDED,
+            )
+            await repo.commit()
+
+    assert second_terminal.ended_at == first_ended_at

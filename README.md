@@ -119,6 +119,9 @@ description: Private project-specific scan helper skill
   - `MOONMIND_DEFAULT_SKILL=my-private-scan`
   - `MOONMIND_SKILL_POLICY_MODE=permissive` (default; set `allowlist` to enforce worker allowlists)
   - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit` (only enforced when `MOONMIND_SKILL_POLICY_MODE=allowlist`)
+  - `MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT=/workspace` (resolve relative skill roots against mounted workspace)
+  - `MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT=/workspace/.agents/skills/local`
+  - `MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT=/workspace/.agents/skills/skills`
 
 3. Source private skills from external locations when needed.
 
