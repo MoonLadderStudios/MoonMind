@@ -47,6 +47,20 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         == "/api/queue/telemetry/migration"
     )
     assert config["sources"]["queue"]["skills"] == "/api/tasks/skills"
+    assert config["sources"]["queue"]["liveSession"] == "/api/task-runs/{id}/live-session"
+    assert (
+        config["sources"]["queue"]["liveSessionGrantWrite"]
+        == "/api/task-runs/{id}/live-session/grant-write"
+    )
+    assert (
+        config["sources"]["queue"]["liveSessionRevoke"]
+        == "/api/task-runs/{id}/live-session/revoke"
+    )
+    assert config["sources"]["queue"]["taskControl"] == "/api/task-runs/{id}/control"
+    assert (
+        config["sources"]["queue"]["operatorMessages"]
+        == "/api/task-runs/{id}/operator-messages"
+    )
     assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]

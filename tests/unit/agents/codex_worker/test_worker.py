@@ -1539,6 +1539,29 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.container_default_timeout_seconds == 3600
 
 
+async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:
+    """Live session config should parse from MOONMIND_LIVE_SESSION_* variables."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "tmate")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "120")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES", "30")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", "true")
+    monkeypatch.setenv("MOONMIND_TMATE_SERVER_HOST", "tmate.internal")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER", "5")
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.live_session_enabled_default is False
+    assert config.live_session_provider == "tmate"
+    assert config.live_session_ttl_minutes == 120
+    assert config.live_session_rw_grant_ttl_minutes == 30
+    assert config.live_session_allow_web is True
+    assert config.tmate_server_host == "tmate.internal"
+    assert config.live_session_max_concurrent_per_worker == 5
+
+
 async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) -> None:
     """Invalid policy mode should fail fast during worker startup."""
 

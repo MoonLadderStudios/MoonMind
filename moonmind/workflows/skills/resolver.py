@@ -172,7 +172,13 @@ def _resolve_mirror_root(raw_root: str | Path) -> Path:
     candidate = Path(raw_root).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
-    return (_resolve_base_repo_path() / candidate).resolve()
+    repo_relative = (_resolve_base_repo_path() / candidate).resolve()
+    if repo_relative.exists():
+        return repo_relative
+    cwd_relative = (Path.cwd() / candidate).resolve()
+    if cwd_relative.exists():
+        return cwd_relative
+    return repo_relative
 
 
 def _resolve_local_source(skill_name: str) -> str | None:

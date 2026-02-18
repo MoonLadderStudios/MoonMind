@@ -92,6 +92,63 @@ class AppendJobEventRequest(BaseModel):
     payload: Optional[dict[str, Any]] = Field(None, alias="payload")
 
 
+class CreateTaskRunLiveSessionRequest(BaseModel):
+    """Request body for creating/enabling task-run live sessions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class GrantTaskRunLiveSessionWriteRequest(BaseModel):
+    """Request body for temporary RW live-session reveal."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ttl_minutes: Optional[int] = Field(None, alias="ttlMinutes", ge=1, le=240)
+
+
+class RevokeTaskRunLiveSessionRequest(BaseModel):
+    """Request body for revoking one task-run live session."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: Optional[str] = Field(None, alias="reason")
+
+
+class TaskRunControlRequest(BaseModel):
+    """Request body for pause/resume/takeover controls."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: str = Field(..., alias="action")
+
+
+class TaskRunOperatorMessageRequest(BaseModel):
+    """Request body for operator message submissions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    message: str = Field(..., alias="message")
+
+
+class WorkerReportTaskRunLiveSessionRequest(BaseModel):
+    """Worker-authenticated report/update payload for task-run live sessions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(..., alias="workerId")
+    worker_hostname: Optional[str] = Field(None, alias="workerHostname")
+    status: models.AgentJobLiveSessionStatus = Field(..., alias="status")
+    provider: Optional[models.AgentJobLiveSessionProvider] = Field(None, alias="provider")
+    attach_ro: Optional[str] = Field(None, alias="attachRo")
+    attach_rw: Optional[str] = Field(None, alias="attachRw")
+    web_ro: Optional[str] = Field(None, alias="webRo")
+    web_rw: Optional[str] = Field(None, alias="webRw")
+    tmate_session_name: Optional[str] = Field(None, alias="tmateSessionName")
+    tmate_socket_path: Optional[str] = Field(None, alias="tmateSocketPath")
+    expires_at: Optional[datetime] = Field(None, alias="expiresAt")
+    error_message: Optional[str] = Field(None, alias="errorMessage")
+
+
 class CreateWorkerTokenRequest(BaseModel):
     """Request payload for creating a worker token."""
 
@@ -195,6 +252,63 @@ class JobEventListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[JobEventModel] = Field(default_factory=list, alias="items")
+
+
+class TaskRunLiveSessionModel(BaseModel):
+    """Serialized live-session state for one task run."""
+
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: UUID = Field(..., alias="id")
+    task_run_id: UUID = Field(..., alias="taskRunId")
+    provider: models.AgentJobLiveSessionProvider = Field(..., alias="provider")
+    status: models.AgentJobLiveSessionStatus = Field(..., alias="status")
+    created_at: datetime = Field(..., alias="createdAt")
+    updated_at: datetime = Field(..., alias="updatedAt")
+    ready_at: Optional[datetime] = Field(None, alias="readyAt")
+    ended_at: Optional[datetime] = Field(None, alias="endedAt")
+    expires_at: Optional[datetime] = Field(None, alias="expiresAt")
+    rw_granted_until: Optional[datetime] = Field(None, alias="rwGrantedUntil")
+    worker_id: Optional[str] = Field(None, alias="workerId")
+    worker_hostname: Optional[str] = Field(None, alias="workerHostname")
+    tmate_session_name: Optional[str] = Field(None, alias="tmateSessionName")
+    tmate_socket_path: Optional[str] = Field(None, alias="tmateSocketPath")
+    attach_ro: Optional[str] = Field(None, alias="attachRo")
+    web_ro: Optional[str] = Field(None, alias="webRo")
+    last_heartbeat_at: Optional[datetime] = Field(None, alias="lastHeartbeatAt")
+    error_message: Optional[str] = Field(None, alias="errorMessage")
+
+
+class TaskRunLiveSessionResponse(BaseModel):
+    """Response envelope for task-run live session fetch/create operations."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session: TaskRunLiveSessionModel = Field(..., alias="session")
+
+
+class TaskRunLiveSessionWriteGrantResponse(BaseModel):
+    """Response payload for temporary RW live-session grants."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session: TaskRunLiveSessionModel = Field(..., alias="session")
+    attach_rw: str = Field(..., alias="attachRw")
+    web_rw: Optional[str] = Field(None, alias="webRw")
+    granted_until: datetime = Field(..., alias="grantedUntil")
+
+
+class TaskRunControlEventModel(BaseModel):
+    """Serialized task-run control event."""
+
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: UUID = Field(..., alias="id")
+    task_run_id: UUID = Field(..., alias="taskRunId")
+    actor_user_id: Optional[UUID] = Field(None, alias="actorUserId")
+    action: str = Field(..., alias="action")
+    metadata_json: Optional[dict[str, Any]] = Field(None, alias="metadataJson")
+    created_at: datetime = Field(..., alias="createdAt")
 
 
 class WorkerTokenModel(BaseModel):

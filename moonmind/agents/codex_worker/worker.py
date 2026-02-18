@@ -12,7 +12,7 @@ import socket
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from os import environ
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -111,6 +111,13 @@ class CodexWorkerConfig:
     live_log_events_enabled: bool = True
     live_log_events_batch_bytes: int = 4096
     live_log_events_flush_interval_ms: int = 200
+    live_session_enabled_default: bool = True
+    live_session_provider: str = "tmate"
+    live_session_ttl_minutes: int = 60
+    live_session_rw_grant_ttl_minutes: int = 15
+    live_session_allow_web: bool = False
+    tmate_server_host: str | None = None
+    live_session_max_concurrent_per_worker: int = 4
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CodexWorkerConfig":
@@ -363,6 +370,97 @@ class CodexWorkerConfig:
         if live_log_events_flush_interval_ms < 10:
             raise ValueError("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10")
 
+        live_session_enabled_raw = (
+            str(
+                source.get(
+                    "MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",
+                    str(settings.spec_workflow.live_session_enabled_default),
+                )
+            )
+            .strip()
+            .lower()
+        )
+        live_session_enabled_default = live_session_enabled_raw not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }
+        live_session_provider = (
+            str(
+                source.get(
+                    "MOONMIND_LIVE_SESSION_PROVIDER",
+                    settings.spec_workflow.live_session_provider,
+                )
+            )
+            .strip()
+            .lower()
+            or "tmate"
+        )
+        if live_session_provider not in {"tmate"}:
+            raise ValueError("MOONMIND_LIVE_SESSION_PROVIDER must be one of: tmate")
+        live_session_ttl_minutes = int(
+            str(
+                source.get(
+                    "MOONMIND_LIVE_SESSION_TTL_MINUTES",
+                    str(settings.spec_workflow.live_session_ttl_minutes),
+                )
+            ).strip()
+        )
+        if live_session_ttl_minutes < 1:
+            raise ValueError("MOONMIND_LIVE_SESSION_TTL_MINUTES must be >= 1")
+        live_session_rw_grant_ttl_minutes = int(
+            str(
+                source.get(
+                    "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
+                    str(settings.spec_workflow.live_session_rw_grant_ttl_minutes),
+                )
+            ).strip()
+        )
+        if live_session_rw_grant_ttl_minutes < 1:
+            raise ValueError(
+                "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1"
+            )
+        live_session_allow_web_raw = (
+            str(
+                source.get(
+                    "MOONMIND_LIVE_SESSION_ALLOW_WEB",
+                    str(settings.spec_workflow.live_session_allow_web),
+                )
+            )
+            .strip()
+            .lower()
+        )
+        live_session_allow_web = live_session_allow_web_raw not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }
+        tmate_server_host = (
+            str(
+                source.get(
+                    "MOONMIND_TMATE_SERVER_HOST",
+                    settings.spec_workflow.tmate_server_host or "",
+                )
+            ).strip()
+            or None
+        )
+        live_session_max_concurrent_per_worker = int(
+            str(
+                source.get(
+                    "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
+                    str(settings.spec_workflow.live_session_max_concurrent_per_worker),
+                )
+            ).strip()
+        )
+        if live_session_max_concurrent_per_worker < 1:
+            raise ValueError(
+                "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER must be >= 1"
+            )
+
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
             worker_id=worker_id,
@@ -399,6 +497,13 @@ class CodexWorkerConfig:
             live_log_events_enabled=live_log_events_enabled,
             live_log_events_batch_bytes=live_log_events_batch_bytes,
             live_log_events_flush_interval_ms=live_log_events_flush_interval_ms,
+            live_session_enabled_default=live_session_enabled_default,
+            live_session_provider=live_session_provider,
+            live_session_ttl_minutes=live_session_ttl_minutes,
+            live_session_rw_grant_ttl_minutes=live_session_rw_grant_ttl_minutes,
+            live_session_allow_web=live_session_allow_web,
+            tmate_server_host=tmate_server_host,
+            live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
         )
 
 
@@ -430,6 +535,17 @@ class PreparedTaskWorkspace:
     workdir_mode: str
     repo_command_env: dict[str, str] | None
     publish_command_env: dict[str, str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSessionHandle:
+    """Worker-owned live session context for active queue job execution."""
+
+    job_id: UUID
+    session_name: str
+    socket_path: Path
+    log_path: Path
+    status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -608,6 +724,67 @@ class QueueApiClient:
             body["payload"] = payload
         await self._post_json(f"/api/queue/jobs/{job_id}/events", json=body)
 
+    async def report_live_session(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        status: str,
+        worker_hostname: str | None = None,
+        provider: str | None = None,
+        attach_ro: str | None = None,
+        attach_rw: str | None = None,
+        web_ro: str | None = None,
+        web_rw: str | None = None,
+        tmate_session_name: str | None = None,
+        tmate_socket_path: str | None = None,
+        expires_at: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        """Report live-session lifecycle updates for a task run."""
+
+        payload: dict[str, Any] = {
+            "workerId": worker_id,
+            "status": status,
+        }
+        if worker_hostname:
+            payload["workerHostname"] = worker_hostname
+        if provider:
+            payload["provider"] = provider
+        if attach_ro:
+            payload["attachRo"] = attach_ro
+        if attach_rw:
+            payload["attachRw"] = attach_rw
+        if web_ro:
+            payload["webRo"] = web_ro
+        if web_rw:
+            payload["webRw"] = web_rw
+        if tmate_session_name:
+            payload["tmateSessionName"] = tmate_session_name
+        if tmate_socket_path:
+            payload["tmateSocketPath"] = tmate_socket_path
+        if expires_at:
+            payload["expiresAt"] = expires_at
+        if error_message:
+            payload["errorMessage"] = error_message
+        return await self._post_json(
+            f"/api/task-runs/{job_id}/live-session/report",
+            json=payload,
+        )
+
+    async def heartbeat_live_session(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+    ) -> dict[str, Any]:
+        """Send live-session heartbeat updates."""
+
+        return await self._post_json(
+            f"/api/task-runs/{job_id}/live-session/heartbeat",
+            json={"workerId": worker_id},
+        )
+
     async def upload_artifact(
         self,
         *,
@@ -681,6 +858,8 @@ class CodexWorker:
         )
         self._dynamic_redaction_values: set[str] = set()
         self._active_cancel_event: asyncio.Event | None = None
+        self._active_pause_event: asyncio.Event | None = None
+        self._active_live_session: LiveSessionHandle | None = None
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
             self._vault_secret_resolver = VaultSecretResolver(
@@ -878,12 +1057,16 @@ class CodexWorker:
 
         heartbeat_stop = asyncio.Event()
         cancel_requested_event = asyncio.Event()
+        pause_requested_event = asyncio.Event()
         self._active_cancel_event = cancel_requested_event
+        self._active_pause_event = pause_requested_event
+        self._active_live_session = None
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(
                 job_id=job.id,
                 stop_event=heartbeat_stop,
                 cancel_event=cancel_requested_event,
+                pause_event=pause_requested_event,
             )
         )
 
@@ -897,6 +1080,11 @@ class CodexWorker:
                 payload={"jobType": job.type, "stages": stage_plan, **skill_meta},
             )
             await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
+            await self._wait_if_paused(
+                job_id=job.id,
+                pause_event=pause_requested_event,
+                cancel_event=cancel_requested_event,
+            )
 
             prepared = await self._run_prepare_stage(
                 job_id=job.id,
@@ -908,6 +1096,11 @@ class CodexWorker:
             )
             staged_artifacts.extend(self._prepare_stage_artifacts(prepared))
             await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
+            await self._wait_if_paused(
+                job_id=job.id,
+                pause_event=pause_requested_event,
+                cancel_event=cancel_requested_event,
+            )
 
             await self._emit_stage_event(
                 job_id=job.id,
@@ -936,6 +1129,11 @@ class CodexWorker:
             )
             await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
             if result.succeeded:
+                await self._wait_if_paused(
+                    job_id=job.id,
+                    pause_event=pause_requested_event,
+                    cancel_event=cancel_requested_event,
+                )
                 publish_note = await self._run_publish_stage(
                     job_id=job.id,
                     canonical_payload=canonical_payload,
@@ -1034,10 +1232,12 @@ class CodexWorker:
             )
         finally:
             self._active_cancel_event = None
+            self._active_pause_event = None
             heartbeat_stop.set()
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
+            await self._teardown_live_session(job_id=job.id)
 
         return True
 
@@ -1059,6 +1259,36 @@ class CodexWorker:
 
         if cancel_event.is_set():
             raise JobCancellationRequested("cancellation requested by user")
+
+    async def _wait_if_paused(
+        self,
+        *,
+        job_id: UUID,
+        pause_event: asyncio.Event,
+        cancel_event: asyncio.Event,
+    ) -> None:
+        """Block at safe checkpoints while operator pause is active."""
+
+        was_paused = False
+        while pause_event.is_set():
+            if cancel_event.is_set():
+                raise JobCancellationRequested("cancellation requested by user")
+            if not was_paused:
+                await self._emit_event(
+                    job_id=job_id,
+                    level="warn",
+                    message="task.control.pause.active",
+                    payload={"status": "paused"},
+                )
+                was_paused = True
+            await asyncio.sleep(1.0)
+        if was_paused:
+            await self._emit_event(
+                job_id=job_id,
+                level="info",
+                message="task.control.pause.cleared",
+                payload={"status": "resumed"},
+            )
 
     async def _acknowledge_cancellation(self, *, job_id: UUID, message: str) -> None:
         """Acknowledge cancellation and avoid terminal success/failure transitions."""
@@ -1312,6 +1542,11 @@ class CodexWorker:
             logs_dir.mkdir(parents=True, exist_ok=True)
             home_dir.mkdir(parents=True, exist_ok=True)
             skills_active_path.mkdir(parents=True, exist_ok=True)
+            await self._ensure_live_session_started(
+                job_id=job_id,
+                log_path=prepare_log_path,
+                cwd=job_root,
+            )
 
             deduped_selected_skills = tuple(
                 dict.fromkeys(
@@ -2184,6 +2419,195 @@ class CodexWorker:
         cache_root.mkdir(parents=True, exist_ok=True)
         return cache_root
 
+    async def _ensure_live_session_started(
+        self,
+        *,
+        job_id: UUID,
+        log_path: Path,
+        cwd: Path,
+    ) -> None:
+        """Best-effort live-session bootstrap for the active task run."""
+
+        if not self._config.live_session_enabled_default:
+            return
+        if self._active_live_session is not None:
+            return
+        if self._config.live_session_provider != "tmate":
+            return
+
+        expires_at = datetime.now(UTC) + timedelta(
+            minutes=max(1, self._config.live_session_ttl_minutes)
+        )
+        with suppress(Exception):
+            await self._queue_client.report_live_session(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                worker_hostname=socket.gethostname(),
+                status="starting",
+                provider="tmate",
+                expires_at=expires_at.isoformat(),
+            )
+
+        tmate_binary = shutil.which("tmate")
+        if not tmate_binary:
+            with suppress(Exception):
+                await self._queue_client.report_live_session(
+                    job_id=job_id,
+                    worker_id=self._config.worker_id,
+                    worker_hostname=socket.gethostname(),
+                    status="error",
+                    provider="tmate",
+                    error_message="tmate binary was not found in PATH",
+                    expires_at=expires_at.isoformat(),
+                )
+            return
+
+        socket_dir = Path("/tmp/moonmind/tmate")
+        socket_dir.mkdir(parents=True, exist_ok=True)
+        socket_path = socket_dir / f"{job_id}.sock"
+        socket_path.unlink(missing_ok=True)
+        session_name = f"mm-{str(job_id).replace('-', '')[:16]}"
+
+        try:
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "new-session", "-d", "-s", session_name],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "set", "-g", "remain-on-exit", "on"],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "set", "-g", "history-limit", "200000"],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "split-window", "-h", "-t", f"{session_name}:0"],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "split-window", "-v", "-t", f"{session_name}:0.0"],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "split-window", "-v", "-t", f"{session_name}:0.1"],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "wait", "tmate-ready"],
+                cwd=cwd,
+                log_path=log_path,
+            )
+            ssh_ro_result = await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "display", "-p", "#{tmate_ssh_ro}"],
+                cwd=cwd,
+                log_path=log_path,
+                check=False,
+            )
+            ssh_rw_result = await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "display", "-p", "#{tmate_ssh}"],
+                cwd=cwd,
+                log_path=log_path,
+                check=False,
+            )
+            web_ro_result = await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "display", "-p", "#{tmate_web_ro}"],
+                cwd=cwd,
+                log_path=log_path,
+                check=False,
+            )
+            web_rw_result = await self._run_stage_command(
+                [tmate_binary, "-S", str(socket_path), "display", "-p", "#{tmate_web}"],
+                cwd=cwd,
+                log_path=log_path,
+                check=False,
+            )
+            attach_ro = ssh_ro_result.stdout.strip() or None
+            attach_rw = ssh_rw_result.stdout.strip() or None
+            web_ro = web_ro_result.stdout.strip() or None
+            web_rw = web_rw_result.stdout.strip() or None
+            if not self._config.live_session_allow_web:
+                web_ro = None
+                web_rw = None
+
+            self._active_live_session = LiveSessionHandle(
+                job_id=job_id,
+                session_name=session_name,
+                socket_path=socket_path,
+                log_path=log_path,
+                status="ready",
+            )
+
+            with suppress(Exception):
+                await self._queue_client.report_live_session(
+                    job_id=job_id,
+                    worker_id=self._config.worker_id,
+                    worker_hostname=socket.gethostname(),
+                    status="ready",
+                    provider="tmate",
+                    attach_ro=attach_ro,
+                    attach_rw=attach_rw,
+                    web_ro=web_ro,
+                    web_rw=web_rw,
+                    tmate_session_name=session_name,
+                    tmate_socket_path=str(socket_path),
+                    expires_at=expires_at.isoformat(),
+                )
+        except Exception as exc:
+            with suppress(Exception):
+                await self._queue_client.report_live_session(
+                    job_id=job_id,
+                    worker_id=self._config.worker_id,
+                    worker_hostname=socket.gethostname(),
+                    status="error",
+                    provider="tmate",
+                    error_message=str(exc),
+                    tmate_session_name=session_name,
+                    tmate_socket_path=str(socket_path),
+                    expires_at=expires_at.isoformat(),
+                )
+            with suppress(Exception):
+                await self._run_stage_command(
+                    [tmate_binary, "-S", str(socket_path), "kill-session", "-t", session_name],
+                    cwd=cwd,
+                    log_path=log_path,
+                    check=False,
+                )
+            socket_path.unlink(missing_ok=True)
+
+    async def _teardown_live_session(self, *, job_id: UUID) -> None:
+        """Best-effort live-session teardown + terminal status report."""
+
+        live = self._active_live_session
+        self._active_live_session = None
+        if live is None:
+            return
+        tmate_binary = shutil.which("tmate") or "tmate"
+        with suppress(Exception):
+            await self._run_stage_command(
+                [tmate_binary, "-S", str(live.socket_path), "kill-session", "-t", live.session_name],
+                cwd=live.socket_path.parent,
+                log_path=live.log_path,
+                check=False,
+            )
+        live.socket_path.unlink(missing_ok=True)
+        with suppress(Exception):
+            await self._queue_client.report_live_session(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                worker_hostname=socket.gethostname(),
+                status="ended",
+                provider="tmate",
+                tmate_session_name=live.session_name,
+                tmate_socket_path=str(live.socket_path),
+            )
+
     @staticmethod
     def _extract_pr_url(stdout: str) -> str | None:
         for line in stdout.splitlines():
@@ -2319,10 +2743,17 @@ class CodexWorker:
         )
 
         cancel_event = getattr(self, "_active_cancel_event", None)
+        pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
+            if pause_event is not None and cancel_event is not None:
+                await self._wait_if_paused(
+                    job_id=job_id,
+                    pause_event=pause_event,
+                    cancel_event=cancel_event,
+                )
             step_log_path = (
                 prepared.artifacts_dir
                 / "logs"
@@ -2999,13 +3430,15 @@ class CodexWorker:
             "- Repo is already checked out on the working branch.\n"
             "- Do NOT commit or push. Publish is handled by MoonMind publish stage.\n"
             "- Skills are available via .agents/skills and .gemini/skills links.\n"
+            "- Selected skills are always materialized under ../skills_active/<skill-id>/.\n"
             "- Write logs to stdout/stderr; MoonMind captures them.\n\n"
             f"RUNTIME ADAPTER: {runtime_mode}"
         )
         if step.effective_skill_id != "auto":
             instruction += (
                 "\n\nSKILL USAGE:\n"
-                "Use the selected skill's files under .agents/skills/{skill}/ as the procedure for this step."
+                "Use the selected skill's files under .agents/skills/{skill}/ as the procedure for this step. "
+                "If that path is missing, use ../skills_active/{skill}/."
             ).format(skill=step.effective_skill_id)
         return instruction
 
@@ -3256,10 +3689,12 @@ class CodexWorker:
         job_id: UUID,
         stop_event: asyncio.Event,
         cancel_event: asyncio.Event,
+        pause_event: asyncio.Event | None = None,
     ) -> None:
         """Send lease renewals while a job is actively executing."""
 
         interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 5.0)
+        effective_pause_event = pause_event or asyncio.Event()
         while not stop_event.is_set():
             await asyncio.sleep(interval_seconds)
             if stop_event.is_set():
@@ -3275,6 +3710,25 @@ class CodexWorker:
                 ).strip()
                 if cancel_requested_at:
                     cancel_event.set()
+                payload_node = payload.get("payload")
+                live_control = (
+                    payload_node.get("liveControl")
+                    if isinstance(payload_node, Mapping)
+                    else None
+                )
+                paused = bool(live_control.get("paused")) if isinstance(
+                    live_control, Mapping
+                ) else False
+                if paused:
+                    effective_pause_event.set()
+                else:
+                    effective_pause_event.clear()
+                if self._active_live_session is not None:
+                    with suppress(Exception):
+                        await self._queue_client.heartbeat_live_session(
+                            job_id=job_id,
+                            worker_id=self._config.worker_id,
+                        )
             except Exception:
                 # Heartbeat errors are tolerated so terminal transition can still run.
                 continue
