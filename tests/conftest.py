@@ -54,5 +54,23 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
         if name in pyfuncitem.funcargs
     }
 
-    asyncio.run(test_function(**bound_args))
+    async def _run_test_with_keepalive():
+        stop_event = asyncio.Event()
+
+        async def _keepalive() -> None:
+            try:
+                while not stop_event.is_set():
+                    await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                # Keepalive cancellation is an expected shutdown path for this helper task.
+                pass
+
+        keepalive_task = asyncio.create_task(_keepalive())
+        try:
+            await test_function(**bound_args)
+        finally:
+            stop_event.set()
+            await keepalive_task
+
+    asyncio.run(_run_test_with_keepalive())
     return True
