@@ -16,8 +16,8 @@ from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
-    AgentQueueJobAuthorizationError,
     AgentQueueAuthorizationError,
+    AgentQueueJobAuthorizationError,
     AgentQueueService,
     LiveSessionNotFoundError,
     LiveSessionStateError,
