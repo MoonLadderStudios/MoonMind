@@ -49,6 +49,14 @@ from moonmind.schemas.agent_queue_models import (
     JobListResponse,
     JobModel,
     MigrationTelemetryResponse,
+    GrantTaskRunLiveSessionWriteRequest,
+    RevokeTaskRunLiveSessionRequest,
+    TaskRunControlEventModel,
+    TaskRunControlRequest,
+    TaskRunLiveSessionModel,
+    TaskRunLiveSessionResponse,
+    TaskRunLiveSessionWriteGrantResponse,
+    TaskRunOperatorMessageRequest,
     WorkerTokenCreateResponse,
     WorkerTokenListResponse,
     WorkerTokenModel,
@@ -548,6 +556,152 @@ async def ack_cancel_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)
+
+
+@router.post(
+    "/jobs/{job_id}/live-session",
+    response_model=TaskRunLiveSessionResponse,
+)
+async def create_job_live_session(
+    job_id: UUID,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> TaskRunLiveSessionResponse:
+    """Idempotently create/enable live session state for one queue task run."""
+
+    try:
+        live = await service.create_live_session(
+            task_run_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return TaskRunLiveSessionResponse(
+        session=TaskRunLiveSessionModel.model_validate(live),
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/live-session",
+    response_model=TaskRunLiveSessionResponse,
+)
+async def get_job_live_session(
+    job_id: UUID,
+    service: AgentQueueService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> TaskRunLiveSessionResponse:
+    """Fetch live session state for one queue task run."""
+
+    try:
+        live = await service.get_live_session(task_run_id=job_id)
+        if live is None:
+            raise LiveSessionNotFoundError("Live session is not enabled for this task run.")
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return TaskRunLiveSessionResponse(
+        session=TaskRunLiveSessionModel.model_validate(live),
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/live-session/grant-write",
+    response_model=TaskRunLiveSessionWriteGrantResponse,
+)
+async def grant_job_live_session_write(
+    job_id: UUID,
+    payload: GrantTaskRunLiveSessionWriteRequest = Body(
+        default_factory=GrantTaskRunLiveSessionWriteRequest
+    ),
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> TaskRunLiveSessionWriteGrantResponse:
+    """Return temporary RW attach details for one queue task run."""
+
+    try:
+        grant = await service.grant_live_session_write(
+            task_run_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+            ttl_minutes=payload.ttl_minutes,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return TaskRunLiveSessionWriteGrantResponse(
+        session=TaskRunLiveSessionModel.model_validate(grant.session),
+        attach_rw=grant.attach_rw,
+        web_rw=grant.web_rw,
+        granted_until=grant.granted_until,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/live-session/revoke",
+    response_model=TaskRunLiveSessionResponse,
+)
+async def revoke_job_live_session(
+    job_id: UUID,
+    payload: RevokeTaskRunLiveSessionRequest = Body(
+        default_factory=RevokeTaskRunLiveSessionRequest
+    ),
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> TaskRunLiveSessionResponse:
+    """Force revoke one queue task-run live session."""
+
+    try:
+        live = await service.revoke_live_session(
+            task_run_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+            reason=payload.reason,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return TaskRunLiveSessionResponse(
+        session=TaskRunLiveSessionModel.model_validate(live),
+    )
+
+
+@router.post("/jobs/{job_id}/control", response_model=JobModel)
+async def apply_job_control_action(
+    job_id: UUID,
+    payload: TaskRunControlRequest,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> JobModel:
+    """Apply pause/resume/takeover controls to one queue task run."""
+
+    try:
+        job = await service.apply_control_action(
+            task_run_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+            action=payload.action,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_job(job)
+
+
+@router.post(
+    "/jobs/{job_id}/operator-messages",
+    response_model=TaskRunControlEventModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def append_job_operator_message(
+    job_id: UUID,
+    payload: TaskRunOperatorMessageRequest,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> TaskRunControlEventModel:
+    """Append one operator message to the queue task run control stream."""
+
+    try:
+        event = await service.append_operator_message(
+            task_run_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+            message=payload.message,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return TaskRunControlEventModel.model_validate(event)
 
 
 @router.post(

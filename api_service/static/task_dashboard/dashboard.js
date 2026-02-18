@@ -519,10 +519,42 @@
         detail?.message ||
         payload?.message ||
         `${response.status} ${response.statusText}`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      error.statusText = response.statusText;
+      error.payload = payload;
+      if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+        error.code = detail.code ? String(detail.code) : "";
+      } else {
+        error.code = "";
+      }
+      throw error;
     }
 
     return payload;
+  }
+
+  function classifyLiveSessionError(error) {
+    const code = String(error?.code || "")
+      .trim()
+      .toLowerCase();
+    const message = String(error?.message || "")
+      .trim()
+      .toLowerCase();
+    const status = Number(error?.status || 0);
+
+    if (
+      code === "live_session_not_found" ||
+      message.includes("live session is not enabled")
+    ) {
+      return "disabled";
+    }
+
+    if (status === 404 && (message === "not found" || message === "404 not found")) {
+      return "route_missing";
+    }
+
+    return "other";
   }
 
   function setView(title, subtitle, body) {
@@ -1538,6 +1570,7 @@
       events: [],
       liveSession: null,
       liveSessionError: null,
+      liveSessionRouteMissing: false,
       liveSessionRwAttach: "",
       liveSessionRwWeb: "",
       liveSessionRwGrantedUntil: "",
@@ -1719,11 +1752,15 @@
           : {};
       const pauseActive = Boolean(pick(liveControl, "paused"));
       const liveSession = state.liveSession;
+      const liveSessionRouteMissing = Boolean(state.liveSessionRouteMissing);
       const liveSessionStatus = liveSession
         ? String(pick(liveSession, "status") || "disabled")
-        : "disabled";
+        : liveSessionRouteMissing
+          ? "unavailable"
+          : "disabled";
       const liveSessionCreated = Boolean(liveSession);
       const liveSessionReady = liveSessionStatus === "ready";
+      const liveSessionActionsDisabled = liveSessionRouteMissing;
       const showGrantDetails = Boolean(state.liveSessionRwAttach);
       const liveSessionSection = job
         ? `
@@ -1766,22 +1803,34 @@
               }
               <div class="actions">
                 <button type="button" id="queue-live-enable" ${
-                  liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
+                  liveSessionActionsDisabled
                     ? "disabled"
-                    : ""
+                    : liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
+                      ? "disabled"
+                      : ""
                 }>Enable Live Session</button>
-                <button type="button" id="queue-live-grant" ${liveSessionReady ? "" : "disabled"}>Grant Write (15m)</button>
+                <button type="button" id="queue-live-grant" ${
+                  liveSessionReady && !liveSessionActionsDisabled ? "" : "disabled"
+                }>Grant Write (15m)</button>
                 <button type="button" id="queue-live-revoke" ${
-                  liveSessionCreated ? "" : "disabled"
+                  liveSessionCreated && !liveSessionActionsDisabled ? "" : "disabled"
                 }>Revoke Session</button>
-                <button type="button" id="queue-live-pause">${
+                <button type="button" id="queue-live-pause" ${
+                  liveSessionActionsDisabled ? "disabled" : ""
+                }>${
                   pauseActive ? "Resume" : "Pause"
                 }</button>
-                <button type="button" id="queue-live-takeover">Takeover</button>
+                <button type="button" id="queue-live-takeover" ${
+                  liveSessionActionsDisabled ? "disabled" : ""
+                }>Takeover</button>
               </div>
               <div class="actions">
-                <input id="queue-operator-message" placeholder="Send operator message..." />
-                <button type="button" id="queue-operator-send">Send</button>
+                <input id="queue-operator-message" placeholder="Send operator message..." ${
+                  liveSessionActionsDisabled ? "disabled" : ""
+                } />
+                <button type="button" id="queue-operator-send" ${
+                  liveSessionActionsDisabled ? "disabled" : ""
+                }>Send</button>
               </div>
             </section>
           `
@@ -1911,7 +1960,7 @@
           try {
             await fetchJson(
               endpoint(
-                queueSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
+                queueSourceConfig.liveSession || "/api/queue/jobs/{id}/live-session",
                 { id: jobId },
               ),
               {
@@ -1942,7 +1991,7 @@
             const grant = await fetchJson(
               endpoint(
                 queueSourceConfig.liveSessionGrantWrite ||
-                  "/api/task-runs/{id}/live-session/grant-write",
+                  "/api/queue/jobs/{id}/live-session/grant-write",
                 { id: jobId },
               ),
               {
@@ -1973,7 +2022,7 @@
             await fetchJson(
               endpoint(
                 queueSourceConfig.liveSessionRevoke ||
-                  "/api/task-runs/{id}/live-session/revoke",
+                  "/api/queue/jobs/{id}/live-session/revoke",
                 { id: jobId },
               ),
               {
@@ -2003,7 +2052,7 @@
           setLiveNotice(action === "pause" ? "Pausing worker..." : "Resuming worker...");
           try {
             await fetchJson(
-              endpoint(queueSourceConfig.taskControl || "/api/task-runs/{id}/control", {
+              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
                 id: jobId,
               }),
               {
@@ -2029,7 +2078,7 @@
           setLiveNotice("Requesting takeover...");
           try {
             await fetchJson(
-              endpoint(queueSourceConfig.taskControl || "/api/task-runs/{id}/control", {
+              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
                 id: jobId,
               }),
               {
@@ -2061,7 +2110,8 @@
           try {
             await fetchJson(
               endpoint(
-                queueSourceConfig.operatorMessages || "/api/task-runs/{id}/operator-messages",
+                queueSourceConfig.operatorMessages ||
+                  "/api/queue/jobs/{id}/operator-messages",
                 { id: jobId },
               ),
               {
@@ -2133,17 +2183,23 @@
         ]);
         let liveSession = null;
         let liveSessionError = null;
+        let liveSessionRouteMissing = false;
         try {
           const livePayload = await fetchJson(
             endpoint(
-              queueSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
+              queueSourceConfig.liveSession || "/api/queue/jobs/{id}/live-session",
               { id: jobId },
             ),
           );
           liveSession = pick(livePayload || {}, "session") || null;
         } catch (error) {
-          const message = String(error?.message || "");
-          if (!message.toLowerCase().includes("live session is not enabled")) {
+          const classification = classifyLiveSessionError(error);
+          if (classification === "route_missing") {
+            liveSessionRouteMissing = true;
+            liveSessionError =
+              "Live session API is unavailable on this deployment. Verify queue live-session routes are exposed.";
+          } else if (classification === "other") {
+            const message = String(error?.message || "");
             liveSessionError = message || "Live session unavailable.";
           }
         }
@@ -2151,6 +2207,7 @@
         state.artifacts = artifactsPayload?.items || [];
         state.liveSession = liveSession;
         state.liveSessionError = liveSessionError;
+        state.liveSessionRouteMissing = liveSessionRouteMissing;
         render(null);
       } catch (error) {
         console.error("queue detail load failed", error);
@@ -2158,6 +2215,7 @@
         state.artifacts = [];
         state.liveSession = null;
         state.liveSessionError = null;
+        state.liveSessionRouteMissing = false;
         render("Failed to load queue detail.");
       }
     };

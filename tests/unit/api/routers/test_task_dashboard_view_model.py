@@ -48,20 +48,21 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     )
     assert config["sources"]["queue"]["skills"] == "/api/tasks/skills"
     assert (
-        config["sources"]["queue"]["liveSession"] == "/api/task-runs/{id}/live-session"
+        config["sources"]["queue"]["liveSession"]
+        == "/api/queue/jobs/{id}/live-session"
     )
     assert (
         config["sources"]["queue"]["liveSessionGrantWrite"]
-        == "/api/task-runs/{id}/live-session/grant-write"
+        == "/api/queue/jobs/{id}/live-session/grant-write"
     )
     assert (
         config["sources"]["queue"]["liveSessionRevoke"]
-        == "/api/task-runs/{id}/live-session/revoke"
+        == "/api/queue/jobs/{id}/live-session/revoke"
     )
-    assert config["sources"]["queue"]["taskControl"] == "/api/task-runs/{id}/control"
+    assert config["sources"]["queue"]["taskControl"] == "/api/queue/jobs/{id}/control"
     assert (
         config["sources"]["queue"]["operatorMessages"]
-        == "/api/task-runs/{id}/operator-messages"
+        == "/api/queue/jobs/{id}/operator-messages"
     )
     assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"

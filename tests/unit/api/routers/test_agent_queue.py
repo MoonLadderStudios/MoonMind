@@ -62,6 +62,47 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
     )
 
 
+def _build_live_session(
+    *,
+    task_run_id=None,
+    status: models.AgentJobLiveSessionStatus = models.AgentJobLiveSessionStatus.READY,
+):
+    now = datetime.now(UTC)
+    run_id = task_run_id or uuid4()
+    return SimpleNamespace(
+        id=uuid4(),
+        task_run_id=run_id,
+        provider=models.AgentJobLiveSessionProvider.TMATE,
+        status=status,
+        created_at=now,
+        updated_at=now,
+        ready_at=now if status is models.AgentJobLiveSessionStatus.READY else None,
+        ended_at=None,
+        expires_at=now,
+        rw_granted_until=None,
+        worker_id="worker-1",
+        worker_hostname="host-1",
+        tmate_session_name="mm-test",
+        tmate_socket_path="/tmp/moonmind/tmate/test.sock",
+        attach_ro="ssh ro",
+        web_ro=None,
+        last_heartbeat_at=now,
+        error_message=None,
+    )
+
+
+def _build_control_event(task_run_id):
+    now = datetime.now(UTC)
+    return SimpleNamespace(
+        id=uuid4(),
+        task_run_id=task_run_id,
+        actor_user_id=uuid4(),
+        action="send_message",
+        metadata_json={"message": "hello"},
+        created_at=now,
+    )
+
+
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock]]:
     """Provide a TestClient with queue service dependency overridden."""
@@ -213,6 +254,105 @@ def test_get_job_not_found_returns_404(client: tuple[TestClient, AsyncMock]) -> 
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "job_not_found"
+
+
+def test_create_job_live_session_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """POST /jobs/{id}/live-session should create session tracking state."""
+
+    test_client, service = client
+    job_id = uuid4()
+    service.create_live_session.return_value = _build_live_session(
+        task_run_id=job_id,
+        status=models.AgentJobLiveSessionStatus.STARTING,
+    )
+
+    response = test_client.post(f"/api/queue/jobs/{job_id}/live-session", json={})
+
+    assert response.status_code == 200
+    assert response.json()["session"]["taskRunId"] == str(job_id)
+    assert response.json()["session"]["status"] == "starting"
+    service.create_live_session.assert_awaited_once()
+
+
+def test_get_job_live_session_not_found_maps_404(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """GET /jobs/{id}/live-session should map missing session to 404."""
+
+    test_client, service = client
+    job_id = uuid4()
+    service.get_live_session.return_value = None
+
+    response = test_client.get(f"/api/queue/jobs/{job_id}/live-session")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "live_session_not_found"
+
+
+def test_grant_job_live_session_write_success(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """POST grant-write alias should return RW attach details."""
+
+    test_client, service = client
+    job_id = uuid4()
+    live = _build_live_session(task_run_id=job_id)
+    service.grant_live_session_write.return_value = SimpleNamespace(
+        session=live,
+        attach_rw="ssh rw",
+        web_rw="https://web-rw",
+        granted_until=datetime.now(UTC),
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job_id}/live-session/grant-write",
+        json={"ttlMinutes": 15},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["attachRw"] == "ssh rw"
+    service.grant_live_session_write.assert_awaited_once()
+
+
+def test_apply_job_control_action_success(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """POST /jobs/{id}/control should apply action and return updated job."""
+
+    test_client, service = client
+    job_id = uuid4()
+    service.apply_control_action.return_value = _build_job(
+        status=models.AgentJobStatus.RUNNING
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job_id}/control",
+        json={"action": "pause"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    service.apply_control_action.assert_awaited_once()
+
+
+def test_append_job_operator_message_success(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """POST /jobs/{id}/operator-messages should append one control event."""
+
+    test_client, service = client
+    job_id = uuid4()
+    service.append_operator_message.return_value = _build_control_event(job_id)
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job_id}/operator-messages",
+        json={"message": "Please continue with logs"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["taskRunId"] == str(job_id)
+    assert response.json()["action"] == "send_message"
+    service.append_operator_message.assert_awaited_once()
 
 
 def test_migration_telemetry_returns_summary(
