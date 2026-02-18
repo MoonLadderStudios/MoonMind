@@ -70,7 +70,6 @@
 ```json
 {
   "type": "manifest",
-  "requiredCapabilities": ["manifest", "qdrant", "embeddings", "github"],
   "payload": {
     "manifest": {
       "name": "repo-docs",
@@ -81,10 +80,11 @@
   }
 }
 ```
+- **Behavior**: API derives and stores `payload.requiredCapabilities` server-side during job creation.
 - **Response 202**:
 ```json
 { "jobId": "uuid" }
 ```
 
-## SSE /api/queue/jobs/{jobId}/events
+## SSE /api/queue/jobs/{job_id}/events/stream
 - **Description**: Streams `moonmind.manifest.*` stage events for manifest runs (validate → finalize) with counts/timings.

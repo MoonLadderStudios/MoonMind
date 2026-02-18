@@ -14,8 +14,7 @@
 ## ManifestJobPayload
 - **Purpose**: Agent Queue payload for manifest jobs.
 - **Fields**:
-  - `type` (string): Always `manifest`.
-  - `requiredCapabilities[]`: Derived capabilities (at minimum `manifest`, `embeddings`, vector store + source connectors).
+  - `requiredCapabilities[]`: Server-derived capabilities (at minimum `manifest`, `embeddings`, vector store + source connectors).
   - `manifest` (object): Includes `name`, `action` (`plan` or `run` phase 1), `source`, and `options` (`dryRun`, `forceFull`, `maxDocs`).
   - `source.kind`: `inline`, `path`, `registry`, or `repo`; Phase 1 supports inline + path.
 
@@ -38,11 +37,14 @@
   - `tokens`: `MOONMIND_WORKER_TOKEN` referencing server-trusted secrets, not stored in payloads.
 
 ## Manifest Registry (Postgres `manifest` table)
-- **Columns** (additive to existing schema):
-  - `name` (PK): Manifest identifier.
+- **Existing columns**:
+  - `id` (integer, PK)
+  - `name` (string, unique): Manifest identifier.
+  - `content` (text): Stored manifest body.
+  - `content_hash` (string): Content hash for change detection.
+  - `last_indexed_at` (timestamptz, nullable): Last successful indexing timestamp.
+- **Proposed additive columns**:
   - `version` (string, nullable): `v0` or `legacy`.
-  - `yaml` (text): Stored manifest body.
-  - `hash` (bytea/text): Content hash for change detection.
   - `updated_at` (timestamptz): Last write timestamp.
   - `last_run_job_id` (UUID, nullable): Most recent queue job.
   - `last_run_status` (string, nullable): Job outcome for dashboard linking.

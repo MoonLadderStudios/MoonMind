@@ -5,12 +5,13 @@
    - Ensure `vectorStore.type = qdrant` and embeddings provider align on dimensions.
 
 2. **Submit a manifest run (Phase 1 path)**
-   - Compose ManifestJobPayload with `type="manifest"`, `requiredCapabilities` (manifest, embeddings, qdrant, source connectors), and a `manifest.source` of kind `inline` or `path`.
+   - Compose a queue job request with `type="manifest"` and a payload containing the `manifest` object with `manifest.source` kind `inline` or `path`.
+   - Do not send `requiredCapabilities`; the API derives capabilities from the manifest before persisting the job.
    - `curl -X POST /api/queue/jobs` with the payload; confirm response returns `jobId`.
 
 3. **Monitor the run**
    - Open Tasks Dashboard → `Manifests` category (new tab) to view status.
-   - Stream events via `/api/queue/jobs/{jobId}/events` and download artifacts once available.
+   - Stream events via `/api/queue/jobs/{jobId}/events/stream` (or poll `/api/queue/jobs/{jobId}/events`) and download artifacts once available.
 
 4. **Implement worker configuration**
    - Launch `moonmind-manifest-worker` with env vars: `MOONMIND_URL`, `MOONMIND_WORKER_ID`, `MOONMIND_WORKER_TOKEN`, `MOONMIND_WORKDIR`, `MOONMIND_WORKER_CAPABILITIES`, embedding provider keys, and `QDRANT_*` settings.

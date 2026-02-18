@@ -91,7 +91,30 @@ It is executed only by workers advertising capability `manifest`.
 
 ### 6.2 Canonical payload: ManifestJobPayload
 
-The payload MUST include `requiredCapabilities` so server-side claim filtering works.
+Clients submit only the manifest payload. The API validates the manifest and derives
+`requiredCapabilities` server-side before persisting the job so claim filtering works.
+
+Client request payload:
+
+```json
+{
+  "manifest": {
+    "name": "repo-docs",
+    "action": "run",
+    "source": {
+      "kind": "inline",
+      "content": "version: \"v0\"\nmetadata:\n  name: ...\n"
+    },
+    "options": {
+      "dryRun": false,
+      "forceFull": false,
+      "maxDocs": null
+    }
+  }
+}
+```
+
+Persisted queue payload (after API derivation):
 
 ```json
 {
@@ -157,7 +180,15 @@ Workers must advertise a superset of required capabilities or they will never cl
 
 Reuse existing `manifest` table (`ManifestRecord`) and extend as needed:
 
-Required columns (additive, backward compatible):
+Existing columns today:
+
+* `id` (integer PK)
+* `name` (string, unique)
+* `content` (text manifest body)
+* `content_hash` (string hash)
+* `last_indexed_at` (nullable timestamp)
+
+Additive columns (backward compatible):
 
 * `version` (nullable string; `"v0"` or `"legacy"`)
 * `updated_at` (timestamp)
@@ -393,8 +424,8 @@ Worker must redact token-like strings from:
 
 ### Phase 1 (MVP): Manifest runs as queue jobs
 
-1. Add job type `manifest` to AgentQueueService allowed types.
-2. Add `ManifestJobPayload` schema + validation + capability derivation.
+1. Add `manifest` to queue job type constants in `task_contract.py` so `_SUPPORTED_QUEUE_JOB_TYPES` in `service.py` accepts it.
+2. Add `ManifestJobPayload` schema + validation + server-side capability derivation, and add explicit manifest handling in queue payload normalization so manifest fields are preserved.
 3. Implement `moonmind-manifest-worker`:
 
    * validate → run minimal ingestion (qdrant + one embedding provider) → artifacts/events
