@@ -9,3 +9,7 @@ celery_broker_url = ""
 celery_result_backend = ""
 codex_queue = "codex"
 artifact_root = "var/artifacts/spec_workflows"
+
+[feature_flags]
+# Enable the Task Preset Catalog (UI + API). Default off until migrations run.
+task_template_catalog = false

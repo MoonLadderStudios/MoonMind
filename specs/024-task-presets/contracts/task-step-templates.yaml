@@ -1,0 +1,348 @@
+openapi: 3.0.3
+info:
+  title: Task Step Template API
+  version: 0.1.0
+paths:
+  /api/task-step-templates:
+    get:
+      summary: List templates filtered by scope/tag/query/favorites.
+      parameters:
+        - in: query
+          name: scope
+          schema:
+            type: string
+            enum: [global, team, personal]
+        - in: query
+          name: tag
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: favoritesOnly
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Template summaries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateListResponse'
+    post:
+      summary: Create template (team/personal scopes).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateCreateRequest'
+      responses:
+        '201':
+          description: Created template metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateResponse'
+  /api/task-step-templates/{slug}:
+    get:
+      summary: Fetch latest version of a template by slug.
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateResponse'
+    delete:
+      summary: Soft-delete template (owner/admin only).
+      parameters:
+        - $ref: '#/components/parameters/TemplateSlug'
+      responses:
+        '204':
+          description: Deleted
+  /api/task-step-templates/{slug}/versions/{version}:
+    get:
+      summary: Fetch a specific template version.
+      parameters:
+        - $ref: '#/components/parameters/TemplateSlug'
+        - in: path
+          name: version
+          schema:
+            type: string
+          required: true
+      responses:
+        '200':
+          description: Version payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateVersion'
+  /api/task-step-templates/{slug}:expand:
+    post:
+      summary: Expand template with user-provided inputs and context.
+      parameters:
+        - $ref: '#/components/parameters/TemplateSlug'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateExpandRequest'
+      responses:
+        '200':
+          description: Expanded step list and audit metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateExpandResponse'
+  /api/task-step-templates/save-from-task:
+    post:
+      summary: Convert selected draft steps into a template.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateSaveFromTaskRequest'
+      responses:
+        '201':
+          description: Created template slug/version reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateResponse'
+components:
+  parameters:
+    TemplateSlug:
+      in: path
+      name: slug
+      required: true
+      schema:
+        type: string
+  schemas:
+    TemplateListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateSummary'
+    TemplateSummary:
+      type: object
+      properties:
+        slug:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        latestVersion:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        scope:
+          type: string
+        isFavorite:
+          type: boolean
+        recentAppliedAt:
+          type: string
+          format: date-time
+    TemplateCreateRequest:
+      type: object
+      required: [slug, title, description, scope, inputs, steps]
+      properties:
+        slug:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        scope:
+          type: string
+          enum: [team, personal]
+        tags:
+          type: array
+          items:
+            type: string
+        inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateInput'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateStepBlueprint'
+    TemplateResponse:
+      type: object
+      properties:
+        slug:
+          type: string
+        version:
+          type: string
+        scope:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateInput'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateStepBlueprint'
+        annotations:
+          type: object
+        requiredCapabilities:
+          type: array
+          items:
+            type: string
+    TemplateVersion:
+      allOf:
+        - $ref: '#/components/schemas/TemplateResponse'
+        - type: object
+          properties:
+            releaseStatus:
+              type: string
+              enum: [draft, active, inactive]
+            reviewedBy:
+              type: string
+              nullable: true
+            reviewedAt:
+              type: string
+              format: date-time
+              nullable: true
+    TemplateInput:
+      type: object
+      required: [name, label, type]
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        type:
+          type: string
+          enum: [text, textarea, markdown, enum, boolean, user, team, repo_path]
+        required:
+          type: boolean
+        default:
+          nullable: true
+        options:
+          type: array
+          items:
+            type: string
+    TemplateStepBlueprint:
+      type: object
+      required: [instructions]
+      properties:
+        slug:
+          type: string
+        title:
+          type: string
+        instructions:
+          type: string
+        skill:
+          type: object
+          properties:
+            id:
+              type: string
+            args:
+              type: object
+            requiredCapabilities:
+              type: array
+              items:
+                type: string
+        annotations:
+          type: object
+    TemplateExpandRequest:
+      type: object
+      required: [version, inputs]
+      properties:
+        version:
+          type: string
+        inputs:
+          type: object
+        options:
+          type: object
+          properties:
+            enforceStepLimit:
+              type: boolean
+    TemplateExpandResponse:
+      type: object
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConcreteStep'
+        appliedTemplate:
+          type: object
+          properties:
+            slug:
+              type: string
+            version:
+              type: string
+            inputs:
+              type: object
+            stepIds:
+              type: array
+              items:
+                type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+    ConcreteStep:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        instructions:
+          type: string
+        skill:
+          $ref: '#/components/schemas/TemplateStepBlueprint/properties/skill'
+    TemplateSaveFromTaskRequest:
+      type: object
+      required: [steps]
+      properties:
+        scope:
+          type: string
+          enum: [personal, team]
+        title:
+          type: string
+        description:
+          type: string
+        selectedStepIds:
+          type: array
+          items:
+            type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateStepBlueprint'
+        suggestedInputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateInput'
+        tags:
+          type: array
+          items:
+            type: string

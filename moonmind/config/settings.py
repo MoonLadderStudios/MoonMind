@@ -715,6 +715,23 @@ class OIDCSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+class FeatureFlagsSettings(BaseSettings):
+    """Feature flag toggles for runtime surfaces."""
+
+    task_template_catalog: bool = Field(
+        False,
+        env="TASK_TEMPLATE_CATALOG",
+        description="Enable task preset catalog endpoints + UI wiring.",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="FEATURE_FLAGS__",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -734,6 +751,7 @@ class AppSettings(BaseSettings):
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
     spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
+    feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")

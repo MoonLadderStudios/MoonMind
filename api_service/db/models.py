@@ -18,6 +18,7 @@ from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -146,6 +147,12 @@ __all__ = [
     "CodexCredentialStatus",
     "GitHubCredentialStatus",
     "CodexPreflightStatus",
+    "TaskTemplateScopeType",
+    "TaskTemplateReleaseStatus",
+    "TaskStepTemplate",
+    "TaskStepTemplateVersion",
+    "TaskStepTemplateFavorite",
+    "TaskStepTemplateRecent",
 ]
 
 
@@ -198,8 +205,371 @@ class OrchestratorRunPriority(str, enum.Enum):
     """Execution priority for orchestrator runs."""
 
     NORMAL = "normal"
-    HIGH = "high"
 
+
+class TaskTemplateScopeType(str, enum.Enum):
+    """Scope owner for task step template visibility."""
+
+    GLOBAL = "global"
+    TEAM = "team"
+    PERSONAL = "personal"
+
+
+class TaskTemplateReleaseStatus(str, enum.Enum):
+    """Release lifecycle for task step template versions."""
+
+    DRAFT = "draft"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class TaskStepTemplate(Base):
+    """Top-level catalog entry for reusable task step templates."""
+
+    __tablename__ = "task_step_templates"
+    __table_args__ = (
+        UniqueConstraint(
+            "slug", "scope_type", "scope_ref", name="uq_task_step_template_slug_scope"
+        ),
+        Index("ix_task_step_templates_scope", "scope_type", "scope_ref"),
+        Index("ix_task_step_templates_slug", "slug"),
+        Index("ix_task_step_templates_active", "is_active"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope_type: Mapped[TaskTemplateScopeType] = mapped_column(
+        Enum(
+            TaskTemplateScopeType,
+            name="tasktemplatescopetype",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    scope_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(mutable_json_list(), default=list)
+    required_capabilities: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), default=list
+    )
+    latest_version_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "task_step_template_versions.id",
+            name="fk_task_template_latest_version",
+            use_alter=True,
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    versions: Mapped[list["TaskStepTemplateVersion"]] = relationship(
+        "TaskStepTemplateVersion",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="TaskStepTemplateVersion.created_at",
+    )
+    favorites: Mapped[list["TaskStepTemplateFavorite"]] = relationship(
+        "TaskStepTemplateFavorite",
+        back_populates="template",
+        cascade="all, delete-orphan",
+    )
+
+
+class TaskStepTemplateVersion(Base):
+    """Immutable release of a template blueprint."""
+
+    __tablename__ = "task_step_template_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id", "version", name="uq_task_step_template_version_label"
+        ),
+        Index("ix_task_step_template_versions_template", "template_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("task_step_templates.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    inputs_schema: Mapped[list[dict[str, Any]]] = mapped_column(
+        mutable_json_list(), nullable=False
+    )
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(
+        mutable_json_list(), nullable=False
+    )
+    annotations: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    required_capabilities: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), default=list
+    )
+    max_step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
+    release_status: Mapped[TaskTemplateReleaseStatus] = mapped_column(
+        Enum(
+            TaskTemplateReleaseStatus,
+            name="tasktemplatereleasestatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TaskTemplateReleaseStatus.DRAFT,
+    )
+    reviewed_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    seed_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    template: Mapped[TaskStepTemplate] = relationship(
+        "TaskStepTemplate", back_populates="versions"
+    )
+    recents: Mapped[list["TaskStepTemplateRecent"]] = relationship(
+        "TaskStepTemplateRecent",
+        back_populates="template_version",
+        cascade="all, delete-orphan",
+    )
+
+
+class TaskStepTemplateFavorite(Base):
+    """User favorites for quick preset access."""
+
+    __tablename__ = "task_step_template_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "template_id", name="uq_task_template_favorite"),
+        Index("ix_task_step_template_favorites_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("task_step_templates.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    template: Mapped[TaskStepTemplate] = relationship(
+        "TaskStepTemplate", back_populates="favorites"
+    )
+
+
+class TaskStepTemplateRecent(Base):
+    """Tracks most recent template applications per user."""
+
+    __tablename__ = "task_step_template_recents"
+    __table_args__ = (
+        Index("ix_task_step_template_recents_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    template_version_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("task_step_template_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    applied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    template_version: Mapped[TaskStepTemplateVersion] = relationship(
+        "TaskStepTemplateVersion", back_populates="recents"
+    )
+
+class TaskStepTemplate(Base):
+    """Top-level catalog entry for reusable task step templates."""
+
+    __tablename__ = "task_step_templates"
+    __table_args__ = (
+        UniqueConstraint(
+            "slug", "scope_type", "scope_ref", name="uq_task_step_template_slug_scope"
+        ),
+        Index("ix_task_step_templates_scope", "scope_type", "scope_ref"),
+        Index("ix_task_step_templates_slug", "slug"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope_type: Mapped[TaskTemplateScopeType] = mapped_column(
+        Enum(
+            TaskTemplateScopeType,
+            name="tasktemplatescopetype",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    scope_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(mutable_json_list(), default=list)
+    required_capabilities: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), default=list
+    )
+    latest_version_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("task_step_template_versions.id", use_alter=True, ondelete="SET NULL"),
+        nullable=True,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    versions: Mapped[list["TaskStepTemplateVersion"]] = relationship(
+        "TaskStepTemplateVersion",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="TaskStepTemplateVersion.created_at",
+    )
+    favorites: Mapped[list["TaskStepTemplateFavorite"]] = relationship(
+        "TaskStepTemplateFavorite",
+        back_populates="template",
+        cascade="all, delete-orphan",
+    )
+
+
+class TaskStepTemplateVersion(Base):
+    """Immutable release of a template blueprint."""
+
+    __tablename__ = "task_step_template_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id", "version", name="uq_task_step_template_version_label"
+        ),
+        Index("ix_task_step_template_versions_template", "template_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("task_step_templates.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    inputs_schema: Mapped[list[dict[str, Any]]] = mapped_column(
+        mutable_json_list(), nullable=False
+    )
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(
+        mutable_json_list(), nullable=False
+    )
+    annotations: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    required_capabilities: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), default=list
+    )
+    max_step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
+    release_status: Mapped[TaskTemplateReleaseStatus] = mapped_column(
+        Enum(
+            TaskTemplateReleaseStatus,
+            name="tasktemplatereleasestatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TaskTemplateReleaseStatus.DRAFT,
+    )
+    reviewed_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    seed_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    template: Mapped[TaskStepTemplate] = relationship(
+        "TaskStepTemplate", back_populates="versions"
+    )
+    recents: Mapped[list["TaskStepTemplateRecent"]] = relationship(
+        "TaskStepTemplateRecent",
+        back_populates="template_version",
+        cascade="all, delete-orphan",
+    )
+
+
+class TaskStepTemplateFavorite(Base):
+    """User favorites for quick preset access."""
+
+    __tablename__ = "task_step_template_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "template_id", name="uq_task_template_favorite"),
+        Index("ix_task_step_template_favorites_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("task_step_templates.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    template: Mapped[TaskStepTemplate] = relationship(
+        "TaskStepTemplate", back_populates="favorites"
+    )
+
+
+class TaskStepTemplateRecent(Base):
+    """Tracks most recent template applications per user."""
+
+    __tablename__ = "task_step_template_recents"
+    __table_args__ = (
+        Index("ix_task_step_template_recents_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    template_version_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("task_step_template_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    applied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    template_version: Mapped[TaskStepTemplateVersion] = relationship(
+        "TaskStepTemplateVersion", back_populates="recents"
+    )
 
 class OrchestratorPlanStep(str, enum.Enum):
     """Supported steps inside an orchestrator ActionPlan."""
