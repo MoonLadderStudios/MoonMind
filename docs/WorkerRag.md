@@ -2,6 +2,16 @@
 
 This document captures how Codex CLI workers perform retrieval-augmented reasoning without any extra generative hops. The loop is strictly **(embed query) → (Qdrant search) → (inject retrieved text into the Codex prompt)** and leans on the direct Qdrant client for all worker reads/writes.
 
+## Status (Current vs Target)
+
+- **Current implementation (as of 2026-02-18)**:
+  - Registered worker CLI entry point: `moonmind-codex-worker` (`pyproject.toml`).
+  - Retrieval path: `QdrantRAG.retrieve_context()` returns `List[NodeWithScore]`.
+  - Runtime Qdrant env vars: `QDRANT_HOST` + `QDRANT_PORT` (and optional `QDRANT_API_KEY`).
+- **Target state described below**:
+  - Add dedicated worker subcommands such as `moonmind rag search`, `moonmind rag overlay upsert`, and `moonmind worker doctor`.
+  - Add a serialization adapter so workers can emit a stable JSON context-pack contract.
+
 ## Goals
 
 - Give every worker a deterministic way to retrieve the latest relevant context while editing a repo.
@@ -12,17 +22,19 @@ This document captures how Codex CLI workers perform retrieval-augmented reasoni
 ## Worker-Facing Flow
 
 1. **Pre-flight**
-   - Worker boots with `GOOGLE_API_KEY`, `GOOGLE_EMBEDDING_MODEL`, and `QDRANT_URL` exported.
-   - `moonmind worker doctor` validates Qdrant connectivity, collection dimensions, and embedding model alignment (reuse the checks from `docs/WorkerVectorEmbedding.md`).
+   - Worker boots with `GOOGLE_API_KEY`, `GOOGLE_EMBEDDING_MODEL`, `QDRANT_HOST`, and `QDRANT_PORT` exported.
+   - **Target**: `moonmind worker doctor` validates Qdrant connectivity, collection dimensions, and embedding model alignment (reuse the checks from `docs/WorkerVectorEmbedding.md`).
 2. **Embed the query**
    - Use the configured embedding provider (Gemini/OpenAI/Ollama) directly inside the worker process.
    - Normalize whitespace and truncate to the embedding model's supported token limit.
 3. **Search Qdrant**
-   - Invoke the lean `qdrant-client` from the new `moonmind rag search` command.
-   - Default search parameters: `top_k=8`, `score_threshold=0.68`, plus payload filters (`repo`, `tenant`, `run_id`).
+   - **Current**: call `QdrantRAG.retrieve_context()` in process.
+   - **Target**: invoke the lean `qdrant-client` from the new `moonmind rag search` command.
+   - Default search parameters should follow runtime settings: `similarity_top_k` defaults to `5` via `RAG_SIMILARITY_TOP_K` (with `QdrantRAG` constructor fallback `3`), plus payload filters (`repo`, `tenant`, `run_id`).
    - Optionally issue follow-up `scroll` calls when pagination is required.
 4. **Format the context pack**
-   - Convert hits into a deterministic JSON block:
+   - **Current**: retrieval returns raw `NodeWithScore` objects.
+   - **Target**: convert hits into a deterministic JSON block:
      ```json
      {
        "context_text": "... ready-to-paste markdown ...",
@@ -37,6 +49,7 @@ This document captures how Codex CLI workers perform retrieval-augmented reasoni
        ]
      }
      ```
+   - `offset_start` and `offset_end` are 0-based character offsets in the source file text (not line numbers).
    - Emit telemetry events (`qdrant_query_completed`) with counts and timings.
 5. **Inject into Codex prompt**
    - Prepend the `context_text` block (plus citations) to the next Codex turn before writing any reasoning or code.
@@ -51,10 +64,11 @@ This document captures how Codex CLI workers perform retrieval-augmented reasoni
   - `--filters repo=my-repo tenant=moonmind`
   - `--top-k 12`
   - `--overlay include` (see overlay section below)
-- Outputs both the `context_text` string (stdout) and a structured JSON blob (stderr or file) for downstream logging.
+- Outputs `context_text` to stdout and writes structured JSON to `--output-file <path>` for downstream logging.
+- Reserve stderr for errors/warnings so machine-readable output remains stable.
 - Errors include actionable hints (e.g., collection dimension mismatch, missing credential) so workers can fix setup fast.
 
-## Making the Capability Obvious to Workers
+## Making the Capability Obvious to Workers (Target State)
 
 To guarantee workers know that database retrieval is available and required:
 
@@ -83,6 +97,21 @@ Workers often edit files that have not been embedded yet. Solve staleness by add
 - After writing or refactoring a file, the worker calls `moonmind rag overlay upsert path/to/file.py`.
 - Overlay vectors either go into a dedicated collection (`repo__overlay__<run_id>`) or share the canonical collection with payload `{run_id, trust_class="workspace_overlay", expires_at}`.
 - Queries search both canonical data and overlay data, merging hits by `(path, chunk_hash)` so the freshest version wins.
+
+### Overlay Storage Trade-Offs
+
+| Option | Strengths | Weaknesses | Suggested Use |
+|---|---|---|---|
+| Dedicated overlay collection per run (`repo__overlay__<run_id>`) | Fast cleanup via collection drop; simple TTL boundaries; minimal filter complexity | More collections to manage; potential control-plane overhead at high run volume | Default for isolated CI-style worker runs |
+| Shared canonical collection + overlay payload markers | Fewer collections; easier cross-run analytics in one place | Harder cleanup (`expires_at` sweeps); more complex filters; higher risk of stale overlay bleed if filters are wrong | Long-lived deployments that optimize for operational simplicity over strict isolation |
+
+### Deterministic Merge Logic (Canonical + Overlay)
+
+1. Build dedup key as `(path, chunk_hash)`, where `chunk_hash` is computed from normalized chunk text.
+2. For each key, prefer a non-expired overlay hit over canonical hit.
+3. If multiple overlay hits exist for the same key, keep the newest by `updated_at`.
+4. If no overlay hit exists, keep the highest-score canonical hit.
+5. Sort final merged list by `(source_precedence, score desc)` where `source_precedence` is overlay first, then canonical.
 
 ## Implementation Checklist
 
