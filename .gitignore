@@ -36,3 +36,7 @@ agent_jobs/
 
 # Local-only worker skills mirror
 .agents/skills/local/
+
+# Node/Tailwind build artifacts
+node_modules/
+npm-debug.log*

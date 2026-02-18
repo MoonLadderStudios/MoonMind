@@ -250,3 +250,7 @@ Queue mutation endpoints used by workers (`claim`, `heartbeat`, `complete`, `fai
 - `docs/TaskArchitecture.md`
 - `docs/TaskUiStrategy1ThinDashboard.md`
 - `docs/CodexTaskQueue.md`
+
+## 13. Recent Updates
+
+- **2026-02-18 – Tailwind Style System Phase 2**: The dashboard stylesheet now compiles from `dashboard.tailwind.css` with `npm run dashboard:css`. Tokens were renamed to the `--mm-*` palette, gradients shifted to purple/cyan/pink, and status chips/cards adopt the “liquid glass” direction described in `docs/TailwindStyleSystem.md`. Screenshot assets live under `docs/assets/task_dashboard/phase2/` for regression tracking.
