@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-ARG CODEX_CLI_VERSION=latest
+ARG CODEX_CLI_VERSION=0.103.0
 ARG SPEC_KIT_VERSION=0.4.0
 ARG CLAUDE_CLI_VERSION=latest
 # Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so

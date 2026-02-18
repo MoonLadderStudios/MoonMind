@@ -8,7 +8,7 @@ Usage: update-moonmind.sh [--rebuild] [--build-arg NAME=VALUE ...] [service...]
 Refresh MoonMind by pulling latest container images and relaunching Compose services.
 Use --rebuild when you need the local Dockerfile/tooling changes in the image.
 Pass --build-arg to forward compose build arguments (for example,
-  CODEX_CLI_VERSION=0.101.0 to avoid known @openai/codex@latest install issues).
+  CODEX_CLI_VERSION=0.103.0 to pin @openai/codex to a known-good release).
 
 If no services are specified, all services in the current compose configuration
 are pulled and relaunched.

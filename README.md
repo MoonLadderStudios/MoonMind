@@ -233,12 +233,12 @@ curl http://localhost:5000/api/queue/jobs/<job-id>
 
 The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:
 
-- Build args set defaults: `CODEX_CLI_VERSION=latest` and `SPEC_KIT_VERSION=0.4.0`.
+- Build args set defaults: `CODEX_CLI_VERSION=0.103.0` and `SPEC_KIT_VERSION=0.4.0`.
 - Override the pins when building the image:
 
   ```bash
   docker build \
-    --build-arg CODEX_CLI_VERSION=latest \
+    --build-arg CODEX_CLI_VERSION=0.103.0 \
     --build-arg SPEC_KIT_VERSION=0.4.1 \
     -f api_service/Dockerfile .
   ```
