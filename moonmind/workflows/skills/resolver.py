@@ -189,21 +189,24 @@ def list_available_skill_names() -> tuple[str, ...]:
 
     cfg = settings.spec_workflow
     allowlisted = set(cfg.allowed_skills or ())
-    candidates: list[str] = []
+
+    # 1) Gather all raw candidate names in intended display precedence.
+    raw_candidates: list[str] = []
 
     default_skill = str(cfg.default_skill or "").strip()
     if default_skill:
-        candidates.append(default_skill)
+        raw_candidates.append(default_skill)
 
-    candidates.extend(_discover_local_skill_names())
+    raw_candidates.extend(_discover_local_skill_names())
 
     # Include explicit allowlist entries so builtin skills (for example `speckit`)
     # still surface even when they are not mirrored locally.
-    candidates.extend(str(item).strip() for item in (cfg.allowed_skills or ()))
+    raw_candidates.extend(str(item).strip() for item in (cfg.allowed_skills or ()))
 
-    discovered: list[str] = []
+    # 2) Validate and deduplicate while preserving order.
+    candidates: list[str] = []
     seen: set[str] = set()
-    for raw_name in candidates:
+    for raw_name in raw_candidates:
         if not raw_name:
             continue
         try:
@@ -213,7 +216,12 @@ def list_available_skill_names() -> tuple[str, ...]:
 
         if skill_name in seen:
             continue
+        seen.add(skill_name)
+        candidates.append(skill_name)
 
+    # 3) Filter by policy and source resolvability.
+    discovered: list[str] = []
+    for skill_name in candidates:
         if (
             cfg.skill_policy_mode == "allowlist"
             and allowlisted
@@ -231,7 +239,6 @@ def list_available_skill_names() -> tuple[str, ...]:
         except SkillResolutionError:
             continue
 
-        seen.add(skill_name)
         discovered.append(skill_name)
 
     return tuple(discovered)

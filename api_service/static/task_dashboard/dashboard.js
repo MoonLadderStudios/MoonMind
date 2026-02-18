@@ -342,11 +342,10 @@
       const items = Array.isArray(payload?.items) ? payload.items : [];
       const discovered = items
         .map((item) => {
-          if (!item || typeof item !== "object" || Array.isArray(item)) {
-            return "";
+          if (item && typeof item.id === "string") {
+            return item.id.trim();
           }
-          const value = pick(item, "id", "name", "skill");
-          return value ? String(value).trim() : "";
+          return "";
         })
         .filter(Boolean);
       cachedAvailableSkillIds = Array.from(new Set(["auto", ...discovered]));
