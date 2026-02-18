@@ -77,6 +77,7 @@
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
+  const TASK_LIST_TITLE_MAX_CHARS = 400;
   const pollers = [];
   const disposers = [];
   let cachedAvailableSkillIds = null;
@@ -626,13 +627,38 @@
     `;
   }
 
+  function summarizeInstructionPreview(value) {
+    const raw = String(value ?? "")
+      .replace(/\r\n/g, "\n")
+      .trim();
+    if (!raw) {
+      return "";
+    }
+    const [firstParagraph] = raw.split(/\n\s*\n/, 1);
+    const collapsed = firstParagraph
+      .replace(/\s*\n\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!collapsed) {
+      return "";
+    }
+    if (collapsed.length <= TASK_LIST_TITLE_MAX_CHARS) {
+      return collapsed;
+    }
+    const truncated = collapsed.slice(0, TASK_LIST_TITLE_MAX_CHARS);
+    const lastSpace = truncated.lastIndexOf(" ");
+    const safeCut =
+      lastSpace > TASK_LIST_TITLE_MAX_CHARS * 0.6 ? truncated.slice(0, lastSpace) : truncated;
+    return `${safeCut.trimEnd()}...`;
+  }
+
   function toQueueRows(items) {
     return items.map((item) => {
       const payload = pick(item, "payload") || {};
-      const task =
-        payload && typeof payload === "object" && !Array.isArray(payload)
-          ? pick(payload, "task")
-          : null;
+      const task = extractTaskNode(payload);
+      const rawInstructions =
+        (task && pick(task, "instructions")) || pick(payload, "instruction") || "";
+      const summarizedTitle = summarizeInstructionPreview(rawInstructions);
       return {
         source: "queue",
         sourceLabel: "Queue",
@@ -642,11 +668,7 @@
         runtimeMode: extractRuntimeFromPayload(payload),
         skillId: extractSkillFromPayload(payload),
         rawStatus: pick(item, "status") || "queued",
-        title:
-          pick(task, "instructions") ||
-          pick(payload, "instruction") ||
-          pick(item, "type") ||
-          "Queue Job",
+        title: summarizedTitle || pick(item, "type") || "Queue Job",
         createdAt: pick(item, "createdAt"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "finishedAt"),
