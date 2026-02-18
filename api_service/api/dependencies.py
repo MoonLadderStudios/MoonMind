@@ -1,13 +1,16 @@
 import logging
 from typing import Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 from llama_index.core import (
     Settings,
     StorageContext,
     VectorStoreIndex,
     load_index_from_storage,
 )
+
+from api_service.db.models import User
+from moonmind.config.settings import settings
 
 
 def get_chat_provider(request: Request):
@@ -70,3 +73,86 @@ def get_vector_index(request: Request) -> Optional[VectorStoreIndex]:
             f"Unexpected error loading VectorStoreIndex in dependency: {e}"
         )
         return None
+
+
+def ensure_task_template_catalog_enabled() -> None:
+    """Raise a 404 when the task template catalog is disabled."""
+
+    if settings.feature_flags.task_template_catalog:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "task_template_catalog_disabled",
+            "message": "Task template catalog is disabled in this environment.",
+        },
+    )
+
+
+def resolve_template_scope_for_user(
+    *,
+    user: User,
+    scope: str,
+    scope_ref: str | None,
+    write: bool = False,
+) -> tuple[str, str | None]:
+    """Normalize and authorize scope access for template catalog requests."""
+
+    normalized_scope = str(scope or "").strip().lower()
+    normalized_scope_ref = str(scope_ref or "").strip() or None
+    user_id = str(getattr(user, "id", "") or "")
+    is_superuser = bool(getattr(user, "is_superuser", False))
+
+    if normalized_scope not in {"global", "team", "personal"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_template_scope",
+                "message": "scope must be one of: global, team, personal",
+            },
+        )
+
+    if normalized_scope == "global":
+        if write and not is_superuser:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "template_scope_forbidden",
+                    "message": "Only admins can modify global templates.",
+                },
+            )
+        return "global", None
+
+    if normalized_scope_ref is None:
+        normalized_scope_ref = user_id or None
+    if normalized_scope_ref is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "template_scope_ref_required",
+                "message": "scopeRef is required when scope is team/personal.",
+            },
+        )
+
+    if normalized_scope == "personal":
+        if not is_superuser and normalized_scope_ref != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "template_scope_forbidden",
+                    "message": "Personal templates are only accessible to their owner.",
+                },
+            )
+        return "personal", normalized_scope_ref
+
+    # Team scope: until a dedicated membership model exists, enforce owner/admin writes
+    # and allow reads by authenticated users.
+    if write and not is_superuser and normalized_scope_ref != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "template_scope_forbidden",
+                "message": "Team template writes require owner/admin permissions.",
+            },
+        )
+    return "team", normalized_scope_ref

@@ -27,6 +27,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     TaskContractError,
     normalize_queue_job_payload,
 )
+from moonmind.workflows.tasks import compile_task_payload_templates
 
 logger = logging.getLogger(__name__)
 _SUPPORTED_QUEUE_JOB_TYPES = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
@@ -242,6 +243,7 @@ class AgentQueueService:
         normalized_payload = dict(payload or {})
         if candidate_type == CANONICAL_TASK_JOB_TYPE:
             normalized_payload = self._enrich_task_payload_defaults(normalized_payload)
+            normalized_payload = compile_task_payload_templates(normalized_payload)
         try:
             normalized_payload = normalize_queue_job_payload(
                 job_type=candidate_type,
