@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 class ExpandOptions:
     """Options provided when expanding template steps."""
 
-    enforce_step_limit: bool = True
+    should_enforce_step_limit: bool = True
 
 
 class TaskTemplateCatalogService:
