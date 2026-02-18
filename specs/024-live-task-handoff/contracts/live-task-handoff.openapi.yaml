@@ -1,0 +1,322 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Task Run Live Handoff API
+  version: 0.1.0
+  description: API surface for queue task-run live sessions, controls, and operator messaging.
+paths:
+  /api/task-runs/{taskRunId}/live-session:
+    post:
+      summary: Create or enable live session
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      responses:
+        '200':
+          description: Live session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunLiveSessionResponse'
+    get:
+      summary: Fetch live session state
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      responses:
+        '200':
+          description: Live session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunLiveSessionResponse'
+        '404':
+          description: Live session not enabled
+  /api/task-runs/{taskRunId}/live-session/grant-write:
+    post:
+      summary: Grant temporary RW access
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantWriteRequest'
+      responses:
+        '200':
+          description: RW grant details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunLiveSessionWriteGrantResponse'
+  /api/task-runs/{taskRunId}/live-session/revoke:
+    post:
+      summary: Revoke live session
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeLiveSessionRequest'
+      responses:
+        '200':
+          description: Revoked live session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunLiveSessionResponse'
+  /api/task-runs/{taskRunId}/control:
+    post:
+      summary: Apply control action
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRunControlRequest'
+      responses:
+        '200':
+          description: Updated queue job model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueJob'
+  /api/task-runs/{taskRunId}/operator-messages:
+    post:
+      summary: Submit operator message
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperatorMessageRequest'
+      responses:
+        '201':
+          description: Persisted control event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunControlEvent'
+  /api/task-runs/{taskRunId}/live-session/report:
+    post:
+      summary: Worker report/update hook
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerReportLiveSessionRequest'
+      responses:
+        '200':
+          description: Updated live session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunLiveSessionResponse'
+        '403':
+          description: Worker authorization mismatch
+  /api/task-runs/{taskRunId}/live-session/heartbeat:
+    post:
+      summary: Worker heartbeat hook
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                workerId:
+                  type: string
+              required: [workerId]
+      responses:
+        '200':
+          description: Updated live session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunLiveSessionResponse'
+        '403':
+          description: Worker authorization mismatch
+
+components:
+  parameters:
+    TaskRunId:
+      in: path
+      name: taskRunId
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    TaskRunLiveSessionStatus:
+      type: string
+      enum: [disabled, starting, ready, revoked, ended, error]
+    TaskRunLiveSessionProvider:
+      type: string
+      enum: [tmate]
+    TaskRunLiveSession:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          format: uuid
+        taskRunId:
+          type: string
+          format: uuid
+        provider:
+          $ref: '#/components/schemas/TaskRunLiveSessionProvider'
+        status:
+          $ref: '#/components/schemas/TaskRunLiveSessionStatus'
+        attachRo:
+          type: string
+        webRo:
+          type: string
+        workerId:
+          type: string
+        workerHostname:
+          type: string
+        readyAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        rwGrantedUntil:
+          type: string
+          format: date-time
+        lastHeartbeatAt:
+          type: string
+          format: date-time
+        errorMessage:
+          type: string
+      required: [id, taskRunId, provider, status]
+    TaskRunLiveSessionResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        session:
+          $ref: '#/components/schemas/TaskRunLiveSession'
+      required: [session]
+    GrantWriteRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        ttlMinutes:
+          type: integer
+          minimum: 1
+          maximum: 240
+    RevokeLiveSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+    TaskRunLiveSessionWriteGrantResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        session:
+          $ref: '#/components/schemas/TaskRunLiveSession'
+        attachRw:
+          type: string
+        webRw:
+          type: string
+        grantedUntil:
+          type: string
+          format: date-time
+      required: [session, attachRw, grantedUntil]
+    TaskRunControlRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          enum: [pause, resume, takeover]
+      required: [action]
+    OperatorMessageRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+      required: [message]
+    WorkerReportLiveSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        workerId:
+          type: string
+        workerHostname:
+          type: string
+        status:
+          $ref: '#/components/schemas/TaskRunLiveSessionStatus'
+        provider:
+          $ref: '#/components/schemas/TaskRunLiveSessionProvider'
+        attachRo:
+          type: string
+        attachRw:
+          type: string
+        webRo:
+          type: string
+        webRw:
+          type: string
+        tmateSessionName:
+          type: string
+        tmateSocketPath:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        errorMessage:
+          type: string
+      required: [workerId, status]
+    TaskRunControlEvent:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          format: uuid
+        taskRunId:
+          type: string
+          format: uuid
+        actorUserId:
+          type: string
+          format: uuid
+        action:
+          type: string
+        metadataJson:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, taskRunId, action, createdAt]
+    QueueJob:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+      required: [id, type, status, payload]
