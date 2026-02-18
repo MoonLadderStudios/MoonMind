@@ -50,11 +50,9 @@ paths:
     get:
       summary: Fetch latest version of a template by slug.
       parameters:
-        - in: path
-          name: slug
-          required: true
-          schema:
-            type: string
+        - $ref: '#/components/parameters/TemplateSlug'
+        - $ref: '#/components/parameters/TemplateScope'
+        - $ref: '#/components/parameters/TemplateScopeRef'
       responses:
         '200':
           description: Template details
@@ -66,6 +64,8 @@ paths:
       summary: Soft-delete template (owner/admin only).
       parameters:
         - $ref: '#/components/parameters/TemplateSlug'
+        - $ref: '#/components/parameters/TemplateScope'
+        - $ref: '#/components/parameters/TemplateScopeRef'
       responses:
         '204':
           description: Deleted
@@ -74,6 +74,8 @@ paths:
       summary: Fetch a specific template version.
       parameters:
         - $ref: '#/components/parameters/TemplateSlug'
+        - $ref: '#/components/parameters/TemplateScope'
+        - $ref: '#/components/parameters/TemplateScopeRef'
         - in: path
           name: version
           schema:
@@ -91,6 +93,8 @@ paths:
       summary: Expand template with user-provided inputs and context.
       parameters:
         - $ref: '#/components/parameters/TemplateSlug'
+        - $ref: '#/components/parameters/TemplateScope'
+        - $ref: '#/components/parameters/TemplateScopeRef'
       requestBody:
         required: true
         content:
@@ -128,6 +132,22 @@ components:
       required: true
       schema:
         type: string
+      description: Template slug unique only within one scope.
+    TemplateScope:
+      in: query
+      name: scope
+      required: true
+      schema:
+        type: string
+        enum: [global, team, personal]
+      description: Scope namespace used with slug lookup.
+    TemplateScopeRef:
+      in: query
+      name: scopeRef
+      required: false
+      schema:
+        type: string
+      description: Team/user scope reference. Required when scope is `team` or `personal`.
   schemas:
     TemplateListResponse:
       type: object

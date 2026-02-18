@@ -10,7 +10,7 @@
    ```bash
    docker compose up api rabbitmq postgres
    ```
-   Ensure `API_SERVICE__FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1`.
+   Ensure `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` (legacy fallback: `TASK_TEMPLATE_CATALOG=1`).
 
 3. **List templates**
    ```bash

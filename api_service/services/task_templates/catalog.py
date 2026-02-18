@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 
 @dataclass(slots=True)
 class ExpandOptions:
@@ -16,7 +18,7 @@ class ExpandOptions:
 class TaskTemplateCatalogService:
     """Placeholder catalog service; full implementation added alongside API wiring."""
 
-    def __init__(self, session):
+    def __init__(self, session: AsyncSession):
         self._session = session
 
     async def list_templates(self, *, scope: str | None = None) -> list[dict[str, Any]]:

@@ -720,7 +720,10 @@ class FeatureFlagsSettings(BaseSettings):
 
     task_template_catalog: bool = Field(
         False,
-        env="TASK_TEMPLATE_CATALOG",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__TASK_TEMPLATE_CATALOG",
+            "TASK_TEMPLATE_CATALOG",
+        ),
         description="Enable task preset catalog endpoints + UI wiring.",
     )
 
