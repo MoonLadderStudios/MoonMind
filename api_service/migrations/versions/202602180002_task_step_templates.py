@@ -100,7 +100,9 @@ def _seed_catalog_defaults(bind) -> None:
 
         if not slug or not title or not description or not steps:
             continue
-        template_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"task-template:{scope}:{scope_ref}:{slug}")
+        template_uuid = uuid.uuid5(
+            uuid.NAMESPACE_DNS, f"task-template:{scope}:{scope_ref}:{slug}"
+        )
         version_uuid = uuid.uuid5(
             uuid.NAMESPACE_DNS,
             f"task-template-version:{scope}:{scope_ref}:{slug}:{version}",

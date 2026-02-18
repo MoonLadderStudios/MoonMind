@@ -28,7 +28,9 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"-----BEGIN [A-Z ]+PRIVATE KEY-----"),
     re.compile(r"(token|password|secret)\s*=\s*[^\s]+", re.IGNORECASE),
 )
-_ALLOWED_STEP_KEYS = frozenset({"slug", "title", "instructions", "skill", "annotations"})
+_ALLOWED_STEP_KEYS = frozenset(
+    {"slug", "title", "instructions", "skill", "annotations"}
+)
 logger = logging.getLogger(__name__)
 
 
@@ -64,7 +66,9 @@ class TaskTemplateSaveService:
             return hits
         return hits
 
-    async def _next_available_slug(self, *, base_slug: str, scope: str, scope_ref: str | None) -> str:
+    async def _next_available_slug(
+        self, *, base_slug: str, scope: str, scope_ref: str | None
+    ) -> str:
         candidate = base_slug
         suffix = 1
         normalized_scope = TaskTemplateScopeType(scope)
@@ -102,7 +106,9 @@ class TaskTemplateSaveService:
                 cleaned.pop("title", None)
             skill = cleaned.get("skill")
             if skill is not None and not isinstance(skill, dict):
-                raise TaskTemplateValidationError(f"step {index} skill must be an object")
+                raise TaskTemplateValidationError(
+                    f"step {index} skill must be an object"
+                )
             sanitized.append(cleaned)
         return sanitized
 
@@ -175,7 +181,8 @@ class TaskTemplateSaveService:
                     )
                     .where(
                         TaskStepTemplate.slug == unique_slug,
-                        TaskStepTemplate.scope_type == TaskTemplateScopeType(normalized_scope),
+                        TaskStepTemplate.scope_type
+                        == TaskTemplateScopeType(normalized_scope),
                         TaskStepTemplate.scope_ref == normalized_scope_ref,
                     )
                     .order_by(TaskStepTemplateVersion.created_at.desc())

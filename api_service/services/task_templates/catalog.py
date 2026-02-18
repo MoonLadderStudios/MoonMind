@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 
 import yaml
 from jinja2.sandbox import SandboxedEnvironment
-from sqlalchemy import and_, delete, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -69,8 +69,7 @@ class _StatsdEmitter:
             or "8125"
         ).strip()
         prefix = (
-            os.getenv("TASK_TEMPLATE_METRICS_PREFIX")
-            or "moonmind.task_templates"
+            os.getenv("TASK_TEMPLATE_METRICS_PREFIX") or "moonmind.task_templates"
         ).strip()
         self._prefix = prefix.rstrip(".")
         self._address: tuple[str, int] | None = None
@@ -85,7 +84,9 @@ class _StatsdEmitter:
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self._enabled = True
             except Exception:
-                logger.warning("Task template metrics emitter disabled due to init failure.")
+                logger.warning(
+                    "Task template metrics emitter disabled due to init failure."
+                )
                 self._enabled = False
 
     @property
@@ -160,12 +161,16 @@ def _normalize_scope(scope: str) -> TaskTemplateScopeType:
     return TaskTemplateScopeType(raw)
 
 
-def _normalize_scope_ref(scope: TaskTemplateScopeType, scope_ref: str | None) -> str | None:
+def _normalize_scope_ref(
+    scope: TaskTemplateScopeType, scope_ref: str | None
+) -> str | None:
     cleaned = str(scope_ref or "").strip() or None
     if scope is TaskTemplateScopeType.GLOBAL:
         return None
     if cleaned is None:
-        raise TaskTemplateValidationError("scopeRef is required for team/personal scopes.")
+        raise TaskTemplateValidationError(
+            "scopeRef is required for team/personal scopes."
+        )
     return cleaned
 
 
@@ -216,7 +221,9 @@ def _hash_from_inputs(values: dict[str, Any]) -> str:
     return hashlib.sha1(normalized).hexdigest()[:8]
 
 
-def _build_step_id(*, slug: str, version: str, index: int, inputs: dict[str, Any]) -> str:
+def _build_step_id(
+    *, slug: str, version: str, index: int, inputs: dict[str, Any]
+) -> str:
     return f"tpl:{slug}:{version}:{index:02d}:{_hash_from_inputs(inputs)}"
 
 
@@ -334,7 +341,9 @@ class TaskTemplateCatalogService:
         user_id: UUID | None = None,
         include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
-        stmt = select(TaskStepTemplate).options(selectinload(TaskStepTemplate.latest_version))
+        stmt = select(TaskStepTemplate).options(
+            selectinload(TaskStepTemplate.latest_version)
+        )
         if not include_inactive:
             stmt = stmt.where(TaskStepTemplate.is_active.is_(True))
         if scope is not None:
@@ -342,7 +351,8 @@ class TaskTemplateCatalogService:
             stmt = stmt.where(TaskStepTemplate.scope_type == scope_type)
             if scope_type is not TaskTemplateScopeType.GLOBAL:
                 stmt = stmt.where(
-                    TaskStepTemplate.scope_ref == _normalize_scope_ref(scope_type, scope_ref)
+                    TaskStepTemplate.scope_ref
+                    == _normalize_scope_ref(scope_type, scope_ref)
                 )
 
         template_rows = (await self._session.execute(stmt)).scalars().all()
@@ -353,20 +363,28 @@ class TaskTemplateCatalogService:
         recents_map: dict[UUID, datetime] = {}
         if user_id is not None:
             favorite_rows = (
-                await self._session.execute(
-                    select(TaskStepTemplateFavorite.template_id).where(
-                        TaskStepTemplateFavorite.user_id == user_id
+                (
+                    await self._session.execute(
+                        select(TaskStepTemplateFavorite.template_id).where(
+                            TaskStepTemplateFavorite.user_id == user_id
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             favorites_map = {template_id: True for template_id in favorite_rows}
 
             recent_rows = (
                 await self._session.execute(
-                    select(TaskStepTemplateVersion.template_id, TaskStepTemplateRecent.applied_at)
+                    select(
+                        TaskStepTemplateVersion.template_id,
+                        TaskStepTemplateRecent.applied_at,
+                    )
                     .join(
                         TaskStepTemplateVersion,
-                        TaskStepTemplateVersion.id == TaskStepTemplateRecent.template_version_id,
+                        TaskStepTemplateVersion.id
+                        == TaskStepTemplateRecent.template_version_id,
                     )
                     .where(TaskStepTemplateRecent.user_id == user_id)
                     .order_by(TaskStepTemplateRecent.applied_at.desc())
@@ -383,7 +401,9 @@ class TaskTemplateCatalogService:
                 version = template.versions[-1]
             if version is None:
                 continue
-            if lowered_tag and lowered_tag not in {str(item).lower() for item in template.tags or []}:
+            if lowered_tag and lowered_tag not in {
+                str(item).lower() for item in template.tags or []
+            }:
                 continue
             if lowered_search:
                 haystack = " ".join(
@@ -508,7 +528,9 @@ class TaskTemplateCatalogService:
             )
         )
         if existing.scalar_one_or_none() is not None:
-            raise TaskTemplateConflictError("Template slug already exists for this scope.")
+            raise TaskTemplateConflictError(
+                "Template slug already exists for this scope."
+            )
 
         normalized_title = str(title or "").strip()
         normalized_description = str(description or "").strip()
@@ -521,7 +543,11 @@ class TaskTemplateCatalogService:
         validated_steps = self._validate_template_steps(steps)
         derived_capabilities = _normalize_capabilities(
             (required_capabilities or [])
-            + [cap for step in validated_steps for cap in _extract_step_capabilities(step)]
+            + [
+                cap
+                for step in validated_steps
+                for cap in _extract_step_capabilities(step)
+            ]
         )
         version_label = str(version or "").strip() or "1.0.0"
         template = TaskStepTemplate(
@@ -583,7 +609,9 @@ class TaskTemplateCatalogService:
             label = str(raw_input.get("label") or "").strip()
             input_type = str(raw_input.get("type") or "text").strip().lower()
             if not name:
-                raise TaskTemplateValidationError("Template inputs require non-empty names.")
+                raise TaskTemplateValidationError(
+                    "Template inputs require non-empty names."
+                )
             if name in names:
                 raise TaskTemplateValidationError(
                     f"Duplicate template input '{name}' is not allowed."
@@ -604,7 +632,9 @@ class TaskTemplateCatalogService:
                     raise TaskTemplateValidationError(
                         f"Enum input '{name}' requires a non-empty options list."
                     )
-                normalized_options = [str(item).strip() for item in options if str(item).strip()]
+                normalized_options = [
+                    str(item).strip() for item in options if str(item).strip()
+                ]
                 if not normalized_options:
                     raise TaskTemplateValidationError(
                         f"Enum input '{name}' requires at least one non-empty option."
@@ -624,7 +654,9 @@ class TaskTemplateCatalogService:
             )
         return validated
 
-    def _validate_template_steps(self, steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    def _validate_template_steps(
+        self, steps: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]]:
         if not steps:
             raise TaskTemplateValidationError("Template steps must not be empty.")
         validated: list[dict[str, Any]] = []
@@ -633,7 +665,9 @@ class TaskTemplateCatalogService:
                 raise TaskTemplateValidationError(
                     f"Step {index} must be an object with instructions and optional skill."
                 )
-            blocked = sorted(key for key in raw_step if str(key).strip() in _FORBIDDEN_STEP_KEYS)
+            blocked = sorted(
+                key for key in raw_step if str(key).strip() in _FORBIDDEN_STEP_KEYS
+            )
             if blocked:
                 raise TaskTemplateValidationError(
                     f"Step {index} uses forbidden keys: {', '.join(blocked)}."
@@ -732,17 +766,25 @@ class TaskTemplateCatalogService:
             )
 
         for index, source_step in enumerate(selected_version.steps or [], start=1):
-            rendered = _render_value(self._template_env, source_step, variables=variables)
+            rendered = _render_value(
+                self._template_env, source_step, variables=variables
+            )
             if not isinstance(rendered, dict):
-                raise TaskTemplateValidationError("Expanded step payload must be an object.")
-            blocked = sorted(key for key in rendered if str(key).strip() in _FORBIDDEN_STEP_KEYS)
+                raise TaskTemplateValidationError(
+                    "Expanded step payload must be an object."
+                )
+            blocked = sorted(
+                key for key in rendered if str(key).strip() in _FORBIDDEN_STEP_KEYS
+            )
             if blocked:
                 raise TaskTemplateValidationError(
                     f"Expanded step uses forbidden keys: {', '.join(blocked)}."
                 )
             instructions = str(rendered.get("instructions") or "").strip()
             if not instructions:
-                raise TaskTemplateValidationError("Expanded step instructions may not be empty.")
+                raise TaskTemplateValidationError(
+                    "Expanded step instructions may not be empty."
+                )
             if _UNRESOLVED_PLACEHOLDER_PATTERN.search(instructions):
                 raise TaskTemplateValidationError(
                     "Expanded instructions still contain unresolved template placeholders."
@@ -819,7 +861,9 @@ class TaskTemplateCatalogService:
             default = definition.get("default")
             raw_value = submitted[name] if name in submitted else default
             if raw_value in (None, "") and required:
-                raise TaskTemplateValidationError(f"Missing required template input '{name}'.")
+                raise TaskTemplateValidationError(
+                    f"Missing required template input '{name}'."
+                )
             if raw_value in (None, ""):
                 resolved[name] = raw_value
                 continue
@@ -933,19 +977,25 @@ class TaskTemplateCatalogService:
         )
         await self._session.flush()
         stale_rows = (
-            await self._session.execute(
-                select(TaskStepTemplateRecent.id)
-                .where(TaskStepTemplateRecent.user_id == user_id)
-                .order_by(
-                    TaskStepTemplateRecent.applied_at.desc(),
-                    TaskStepTemplateRecent.id.desc(),
+            (
+                await self._session.execute(
+                    select(TaskStepTemplateRecent.id)
+                    .where(TaskStepTemplateRecent.user_id == user_id)
+                    .order_by(
+                        TaskStepTemplateRecent.applied_at.desc(),
+                        TaskStepTemplateRecent.id.desc(),
+                    )
+                    .offset(5)
                 )
-                .offset(5)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if stale_rows:
             await self._session.execute(
-                delete(TaskStepTemplateRecent).where(TaskStepTemplateRecent.id.in_(stale_rows))
+                delete(TaskStepTemplateRecent).where(
+                    TaskStepTemplateRecent.id.in_(stale_rows)
+                )
             )
         await self._session.commit()
         logger.info(
@@ -1041,9 +1091,12 @@ class TaskTemplateCatalogService:
             version = str(item.get("version", "1.0.0")).strip() or "1.0.0"
             try:
                 await self.create_template(
-                    slug=str(item.get("slug") or _slugify_from_title(item.get("title", ""))),
+                    slug=str(
+                        item.get("slug") or _slugify_from_title(item.get("title", ""))
+                    ),
                     title=str(item.get("title") or "").strip(),
-                    description=str(item.get("description") or "").strip() or "Seed template.",
+                    description=str(item.get("description") or "").strip()
+                    or "Seed template.",
                     scope=scope,
                     scope_ref=item.get("scopeRef"),
                     tags=item.get("tags") or [],

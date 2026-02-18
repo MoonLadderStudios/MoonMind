@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, TaskStepTemplateRecent, TaskTemplateReleaseStatus
+from api_service.db.models import (
+    Base,
+    TaskStepTemplateRecent,
+    TaskTemplateReleaseStatus,
+)
 from api_service.services.task_templates.catalog import (
     ExpandOptions,
     TaskTemplateCatalogService,

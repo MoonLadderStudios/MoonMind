@@ -63,10 +63,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         config["sources"]["queue"]["operatorMessages"]
         == "/api/queue/jobs/{id}/operator-messages"
     )
-    assert (
-        config["sources"]["queue"]["taskStepTemplates"]
-        == "/api/task-step-templates"
-    )
+    assert config["sources"]["queue"]["taskStepTemplates"] == "/api/task-step-templates"
     assert (
         config["sources"]["queue"]["taskStepTemplateDetail"]
         == "/api/task-step-templates/{slug}"

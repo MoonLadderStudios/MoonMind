@@ -41,7 +41,9 @@ def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | No
         "appliedAt": applied_at,
     }
     if step_ids:
-        payload["stepIds"] = [str(item).strip() for item in step_ids if str(item).strip()]
+        payload["stepIds"] = [
+            str(item).strip() for item in step_ids if str(item).strip()
+        ]
     return payload
 
 

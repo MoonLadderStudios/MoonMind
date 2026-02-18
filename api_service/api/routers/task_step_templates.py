@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -192,7 +191,9 @@ async def save_from_task(
             title=payload.title,
             description=payload.description,
             steps=[item.model_dump(by_alias=True) for item in payload.steps],
-            suggested_inputs=[item.model_dump(by_alias=True) for item in payload.suggested_inputs],
+            suggested_inputs=[
+                item.model_dump(by_alias=True) for item in payload.suggested_inputs
+            ],
             tags=payload.tags,
             created_by=getattr(user, "id", None),
         )

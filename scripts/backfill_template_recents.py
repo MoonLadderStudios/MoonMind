@@ -36,7 +36,9 @@ def _extract_applied_templates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         version = str(raw.get("version") or "").strip()
         if not slug or not version:
             continue
-        result.append({"slug": slug, "version": version, "appliedAt": raw.get("appliedAt")})
+        result.append(
+            {"slug": slug, "version": version, "appliedAt": raw.get("appliedAt")}
+        )
     return result
 
 
@@ -83,7 +85,9 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
             if not isinstance(payload, dict):
                 continue
             for template_meta in _extract_applied_templates(payload):
-                version_id = version_index.get((template_meta["slug"], template_meta["version"]))
+                version_id = version_index.get(
+                    (template_meta["slug"], template_meta["version"])
+                )
                 if version_id is None:
                     continue
                 applied_at = created_at

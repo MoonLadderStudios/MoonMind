@@ -67,16 +67,20 @@ def test_merge_expanded_steps_modes() -> None:
     existing = [{"id": "s1", "instructions": "one"}]
     incoming = [{"id": "s2", "instructions": "two"}]
 
-    assert merge_expanded_steps(existing_steps=existing, expanded_steps=incoming, mode="append") == [
+    assert merge_expanded_steps(
+        existing_steps=existing, expanded_steps=incoming, mode="append"
+    ) == [
         {"id": "s1", "instructions": "one"},
         {"id": "s2", "instructions": "two"},
     ]
-    assert merge_expanded_steps(existing_steps=existing, expanded_steps=incoming, mode="replace") == [
-        {"id": "s2", "instructions": "two"}
-    ]
+    assert merge_expanded_steps(
+        existing_steps=existing, expanded_steps=incoming, mode="replace"
+    ) == [{"id": "s2", "instructions": "two"}]
 
     with pytest.raises(ValueError):
-        merge_expanded_steps(existing_steps=existing, expanded_steps=incoming, mode="bad")
+        merge_expanded_steps(
+            existing_steps=existing, expanded_steps=incoming, mode="bad"
+        )
 
 
 def test_cli_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
