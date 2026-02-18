@@ -314,9 +314,7 @@ def test_grant_job_live_session_write_success(
     service.grant_live_session_write.assert_awaited_once()
 
 
-def test_apply_job_control_action_success(
-    client: tuple[TestClient, AsyncMock]
-) -> None:
+def test_apply_job_control_action_success(client: tuple[TestClient, AsyncMock]) -> None:
     """POST /jobs/{id}/control should apply action and return updated job."""
 
     test_client, service = client

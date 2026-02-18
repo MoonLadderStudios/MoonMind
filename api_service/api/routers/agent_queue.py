@@ -43,13 +43,13 @@ from moonmind.schemas.agent_queue_models import (
     CreateJobRequest,
     CreateWorkerTokenRequest,
     FailJobRequest,
+    GrantTaskRunLiveSessionWriteRequest,
     HeartbeatRequest,
     JobEventListResponse,
     JobEventModel,
     JobListResponse,
     JobModel,
     MigrationTelemetryResponse,
-    GrantTaskRunLiveSessionWriteRequest,
     RevokeTaskRunLiveSessionRequest,
     TaskRunControlEventModel,
     TaskRunControlRequest,
@@ -595,7 +595,9 @@ async def get_job_live_session(
     try:
         live = await service.get_live_session(task_run_id=job_id)
         if live is None:
-            raise LiveSessionNotFoundError("Live session is not enabled for this task run.")
+            raise LiveSessionNotFoundError(
+                "Live session is not enabled for this task run."
+            )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return TaskRunLiveSessionResponse(
