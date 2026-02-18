@@ -118,6 +118,7 @@ class CodexWorkerConfig:
     live_session_allow_web: bool = False
     tmate_server_host: str | None = None
     live_session_max_concurrent_per_worker: int = 4
+    enable_task_proposals: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CodexWorkerConfig":
@@ -458,6 +459,23 @@ class CodexWorkerConfig:
             raise ValueError(
                 "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER must be >= 1"
             )
+        enable_task_proposals_raw = (
+            str(
+                source.get(
+                    "MOONMIND_ENABLE_TASK_PROPOSALS",
+                    source.get("ENABLE_TASK_PROPOSALS", "false"),
+                )
+            )
+            .strip()
+            .lower()
+        )
+        enable_task_proposals = enable_task_proposals_raw not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }
 
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
@@ -502,6 +520,7 @@ class CodexWorkerConfig:
             live_session_allow_web=live_session_allow_web,
             tmate_server_host=tmate_server_host,
             live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
+            enable_task_proposals=enable_task_proposals,
         )
 
 
@@ -843,6 +862,11 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
+    async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
+        """Submit a task proposal to the MoonMind API."""
+
+        return await self._post_json("/api/proposals", json=proposal)
+
     @staticmethod
     def _sha256_file(path: Path) -> str:
         digest = hashlib.sha256()
@@ -1170,6 +1194,12 @@ class CodexWorker:
                 await self._raise_if_cancel_requested(
                     cancel_event=cancel_requested_event
                 )
+                if self._config.enable_task_proposals:
+                    with suppress(Exception):
+                        await self._maybe_submit_task_proposals(
+                            job=job,
+                            prepared=prepared,
+                        )
 
             await self._upload_artifacts(job_id=job.id, artifacts=staged_artifacts)
             if cancel_requested_event.is_set():
@@ -3869,6 +3899,74 @@ class CodexWorker:
                 worker_id=self._config.worker_id,
                 artifact=artifact,
             )
+
+    async def _maybe_submit_task_proposals(
+        self,
+        *,
+        job: ClaimedJob,
+        prepared: PreparedTaskWorkspace,
+    ) -> None:
+        """Read worker-generated proposals and submit them when enabled."""
+
+        if not self._config.enable_task_proposals:
+            return
+        proposals_path = prepared.task_context_path / "task_proposals.json"
+        if not proposals_path.exists():
+            return
+        try:
+            raw_text = proposals_path.read_text(encoding="utf-8")
+            parsed = json.loads(raw_text)
+        except Exception:
+            logger.warning(
+                "Task proposal file %s is missing or invalid JSON; skipping",
+                proposals_path,
+            )
+            return
+        proposals = parsed if isinstance(parsed, list) else [parsed]
+        origin_metadata = {
+            "startingBranch": prepared.starting_branch,
+            "newBranch": prepared.new_branch,
+            "workingBranch": prepared.working_branch,
+        }
+        submitted = 0
+        for candidate in proposals:
+            if not isinstance(candidate, dict):
+                continue
+            payload: dict[str, Any] = dict(candidate)
+            origin_node = payload.get("origin")
+            origin = origin_node if isinstance(origin_node, dict) else {}
+            if not origin.get("source"):
+                origin["source"] = "queue"
+            if not origin.get("id"):
+                origin["id"] = str(job.id)
+            metadata = origin.get("metadata")
+            metadata_dict = metadata if isinstance(metadata, dict) else {}
+            for key, value in origin_metadata.items():
+                metadata_dict.setdefault(key, value)
+            origin["metadata"] = metadata_dict
+            payload["origin"] = origin
+            if "taskCreateRequest" not in payload:
+                logger.warning(
+                    "Proposal entry in %s missing taskCreateRequest; skipping",
+                    proposals_path,
+                )
+                continue
+            try:
+                await self._queue_client.create_task_proposal(proposal=payload)
+                submitted += 1
+            except Exception:
+                logger.exception(
+                    "Failed to submit task proposal derived from %s", proposals_path
+                )
+        if submitted:
+            logger.info(
+                "Submitted %s task proposal(s) for job %s from %s",
+                submitted,
+                job.id,
+                proposals_path,
+            )
+            with suppress(Exception):
+                proposals_path.unlink()
 
     async def _emit_event(
         self,

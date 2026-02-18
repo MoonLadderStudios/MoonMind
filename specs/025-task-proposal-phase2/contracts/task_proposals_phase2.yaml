@@ -1,0 +1,124 @@
+openapi: 3.0.3
+title: Task Proposal Queue Phase 2
+version: 0.1.0
+paths:
+  /api/proposals:
+    post:
+      summary: Create proposal (unchanged) with dedup response fields.
+      responses:
+        '201':
+          description: Proposal created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskProposal'
+  /api/proposals/{proposalId}:
+    get:
+      summary: Retrieve proposal plus similar proposals metadata.
+      parameters:
+        - in: query
+          name: includeSimilars
+          schema:
+            type: boolean
+          description: When true, include similar proposals in response.
+  /api/proposals/{proposalId}/promote:
+    post:
+      summary: Promote with optional edits.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                priority:
+                  type: integer
+                maxAttempts:
+                  type: integer
+                note:
+                  type: string
+                taskCreateRequestOverride:
+                  $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '200':
+          description: Promotion result with queue job.
+  /api/proposals/{proposalId}/snooze:
+    post:
+      summary: Snooze proposal until timestamp.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - until
+              properties:
+                until:
+                  type: string
+                  format: date-time
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Snoozed proposal payload.
+  /api/proposals/{proposalId}/unsnooze:
+    post:
+      summary: Cancel snooze immediately.
+      responses:
+        '200':
+          description: Updated proposal.
+  /api/proposals/{proposalId}/priority:
+    post:
+      summary: Update reviewer priority.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - priority
+              properties:
+                priority:
+                  type: string
+                  enum: [low, normal, high, urgent]
+      responses:
+        '200':
+          description: Updated proposal with priority.
+components:
+  schemas:
+    TaskProposal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        dedupKey:
+          type: string
+        dedupHash:
+          type: string
+        reviewPriority:
+          type: string
+          enum: [low, normal, high, urgent]
+        snoozedUntil:
+          type: string
+          format: date-time
+        snoozeNote:
+          type: string
+        similar:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimilarProposal'
+    SimilarProposal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        category:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        repository:
+          type: string

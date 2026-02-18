@@ -217,6 +217,18 @@ class AgentQueueService:
         enriched["task"] = task
         return enriched
 
+    def normalize_task_job_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Normalize canonical task payloads for downstream reuse."""
+
+        normalized_payload = self._enrich_task_payload_defaults(dict(payload or {}))
+        try:
+            return normalize_queue_job_payload(
+                job_type=CANONICAL_TASK_JOB_TYPE,
+                payload=normalized_payload,
+            )
+        except TaskContractError as exc:
+            raise AgentQueueValidationError(str(exc)) from exc
+
     async def create_job(
         self,
         *,
@@ -241,14 +253,15 @@ class AgentQueueService:
 
         normalized_payload = dict(payload or {})
         if candidate_type == CANONICAL_TASK_JOB_TYPE:
-            normalized_payload = self._enrich_task_payload_defaults(normalized_payload)
-        try:
-            normalized_payload = normalize_queue_job_payload(
-                job_type=candidate_type,
-                payload=normalized_payload,
-            )
-        except TaskContractError as exc:
-            raise AgentQueueValidationError(str(exc)) from exc
+            normalized_payload = self.normalize_task_job_payload(normalized_payload)
+        else:
+            try:
+                normalized_payload = normalize_queue_job_payload(
+                    job_type=candidate_type,
+                    payload=normalized_payload,
+                )
+            except TaskContractError as exc:
+                raise AgentQueueValidationError(str(exc)) from exc
 
         job = await self._repository.create_job(
             job_type=candidate_type,
