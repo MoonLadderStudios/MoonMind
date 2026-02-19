@@ -787,7 +787,7 @@ class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
 
     task_template_catalog: bool = Field(
-        True,
+        False,
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__TASK_TEMPLATE_CATALOG",
             "TASK_TEMPLATE_CATALOG",

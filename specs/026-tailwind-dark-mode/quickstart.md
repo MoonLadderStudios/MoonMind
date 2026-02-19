@@ -9,7 +9,7 @@
 ## Build Dashboard CSS
 
 ```bash
-cd /home/nsticco/MoonMind
+# from repository root
 npm install
 npm run dashboard:css:min
 ```
@@ -17,7 +17,7 @@ npm run dashboard:css:min
 ## Start the API Service for Manual Verification
 
 ```bash
-cd /home/nsticco/MoonMind
+# from repository root
 poetry run uvicorn api_service.main:app --reload
 ```
 
@@ -29,9 +29,9 @@ Open these routes in a browser:
 
 ## Phase 3 Verification Flow
 
-1. Confirm the dashboard masthead includes a theme toggle control.
-2. Toggle between light and dark and verify visual updates apply immediately.
-3. Reload each route and confirm selected theme persists.
+1. Confirm the dashboard shell renders and applies a resolved theme at first paint.
+2. In browser devtools, set `localStorage.setItem("moonmind.theme", "dark")`, reload each route, and confirm dark mode persists.
+3. Set `localStorage.setItem("moonmind.theme", "light")`, reload each route, and confirm light mode persists.
 4. Clear `moonmind.theme` from local storage and verify default mode follows system preference.
 5. With no saved preference, change system color scheme and verify dashboard updates accordingly.
 6. Hard-refresh with light and dark system preferences and confirm no first-paint flash occurs.
@@ -46,7 +46,7 @@ Open these routes in a browser:
 ## Automated Regression Checks
 
 ```bash
-cd /home/nsticco/MoonMind
+# from repository root
 node tests/task_dashboard/test_theme_runtime.js
 ./tools/test_unit.sh
 ```
@@ -56,7 +56,7 @@ node tests/task_dashboard/test_theme_runtime.js
 After any CSS edits:
 
 ```bash
-cd /home/nsticco/MoonMind
+# from repository root
 npm run dashboard:css:min
 git diff -- api_service/static/task_dashboard/dashboard.css
 ```
@@ -68,7 +68,7 @@ Ensure generated output changes are scoped to intended Phase 3 theme updates.
 - Foundational CSS rebuild: `npm run dashboard:css:min` ✅ PASS
 - Foundational unit validation: `./tools/test_unit.sh` ✅ PASS (`573 passed`)
 - Theme runtime smoke validation: `node tests/task_dashboard/test_theme_runtime.js` ✅ PASS
-- No-flash protocol validation: `testNoFlashMatrixProtocol` (20 system-light + 20 system-dark, unset preference) ✅ PASS (`40/40` passing; threshold `>=38/40`)
+- No-flash protocol validation: `testNoFlashMatrixProtocol` executes the inline bootstrap script for 20 system-light + 20 system-dark runs (unset preference) ✅ PASS (`40/40` passing)
 - Dark readability/accent automated QA: `testDarkTokenAndReadabilitySurfaces` + `testAccentHierarchyRules` ✅ PASS
 - Final release-gate rerun:
   - `npm run dashboard:css:min` ✅ PASS

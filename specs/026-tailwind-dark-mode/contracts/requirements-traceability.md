@@ -22,7 +22,7 @@
 | CSS generation deterministic | `npm run dashboard:css:min` | PASS (output regenerated from `dashboard.tailwind.css`) |
 | Runtime + API regression suite | `./tools/test_unit.sh` | PASS (`573 passed`) |
 | Theme runtime smoke assertions | `node tests/task_dashboard/test_theme_runtime.js` | PASS |
-| No-flash matrix protocol | `testNoFlashMatrixProtocol` in `tests/task_dashboard/test_theme_runtime.js` (20 system-light + 20 system-dark with unset preference) | PASS (`40/40` runs satisfy expected first-frame mode; threshold `>=38/40`) |
+| No-flash matrix protocol | `testNoFlashMatrixProtocol` in `tests/task_dashboard/test_theme_runtime.js` executes the inline template bootstrap script over 20 system-light + 20 system-dark runs (unset preference) | PASS (`40/40` runs satisfy expected first-frame mode) |
 | Dark readability assertions | `testDarkTokenAndReadabilitySurfaces` in `tests/task_dashboard/test_theme_runtime.js` | PASS (`mm-ink`/`mm-panel` contrast ratio `>=4.5`, dark table/form/live-output selectors present) |
 | Accent hierarchy assertions | `testAccentHierarchyRules` in `tests/task_dashboard/test_theme_runtime.js` | PASS (primary button/nav use `--mm-accent`; queued status uses `--mm-warn`) |
 

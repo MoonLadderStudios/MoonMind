@@ -148,7 +148,6 @@
       disposers.push(disposer);
     }
   }
-  registerDisposer(initTheme());
 
   function readStoredThemePreference() {
     try {
@@ -234,25 +233,16 @@
       currentMode = applyResolvedTheme(event.matches ? "dark" : "light", "system");
     };
 
-    if (mediaQueryList) {
-      if (typeof mediaQueryList.addEventListener === "function") {
-        mediaQueryList.addEventListener("change", handleSystemPreferenceChange);
-      } else if (typeof mediaQueryList.addListener === "function") {
-        mediaQueryList.addListener(handleSystemPreferenceChange);
-      }
+    if (mediaQueryList && typeof mediaQueryList.addEventListener === "function") {
+      mediaQueryList.addEventListener("change", handleSystemPreferenceChange);
     }
 
     return () => {
       if (toggle) {
         toggle.removeEventListener("click", handleToggleClick);
       }
-      if (!mediaQueryList) {
-        return;
-      }
-      if (typeof mediaQueryList.removeEventListener === "function") {
+      if (mediaQueryList && typeof mediaQueryList.removeEventListener === "function") {
         mediaQueryList.removeEventListener("change", handleSystemPreferenceChange);
-      } else if (typeof mediaQueryList.removeListener === "function") {
-        mediaQueryList.removeListener(handleSystemPreferenceChange);
       }
     };
   }
@@ -4229,7 +4219,13 @@
     renderNotFound();
   }
 
-  window.addEventListener("beforeunload", stopPolling);
+  const disposeTheme = initTheme();
+  window.addEventListener("beforeunload", () => {
+    stopPolling();
+    if (typeof disposeTheme === "function") {
+      disposeTheme();
+    }
+  });
   renderForPath(window.location.pathname).catch((error) => {
     console.error("dashboard render failed", error);
     setView(

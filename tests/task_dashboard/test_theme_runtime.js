@@ -4,6 +4,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const DASHBOARD_TEMPLATE = path.join(REPO_ROOT, "api_service", "templates", "task_dashboard.html");
@@ -12,7 +13,7 @@ const DASHBOARD_CSS = path.join(
   "api_service",
   "static",
   "task_dashboard",
-  "dashboard.tailwind.css",
+  "dashboard.css",
 );
 
 function normalizeStoredPreference(raw) {
@@ -59,6 +60,58 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function extractHeadBootstrapScript(html) {
+  const scriptMatches = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert(scriptMatches.length > 0, "Expected inline bootstrap script in template head");
+  return scriptMatches[0][1];
+}
+
+function runBootstrapScript(scriptSource, { storedPreference, systemPrefersDark }) {
+  const storage = {};
+  if (storedPreference !== undefined && storedPreference !== null) {
+    storage["moonmind.theme"] = String(storedPreference);
+  }
+  const removedKeys = [];
+  const activeClasses = new Set();
+  const root = {
+    classList: {
+      toggle(className, enabled) {
+        if (enabled) {
+          activeClasses.add(className);
+        } else {
+          activeClasses.delete(className);
+        }
+      },
+    },
+    dataset: {},
+  };
+  const context = {
+    document: { documentElement: root },
+    window: {
+      localStorage: {
+        getItem(key) {
+          return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null;
+        },
+        removeItem(key) {
+          removedKeys.push(key);
+          delete storage[key];
+        },
+      },
+      matchMedia() {
+        return { matches: Boolean(systemPrefersDark) };
+      },
+    },
+  };
+
+  vm.runInNewContext(scriptSource, context, { timeout: 1000 });
+
+  return {
+    mode: root.dataset.theme,
+    isDark: activeClasses.has("dark"),
+    removedKeys,
+  };
+}
+
 (function testThemeResolutionPrecedenceAndFallback() {
   assert.deepStrictEqual(resolveTheme({ storedPreference: "dark", systemPrefersDark: false }), {
     mode: "dark",
@@ -81,26 +134,43 @@ function contrastRatio(foreground, background) {
 })();
 
 (function testNoFlashMatrixProtocol() {
-  // Mirrors SC-002 protocol: 20 system-light + 20 system-dark runs with unset preference.
+  // Mirrors SC-002 protocol against the actual inline bootstrap script.
+  const html = fs.readFileSync(DASHBOARD_TEMPLATE, "utf8");
+  const bootstrapScript = extractHeadBootstrapScript(html);
   let passCount = 0;
   const totalRuns = 40;
 
   for (let i = 0; i < 20; i += 1) {
-    const resolved = resolveTheme({ storedPreference: null, systemPrefersDark: false });
-    if (resolved.mode === "light" && resolved.source === "system") {
+    const boot = runBootstrapScript(bootstrapScript, {
+      storedPreference: null,
+      systemPrefersDark: false,
+    });
+    if (boot.mode === "light" && boot.isDark === false) {
       passCount += 1;
     }
   }
 
   for (let i = 0; i < 20; i += 1) {
-    const resolved = resolveTheme({ storedPreference: null, systemPrefersDark: true });
-    if (resolved.mode === "dark" && resolved.source === "system") {
+    const boot = runBootstrapScript(bootstrapScript, {
+      storedPreference: null,
+      systemPrefersDark: true,
+    });
+    if (boot.mode === "dark" && boot.isDark === true) {
       passCount += 1;
     }
   }
 
+  const invalid = runBootstrapScript(bootstrapScript, {
+    storedPreference: "invalid-value",
+    systemPrefersDark: true,
+  });
+  assert(
+    invalid.removedKeys.includes("moonmind.theme"),
+    "Invalid stored preferences should be removed during bootstrap",
+  );
+
   assert.strictEqual(totalRuns, 40);
-  assert(passCount >= 38, `Expected >=38 passing runs, received ${passCount}`);
+  assert.strictEqual(passCount, totalRuns, `Expected ${totalRuns} passing runs, received ${passCount}`);
 })();
 
 (function testTemplateContainsNoFlashAndToggleContract() {
@@ -130,9 +200,12 @@ function contrastRatio(foreground, background) {
   const ratio = contrastRatio(inkRgb, panelRgb);
   assert(ratio >= 4.5, `Expected contrast ratio >=4.5 for mm-ink/mm-panel, got ${ratio.toFixed(2)}`);
 
-  assert(css.includes(".dark table {"), "Dark table surface tuning is required");
-  assert(css.includes(".dark input,"), "Dark form control tuning is required");
-  assert(css.includes(".dark .queue-live-output {"), "Dark live output tuning is required");
+  assert(/\.dark table\{/.test(css), "Dark table surface tuning is required");
+  assert(
+    /\.dark input,\s*\.dark select,\s*\.dark textarea\{/.test(css),
+    "Dark form control tuning is required",
+  );
+  assert(/\.dark \.queue-live-output\{/.test(css), "Dark live output tuning is required");
 })();
 
 (function testAccentHierarchyRules() {

@@ -12,4 +12,4 @@ artifact_root = "var/artifacts/spec_workflows"
 
 [feature_flags]
 # Enable the Task Preset Catalog (UI + API).
-task_template_catalog = true
+task_template_catalog = false
