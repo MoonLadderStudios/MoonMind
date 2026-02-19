@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import UniqueConstraint, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -95,6 +95,15 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert set(expanded["capabilities"]) >= {"codex", "docker"}
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert expanded["appliedTemplate"]["version"] == "1.0.0"
+
+
+async def test_template_recents_declares_unique_user_version_constraint() -> None:
+    constraint_names = {
+        constraint.name
+        for constraint in TaskStepTemplateRecent.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert "uq_task_template_recent_user_version" in constraint_names
 
 
 async def test_save_from_task_rejects_secret_patterns(tmp_path):

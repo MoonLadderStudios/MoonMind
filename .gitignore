@@ -3,6 +3,9 @@ model_data/
 outputs/
 temp/
 data/
+!api_service/data/
+!api_service/data/task_step_templates/
+!api_service/data/task_step_templates/*.yaml
 prompts/
 jobs/
 *.code-workspace

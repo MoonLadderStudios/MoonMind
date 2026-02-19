@@ -1,0 +1,242 @@
+slug: speckit-orchestrate
+title: Spec Kit Orchestrate
+description: Run the full Spec Kit pipeline from one feature request, including remediation loops, scope validation, and implementation/PR handoff.
+scope: global
+version: 1.0.0
+tags:
+  - speckit
+  - orchestration
+  - runtime
+  - docs
+requiredCapabilities:
+  - codex
+  - git
+  - gh
+annotations:
+  sourceSkill: speckit-orchestrate
+  profile: runtime-first
+inputs:
+  - name: feature_request
+    label: Feature Request
+    type: markdown
+    required: true
+  - name: orchestration_mode
+    label: Orchestration Mode
+    type: enum
+    required: true
+    default: runtime
+    options:
+      - runtime
+      - docs
+  - name: source_contract_path
+    label: Source Contract Path
+    type: text
+    required: false
+    default: ""
+  - name: constraints
+    label: Constraints
+    type: textarea
+    required: false
+    default: ""
+steps:
+  - title: Intake feature request and determine mode
+    instructions: |-
+      Use this feature request as the canonical orchestration input:
+      {{ inputs.feature_request }}
+
+      Additional constraints:
+      {{ inputs.constraints }}
+
+      Selected mode: {{ inputs.orchestration_mode }}.
+      Default to runtime mode and only switch to docs mode when explicitly requested.
+      If the request is "Implement Docs/<path>.md", treat it as runtime intent and use the doc as a requirements contract.
+      Source contract path (optional): {{ inputs.source_contract_path }}.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Invoke speckit-specify
+    instructions: |-
+      Run speckit-specify with the canonical feature request.
+      In runtime mode, append this scope guard:
+      "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+      Preserve all user-provided constraints.
+    skill:
+      id: speckit-specify
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Resolve clarify blockers
+    instructions: |-
+      Resolve any clarification blockers from speckit-specify before continuing.
+      If blocking context is missing, ask targeted questions and update spec artifacts.
+    skill:
+      id: speckit-clarify
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Run DOC-REQ pre-plan gate when doc-backed
+    instructions: |-
+      If DOC-REQ-* identifiers are present in spec.md or the request is doc-backed:
+      1. Ensure spec.md contains DOC-REQ-* IDs.
+      2. Ensure every DOC-REQ-* maps to at least one functional requirement.
+      If this fails, treat as CRITICAL and remediate before continuing.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Invoke speckit-plan
+    instructions: |-
+      Run speckit-plan using the current feature artifacts.
+      Keep runtime vs docs mode behavior aligned with the selected orchestration mode.
+    skill:
+      id: speckit-plan
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Enforce requirements traceability contract
+    instructions: |-
+      If DOC-REQ-* exists, require contracts/requirements-traceability.md with one row per DOC-REQ-* and non-empty validation strategy.
+      Missing or incomplete traceability is CRITICAL and must be remediated.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Invoke speckit-tasks
+    instructions: |-
+      Run speckit-tasks and generate dependency-ordered tasks.md from the planned artifacts.
+    skill:
+      id: speckit-tasks
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Validate task implementation scope
+    instructions: |-
+      Run:
+      .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode {{ inputs.orchestration_mode }}
+
+      In runtime mode, failure is CRITICAL:
+      run remediation Prompt B, regenerate tasks, and re-run until pass or required context is missing.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Validate DOC-REQ task coverage
+    instructions: |-
+      If DOC-REQ-* exists, verify tasks.md has at least one implementation task and one validation task for each DOC-REQ-*.
+      Missing coverage is CRITICAL and must be fixed before continuing.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Invoke speckit-analyze
+    instructions: |-
+      Run speckit-analyze against spec.md, plan.md, and tasks.md.
+    skill:
+      id: speckit-analyze
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Prompt A remediation discovery
+    instructions: |-
+      Run Prompt A (Remediation Discovery) over spec.md, plan.md, tasks.md, and latest speckit-analyze output.
+      Output must include:
+      - Severity (CRITICAL/HIGH/MEDIUM/LOW)
+      - Artifact
+      - Location
+      - Problem
+      - Remediation
+      - Rationale
+      Plus:
+      - Safe to Implement: YES | NO | NO DETERMINATION
+      - Blocking Remediations
+      - Determination Rationale
+
+      In runtime mode classify "no production runtime code tasks" as CRITICAL.
+      If DOC-REQ-* exists classify missing DOC-REQ-* mappings as CRITICAL.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Prompt B remediation application
+    instructions: |-
+      Apply Prompt B (Remediation Application):
+      - Complete all CRITICAL/HIGH remediations.
+      - Complete MEDIUM/LOW unless conflicting with explicit constraints.
+      - Keep edits deterministic across spec.md/plan.md/tasks.md.
+      - For runtime mode, ensure production runtime code tasks and validation tasks exist.
+      - If DOC-REQ-* exists, ensure implementation + validation coverage and traceability mappings.
+
+      Report files changed, remediations completed/skipped, and residual risks.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Re-run analysis and remediation loop gate
+    instructions: |-
+      Re-run speckit-analyze once, then re-run Prompt A.
+      Stop and report required context if Prompt A returns NO DETERMINATION.
+      If Prompt A returns NO, run one extra best-effort cycle:
+      Prompt B -> speckit-analyze -> Prompt A.
+      Continue unless result changes to NO DETERMINATION.
+    skill:
+      id: speckit-analyze
+      args: {}
+      requiredCapabilities:
+        - codex
+  - title: Invoke speckit-implement with auto-proceed gate
+    instructions: |-
+      Run speckit-implement with checklist gate mode set to auto-proceed.
+      Do not pause for manual yes/no checklist confirmations in this orchestration.
+      Ensure completed work is marked [X] in tasks.md.
+    skill:
+      id: speckit-implement
+      args:
+        checklistGateMode: auto-proceed
+      requiredCapabilities:
+        - codex
+        - git
+  - title: Validate completion coverage and implementation diff scope
+    instructions: |-
+      If DOC-REQ-* exists, verify each DOC-REQ-* appears in at least one completed ([X]) task.
+      Then run:
+      .specify/scripts/bash/validate-implementation-scope.sh --check diff --mode {{ inputs.orchestration_mode }} --base-ref origin/main
+
+      In runtime mode, if scope diff validation fails, do not commit or open a PR.
+      Report "implementation scope not satisfied" and required corrective actions.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+        - git
+  - title: Commit, open PR, and return final report
+    instructions: |-
+      If all gates pass (no NO DETERMINATION and no unresolved CRITICAL/HIGH blockers):
+      1. Create a commit for completed changes.
+      2. Create a pull request with concise scope/remediation/test summary.
+
+      If commit or PR creation fails (auth, remote, or permissions), stop and report exact blocker plus minimum manual commands.
+      Return final report including:
+      - Feature path and branch
+      - Files edited
+      - Test status
+      - Safe-to-Implement determination
+      - Checklist gate outcome
+      - Scope validation outcomes (tasks + diff)
+      - DOC-REQ coverage status
+      - Commit hash and PR link/status
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - codex
+        - git
+        - gh

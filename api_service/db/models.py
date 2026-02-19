@@ -394,7 +394,14 @@ class TaskStepTemplateRecent(Base):
     """Tracks most recent template applications per user."""
 
     __tablename__ = "task_step_template_recents"
-    __table_args__ = (Index("ix_task_step_template_recents_user", "user_id"),)
+    __table_args__ = (
+        Index("ix_task_step_template_recents_user", "user_id"),
+        UniqueConstraint(
+            "user_id",
+            "template_version_id",
+            name="uq_task_template_recent_user_version",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[UUID] = mapped_column(

@@ -1305,7 +1305,7 @@
       ? `
         <div class="card">
           <div class="actions">
-            <strong>Task Presets</strong>
+            <strong>Task Presets (optional)</strong>
           </div>
           <div class="grid-2">
             <label>Scope
@@ -1329,6 +1329,10 @@
               </select>
             </label>
           </div>
+          <label>Feature Request / Initial Instructions
+            <textarea id="queue-template-feature-request" placeholder="Describe the feature request this preset should execute."></textarea>
+            <span class="small">Used as <span class="inline-code">feature_request</span> input when required by the preset. If left blank, the primary step instructions are used.</span>
+          </label>
           <div class="grid-2">
             <label>Apply Mode
               <select id="queue-template-apply-mode">
@@ -1369,7 +1373,7 @@
           <div class="actions">
             <strong>Steps</strong>
           </div>
-          <span class="small">Step 1 is required and defines default task instructions + skill. Add more steps for multi-step runs.</span>
+          <span class="small">At least one step is required to submit. You can remove all steps while editing, but submit stays disabled by validation until a step is added back.</span>
           <div id="queue-steps-list"></div>
         </div>
         ${templateControlsHtml}
@@ -1481,35 +1485,31 @@
     });
     const stepState = [createStepStateEntry()];
     let appliedTemplateState = [];
-    const ensurePrimaryStep = () => {
-      if (stepState.length === 0) {
-        stepState.push(createStepStateEntry());
-      }
-    };
     const renderStepEditor = () => {
       if (!stepsList) {
         console.error("[dashboard] #queue-steps-list not found; step editor unavailable");
         return;
       }
-      ensurePrimaryStep();
       const rows = stepState
         .map((step, index) => {
           const isPrimaryStep = index === 0;
-          const stepLabel = isPrimaryStep ? " (Required)" : "";
-          const skillLabel = isPrimaryStep ? "Skill" : "Skill (optional)";
+          const stepLabel = isPrimaryStep ? " (Primary)" : "";
+          const skillLabel = isPrimaryStep ? "Skill (default)" : "Skill (optional)";
           const skillPlaceholder = isPrimaryStep
             ? "auto (default), speckit-orchestrate, ..."
-            : "inherit Step 1 skill";
-          const instructionsLabel = isPrimaryStep ? "Instructions" : "Instructions (optional)";
+            : "inherit primary step skill";
+          const instructionsLabel = isPrimaryStep
+            ? "Instructions (required for primary step)"
+            : "Instructions (optional)";
           const instructionsPlaceholder = isPrimaryStep
             ? "Describe the task to execute against the repository."
             : "Step-specific instructions (leave blank to continue from the task objective).";
-          const upDisabled = isPrimaryStep || index <= 1 ? "disabled" : "";
-          const downDisabled = isPrimaryStep || index === stepState.length - 1 ? "disabled" : "";
-          const removeDisabled = isPrimaryStep ? "disabled" : "";
+          const upDisabled = index === 0 ? "disabled" : "";
+          const downDisabled = index === stepState.length - 1 ? "disabled" : "";
+          const removeDisabled = "";
           const defaultHint = isPrimaryStep
-            ? "Step 1 skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
-            : "Leave skill blank to inherit Step 1 defaults.";
+            ? "Primary step skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
+            : "Leave skill blank to inherit primary step defaults.";
           return `
             <div class="card" data-step-index="${index}">
               <div class="queue-step-header">
@@ -1605,7 +1605,7 @@
       stepsList.innerHTML = rows + addStepButtonRow;
     };
     const readStepIndex = (target) => {
-      if (!(target instanceof HTMLElement)) {
+      if (!(target instanceof Element)) {
         return null;
       }
       const raw = target.getAttribute("data-step-index");
@@ -1621,14 +1621,14 @@
     if (stepsList) {
       stepsList.addEventListener("click", (event) => {
         const target = event.target;
-        if (!(target instanceof HTMLElement)) {
+        if (!(target instanceof Element)) {
           return;
         }
         const actionButton = target.closest("[data-step-action]");
-        if (!(actionButton instanceof HTMLElement)) {
+        if (!(actionButton instanceof HTMLButtonElement)) {
           return;
         }
-        if (actionButton instanceof HTMLButtonElement && actionButton.disabled) {
+        if (actionButton.disabled) {
           return;
         }
         const action = actionButton.getAttribute("data-step-action");
@@ -1645,21 +1645,18 @@
           return;
         }
         if (action === "remove") {
-          if (index === 0) {
-            return;
-          }
           stepState.splice(index, 1);
           renderStepEditor();
           return;
         }
-        if (action === "up" && index > 1) {
+        if (action === "up" && index > 0) {
           const current = stepState[index];
           stepState[index] = stepState[index - 1];
           stepState[index - 1] = current;
           renderStepEditor();
           return;
         }
-        if (action === "down" && index > 0 && index < stepState.length - 1) {
+        if (action === "down" && index < stepState.length - 1) {
           const current = stepState[index];
           stepState[index] = stepState[index + 1];
           stepState[index + 1] = current;
@@ -1704,6 +1701,7 @@
     const templateScopeRef = document.getElementById("queue-template-scope-ref");
     const templateSearch = document.getElementById("queue-template-search");
     const templateSelect = document.getElementById("queue-template-select");
+    const templateFeatureRequest = document.getElementById("queue-template-feature-request");
     const templateVersion = document.getElementById("queue-template-version");
     const templateApplyMode = document.getElementById("queue-template-apply-mode");
     const templateReload = document.getElementById("queue-template-reload");
@@ -1711,6 +1709,9 @@
     const templateApply = document.getElementById("queue-template-apply");
     const templateSaveCurrent = document.getElementById("queue-template-save-current");
     let templateItems = [];
+    const templateInputMemory = {};
+    const preferredTemplateSlug = "speckit-orchestrate";
+    const preferredTemplateVersion = "1.0.0";
 
     const setTemplateMessage = (text, isError = false) => {
       if (!templateMessage) {
@@ -1730,11 +1731,38 @@
       templateSearch instanceof HTMLInputElement
         ? String(templateSearch.value || "").trim()
         : "";
+    const currentTemplateFeatureRequest = () =>
+      templateFeatureRequest instanceof HTMLTextAreaElement
+        ? String(templateFeatureRequest.value || "").trim()
+        : "";
+    const templateVersionForItem = (item) =>
+      String(item?.latestVersion || item?.version || "1.0.0").trim();
+    const preferredTemplateFrom = (items) => {
+      const exact = items.find(
+        (item) =>
+          String(item?.slug || "").trim() === preferredTemplateSlug &&
+          templateVersionForItem(item) === preferredTemplateVersion,
+      );
+      if (exact) {
+        return exact;
+      }
+      return (
+        items.find((item) => String(item?.slug || "").trim() === preferredTemplateSlug) || null
+      );
+    };
+    const syncTemplateVersion = () => {
+      if (!(templateVersion instanceof HTMLInputElement)) {
+        return;
+      }
+      const selected = selectedTemplate();
+      templateVersion.value = selected ? templateVersionForItem(selected) : "";
+    };
 
     const renderTemplateSelect = () => {
       if (!(templateSelect instanceof HTMLSelectElement)) {
         return;
       }
+      const previousSelection = String(templateSelect.value || "").trim();
       const searchFilter = currentTemplateSearch().toLowerCase();
       const filtered = templateItems.filter((item) => {
         if (!searchFilter) {
@@ -1748,13 +1776,27 @@
         ...filtered.map(
           (item) =>
             `<option value="${escapeHtml(item.slug)}">${escapeHtml(item.title)} (${escapeHtml(
-              item.latestVersion || item.version || "1.0.0",
+              templateVersionForItem(item),
             )})</option>`,
         ),
       ].join("");
-      if (templateVersion instanceof HTMLInputElement) {
-        templateVersion.value = "";
+      const hasPreviousSelection = filtered.some(
+        (item) => String(item?.slug || "").trim() === previousSelection,
+      );
+      const preferredTemplate = preferredTemplateFrom(filtered);
+      const fallbackTemplate = filtered[0] || null;
+      const nextSelection = hasPreviousSelection
+        ? previousSelection
+        : String(
+            preferredTemplate?.slug ||
+              fallbackTemplate?.slug ||
+              "",
+          ).trim();
+      templateSelect.value = nextSelection;
+      if (!nextSelection && filtered.length === 0) {
+        templateSelect.value = "";
       }
+      syncTemplateVersion();
     };
 
     const fetchTemplateList = async () => {
@@ -1796,8 +1838,31 @@
       return templateItems.find((item) => String(item.slug || "").trim() === slug) || null;
     };
 
-    const promptTemplateInputs = (inputs) => {
+    const resolveTemplateInputs = (inputs) => {
       const values = {};
+      const assumptions = [];
+      const primaryInstructions = String(stepState[0]?.instructions || "").trim();
+      const explicitFeatureRequest = currentTemplateFeatureRequest();
+      const repositoryInput = form.querySelector('input[name="repository"]');
+      const repositoryValue =
+        repositoryInput instanceof HTMLInputElement
+          ? String(repositoryInput.value || "").trim()
+          : "";
+
+      const normalizeBoolean = (value) => {
+        if (typeof value === "boolean") {
+          return value;
+        }
+        const lowered = String(value ?? "").trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(lowered)) {
+          return true;
+        }
+        if (["0", "false", "no", "off"].includes(lowered)) {
+          return false;
+        }
+        return false;
+      };
+
       for (const definition of Array.isArray(inputs) ? inputs : []) {
         const name = String(definition?.name || "").trim();
         const label = String(definition?.label || name).trim() || name;
@@ -1805,33 +1870,96 @@
           continue;
         }
         const required = Boolean(definition?.required);
+        const inputType = String(definition?.type || "").toLowerCase();
+        const options = Array.isArray(definition?.options)
+          ? definition.options.map((option) => String(option).trim()).filter((option) => option)
+          : [];
+        const key = name.toLowerCase();
+        const isFeatureRequestKey =
+          key.includes("feature_request") || key === "feature" || key === "request";
+
+        let value = null;
+        let valueSource = "";
+        const remembered = templateInputMemory[name];
         const defaultValue = definition?.default;
-        const initial = defaultValue === null || defaultValue === undefined ? "" : String(defaultValue);
-        const entered = window.prompt(`${label}${required ? " (required)" : ""}`, initial);
-        if (entered === null) {
-          if (required) {
-            throw new Error(`Input '${label}' is required.`);
+
+        if (isFeatureRequestKey && explicitFeatureRequest) {
+          value = explicitFeatureRequest;
+          valueSource = "manual";
+        } else if (remembered !== null && remembered !== undefined && String(remembered).trim() !== "") {
+          value = remembered;
+          valueSource = "memory";
+        } else if (defaultValue !== null && defaultValue !== undefined && String(defaultValue).trim() !== "") {
+          value = defaultValue;
+          valueSource = "default";
+        } else if (
+          key.includes("instruction") ||
+          isFeatureRequestKey
+        ) {
+          value = explicitFeatureRequest || primaryInstructions;
+          valueSource = "draft";
+        } else if (key.includes("repo")) {
+          value = repositoryValue;
+          valueSource = "draft";
+        } else if (inputType === "enum") {
+          if (key.includes("mode") && options.includes("runtime")) {
+            value = "runtime";
+          } else if (options.length > 0) {
+            value = options[0];
           }
+          valueSource = "assumed";
+        } else if (inputType === "boolean") {
+          value = false;
+          valueSource = "assumed";
+        }
+
+        const hasValue = value !== null && value !== undefined && String(value).trim() !== "";
+        if (!hasValue && required) {
+          if (inputType === "enum" && options.length > 0) {
+            value = options[0];
+          } else if (inputType === "boolean") {
+            value = false;
+          } else if (explicitFeatureRequest || primaryInstructions) {
+            value = explicitFeatureRequest || primaryInstructions;
+          } else {
+            value = `auto-${key.replaceAll(/[^a-z0-9]+/g, "-").replaceAll(/^-+|-+$/g, "") || "value"}`;
+          }
+          valueSource = "assumed";
+        } else if (!hasValue) {
           continue;
         }
-        const normalized = String(entered).trim();
-        if (!normalized) {
-          if (required) {
-            throw new Error(`Input '${label}' is required.`);
+
+        let normalized = value;
+        if (inputType === "boolean") {
+          normalized = normalizeBoolean(value);
+        } else {
+          normalized = String(value).trim();
+        }
+
+        if (inputType === "enum") {
+          const candidate = String(normalized).trim();
+          if (options.length > 0 && !options.includes(candidate)) {
+            normalized = options[0];
+            valueSource = "assumed";
+          } else {
+            normalized = candidate;
           }
+        }
+
+        if ((normalized === null || normalized === undefined || String(normalized).trim() === "") && required) {
+          throw new Error(`Input '${label}' could not be inferred.`);
+        }
+        if (normalized === null || normalized === undefined || String(normalized).trim() === "") {
           continue;
         }
-        if (String(definition?.type || "").toLowerCase() === "enum") {
-          const options = Array.isArray(definition?.options) ? definition.options : [];
-          if (options.length > 0 && !options.includes(normalized)) {
-            throw new Error(
-              `Input '${label}' must be one of: ${options.join(", ")}.`,
-            );
-          }
-        }
+
         values[name] = normalized;
+        templateInputMemory[name] = normalized;
+        if (valueSource === "assumed" || valueSource === "draft") {
+          assumptions.push(label);
+        }
       }
-      return values;
+      return { values, assumptions };
     };
 
     const mapExpandedStepToState = (step) => {
@@ -1856,6 +1984,19 @@
       });
     };
 
+    const isEmptyStepStateEntry = (step) =>
+      !String(step?.id || "").trim() &&
+      !String(step?.title || "").trim() &&
+      !String(step?.instructions || "").trim() &&
+      !String(step?.skillId || "").trim() &&
+      !String(step?.skillArgs || "").trim() &&
+      !String(step?.skillRequiredCapabilities || "").trim() &&
+      !String(step?.templateStepId || "").trim() &&
+      !String(step?.templateInstructions || "").trim();
+
+    const hasOnlyEmptyDefaultStep = () =>
+      stepState.length === 1 && isEmptyStepStateEntry(stepState[0]);
+
     const applySelectedTemplate = async ({ previewOnly }) => {
       const selected = selectedTemplate();
       if (!selected) {
@@ -1874,7 +2015,7 @@
         const detail = await fetchJson(
           `${endpoint(taskTemplateEndpoints.detail, { slug: selected.slug })}?${scopeParams.toString()}`,
         );
-        const inputs = promptTemplateInputs(detail?.inputs || []);
+        const { values: inputs, assumptions } = resolveTemplateInputs(detail?.inputs || []);
         const expanded = await fetchJson(
           `${endpoint(taskTemplateEndpoints.expand, { slug: selected.slug })}?${scopeParams.toString()}`,
           {
@@ -1917,7 +2058,9 @@
         const mappedSteps = expandedSteps.map(mapExpandedStepToState);
         const applyMode =
           templateApplyMode instanceof HTMLSelectElement ? templateApplyMode.value : "append";
-        if (applyMode === "replace") {
+        const shouldReplaceEmptyDefaultStep =
+          applyMode !== "replace" && hasOnlyEmptyDefaultStep();
+        if (applyMode === "replace" || shouldReplaceEmptyDefaultStep) {
           stepState.splice(0, stepState.length, ...(mappedSteps.length > 0 ? mappedSteps : [createStepStateEntry()]));
           appliedTemplateState = [];
         } else {
@@ -1947,7 +2090,13 @@
           });
         }
         renderStepEditor();
-        setTemplateMessage(`Applied preset '${selected.title}' (${mappedSteps.length} steps).`);
+        const autoFillSuffix =
+          assumptions.length > 0
+            ? ` Auto-filled ${assumptions.length} input(s): ${assumptions.join(", ")}.`
+            : "";
+        setTemplateMessage(
+          `Applied preset '${selected.title}' (${mappedSteps.length} steps).${autoFillSuffix}`,
+        );
       } catch (error) {
         console.error("template apply failed", error);
         setTemplateMessage(
@@ -2040,6 +2189,12 @@
           body: JSON.stringify(body),
         });
         setTemplateMessage(`Saved preset '${created?.title || body.title}'. Reloading catalog...`);
+        if (templateScope instanceof HTMLSelectElement) {
+          templateScope.value = scope;
+        }
+        if (templateScopeRef instanceof HTMLInputElement) {
+          templateScopeRef.value = scope === "team" ? scopeRef : "";
+        }
         await fetchTemplateList();
       } catch (error) {
         console.error("template save failed", error);
@@ -2067,12 +2222,9 @@
     if (templateSearch instanceof HTMLInputElement) {
       templateSearch.addEventListener("input", renderTemplateSelect);
     }
-    if (templateSelect instanceof HTMLSelectElement && templateVersion instanceof HTMLInputElement) {
+    if (templateSelect instanceof HTMLSelectElement) {
       templateSelect.addEventListener("change", () => {
-        const selected = selectedTemplate();
-        templateVersion.value = selected
-          ? String(selected.latestVersion || selected.version || "")
-          : "";
+        syncTemplateVersion();
       });
     }
     if (templateReload instanceof HTMLButtonElement) {
@@ -2115,12 +2267,16 @@
       message.textContent = "Submitting...";
 
       const formData = new FormData(form);
-      ensurePrimaryStep();
-      const primaryStep = stepState[0] || createStepStateEntry();
+      const primaryStep = stepState[0] || null;
+      if (!primaryStep) {
+        message.className = "notice error";
+        message.textContent = "Add at least one step before submitting.";
+        return;
+      }
       const instructions = String(primaryStep.instructions || "").trim();
       if (!instructions) {
         message.className = "notice error";
-        message.textContent = "Step 1 instructions are required.";
+        message.textContent = "Primary step instructions are required.";
         return;
       }
 
@@ -2190,7 +2346,7 @@
         } catch (error) {
           message.className = "notice error";
           message.textContent =
-            "Step 1 Skill Args must be valid JSON object text (for example: {\"featureKey\":\"...\"}).";
+            "Primary step Skill Args must be valid JSON object text (for example: {\"featureKey\":\"...\"}).";
           return;
         }
       }
