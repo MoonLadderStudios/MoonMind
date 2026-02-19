@@ -151,49 +151,58 @@ class TaskTemplateSaveService:
             scope=normalized_scope,
             scope_ref=normalized_scope_ref,
         )
-        saved = await self._catalog.create_template(
-            slug=unique_slug,
-            title=normalized_title,
-            description=normalized_description,
-            scope=normalized_scope,
-            scope_ref=normalized_scope_ref,
-            tags=tags or [],
-            inputs_schema=suggested_inputs or [],
-            steps=sanitized_steps,
-            annotations={},
-            required_capabilities=[],
-            created_by=created_by,
-            version="1.0.0",
-        )
-        if created_by is not None:
-            await self._catalog.set_favorite(
-                user_id=created_by,
+        try:
+            saved = await self._catalog.create_template(
                 slug=unique_slug,
+                title=normalized_title,
+                description=normalized_description,
                 scope=normalized_scope,
                 scope_ref=normalized_scope_ref,
+                tags=tags or [],
+                inputs_schema=suggested_inputs or [],
+                steps=sanitized_steps,
+                annotations={},
+                required_capabilities=[],
+                created_by=created_by,
+                version="1.0.0",
+                auto_commit=False,
             )
-            version_id = (
-                await self._session.execute(
-                    select(TaskStepTemplateVersion.id)
-                    .join(
-                        TaskStepTemplate,
-                        TaskStepTemplate.id == TaskStepTemplateVersion.template_id,
-                    )
-                    .where(
-                        TaskStepTemplate.slug == unique_slug,
-                        TaskStepTemplate.scope_type
-                        == TaskTemplateScopeType(normalized_scope),
-                        TaskStepTemplate.scope_ref == normalized_scope_ref,
-                    )
-                    .order_by(TaskStepTemplateVersion.created_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if version_id is not None:
-                await self._catalog.record_recent(
+            if created_by is not None:
+                await self._catalog.set_favorite(
                     user_id=created_by,
-                    template_version_id=version_id,
+                    slug=unique_slug,
+                    scope=normalized_scope,
+                    scope_ref=normalized_scope_ref,
+                    auto_commit=False,
                 )
+                version_id = (
+                    await self._session.execute(
+                        select(TaskStepTemplateVersion.id)
+                        .join(
+                            TaskStepTemplate,
+                            TaskStepTemplate.id == TaskStepTemplateVersion.template_id,
+                        )
+                        .where(
+                            TaskStepTemplate.slug == unique_slug,
+                            TaskStepTemplate.scope_type
+                            == TaskTemplateScopeType(normalized_scope),
+                            TaskStepTemplate.scope_ref == normalized_scope_ref,
+                        )
+                        .order_by(TaskStepTemplateVersion.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if version_id is not None:
+                    await self._catalog.record_recent(
+                        user_id=created_by,
+                        template_version_id=version_id,
+                        auto_commit=False,
+                    )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            raise
+
         logger.info(
             "task_template_catalog.save_from_task",
             extra={

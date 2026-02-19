@@ -99,15 +99,12 @@ async def list_templates(
 ) -> TaskTemplateListResponseSchema:
     ensure_task_template_catalog_enabled()
 
-    resolved_scope = scope
-    resolved_scope_ref = scope_ref
-    if scope is not None:
-        resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-            user=user,
-            scope=scope,
-            scope_ref=scope_ref,
-            write=False,
-        )
+    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
+        user=user,
+        scope=scope or "personal",
+        scope_ref=scope_ref,
+        write=False,
+    )
     try:
         items = await service.list_templates(
             scope=resolved_scope,

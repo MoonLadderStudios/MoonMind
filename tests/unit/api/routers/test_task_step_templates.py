@@ -82,6 +82,17 @@ def test_list_templates_success() -> None:
     assert response.json()["items"][0]["slug"] == "example"
 
 
+def test_list_templates_defaults_to_personal_scope_when_omitted() -> None:
+    client, catalog, _ = _build_app()
+    catalog.list_templates.return_value = []
+
+    response = client.get("/api/task-step-templates")
+
+    assert response.status_code == 200
+    kwargs = catalog.list_templates.await_args.kwargs
+    assert kwargs["scope"] == "personal"
+    assert kwargs["scope_ref"] is not None
+
 def test_expand_template_success() -> None:
     client, catalog, _ = _build_app()
     catalog.expand_template.return_value = {

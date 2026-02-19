@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -97,14 +98,18 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
                         applied_at = datetime.fromisoformat(raw_applied)
                     except ValueError:
                         applied_at = created_at
-                session.add(
-                    TaskStepTemplateRecent(
+                result = await session.execute(
+                    pg_insert(TaskStepTemplateRecent)
+                    .values(
                         user_id=user_id,
                         template_version_id=version_id,
                         applied_at=applied_at,
                     )
+                    .on_conflict_do_nothing(
+                        index_elements=["user_id", "template_version_id"]
+                    )
                 )
-                inserted += 1
+                inserted += int((result.rowcount or 0) > 0)
 
         await session.commit()
         return inserted

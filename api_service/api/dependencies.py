@@ -145,14 +145,16 @@ def resolve_template_scope_for_user(
             )
         return "personal", normalized_scope_ref
 
-    # Team scope: until a dedicated membership model exists, enforce owner/admin writes
-    # and allow reads by authenticated users.
-    if write and not is_superuser and normalized_scope_ref != user_id:
+    # Team scope access is limited to owner/admin until a dedicated membership model is available.
+    if not is_superuser and normalized_scope_ref != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "template_scope_forbidden",
-                "message": "Team template writes require owner/admin permissions.",
+                "message": (
+                    "Team templates are only accessible to the template owner "
+                    "or an admin."
+                ),
             },
         )
     return "team", normalized_scope_ref

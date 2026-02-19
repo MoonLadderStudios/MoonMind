@@ -65,3 +65,29 @@ def test_resolve_global_write_allows_admin() -> None:
 
     assert scope == "global"
     assert scope_ref is None
+
+
+def test_resolve_team_scope_rejects_non_owner_reads_for_non_admin() -> None:
+    user = _user()
+    with pytest.raises(HTTPException) as exc:
+        resolve_template_scope_for_user(
+            user=user,
+            scope="team",
+            scope_ref=str(uuid4()),
+            write=False,
+        )
+
+    assert exc.value.status_code == 403
+
+
+def test_resolve_team_scope_allows_admin_reads() -> None:
+    admin = _user(is_superuser=True)
+    scope, scope_ref = resolve_template_scope_for_user(
+        user=admin,
+        scope="team",
+        scope_ref=str(uuid4()),
+        write=False,
+    )
+
+    assert scope == "team"
+    assert scope_ref is not None

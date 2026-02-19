@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 import yaml
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -261,7 +262,9 @@ def _serialize_template(
         "description": template.description,
         "tags": list(template.tags or []),
         "version": version.version,
-        "latestVersion": version.version,
+        "latestVersion": (
+            template.latest_version.version if template.latest_version else version.version
+        ),
         "inputs": list(version.inputs_schema or []),
         "steps": list(version.steps or []),
         "annotations": dict(version.annotations or {}),
@@ -516,6 +519,7 @@ class TaskTemplateCatalogService:
         version: str = "1.0.0",
         release_status: TaskTemplateReleaseStatus = TaskTemplateReleaseStatus.DRAFT,
         seed_source: str | None = None,
+        auto_commit: bool = True,
     ) -> dict[str, Any]:
         normalized_scope = _normalize_scope(scope)
         normalized_scope_ref = _normalize_scope_ref(normalized_scope, scope_ref)
@@ -578,16 +582,17 @@ class TaskTemplateCatalogService:
         self._session.add(template)
         self._session.add(version_model)
         await self._session.flush()
-        await self._session.commit()
-        logger.info(
-            "task_template_catalog.create",
-            extra={
-                "slug": normalized_slug,
-                "scope": normalized_scope.value,
-                "version": version_label,
-            },
-        )
-        _METRICS.increment("create")
+        if auto_commit:
+            await self._session.commit()
+            logger.info(
+                "task_template_catalog.create",
+                extra={
+                    "slug": normalized_slug,
+                    "scope": normalized_scope.value,
+                    "version": version_label,
+                },
+            )
+            _METRICS.increment("create")
         return _serialize_template(
             template=template,
             version=version_model,
@@ -900,6 +905,7 @@ class TaskTemplateCatalogService:
         slug: str,
         scope: str,
         scope_ref: str | None,
+        auto_commit: bool = True,
     ) -> None:
         scope_type = _normalize_scope(scope)
         normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
@@ -921,7 +927,10 @@ class TaskTemplateCatalogService:
                     template_id=template.id,
                 )
             )
-            await self._session.commit()
+            if auto_commit:
+                await self._session.commit()
+            else:
+                await self._session.flush()
             logger.info(
                 "task_template_catalog.favorite",
                 extra={
@@ -968,36 +977,48 @@ class TaskTemplateCatalogService:
         *,
         user_id: UUID,
         template_version_id: UUID,
+        auto_commit: bool = True,
     ) -> None:
-        self._session.add(
-            TaskStepTemplateRecent(
-                user_id=user_id,
-                template_version_id=template_version_id,
-            )
-        )
-        await self._session.flush()
-        stale_rows = (
-            (
-                await self._session.execute(
-                    select(TaskStepTemplateRecent.id)
-                    .where(TaskStepTemplateRecent.user_id == user_id)
-                    .order_by(
-                        TaskStepTemplateRecent.applied_at.desc(),
-                        TaskStepTemplateRecent.id.desc(),
-                    )
-                    .offset(5)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        if stale_rows:
+        dialect_name = self._session.bind.dialect.name if self._session.bind else ""
+        if dialect_name == "postgresql":
             await self._session.execute(
-                delete(TaskStepTemplateRecent).where(
-                    TaskStepTemplateRecent.id.in_(stale_rows)
+                pg_insert(TaskStepTemplateRecent)
+                .values(
+                    user_id=user_id,
+                    template_version_id=template_version_id,
+                )
+                .on_conflict_do_update(
+                    index_elements=["user_id", "template_version_id"],
+                    set_={"applied_at": datetime.now(UTC)},
                 )
             )
-        await self._session.commit()
+        else:
+            self._session.add(
+                TaskStepTemplateRecent(
+                    user_id=user_id,
+                    template_version_id=template_version_id,
+                )
+            )
+        await self._session.flush()
+        keep_recent_ids = (
+            select(TaskStepTemplateRecent.id)
+            .where(TaskStepTemplateRecent.user_id == user_id)
+            .order_by(
+                TaskStepTemplateRecent.applied_at.desc(),
+                TaskStepTemplateRecent.id.desc(),
+            )
+            .limit(5)
+        )
+        await self._session.execute(
+            delete(TaskStepTemplateRecent).where(
+                TaskStepTemplateRecent.user_id == user_id,
+                TaskStepTemplateRecent.id.not_in(keep_recent_ids),
+            )
+        )
+        if auto_commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
         logger.info(
             "task_template_catalog.recent",
             extra={"template_version_id": str(template_version_id)},

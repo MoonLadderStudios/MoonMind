@@ -10,6 +10,7 @@ import sqlalchemy as sa
 import yaml
 from alembic import op
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 revision: str = "202602180002"
 down_revision: Union[str, None] = "202602180001"
@@ -108,8 +109,9 @@ def _seed_catalog_defaults(bind) -> None:
             f"task-template-version:{scope}:{scope_ref}:{slug}:{version}",
         )
         now = sa.func.now()
-        bind.execute(
-            sa.insert(templates_table).values(
+        template_inserted = bind.execute(
+            pg_insert(templates_table)
+            .values(
                 id=template_uuid,
                 slug=slug,
                 scope_type=scope,
@@ -124,9 +126,11 @@ def _seed_catalog_defaults(bind) -> None:
                 created_at=now,
                 updated_at=now,
             )
+            .on_conflict_do_nothing(index_elements=["id"])
         )
-        bind.execute(
-            sa.insert(versions_table).values(
+        version_inserted = bind.execute(
+            pg_insert(versions_table)
+            .values(
                 id=version_uuid,
                 template_id=template_uuid,
                 version=version,
@@ -143,20 +147,22 @@ def _seed_catalog_defaults(bind) -> None:
                 created_at=now,
                 updated_at=now,
             )
+            .on_conflict_do_nothing(index_elements=["id"])
         )
-        bind.execute(
-            sa.text(
-                """
-                UPDATE task_step_templates
-                SET latest_version_id = :version_id
-                WHERE id = :template_id
-                """
-            ),
-            {
-                "template_id": str(template_uuid),
-                "version_id": str(version_uuid),
-            },
-        )
+        if (template_inserted.rowcount or 0) > 0 or (version_inserted.rowcount or 0) > 0:
+            bind.execute(
+                sa.text(
+                    """
+                    UPDATE task_step_templates
+                    SET latest_version_id = :version_id
+                    WHERE id = :template_id
+                    """
+                ),
+                {
+                    "template_id": str(template_uuid),
+                    "version_id": str(version_uuid),
+                },
+            )
 
 
 def upgrade() -> None:
@@ -220,6 +226,13 @@ def upgrade() -> None:
         "task_step_templates",
         ["is_active"],
         unique=False,
+    )
+    op.create_index(
+        "uq_task_step_template_slug_global",
+        "task_step_templates",
+        ["slug", "scope_type"],
+        unique=True,
+        postgresql_where=sa.text("scope_ref IS NULL"),
     )
 
     op.create_table(
@@ -324,6 +337,11 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["user_id"], ["user.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "user_id",
+            "template_version_id",
+            name="uq_task_template_recent_user_version",
+        ),
     )
     op.create_index(
         "ix_task_step_template_recents_user",
@@ -358,6 +376,7 @@ def downgrade() -> None:
     op.drop_table("task_step_template_versions")
 
     op.drop_index("ix_task_step_templates_active", table_name="task_step_templates")
+    op.drop_index("uq_task_step_template_slug_global", table_name="task_step_templates")
     op.drop_index("ix_task_step_templates_slug", table_name="task_step_templates")
     op.drop_index("ix_task_step_templates_scope", table_name="task_step_templates")
     op.drop_table("task_step_templates")
