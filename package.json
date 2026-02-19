@@ -9,7 +9,10 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dashboard:css": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css",
+    "dashboard:css:min": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --minify",
+    "dashboard:css:watch": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --watch"
   },
   "repository": {
     "type": "git",
@@ -22,5 +25,10 @@
   "bugs": {
     "url": "https://github.com/MoonLadderStudios/MoonMind/issues"
   },
-  "homepage": "https://github.com/MoonLadderStudios/MoonMind#readme"
+  "homepage": "https://github.com/MoonLadderStudios/MoonMind#readme",
+  "devDependencies": {
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0"
+  }
 }

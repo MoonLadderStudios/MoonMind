@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from os import environ
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 from uuid import UUID
 
 import httpx
@@ -118,6 +118,7 @@ class CodexWorkerConfig:
     live_session_allow_web: bool = False
     tmate_server_host: str | None = None
     live_session_max_concurrent_per_worker: int = 4
+    artifact_upload_incremental: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CodexWorkerConfig":
@@ -458,6 +459,18 @@ class CodexWorkerConfig:
             raise ValueError(
                 "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER must be >= 1"
             )
+        artifact_upload_incremental_raw = (
+            str(source.get("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "true"))
+            .strip()
+            .lower()
+        )
+        artifact_upload_incremental = artifact_upload_incremental_raw not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }
 
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
@@ -502,6 +515,7 @@ class CodexWorkerConfig:
             live_session_allow_web=live_session_allow_web,
             tmate_server_host=tmate_server_host,
             live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
+            artifact_upload_incremental=artifact_upload_incremental,
         )
 
 
@@ -1088,6 +1102,33 @@ class CodexWorker:
         )
 
         staged_artifacts: list[ArtifactUpload] = []
+        uploaded_artifact_names: set[str] = set()
+        optional_artifact_failures: set[str] = set()
+
+        async def _upload_new_artifacts(
+            artifacts: Sequence[ArtifactUpload],
+        ) -> None:
+            if not artifacts:
+                return
+            failed_optionals = await self._upload_artifacts(
+                job_id=job.id,
+                artifacts=artifacts,
+                uploaded_artifact_names=uploaded_artifact_names,
+            )
+            optional_artifact_failures.update(failed_optionals)
+
+        async def _flush_staged_artifacts() -> None:
+            if not staged_artifacts:
+                return
+            await _upload_new_artifacts(staged_artifacts)
+            staged_artifacts.clear()
+
+        async def _handle_incremental_artifacts(
+            artifacts: Sequence[ArtifactUpload],
+        ) -> None:
+            if not self._config.artifact_upload_incremental:
+                return
+            await _upload_new_artifacts(artifacts)
         try:
             stage_plan = build_task_stage_plan(canonical_payload)
             await self._emit_event(
@@ -1132,6 +1173,7 @@ class CodexWorker:
                 runtime_mode=runtime_mode,
                 resolved_steps=resolved_steps,
                 prepared=prepared,
+                artifact_callback=_handle_incremental_artifacts,
             )
             execute_artifacts = self._normalize_execute_artifacts(
                 result_artifacts=result.artifacts,
@@ -1171,7 +1213,28 @@ class CodexWorker:
                     cancel_event=cancel_requested_event
                 )
 
-            await self._upload_artifacts(job_id=job.id, artifacts=staged_artifacts)
+            await _flush_staged_artifacts()
+            if optional_artifact_failures:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="warn",
+                    message="Optional artifact uploads failed",
+                    payload={
+                        "failedCount": len(optional_artifact_failures),
+                        "artifacts": sorted(optional_artifact_failures),
+                    },
+                )
+                if result.succeeded:
+                    base_summary = result.summary or "task completed"
+                    result = type(result)(
+                        succeeded=True,
+                        summary=(
+                            f"{base_summary}; "
+                            f"{len(optional_artifact_failures)} optional artifact upload(s) failed"
+                        ),
+                        error_message=None,
+                        artifacts=result.artifacts,
+                    )
             if cancel_requested_event.is_set():
                 await self._acknowledge_cancellation(
                     job_id=job.id,
@@ -1217,10 +1280,13 @@ class CodexWorker:
         except Exception as exc:
             if staged_artifacts:
                 try:
-                    await self._upload_artifacts(
+                    failed_optionals = await self._upload_artifacts(
                         job_id=job.id,
                         artifacts=staged_artifacts,
+                        uploaded_artifact_names=uploaded_artifact_names,
                     )
+                    optional_artifact_failures.update(failed_optionals)
+                    staged_artifacts.clear()
                 except Exception:
                     logger.warning(
                         "Best-effort artifact upload failed during exception path",
@@ -2121,6 +2187,7 @@ class CodexWorker:
                             name=step_log_name,
                             content_type="text/plain",
                             digest=artifact.digest,
+                            required=False,
                         )
                     )
                     has_step_log = True
@@ -2137,6 +2204,7 @@ class CodexWorker:
                                 name=step_patch_name,
                                 content_type="text/x-diff",
                                 digest=artifact.digest,
+                                required=False,
                             )
                         )
                         has_step_patch = True
@@ -2149,6 +2217,7 @@ class CodexWorker:
                     path=step_log_path,
                     name=step_log_name,
                     content_type="text/plain",
+                    required=False,
                 )
             )
         if (
@@ -2161,6 +2230,7 @@ class CodexWorker:
                     path=step_patch_path,
                     name=step_patch_name,
                     content_type="text/x-diff",
+                    required=False,
                 )
             )
         return normalized
@@ -2773,6 +2843,8 @@ class CodexWorker:
         runtime_mode: str,
         resolved_steps: Sequence[ResolvedTaskStep],
         prepared: PreparedTaskWorkspace,
+        artifact_callback: Callable[[Sequence[ArtifactUpload]], Awaitable[None]]
+        | None = None,
     ) -> WorkerExecutionResult:
         """Execute resolved task steps via selected runtime adapter."""
 
@@ -2984,6 +3056,8 @@ class CodexWorker:
                 step_patch_path=step_patch_path,
             )
             step_artifacts.extend(normalized_step_artifacts)
+            if artifact_callback is not None and normalized_step_artifacts:
+                await artifact_callback(normalized_step_artifacts)
 
             if step_result.succeeded:
                 event_payload["summary"] = step_result.summary
@@ -3032,13 +3106,14 @@ class CodexWorker:
         )
         patch_path.write_text(patch_result.stdout or "", encoding="utf-8")
         if patch_path.exists() and patch_path.stat().st_size > 0:
-            step_artifacts.append(
-                ArtifactUpload(
-                    path=patch_path,
-                    name="patches/changes.patch",
-                    content_type="text/x-diff",
-                )
+            final_patch_artifact = ArtifactUpload(
+                path=patch_path,
+                name="patches/changes.patch",
+                content_type="text/x-diff",
             )
+            step_artifacts.append(final_patch_artifact)
+            if artifact_callback is not None:
+                await artifact_callback((final_patch_artifact,))
 
         return WorkerExecutionResult(
             succeeded=True,
@@ -3858,17 +3933,44 @@ class CodexWorker:
         *,
         job_id: UUID,
         artifacts: Sequence[ArtifactUpload],
-    ) -> None:
+        uploaded_artifact_names: set[str] | None = None,
+    ) -> set[str]:
+        optional_failures: set[str] = set()
         for artifact in artifacts:
             if not artifact.path.exists():
                 continue
             if artifact.path.stat().st_size == 0:
                 continue
-            await self._queue_client.upload_artifact(
-                job_id=job_id,
-                worker_id=self._config.worker_id,
-                artifact=artifact,
-            )
+            if (
+                uploaded_artifact_names is not None
+                and artifact.name in uploaded_artifact_names
+            ):
+                continue
+            try:
+                await self._queue_client.upload_artifact(
+                    job_id=job_id,
+                    worker_id=self._config.worker_id,
+                    artifact=artifact,
+                )
+                if uploaded_artifact_names is not None:
+                    uploaded_artifact_names.add(artifact.name)
+            except Exception as exc:
+                if artifact.required:
+                    raise
+                optional_failures.add(artifact.name)
+                await self._emit_event(
+                    job_id=job_id,
+                    level="warn",
+                    message="Optional artifact upload failed",
+                    payload={"name": artifact.name, "error": str(exc)},
+                )
+                logger.warning(
+                    "Optional artifact upload failed for job %s artifact %s: %s",
+                    job_id,
+                    artifact.name,
+                    exc,
+                )
+        return optional_failures
 
     async def _emit_event(
         self,
