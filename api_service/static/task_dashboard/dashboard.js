@@ -1512,12 +1512,51 @@
             : "Leave skill blank to inherit Step 1 defaults.";
           return `
             <div class="card" data-step-index="${index}">
-              <div class="actions">
+              <div class="queue-step-header">
                 <strong>Step ${index + 1}${stepLabel}</strong>
-                <div>
-                  <button type="button" data-step-action="up" data-step-index="${index}" ${upDisabled}>Up</button>
-                  <button type="button" data-step-action="down" data-step-index="${index}" ${downDisabled}>Down</button>
-                  <button type="button" data-step-action="remove" data-step-index="${index}" ${removeDisabled}>Remove</button>
+                <div class="queue-step-controls" role="group" aria-label="Step ${index + 1} controls">
+                  <button
+                    type="button"
+                    class="queue-step-icon-button"
+                    data-step-action="up"
+                    data-step-index="${index}"
+                    ${upDisabled}
+                    aria-label="Move step up"
+                    title="Move step up"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 6v12m0-12-4 4m4-4 4 4" />
+                    </svg>
+                    <span class="sr-only">Move step up</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="queue-step-icon-button"
+                    data-step-action="down"
+                    data-step-index="${index}"
+                    ${downDisabled}
+                    aria-label="Move step down"
+                    title="Move step down"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 18V6m0 12 4-4m-4 4-4-4" />
+                    </svg>
+                    <span class="sr-only">Move step down</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="queue-step-icon-button destructive"
+                    data-step-action="remove"
+                    data-step-index="${index}"
+                    ${removeDisabled}
+                    aria-label="Remove step"
+                    title="Remove step"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M7 7l10 10M17 7l-10 10" />
+                    </svg>
+                    <span class="sr-only">Remove step</span>
+                  </button>
                 </div>
               </div>
               <div class="grid-2">
@@ -1587,6 +1626,9 @@
         }
         const actionButton = target.closest("[data-step-action]");
         if (!(actionButton instanceof HTMLElement)) {
+          return;
+        }
+        if (actionButton instanceof HTMLButtonElement && actionButton.disabled) {
           return;
         }
         const action = actionButton.getAttribute("data-step-action");
