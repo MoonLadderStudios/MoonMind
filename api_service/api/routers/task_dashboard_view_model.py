@@ -156,6 +156,12 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "snooze": "/api/proposals/{id}/snooze",
                 "unsnooze": "/api/proposals/{id}/unsnooze",
             },
+            "manifests": {
+                "list": "/api/queue/jobs?type=manifest&limit=200",
+                "create": "/api/queue/jobs",
+                "registry": "/api/manifests",
+                "registryRun": "/api/manifests/{name}/runs",
+            },
         },
         "system": {
             "defaultQueue": settings.spec_workflow.codex_queue

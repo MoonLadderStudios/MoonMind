@@ -18,6 +18,10 @@
     sourceConfig.proposals && typeof sourceConfig.proposals === "object"
       ? sourceConfig.proposals
       : {};
+  const manifestsSourceConfig =
+    sourceConfig.manifests && typeof sourceConfig.manifests === "object"
+      ? sourceConfig.manifests
+      : {};
   const systemConfig = config.system || {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
   const supportedWorkerRuntimes =
@@ -1266,6 +1270,212 @@
     };
 
     startPolling(load, pollIntervals.list);
+  }
+
+  async function renderManifestListPage() {
+    setView(
+      "Manifest Runs",
+      "All manifest ingestion jobs (type=manifest).",
+      "<p class='loading'>Loading manifest jobs...</p>",
+    );
+
+    const load = async () => {
+      const endpoint =
+        manifestsSourceConfig.list ||
+        "/api/queue/jobs?type=manifest&limit=200";
+      const payload = await fetchJson(endpoint);
+      const rows = sortRows(
+        toQueueRows(payload?.items || []).map((row) => ({
+          ...row,
+          source: "manifests",
+          sourceLabel: "Manifests",
+        })),
+      );
+      setView(
+        "Manifest Runs",
+        "All manifest ingestion jobs (type=manifest).",
+        `<div class="actions"><a href="/tasks/manifests/new"><button type="button">New Manifest Run</button></a></div>${renderRowsTable(rows)}`,
+      );
+    };
+
+    startPolling(load, pollIntervals.list);
+  }
+
+  function renderManifestSubmitPage() {
+    setView(
+      "Submit Manifest Run",
+      "Queue a manifest ingestion job via the shared Agent Queue.",
+      `
+      <form id="manifest-submit-form">
+        <label>Manifest Name
+          <input name="manifestName" required />
+        </label>
+        <div class="grid-2">
+          <label>Action
+            <select name="action">
+              <option value="run" selected>run</option>
+              <option value="plan">plan</option>
+            </select>
+          </label>
+          <label>Source Type
+            <select name="sourceKind">
+              <option value="inline" selected>Inline YAML</option>
+              <option value="registry">Registry</option>
+            </select>
+          </label>
+        </div>
+        <label id="manifest-inline-field">
+          Manifest YAML
+          <textarea name="manifestContent" placeholder="Paste manifest YAML..." rows="12" required></textarea>
+        </label>
+        <label id="manifest-registry-field" class="hidden">
+          Registry Name
+          <input name="registryName" placeholder="existing manifest name" />
+        </label>
+        <div class="grid-3">
+          <label class="checkbox">
+            <input type="checkbox" name="dryRun" />
+            Dry Run
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" name="forceFull" />
+            Force Full Sync
+          </label>
+          <label>Max Docs
+            <input type="number" min="1" name="maxDocs" placeholder="optional" />
+          </label>
+        </div>
+        <label>Queue Priority
+          <input type="number" name="priority" value="0" />
+        </label>
+        <div class="actions">
+          <button type="submit">Create Manifest Job</button>
+          <a href="/tasks/manifests"><button class="secondary" type="button">Cancel</button></a>
+        </div>
+        <p class="small" id="manifest-submit-message"></p>
+      </form>
+      `,
+    );
+
+    const form = document.getElementById("manifest-submit-form");
+    const message = document.getElementById("manifest-submit-message");
+    const inlineField = document.getElementById("manifest-inline-field");
+    const registryField = document.getElementById("manifest-registry-field");
+    const sourceSelect = form.querySelector('select[name="sourceKind"]');
+
+    const syncSourceFields = () => {
+      const kind = String(sourceSelect.value || "inline").toLowerCase();
+      inlineField.classList.toggle("hidden", kind !== "inline");
+      registryField.classList.toggle("hidden", kind !== "registry");
+      const contentField = form.elements.namedItem("manifestContent");
+      const registryInput = form.elements.namedItem("registryName");
+      if (contentField) {
+        contentField.required = kind === "inline";
+      }
+      if (registryInput) {
+        registryInput.required = kind === "registry";
+      }
+    };
+    syncSourceFields();
+    sourceSelect.addEventListener("change", syncSourceFields);
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      message.textContent = "";
+
+      const formData = new FormData(form);
+      const manifestName = String(formData.get("manifestName") || "").trim();
+      const action = String(formData.get("action") || "run").trim() || "run";
+      const sourceKind = String(formData.get("sourceKind") || "inline").trim().toLowerCase();
+      const manifestPayload = {
+        manifest: {
+          name: manifestName,
+          action,
+          source: { kind: sourceKind },
+        },
+      };
+
+      if (!manifestName) {
+        message.textContent = "Manifest name is required.";
+        return;
+      }
+
+      if (sourceKind === "registry") {
+        const registryName = String(formData.get("registryName") || "").trim();
+        if (!registryName) {
+          message.textContent = "Registry name is required for registry submissions.";
+          return;
+        }
+        manifestPayload.manifest.source = { kind: "registry", name: registryName };
+      } else {
+        const manifestContent = String(formData.get("manifestContent") || "").trim();
+        if (!manifestContent) {
+          message.textContent = "Manifest YAML is required.";
+          return;
+        }
+        manifestPayload.manifest.source = { kind: "inline", content: manifestContent };
+      }
+
+      const options = {};
+      if (formData.get("dryRun")) {
+        options.dryRun = true;
+      }
+      if (formData.get("forceFull")) {
+        options.forceFull = true;
+      }
+      const maxDocsRaw = String(formData.get("maxDocs") || "").trim();
+      if (maxDocsRaw) {
+        const parsed = Number(maxDocsRaw);
+        if (Number.isFinite(parsed) && parsed >= 1) {
+          options.maxDocs = parsed;
+        }
+      }
+      if (Object.keys(options).length > 0) {
+        manifestPayload.manifest.options = options;
+      }
+
+      const priorityValue = Number(String(formData.get("priority") || "").trim());
+      const priority = Number.isFinite(priorityValue) ? priorityValue : 0;
+
+      try {
+        let created;
+        if (sourceKind === "registry") {
+          const registryName = String(formData.get("registryName") || "").trim();
+          const registryRunUrlTemplate =
+            queueSourceConfig.registryRun || "/api/manifests/{name}/runs";
+          const registryRunUrl = registryRunUrlTemplate.replace(
+            "{name}",
+            encodeURIComponent(registryName),
+          );
+          created = await fetchJson(registryRunUrl, {
+            method: "POST",
+            body: JSON.stringify({
+              action,
+              options: Object.keys(options).length > 0 ? options : undefined,
+            }),
+          });
+          window.location.href = `/tasks/queue/${encodeURIComponent(
+            String(created.jobId || ""),
+          )}`;
+          return;
+        }
+
+        created = await fetchJson(queueSourceConfig.create || "/api/queue/jobs", {
+          method: "POST",
+          body: JSON.stringify({
+            type: "manifest",
+            priority,
+            payload: manifestPayload,
+          }),
+        });
+        window.location.href = `/tasks/queue/${encodeURIComponent(
+          String(created.id || ""),
+        )}`;
+      } catch (error) {
+        console.error("manifest submit failed", error);
+        message.textContent = "Failed to create manifest job.";
+      }
+    });
   }
 
   async function renderOrchestratorListPage() {
@@ -4385,6 +4595,14 @@
     }
     if (pathname === "/tasks/orchestrator") {
       await renderOrchestratorListPage();
+      return;
+    }
+    if (pathname === "/tasks/manifests") {
+      await renderManifestListPage();
+      return;
+    }
+    if (pathname === "/tasks/manifests/new") {
+      renderManifestSubmitPage();
       return;
     }
     if (pathname === "/tasks/proposals") {

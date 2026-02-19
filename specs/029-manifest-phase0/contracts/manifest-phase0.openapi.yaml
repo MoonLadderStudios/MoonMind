@@ -1,0 +1,429 @@
+openapi: 3.0.3
+info:
+  title: MoonMind Manifest Queue Phase 0
+  version: 0.1.0
+  description: >
+    API surface required to submit manifest ingestion jobs, manage registry
+    entries, and ensure queue responses return sanitized payloads
+    (per `docs/ManifestTaskSystem.md` §6–§7).
+servers:
+  - url: /api
+paths:
+  /queue/jobs:
+    post:
+      summary: Submit a queue job
+      description: Create a queue job of type `manifest` with inline manifest YAML.
+      operationId: createManifestJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManifestJobCreateRequest'
+      responses:
+        '201':
+          description: Manifest job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestJobModel'
+    get:
+      summary: List queue jobs (manifest only)
+      description: >
+        Filtered listing to observe manifest jobs without exposing raw manifest
+        content. Results include audit metadata (hash, version, requiredCapabilities).
+      operationId: listManifestJobs
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [manifest]
+          required: true
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Manifest job list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ManifestJobModel'
+                required: [items]
+  /manifests:
+    get:
+      summary: List manifests
+      operationId: listManifests
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Registry entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestListResponse'
+  /manifests/{name}:
+    get:
+      summary: Get manifest
+      operationId: getManifest
+      parameters:
+        - $ref: '#/components/parameters/ManifestName'
+      responses:
+        '200':
+          description: Manifest detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestRegistryRecord'
+        '404':
+          description: Manifest not found
+    put:
+      summary: Upsert manifest
+      operationId: putManifest
+      parameters:
+        - $ref: '#/components/parameters/ManifestName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+                  description: Raw YAML (validated server-side)
+              required: [content]
+      responses:
+        '200':
+          description: Manifest stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestRegistryRecord'
+  /manifests/{name}/runs:
+    post:
+      summary: Submit a registry-backed manifest run
+      operationId: createManifestRun
+      parameters:
+        - $ref: '#/components/parameters/ManifestName'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManifestRunRequest'
+      responses:
+        '201':
+          description: Queue job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestRunResponse'
+        '404':
+          description: Manifest not found
+        '422':
+          description: Validation error (invalid manifest/options)
+
+components:
+  parameters:
+    ManifestName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Manifest registry key (must match YAML metadata.name)
+
+  schemas:
+    ManifestJobCreateRequest:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [manifest]
+        priority:
+          type: integer
+          default: 0
+        payload:
+          type: object
+          properties:
+            manifest:
+              $ref: '#/components/schemas/ManifestEnvelopeRequest'
+          required: [manifest]
+      required: [type, payload]
+
+    ManifestEnvelopeRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        action:
+          type: string
+          enum: [plan, run]
+          default: run
+        source:
+          $ref: '#/components/schemas/ManifestSourceRequest'
+        options:
+          $ref: '#/components/schemas/ManifestOptions'
+      required: [name, source]
+
+    ManifestSourceRequest:
+      oneOf:
+        - $ref: '#/components/schemas/ManifestSourceInline'
+        - $ref: '#/components/schemas/ManifestSourceRegistry'
+      discriminator:
+        propertyName: kind
+        mapping:
+          inline: '#/components/schemas/ManifestSourceInline'
+          registry: '#/components/schemas/ManifestSourceRegistry'
+
+    ManifestSourceInline:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [inline]
+        content:
+          type: string
+        name:
+          type: string
+          description: Optional alias; defaults to manifest name
+      required: [kind, content]
+
+    ManifestSourceRegistry:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [registry]
+        name:
+          type: string
+          description: Registry entry to fetch
+      required: [kind, name]
+
+    ManifestOptions:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+        forceFull:
+          type: boolean
+        maxDocs:
+          type: integer
+          minimum: 1
+      additionalProperties: false
+
+    ManifestJobModel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [manifest]
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        priority:
+          type: integer
+        payload:
+          $ref: '#/components/schemas/SanitizedManifestPayload'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - type
+        - status
+        - payload
+        - createdAt
+        - updatedAt
+
+    SanitizedManifestPayload:
+      type: object
+      properties:
+        manifest:
+          $ref: '#/components/schemas/SanitizedManifestEnvelope'
+        manifestHash:
+          type: string
+          description: sha256-prefixed hash
+        manifestVersion:
+          type: string
+          enum: [v0]
+        requiredCapabilities:
+          type: array
+          items:
+            type: string
+        effectiveRunConfig:
+          type: object
+          additionalProperties: true
+      required:
+        - manifest
+        - manifestHash
+        - manifestVersion
+        - requiredCapabilities
+
+    SanitizedManifestEnvelope:
+      type: object
+      properties:
+        name:
+          type: string
+        action:
+          type: string
+          enum: [plan, run]
+        source:
+          $ref: '#/components/schemas/SanitizedManifestSource'
+        options:
+          $ref: '#/components/schemas/ManifestOptions'
+      required: [name, source]
+
+    SanitizedManifestSource:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [inline, registry]
+        name:
+          type: string
+          description: Present when `kind=registry`
+        contentHash:
+          type: string
+        version:
+          type: string
+          enum: [v0]
+      required: [kind, contentHash, version]
+      description: >
+        Inline manifests return `kind="inline"` but never include `content`.
+        Registry manifests return `kind="registry"` and only expose the entry name
+        plus audit metadata.
+
+    ManifestRegistryRecord:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        content:
+          type: string
+        contentHash:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        lastRun:
+          type: object
+          nullable: true
+          properties:
+            jobId:
+              type: string
+              format: uuid
+            status:
+              type: string
+            startedAt:
+              type: string
+              format: date-time
+            finishedAt:
+              type: string
+              format: date-time
+        state:
+          type: object
+          properties:
+            stateJson:
+              type: object
+              nullable: true
+            stateUpdatedAt:
+              type: string
+              format: date-time
+              nullable: true
+      required: [name, version, content, contentHash]
+
+    ManifestListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              version:
+                type: string
+              contentHash:
+                type: string
+              updatedAt:
+                type: string
+                format: date-time
+              lastRunJobId:
+                type: string
+                format: uuid
+                nullable: true
+              lastRunStatus:
+                type: string
+                nullable: true
+              stateUpdatedAt:
+                type: string
+                format: date-time
+                nullable: true
+            required: [name, contentHash]
+      required: [items]
+
+    ManifestRunRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [plan, run]
+          default: run
+        options:
+          $ref: '#/components/schemas/ManifestOptions'
+
+    ManifestRunResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        queue:
+          $ref: '#/components/schemas/ManifestRunQueueMetadata'
+      required: [jobId, queue]
+
+    ManifestRunQueueMetadata:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [manifest]
+        requiredCapabilities:
+          type: array
+          items:
+            type: string
+        manifestHash:
+          type: string
+      required: [type, requiredCapabilities]
