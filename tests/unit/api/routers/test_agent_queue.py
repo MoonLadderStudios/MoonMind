@@ -594,6 +594,31 @@ def test_list_job_events_forwards_composite_cursor(
     assert kwargs["after"] is not None
 
 
+def test_list_job_events_forwards_before_cursor_and_sort(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Event list endpoint should forward before + beforeEventId + sort."""
+
+    test_client, service = client
+    job_id = uuid4()
+    before = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    before_event_id = uuid4()
+    service.list_events.return_value = []
+
+    response = test_client.get(
+        f"/api/queue/jobs/{job_id}/events?limit=75&before={before}&beforeEventId={before_event_id}&sort=desc"
+    )
+
+    assert response.status_code == 200
+    service.list_events.assert_awaited_once()
+    kwargs = service.list_events.await_args.kwargs
+    assert kwargs["job_id"] == job_id
+    assert kwargs["limit"] == 75
+    assert kwargs["before_event_id"] == before_event_id
+    assert kwargs["before"] is not None
+    assert kwargs["sort"] == "desc"
+
+
 @pytest.mark.asyncio
 async def test_stream_job_events_sse_emits_queue_event(
     client: tuple[TestClient, AsyncMock]

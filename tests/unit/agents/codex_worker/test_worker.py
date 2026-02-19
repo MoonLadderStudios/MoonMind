@@ -123,6 +123,24 @@ class FailingUploadQueueClient(FakeQueueClient):
         raise RuntimeError("artifact upload failed")
 
 
+class SelectiveFailUploadQueueClient(FakeQueueClient):
+    """Queue client stub that fails uploads for a selected artifact name set."""
+
+    def __init__(
+        self,
+        jobs: list[ClaimedJob | None] | None = None,
+        *,
+        fail_names: set[str] | None = None,
+    ) -> None:
+        super().__init__(jobs=jobs)
+        self.fail_names = set(fail_names or set())
+
+    async def upload_artifact(self, *, job_id, worker_id, artifact):
+        if artifact.name in self.fail_names:
+            raise RuntimeError("artifact upload failed")
+        await super().upload_artifact(job_id=job_id, worker_id=worker_id, artifact=artifact)
+
+
 class FakeHandler:
     """Handler stub returning configured results."""
 
@@ -285,6 +303,71 @@ async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     assert "patches/changes.patch" not in queue.uploaded
     assert len(queue.completed) == 1
     assert queue.failed == []
+
+
+async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
+    tmp_path: Path,
+) -> None:
+    """Optional artifact upload failures should not fail otherwise successful jobs."""
+
+    step_log = tmp_path / "step.log"
+    step_patch = tmp_path / "step.patch"
+    step_log.write_text("step", encoding="utf-8")
+    step_patch.write_text("diff", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = SelectiveFailUploadQueueClient(
+        jobs=[job], fail_names={"logs/steps/step-0000.log"}
+    )
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(
+                ArtifactUpload(path=step_log, name="logs/codex_exec.log"),
+                ArtifactUpload(path=step_patch, name="patches/changes.patch"),
+            ),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert any(
+        event["message"] == "Optional artifact upload failed" for event in queue.events
+    )
+    assert any(
+        event["message"] == "Optional artifact uploads failed" for event in queue.events
+    )
+    assert queue.completed[0][1] is not None
+    assert "optional artifact upload(s) failed" in queue.completed[0][1]
 
 
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
@@ -1626,6 +1709,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_DOCKER_BINARY", "docker")
     monkeypatch.setenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", "agent_workspaces")
     monkeypatch.setenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "false")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
@@ -1645,6 +1729,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume == "agent_workspaces"
     assert config.container_default_timeout_seconds == 1800
+    assert config.artifact_upload_incremental is False
     assert config.git_user_name == "Nate Sticco"
     assert config.git_user_email == "nsticco@gmail.com"
 
@@ -1667,6 +1752,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_DOCKER_BINARY", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", raising=False)
     monkeypatch.delenv("MOONMIND_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SKILL_POLICY_MODE", raising=False)
@@ -1689,6 +1775,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume is None
     assert config.container_default_timeout_seconds == 3600
+    assert config.artifact_upload_incremental is True
 
 
 async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:

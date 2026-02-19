@@ -164,7 +164,7 @@ class TestSpecWorkflowSettings:
         )
         assert (
             SpecWorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
-            == 10 * 1024 * 1024
+            == 50 * 1024 * 1024
         )
 
     def test_agent_job_artifact_env_overrides(self, monkeypatch):

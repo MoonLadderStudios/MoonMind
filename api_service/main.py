@@ -35,6 +35,9 @@ from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.spec_automation import router as spec_automation_router
 from api_service.api.routers.task_dashboard import router as task_dashboard_router
 from api_service.api.routers.task_runs import router as task_runs_router
+from api_service.api.routers.task_step_templates import (
+    router as task_step_templates_router,
+)
 from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.schemas import UserProfileUpdate
 
@@ -265,6 +268,7 @@ app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
 app.include_router(task_runs_router)
 app.include_router(task_dashboard_router)
+app.include_router(task_step_templates_router)
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity

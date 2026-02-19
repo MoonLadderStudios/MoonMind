@@ -464,6 +464,48 @@ async def test_list_events_supports_composite_after_cursor(tmp_path):
     assert [event.message for event in events] == ["second", "third"]
 
 
+async def test_list_events_supports_descending_before_cursor(tmp_path):
+    """Reverse paging should include same-timestamp events older than cursor id."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(repo, job_type="task")
+            await repo.commit()
+
+            created_at = datetime.now(UTC)
+            event_ids = [
+                UUID("00000000-0000-0000-0000-000000000001"),
+                UUID("00000000-0000-0000-0000-000000000002"),
+                UUID("00000000-0000-0000-0000-000000000003"),
+            ]
+            messages = ["first", "second", "third"]
+            for event_id, message in zip(event_ids, messages):
+                session.add(
+                    models.AgentJobEvent(
+                        id=event_id,
+                        job_id=job.id,
+                        level=models.AgentJobEventLevel.INFO,
+                        message=message,
+                        payload=None,
+                        created_at=created_at,
+                        updated_at=created_at,
+                    )
+                )
+            await repo.commit()
+
+            events = await repo.list_events(
+                job_id=job.id,
+                limit=10,
+                before=created_at,
+                before_event_id=event_ids[2],
+                sort="desc",
+            )
+
+    assert [event.id for event in events] == [event_ids[1], event_ids[0]]
+    assert [event.message for event in events] == ["second", "first"]
+
+
 async def test_request_cancel_queued_job_is_immediate_and_idempotent(tmp_path):
     """Queued cancellation should be immediate and repeated requests no-op."""
 

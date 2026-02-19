@@ -63,6 +63,23 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         config["sources"]["queue"]["operatorMessages"]
         == "/api/queue/jobs/{id}/operator-messages"
     )
+    assert config["sources"]["queue"]["taskStepTemplates"] == "/api/task-step-templates"
+    assert (
+        config["sources"]["queue"]["taskStepTemplateDetail"]
+        == "/api/task-step-templates/{slug}"
+    )
+    assert (
+        config["sources"]["queue"]["taskStepTemplateExpand"]
+        == "/api/task-step-templates/{slug}:expand"
+    )
+    assert (
+        config["sources"]["queue"]["taskStepTemplateSave"]
+        == "/api/task-step-templates/save-from-task"
+    )
+    assert (
+        config["sources"]["queue"]["taskStepTemplateFavorite"]
+        == "/api/task-step-templates/{slug}:favorite"
+    )
     assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]
@@ -76,6 +93,9 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
+    assert "taskTemplateCatalog" in config["system"]
+    assert "enabled" in config["system"]["taskTemplateCatalog"]
+    assert "templateSaveEnabled" in config["system"]["taskTemplateCatalog"]
 
 
 def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
