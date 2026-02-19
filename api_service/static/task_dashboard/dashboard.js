@@ -1212,7 +1212,7 @@
         setView(
           "Queue Jobs",
           `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-          `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Task</button></a></div>${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
+          `${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
         );
         attachFilterHandlers(rows, telemetryHtml);
       };
@@ -1260,7 +1260,7 @@
       setView(
         "Queue Jobs",
         `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-        `<div class="actions"><a href="/tasks/queue/new"><button type="button">New Queue Task</button></a></div>${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
+        `${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
       );
       attachFilterHandlers(rows, telemetryHtml);
     };
