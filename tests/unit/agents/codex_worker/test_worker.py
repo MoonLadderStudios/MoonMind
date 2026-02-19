@@ -2010,6 +2010,159 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     assert effort_override == "high"
 
 
+async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
+    tmp_path: Path,
+) -> None:
+    """Default title should come from the first non-empty step title."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    payload = {
+        "task": {
+            "instructions": "Fallback instructions",
+            "steps": [
+                {"id": "one", "title": " "},
+                {"id": "two", "title": "Ship publish title defaults for queue tasks"},
+            ],
+        }
+    }
+
+    resolved_steps = worker._resolve_task_steps(payload)
+    title = worker._derive_default_pr_title(
+        job_id=uuid4(),
+        canonical_payload=payload,
+        resolved_steps=resolved_steps,
+    )
+
+    assert title == "Ship publish title defaults for queue tasks"
+
+
+async def test_derive_default_pr_title_falls_back_to_instruction_sentence_and_sanitizes_uuid(
+    tmp_path: Path,
+) -> None:
+    """Instruction fallback should use first sentence and remove full UUID tokens."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    full_uuid = "123e4567-e89b-12d3-a456-426614174000"
+    payload = {
+        "task": {
+            "instructions": (
+                f"Fix publish behavior for {full_uuid}. Keep metadata stable.\n"
+                "Second line should not be used."
+            ),
+            "steps": [{"id": "step-1", "title": " "}],
+        }
+    }
+
+    title = worker._derive_default_pr_title(
+        job_id=uuid4(),
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+    )
+
+    assert title == "Fix publish behavior for job."
+    assert full_uuid not in title
+    assert len(title) <= 90
+
+
+async def test_derive_default_pr_title_uses_short_correlation_fallback(
+    tmp_path: Path,
+) -> None:
+    """Missing step titles and instructions should fall back to short token title."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    job_id = uuid4()
+    payload = {
+        "task": {
+            "instructions": " ",
+            "steps": [{"id": "step-1", "title": " "}],
+        }
+    }
+
+    title = worker._derive_default_pr_title(
+        job_id=job_id,
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+    )
+
+    assert title == f"MoonMind task result [mm:{str(job_id)[:8]}]"
+    assert str(job_id) not in title
+    assert len(title) <= 90
+
+
+async def test_derive_default_pr_body_contains_required_correlation_footer() -> None:
+    """Generated PR body should include stable MoonMind metadata footer fields."""
+
+    job_id = uuid4()
+    body = CodexWorker._derive_default_pr_body(
+        job_id=job_id,
+        runtime_mode="gemini",
+        base_branch="main",
+        head_branch="task/20260219/abcd1234",
+    )
+
+    assert "<!-- moonmind:begin -->" in body
+    assert f"MoonMind Job: {job_id}" in body
+    assert "Runtime: gemini" in body
+    assert "Base: main" in body
+    assert "Head: task/20260219/abcd1234" in body
+    assert "<!-- moonmind:end -->" in body
+
+
+async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
+    """PR base should use override when present, otherwise starting branch."""
+
+    assert (
+        CodexWorker._resolve_pr_base_branch(
+            publish={"prBaseBranch": "release/1.2"},
+            starting_branch="main",
+        )
+        == "release/1.2"
+    )
+    assert (
+        CodexWorker._resolve_pr_base_branch(
+            publish={"prBaseBranch": " "},
+            starting_branch="develop",
+        )
+        == "develop"
+    )
+
+
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
     """Legacy env defaults should hydrate model/effort when MoonMind overrides unset."""
 
