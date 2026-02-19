@@ -145,7 +145,9 @@ class SelectiveFailUploadQueueClient(FakeQueueClient):
     async def upload_artifact(self, *, job_id, worker_id, artifact):
         if artifact.name in self.fail_names:
             raise RuntimeError("artifact upload failed")
-        await super().upload_artifact(job_id=job_id, worker_id=worker_id, artifact=artifact)
+        await super().upload_artifact(
+            job_id=job_id, worker_id=worker_id, artifact=artifact
+        )
 
 
 class FakeHandler:

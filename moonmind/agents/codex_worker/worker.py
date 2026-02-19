@@ -1153,6 +1153,7 @@ class CodexWorker:
             if not self._config.artifact_upload_incremental:
                 return
             await _upload_new_artifacts(artifacts)
+
         try:
             stage_plan = build_task_stage_plan(canonical_payload)
             await self._emit_event(
@@ -2873,8 +2874,9 @@ class CodexWorker:
         runtime_mode: str,
         resolved_steps: Sequence[ResolvedTaskStep],
         prepared: PreparedTaskWorkspace,
-        artifact_callback: Callable[[Sequence[ArtifactUpload]], Awaitable[None]]
-        | None = None,
+        artifact_callback: (
+            Callable[[Sequence[ArtifactUpload]], Awaitable[None]] | None
+        ) = None,
     ) -> WorkerExecutionResult:
         """Execute resolved task steps via selected runtime adapter."""
 
