@@ -177,6 +177,10 @@ class AgentQueueService:
         """Fill missing canonical task payload fields from configured defaults."""
 
         enriched = dict(payload)
+        default_runtime = (
+            self._clean_optional_str(settings.spec_workflow.default_task_runtime)
+            or _DEFAULT_TASK_RUNTIME
+        ).lower()
         repository = self._clean_optional_str(
             enriched.get("repository") or enriched.get("repo")
         )
@@ -197,7 +201,7 @@ class AgentQueueService:
             self._clean_optional_str(runtime.get("mode"))
             or self._clean_optional_str(enriched.get("targetRuntime"))
             or self._clean_optional_str(enriched.get("target_runtime"))
-            or _DEFAULT_TASK_RUNTIME
+            or default_runtime
         ).lower()
         runtime["mode"] = runtime_mode
         enriched["targetRuntime"] = runtime_mode
@@ -227,6 +231,7 @@ class AgentQueueService:
             return normalize_queue_job_payload(
                 job_type=CANONICAL_TASK_JOB_TYPE,
                 payload=normalized_payload,
+                default_runtime=normalized_payload.get("targetRuntime"),
             )
         except TaskContractError as exc:
             raise AgentQueueValidationError(str(exc)) from exc

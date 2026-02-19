@@ -14,6 +14,9 @@ x-celery-worker-base: &celery-worker-base
     CODEX_HOME: ${CODEX_HOME:-/home/app/.codex}
     CODEX_CONFIG_HOME: ${CODEX_CONFIG_HOME:-/home/app/.codex}
     CODEX_CONFIG_PATH: ${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
+    CLAUDE_VOLUME_NAME: ${CLAUDE_VOLUME_NAME:-claude_auth_volume}
+    CLAUDE_VOLUME_PATH: ${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+    CLAUDE_HOME: ${CLAUDE_HOME:-/home/app/.claude}
     CELERY_BROKER_URL: amqp://${RABBITMQ_USER?Variable RABBITMQ_USER is not set}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
     CODEX_TEMPLATE_PATH: /app/api_service/config.template.toml
     GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -29,6 +32,7 @@ x-celery-worker-base: &celery-worker-base
     - ./model_data:/app/model_data
     - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
     - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
+    - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
     - speckit_workspaces:/work/runs
   depends_on:
     rabbitmq:
@@ -281,6 +285,8 @@ services:
       - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_CONFIG_HOME:-/home/app/.codex}
       - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
+      - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+      - CLAUDE_HOME=${CLAUDE_HOME:-/home/app/.claude}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - MOONMIND_WORKER_ID=${MOONMIND_WORKER_ID:-codex-worker-1}
       - MOONMIND_WORKER_TOKEN=${MOONMIND_WORKER_TOKEN:-}
@@ -306,12 +312,14 @@ services:
       - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
       - MOONMIND_WORKER_RETRY_ENABLED=${MOONMIND_WORKER_RETRY_ENABLED:-true}
       - MOONMIND_WORKER_RETRY_SECONDS=${MOONMIND_WORKER_RETRY_SECONDS:-20}
+      - MOONMIND_DEFAULT_TASK_RUNTIME=${MOONMIND_DEFAULT_TASK_RUNTIME:-codex}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - DEFAULT_EMBEDDING_PROVIDER=${MOONMIND_WORKER_EMBEDDING_PROVIDER_OVERRIDE:-disabled}
     volumes:
       - .:/workspace
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
       - speckit_workspaces:/work/runs
       - ./var/artifacts:/workspace/var/artifacts
     working_dir: /workspace
@@ -460,6 +468,8 @@ volumes:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
+  claude_auth_volume:
+    name: ${CLAUDE_VOLUME_NAME:-claude_auth_volume}
   gemini_auth_volume:
 
 networks:

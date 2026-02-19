@@ -367,6 +367,162 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
     ]
 
 
+def test_run_preflight_claude_runtime_checks_claude_auth(monkeypatch) -> None:
+    """Claude runtime should validate Claude CLI version + auth status."""
+
+    calls: list[list[str]] = []
+    verifications: list[str] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "claude",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
+
+    assert verifications == ["claude", "speckit"]
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/claude", "--version"],
+        ["/usr/bin/claude", "auth", "status"],
+    ]
+
+
+def test_run_preflight_claude_runtime_falls_back_to_login_status(monkeypatch) -> None:
+    """If `claude auth status` is unsupported, preflight should try login status."""
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        if command == ["/usr/bin/claude", "auth", "status"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=2,
+                stdout="",
+                stderr="unknown command 'auth'",
+            )
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "claude",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
+
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/claude", "--version"],
+        ["/usr/bin/claude", "auth", "status"],
+        ["/usr/bin/claude", "login", "status"],
+    ]
+
+
+def test_run_preflight_claude_runtime_does_not_fallback_on_auth_error_with_usage_hint(
+    monkeypatch,
+) -> None:
+    """Auth failures with usage hints should still fail preflight without fallback."""
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        if command == ["/usr/bin/claude", "auth", "status"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: not authenticated\n\n" "Usage: claude auth status [flags]"
+                ),
+            )
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="not authenticated"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "claude",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/claude", "--version"],
+        ["/usr/bin/claude", "auth", "status"],
+    ]
+
+
+def test_run_preflight_universal_checks_codex_and_claude_auth(monkeypatch) -> None:
+    """Universal runtime should validate both Codex and Claude auth states."""
+
+    calls: list[list[str]] = []
+    verifications: list[str] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "universal",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
+
+    assert verifications == ["codex", "gemini", "claude", "speckit"]
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/codex", "login", "status"],
+        ["/usr/bin/gemini", "--version"],
+        ["/usr/bin/claude", "--version"],
+        ["/usr/bin/claude", "auth", "status"],
+    ]
+
+
 def test_main_returns_error_when_run_fails(monkeypatch) -> None:
     """CLI main should exit 1 when async runtime fails."""
 

@@ -34,12 +34,13 @@ MoonMind exposes all of this through:
 **Running MoonMind:**
 
 1.  **Open a terminal** in the root directory of the MoonMind project.
-2.  **Authenticate the Codex worker volume (one-time per environment)** before running Codex automation (Celery or `/api/queue` worker):
+2.  **Authenticate worker OAuth volumes (one-time per environment)** before running queue/Celery automation:
     ```bash
     ./tools/auth-codex-volume.sh
+    ./tools/auth-claude-volume.sh
     ```
-    This persists Codex auth in `codex_auth_volume` so worker pre-flight checks pass.
-    By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If Codex is not authenticated yet, the worker stays idle and retries until `codex login status` passes.
+    This persists Codex auth in `codex_auth_volume` and Claude auth in `claude_auth_volume` so runtime pre-flight checks pass.
+    By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If required runtime auth is missing, the worker stays idle and retries until runtime-specific preflight checks pass.
 3.  **Start the services** using the following command:
     ```bash
     docker-compose up -d
@@ -183,6 +184,9 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
 - `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
+- `CLAUDE_VOLUME_NAME` – Docker volume that stores persistent Claude auth (default `claude_auth_volume`).
+- `CLAUDE_VOLUME_PATH` / `CLAUDE_HOME` – In-container Claude auth path (default `/home/app/.claude`).
+- `MOONMIND_DEFAULT_TASK_RUNTIME` – Fallback runtime for queue tasks that omit `targetRuntime` / `task.runtime.mode` (default `codex`).
 - `CODEX_ENV` and `CODEX_MODEL` – Required by credential validation before Codex phases execute.
 - `GITHUB_TOKEN` – Required for private repository clone/push/PR operations.
 
@@ -211,7 +215,7 @@ poetry run celery -A celery_worker.speckit_worker worker -Q speckit,codex --logl
 poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=info
 ```
 
-The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. The Spec Kit worker runs a Codex pre-flight (`codex login status`) and will fail fast if the configured auth volume is not authenticated.
+The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. Preflight checks are runtime-aware: `codex` validates Codex auth, `claude` validates Claude auth, and `universal` validates both.
 
 ### Agent queue Codex worker
 
@@ -220,6 +224,7 @@ MoonMind also includes a standalone queue worker daemon for `/api/queue/*` jobs 
 - Compose service: `codex-worker` (started by default via `docker compose up -d`).
 - CLI entrypoint: `moonmind-codex-worker`.
 - Claim path: `POST /api/queue/jobs/claim` with `X-MoonMind-Worker-Token`.
+- Runtime mode is selected with `MOONMIND_WORKER_RUNTIME=codex|claude|gemini|universal`.
 
 Run it manually outside Compose if needed:
 
