@@ -110,7 +110,10 @@ function contrastRatio(foreground, background) {
     "Viewport meta must include viewport-fit=cover",
   );
   assert(html.includes("moonmind.theme"), "No-flash bootstrap should reference moonmind.theme key");
-  assert(html.includes("class=\"theme-toggle secondary\""), "Theme toggle button must exist");
+  assert(
+    !html.includes("class=\"theme-toggle secondary\""),
+    "Theme toggle button should not be present in the shell",
+  );
   assert(
     /classList\.toggle\("dark",\s*mode === "dark"\)/.test(html),
     "No-flash bootstrap should toggle dark class",
