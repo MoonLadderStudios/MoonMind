@@ -748,6 +748,9 @@ Make it feel like a futuristic terminal:
 
 * [ ] `/static/task_dashboard/dashboard.css` is generated from Tailwind input
 * [ ] Dashboard renders correctly across routes (per contracts) 
+* [x] Glass surfaces include `@supports` fallback backgrounds when `backdrop-filter` is unavailable.
+* [x] Focus states keep a visible indicator in forced-colors mode (`outline` fallback for inputs/selects/textareas).
+* [x] Visual QA spot-check complete in Chromium + Firefox for navigation pills, panel glass treatment, and form controls.
 * [ ] Dark mode:
 
   * [ ] toggle works (persisted)

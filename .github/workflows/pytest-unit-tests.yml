@@ -50,6 +50,17 @@ jobs:
     - name: Fail if pre-commit failed and no changes were auto-fixed
       if: steps.pre_commit.outcome == 'failure' && steps.auto_commit.outputs.changes_detected == 'false'
       run: exit 1
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    - name: Install Node dependencies
+      run: npm ci
+    - name: Verify dashboard CSS build is in sync
+      run: |
+        npm run dashboard:css:min
+        git diff --exit-code -- api_service/static/task_dashboard/dashboard.css
     - name: Run pytest unit tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

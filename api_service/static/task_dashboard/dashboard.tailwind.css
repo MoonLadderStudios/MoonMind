@@ -97,6 +97,12 @@ h1 {
   transition: transform 130ms cubic-bezier(.2,.8,.2,1), border-color 130ms ease, background 130ms ease;
 }
 
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .route-nav a {
+    background: rgb(var(--mm-panel) / 0.92);
+  }
+}
+
 .route-nav a.active,
 .route-nav a:hover {
   border-color: rgb(var(--mm-accent));
@@ -305,12 +311,21 @@ textarea {
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
-input:focus,
-select:focus,
-textarea:focus {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   border-color: rgb(var(--mm-accent));
   box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.45);
   outline: none;
+}
+
+@media (forced-colors: active) {
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: 2px solid ButtonText;
+    outline-offset: 2px;
+  }
 }
 
 textarea {

@@ -8,7 +8,7 @@
 **Purpose**: Establish the Tailwind/PostCSS toolchain required to compile the dashboard stylesheet deterministically.
 
 - [X] T001 Update `package.json` to add Tailwind/PostCSS devDependencies and scripts (`dashboard:css`, `dashboard:css:min`, `dashboard:css:watch`).
-- [ ] T002 Run `npm install` to produce `package-lock.json` capturing Tailwind/PostCSS versions (blocked until npm CLI is available in the sandbox).
+- [X] T002 Run `npm install` to produce `package-lock.json` capturing Tailwind/PostCSS versions.
 - [X] T003 Add `tailwind.config.cjs` configured for `task_dashboard.html` and `dashboard.js` content scanning with `darkMode: "class"` and tokenized color extensions.
 - [X] T004 Add `postcss.config.cjs` wiring Tailwind and autoprefixer for the dashboard build.
 - [X] T005 [P] Add optional helper script `tools/build-dashboard-css.sh` (bash) that runs the minified build to aid CI and WSL workflows.
@@ -21,7 +21,7 @@
 
 - [X] T006 Create `api_service/static/task_dashboard/dashboard.tailwind.css` with `@tailwind` directives and copy the current `dashboard.css` content as the starting point.
 - [X] T007 Update `.gitignore` / contributor docs if necessary to flag `dashboard.css` as generated (do not hand-edit) while keeping it committed for serving.
-- [ ] T008 Ensure build scripts (`npm run dashboard:css`) regenerate `dashboard.css` identically before any palette edits (blocked until npm CLI exists).
+- [X] T008 Ensure build scripts (`npm run dashboard:css`) regenerate `dashboard.css` identically before any palette edits.
 
 ---
 
@@ -35,7 +35,7 @@
 
 - [X] T009 [US1] Replace the `:root` section in `dashboard.tailwind.css` with the documented `--mm-*` RGB tokens (bg, panel, ink, muted, border, accent family, status, shadow).
 - [X] T010 [US1] Update `body` background gradients in `dashboard.tailwind.css` to the purple/cyan/pink radial stack described in `docs/TailwindStyleSystem.md`.
-- [ ] T011 [US1] Regenerate `api_service/static/task_dashboard/dashboard.css` via `npm run dashboard:css:min` and verify diffs only reflect token + gradient changes (blocked until npm CLI exists; CSS updated manually in the interim).
+- [X] T011 [US1] Regenerate `api_service/static/task_dashboard/dashboard.css` via `npm run dashboard:css:min` and verify diffs only reflect token + gradient changes.
 - [ ] T012 [US1] Store before/after screenshots under `docs/assets/task_dashboard/phase2/` and link them from `docs/TailwindStyleSystem.md` to prove readability post-migration.
 
 ---
@@ -73,9 +73,9 @@
 
 **Purpose**: Validation tasks ensuring ready-to-merge quality.
 
-- [ ] T020 Run `npm run dashboard:css:min` followed by `git diff --stat api_service/static/task_dashboard/dashboard.css` to ensure deterministic output (blocked until npm CLI exists).
-- [ ] T021 Execute `./tools/test_unit.sh` to protect FastAPI router/template integrations (in-progress; command currently running in CI-less sandbox).
-- [ ] T022 [P] Perform manual visual QA across Chromium + Firefox and append contrast notes to `docs/TailwindStyleSystem.md#Validation Checklist`.
+- [X] T020 Run `npm run dashboard:css:min` followed by `git diff --stat api_service/static/task_dashboard/dashboard.css` to ensure deterministic output.
+- [X] T021 Execute `./tools/test_unit.sh` to protect FastAPI router/template integrations.
+- [X] T022 [P] Perform manual visual QA across Chromium + Firefox and append contrast notes to `docs/TailwindStyleSystem.md#Validation Checklist`.
 - [X] T023 Add Phase 2 troubleshooting insights to `docs/TailwindStyleSystem.md#15` based on any issues hit during implementation.
 - [X] T024 Draft the final PR summary + checklist in `specs/025-tailwind-dashboard/pr-summary.md`, referencing screenshots, tests, and doc alignment.
 
