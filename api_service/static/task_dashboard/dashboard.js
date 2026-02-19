@@ -1628,6 +1628,9 @@
         if (!(actionButton instanceof HTMLElement)) {
           return;
         }
+        if (actionButton instanceof HTMLButtonElement && actionButton.disabled) {
+          return;
+        }
         const action = actionButton.getAttribute("data-step-action");
         if (!action) {
           return;

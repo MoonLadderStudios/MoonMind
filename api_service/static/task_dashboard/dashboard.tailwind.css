@@ -431,11 +431,11 @@ textarea {
   margin-left: auto;
   padding: 0.15rem;
   border-radius: 999px;
-  background: rgb(var(--mm-panel) / 0.45);
-  border: 1px solid rgb(var(--mm-border) / 0.8);
+  background: rgb(var(--mm-panel) / 0.6);
+  border: 1px solid rgb(var(--mm-border) / 0.7);
   box-shadow: inset 0 0 0 1px rgb(var(--mm-panel) / 0.35), 0 8px 18px -14px rgb(var(--mm-ink) / 0.65);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .queue-step-icon-button {
@@ -446,7 +446,7 @@ textarea {
   justify-content: center;
   align-items: center;
   border-radius: 0.65rem;
-  border: 1px solid rgb(var(--mm-border));
+  border: 1px solid rgb(var(--mm-border) / 0.7);
   background: linear-gradient(145deg, rgb(var(--mm-panel) / 0.95), rgb(var(--mm-panel) / 0.65));
   color: rgb(var(--mm-ink));
   box-shadow: 0 10px 25px -18px rgb(var(--mm-ink) / 0.8);
@@ -475,6 +475,7 @@ textarea {
 
 .queue-step-icon-button.destructive:hover {
   background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.25), rgb(var(--mm-accent-warm) / 0.2));
+  border-color: rgb(var(--mm-danger));
 }
 
 .queue-step-icon-button:disabled,
@@ -484,6 +485,7 @@ textarea {
   background: rgb(var(--mm-panel) / 0.4);
   border-color: rgb(var(--mm-border) / 0.4);
   box-shadow: none;
+  transform: none;
 }
 
 .sr-only {
