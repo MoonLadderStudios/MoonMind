@@ -28,6 +28,7 @@ _STATIC_PATHS = {
     "queue/new",
     "orchestrator",
     "orchestrator/new",
+    "proposals",
 }
 
 
@@ -67,7 +68,10 @@ def _is_allowed_path(path: str) -> bool:
         return False
     if path in _STATIC_PATHS:
         return True
-    return any(_is_dynamic_detail(path, source) for source in ("queue", "orchestrator"))
+    return any(
+        _is_dynamic_detail(path, source)
+        for source in ("queue", "orchestrator", "proposals")
+    )
 
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
@@ -129,7 +133,7 @@ async def task_dashboard_route(
             status_code=404,
             detail={
                 "code": "dashboard_route_not_found",
-                "message": "Dashboard route was not found. Use /tasks/queue or /tasks/orchestrator.",
+                "message": "Dashboard route was not found. Use /tasks/queue, /tasks/orchestrator, or /tasks/proposals.",
             },
         )
 

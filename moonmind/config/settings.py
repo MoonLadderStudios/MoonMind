@@ -803,6 +803,39 @@ class FeatureFlagsSettings(BaseSettings):
     )
 
 
+class TaskProposalSettings(BaseSettings):
+    """Task proposal queue runtime knobs."""
+
+    notifications_enabled: bool = Field(
+        False,
+        env="TASK_PROPOSALS_NOTIFICATIONS_ENABLED",
+        description="Emit webhook notifications for high-signal proposal categories.",
+    )
+    notifications_webhook_url: Optional[str] = Field(
+        None,
+        env="TASK_PROPOSALS_NOTIFICATIONS_WEBHOOK_URL",
+        description="Webhook endpoint for proposal alerts.",
+    )
+    notifications_authorization: Optional[str] = Field(
+        None,
+        env="TASK_PROPOSALS_NOTIFICATIONS_AUTHORIZATION",
+        description="Optional Authorization header for webhook calls.",
+    )
+    notifications_timeout_seconds: int = Field(
+        5,
+        env="TASK_PROPOSALS_NOTIFICATIONS_TIMEOUT_SECONDS",
+        description="Webhook timeout in seconds.",
+        gt=0,
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -823,6 +856,7 @@ class AppSettings(BaseSettings):
     celery: CelerySettings = Field(default_factory=CelerySettings)
     spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
+    task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")

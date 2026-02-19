@@ -18,6 +18,8 @@ from moonmind.workflows.speckit_celery.repositories import (
     SpecAutomationRepository,
     SpecWorkflowRepository,
 )
+from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
+from moonmind.workflows.task_proposals.service import TaskProposalService
 
 
 def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepository:
@@ -46,12 +48,29 @@ def get_spec_automation_repository(
     return SpecAutomationRepository(session)
 
 
+def get_task_proposal_repository(session: AsyncSession) -> TaskProposalRepository:
+    """Factory helper returning the task proposal repository."""
+
+    return TaskProposalRepository(session)
+
+
+def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
+    """Factory helper returning the task proposal service."""
+
+    return TaskProposalService(
+        get_task_proposal_repository(session),
+        get_agent_queue_service(session),
+    )
+
+
 __all__ = sorted(
     [
         "AgentQueueRepository",
         "AgentQueueService",
         "SpecAutomationRepository",
         "SpecWorkflowRepository",
+        "TaskProposalRepository",
+        "TaskProposalService",
         "TriggeredWorkflow",
         "WorkflowConflictError",
         "WorkflowRetryError",
@@ -60,6 +79,8 @@ __all__ = sorted(
         "get_agent_queue_service",
         "get_spec_automation_repository",
         "get_spec_workflow_repository",
+        "get_task_proposal_repository",
+        "get_task_proposal_service",
         "retry_spec_workflow_run",
         "trigger_spec_workflow_run",
     ]

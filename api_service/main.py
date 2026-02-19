@@ -34,6 +34,7 @@ from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.spec_automation import router as spec_automation_router
 from api_service.api.routers.task_dashboard import router as task_dashboard_router
+from api_service.api.routers.task_proposals import router as task_proposals_router
 from api_service.api.routers.task_runs import router as task_runs_router
 from api_service.api.routers.task_step_templates import (
     router as task_step_templates_router,
@@ -267,6 +268,7 @@ app.include_router(spec_automation_router)
 app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
 app.include_router(task_runs_router)
+app.include_router(task_proposals_router)
 app.include_router(task_dashboard_router)
 app.include_router(task_step_templates_router)
 
