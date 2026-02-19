@@ -160,6 +160,13 @@
     }
   }
 
+  function sanitizeCssToken(value, fallback = "") {
+    const token = String(value ?? "")
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9_-]/g, "");
+    return token || fallback;
+  }
+
   function extractRuntimeFromPayload(payload) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       return null;
@@ -481,7 +488,8 @@
 
   function statusBadge(source, rawStatus) {
     const normalized = normalizeStatus(source, rawStatus);
-    return `<span class="status status-${normalized}">${escapeHtml(normalized)}</span>`;
+    const statusClassToken = sanitizeCssToken(normalized, "queued");
+    return `<span class="status status-${statusClassToken}">${escapeHtml(normalized)}</span>`;
   }
 
   function endpoint(template, replacements) {
@@ -1749,6 +1757,7 @@
         }
       });
       state.forceLiveOutputRebuild = true;
+      state.hasOlderEvents = true;
     };
 
     const resolveFullLogArtifact = (artifacts) => {
@@ -2032,7 +2041,9 @@
         return;
       }
 
-      const visibleEvents = state.events.slice(-state.maxVisibleEventRows);
+      const visibleEvents = state.hasOlderEvents
+        ? state.events.slice(0, state.maxVisibleEventRows)
+        : state.events.slice(-state.maxVisibleEventRows);
       const hiddenCount = Math.max(0, state.events.length - visibleEvents.length);
       const rows = visibleEvents
         .map((event) => {
@@ -2394,16 +2405,20 @@
       });
 
       source.addEventListener("queue_event", (event) => {
-        state.eventsTransport = "sse";
-        state.eventsTransportStatus = "active";
-        renderTransportStatus();
+        if (state.eventsTransportStatus !== "active") {
+          state.eventsTransport = "sse";
+          state.eventsTransportStatus = "active";
+          renderTransportStatus();
+        }
         handleMessage(event.data);
       });
 
       source.onmessage = (event) => {
-        state.eventsTransport = "sse";
-        state.eventsTransportStatus = "active";
-        renderTransportStatus();
+        if (state.eventsTransportStatus !== "active") {
+          state.eventsTransport = "sse";
+          state.eventsTransportStatus = "active";
+          renderTransportStatus();
+        }
         handleMessage(event.data);
       };
 
