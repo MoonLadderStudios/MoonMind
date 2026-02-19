@@ -628,8 +628,12 @@
   }
 
   function summarizeInstructionPreview(value) {
+    if (value !== null && value !== undefined && typeof value !== "string") {
+      return "";
+    }
     const raw = String(value ?? "")
       .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
       .trim();
     if (!raw) {
       return "";
@@ -647,8 +651,7 @@
     }
     const truncated = collapsed.slice(0, TASK_LIST_TITLE_MAX_CHARS);
     const lastSpace = truncated.lastIndexOf(" ");
-    const safeCut =
-      lastSpace > TASK_LIST_TITLE_MAX_CHARS * 0.6 ? truncated.slice(0, lastSpace) : truncated;
+    const safeCut = lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated;
     return `${safeCut.trimEnd()}...`;
   }
 
@@ -656,8 +659,12 @@
     return items.map((item) => {
       const payload = pick(item, "payload") || {};
       const task = extractTaskNode(payload);
+      const taskInstructions = task ? pick(task, "instructions") : undefined;
+      const payloadInstruction = pick(payload, "instruction");
       const rawInstructions =
-        (task && pick(task, "instructions")) || pick(payload, "instruction") || "";
+        (typeof taskInstructions === "string" && taskInstructions) ||
+        (typeof payloadInstruction === "string" && payloadInstruction) ||
+        "";
       const summarizedTitle = summarizeInstructionPreview(rawInstructions);
       return {
         source: "queue",
