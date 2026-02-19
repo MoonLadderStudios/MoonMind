@@ -42,6 +42,13 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "rolled_back": "succeeded",
         "failed": "failed",
     },
+    "proposals": {
+        "open": "queued",
+        "promoted": "succeeded",
+        "dismissed": "cancelled",
+        "accepted": "succeeded",
+        "rejected": "failed",
+    },
 }
 
 
@@ -139,6 +146,15 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifacts": "/orchestrator/runs/{id}/artifacts",
                 "approve": "/orchestrator/runs/{id}/approvals",
                 "retry": "/orchestrator/runs/{id}/retry",
+            },
+            "proposals": {
+                "list": "/api/proposals",
+                "detail": "/api/proposals/{id}",
+                "promote": "/api/proposals/{id}/promote",
+                "dismiss": "/api/proposals/{id}/dismiss",
+                "priority": "/api/proposals/{id}/priority",
+                "snooze": "/api/proposals/{id}/snooze",
+                "unsnooze": "/api/proposals/{id}/unsnooze",
             },
         },
         "system": {

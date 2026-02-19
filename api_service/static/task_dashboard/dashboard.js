@@ -14,6 +14,10 @@
   const sourceConfig = config.sources || {};
   const queueSourceConfig =
     sourceConfig.queue && typeof sourceConfig.queue === "object" ? sourceConfig.queue : {};
+  const proposalsSourceConfig =
+    sourceConfig.proposals && typeof sourceConfig.proposals === "object"
+      ? sourceConfig.proposals
+      : {};
   const systemConfig = config.system || {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
   const supportedWorkerRuntimes =
@@ -100,6 +104,7 @@
     ),
   };
 
+  const TASK_LIST_TITLE_MAX_CHARS = 400;
   const pollers = [];
   const disposers = [];
   let cachedAvailableSkillIds = null;
@@ -657,13 +662,45 @@
     `;
   }
 
+  function summarizeInstructionPreview(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const raw = String(value ?? "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .trim();
+    if (!raw) {
+      return "";
+    }
+    const [firstParagraph] = raw.split(/\n\s*\n/, 1);
+    const collapsed = firstParagraph
+      .replace(/\s*\n\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!collapsed) {
+      return "";
+    }
+    if (collapsed.length <= TASK_LIST_TITLE_MAX_CHARS) {
+      return collapsed;
+    }
+    const truncated = collapsed.slice(0, TASK_LIST_TITLE_MAX_CHARS);
+    const lastSpace = truncated.lastIndexOf(" ");
+    const safeCut = lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated;
+    return `${safeCut.trimEnd()}...`;
+  }
+
   function toQueueRows(items) {
     return items.map((item) => {
       const payload = pick(item, "payload") || {};
-      const task =
-        payload && typeof payload === "object" && !Array.isArray(payload)
-          ? pick(payload, "task")
-          : null;
+      const task = extractTaskNode(payload);
+      const taskInstructions = task ? pick(task, "instructions") : undefined;
+      const payloadInstruction = pick(payload, "instruction");
+      const rawInstructions =
+        (typeof taskInstructions === "string" && taskInstructions) ||
+        (typeof payloadInstruction === "string" && payloadInstruction) ||
+        "";
+      const summarizedTitle = summarizeInstructionPreview(rawInstructions);
       return {
         source: "queue",
         sourceLabel: "Queue",
@@ -673,17 +710,150 @@
         runtimeMode: extractRuntimeFromPayload(payload),
         skillId: extractSkillFromPayload(payload),
         rawStatus: pick(item, "status") || "queued",
-        title:
-          pick(task, "instructions") ||
-          pick(payload, "instruction") ||
-          pick(item, "type") ||
-          "Queue Job",
+        title: summarizedTitle || pick(item, "type") || "Queue Job",
         createdAt: pick(item, "createdAt"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "finishedAt"),
         link: `/tasks/queue/${encodeURIComponent(String(pick(item, "id") || ""))}`,
       };
     });
+  }
+
+  async function apiPromoteProposal(proposalId, overrides = {}) {
+    const endpointTemplate =
+      proposalsSourceConfig.promote || "/api/proposals/{id}/promote";
+    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
+      method: "POST",
+      body: JSON.stringify(overrides),
+    });
+  }
+
+  async function apiDismissProposal(proposalId, note = null) {
+    const endpointTemplate =
+      proposalsSourceConfig.dismiss || "/api/proposals/{id}/dismiss";
+    const body = {};
+    if (note) {
+      body.note = note;
+    }
+    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function apiUpdateProposalPriority(proposalId, priority) {
+    const endpointTemplate =
+      proposalsSourceConfig.priority || "/api/proposals/{id}/priority";
+    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
+      method: "POST",
+      body: JSON.stringify({ priority }),
+    });
+  }
+
+  async function apiSnoozeProposal(proposalId, until, note = null) {
+    const endpointTemplate =
+      proposalsSourceConfig.snooze || "/api/proposals/{id}/snooze";
+    const payload = { until };
+    if (note) {
+      payload.note = note;
+    }
+    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async function apiUnsnoozeProposal(proposalId) {
+    const endpointTemplate =
+      proposalsSourceConfig.unsnooze || "/api/proposals/{id}/unsnooze";
+    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+
+  function cloneTaskRequest(node) {
+    try {
+      return JSON.parse(JSON.stringify(node || {}));
+    } catch {
+      return {};
+    }
+  }
+
+  function buildEditOverrides(row) {
+    const baseRequest = cloneTaskRequest(pick(row, "taskCreateRequest") || {});
+    const payload =
+      baseRequest.payload && typeof baseRequest.payload === "object"
+        ? baseRequest.payload
+        : {};
+    baseRequest.payload = payload;
+    const taskNode =
+      payload.task && typeof payload.task === "object" ? payload.task : {};
+    payload.task = taskNode;
+    const publishNode =
+      taskNode.publish && typeof taskNode.publish === "object"
+        ? taskNode.publish
+        : {};
+    taskNode.publish = publishNode;
+    const gitNode =
+      taskNode.git && typeof taskNode.git === "object" ? taskNode.git : {};
+    taskNode.git = gitNode;
+
+    const currentInstructions =
+      taskNode.instructions || pick(row, "summary") || "";
+    const updatedInstructions = window.prompt(
+      "Task instructions",
+      currentInstructions,
+    );
+    if (updatedInstructions === null) {
+      return null;
+    }
+    taskNode.instructions = updatedInstructions;
+    const publishMode = window.prompt(
+      "Publish mode (branch/pr/none)",
+      publishNode.mode || "branch",
+    );
+    if (publishMode === null) {
+      return null;
+    }
+    publishNode.mode = publishMode || publishNode.mode || "branch";
+    const startingBranch = window.prompt(
+      "Starting branch (leave blank to keep current)",
+      gitNode.startingBranch || "",
+    );
+    if (startingBranch === null) {
+      return null;
+    }
+    gitNode.startingBranch = startingBranch || null;
+
+    const queuePriority = window.prompt(
+      "Queue priority",
+      String(baseRequest.priority ?? 0),
+    );
+    if (queuePriority === null) {
+      return null;
+    }
+    const maxAttempts = window.prompt(
+      "Max attempts",
+      String(baseRequest.maxAttempts ?? 3),
+    );
+    if (maxAttempts === null) {
+      return null;
+    }
+    const parsedPriority = Number(queuePriority);
+    const parsedAttempts = Number(maxAttempts);
+    baseRequest.priority = Number.isFinite(parsedPriority)
+      ? parsedPriority
+      : baseRequest.priority;
+    baseRequest.maxAttempts = Number.isFinite(parsedAttempts)
+      ? parsedAttempts
+      : baseRequest.maxAttempts;
+
+    return {
+      priority: baseRequest.priority,
+      maxAttempts: baseRequest.maxAttempts,
+      taskCreateRequestOverride: baseRequest,
+    };
   }
 
   function toOrchestratorRows(runs) {
@@ -3331,6 +3501,563 @@
     startPolling(load, pollIntervals.detail);
   }
 
+  async function renderProposalsListPage() {
+    const repoStorageKey = "task-dashboard-proposals-repo";
+    const state = {
+      status: "open",
+      repository: localStorage.getItem(repoStorageKey) || "",
+      category: "",
+      includeSnoozed: false,
+      rows: [],
+      notice: "",
+    };
+
+    const renderFilters = () => {
+      const statusOptions = [
+        ["", "(all)"],
+        ["open", "open"],
+        ["promoted", "promoted"],
+        ["dismissed", "dismissed"],
+        ["accepted", "accepted"],
+        ["rejected", "rejected"],
+        ["snoozed", "snoozed"],
+      ]
+        .map(
+          ([value, label]) =>
+            `<option value="${escapeHtml(value)}" ${
+              state.status === value ? "selected" : ""
+            }>${escapeHtml(label)}</option>`,
+        )
+        .join("");
+      return `
+        <form id="proposals-filter-form" class="stack">
+          <div class="grid-2">
+            <label>Status
+              <select name="status">${statusOptions}</select>
+            </label>
+            <label>Repository
+              <input name="repository" placeholder="owner/repo" value="${escapeHtml(
+                state.repository,
+              )}" />
+            </label>
+          </div>
+          <label>Category
+            <input name="category" placeholder="security, tests, ..." value="${escapeHtml(
+              state.category,
+            )}" />
+          </label>
+          <label class="checkbox stack">
+            <span>
+              <input type="checkbox" name="includeSnoozed" ${
+                state.includeSnoozed ? "checked" : ""
+              } />
+              Include snoozed proposals
+            </span>
+          </label>
+        </form>
+      `;
+    };
+
+    const renderTable = () => {
+      if (!state.rows.length) {
+        return "<p class='small'>No proposals found for the current filters.</p>";
+      }
+      const rows = state.rows
+        .map((row) => {
+          const id = pick(row, "id");
+          const preview = pick(row, "taskPreview") || {};
+          const origin = pick(row, "origin") || {};
+          const originSource = pick(origin, "source") || "-";
+          const originLink =
+            originSource === "queue" && pick(origin, "id")
+              ? `<a href="/tasks/queue/${escapeHtml(
+                  String(pick(origin, "id") || ""),
+                )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+              : escapeHtml(originSource);
+          const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+          const instructions = pick(preview, "instructions") || "";
+          const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
+          const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+          const priorityBadge = `<span class="badge priority-${escapeHtml(
+            priority.toLowerCase(),
+          )}">${escapeHtml(priority)}</span>`;
+          const snoozedUntil = pick(row, "snoozedUntil");
+          const snoozedDisplay = snoozedUntil
+            ? `${formatTimestamp(snoozedUntil)}`
+            : "-";
+          const dedupHash = (pick(row, "dedupHash") || "").toString();
+          const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+          return `
+            <tr>
+              <td><a href="/tasks/proposals/${encodeURIComponent(
+                String(id || ""),
+              )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
+              <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
+              <td>${escapeHtml(repo)}</td>
+              <td>${escapeHtml(pick(row, "category") || "-")}</td>
+              <td>${priorityBadge}</td>
+              <td>${statusBadge("proposals", pick(row, "status"))}</td>
+              <td>${formatTimestamp(pick(row, "createdAt"))}</td>
+              <td>${originLink}</td>
+              <td>${escapeHtml(tags || "-")}</td>
+              <td>${escapeHtml(snoozedDisplay)}</td>
+              <td><code>${escapeHtml(dedupShort)}</code></td>
+              <td>
+                <div class="stack compact">
+                  <button type="button" class="secondary proposal-action" data-action="promote" data-proposal-id="${escapeHtml(
+                    String(id || ""),
+                  )}">Promote</button>
+                  <button type="button" class="danger proposal-action" data-action="dismiss" data-proposal-id="${escapeHtml(
+                    String(id || ""),
+                  )}">Dismiss</button>
+                </div>
+              </td>
+            </tr>
+            ${
+              instructions
+                ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+                    instructions,
+                  )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
+                    dedupHash || "-",
+                  )}</code></span></td></tr>`
+                : ""
+            }
+          `;
+        })
+        .join("");
+
+      return `
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Repository</th>
+              <th>Category</th>
+              <th>Priority</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Origin</th>
+              <th>Tags</th>
+              <th>Snoozed Until</th>
+              <th>Dedup</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    };
+
+    const attachHandlers = () => {
+      const filterForm = document.getElementById("proposals-filter-form");
+      if (!filterForm) {
+        return;
+      }
+      const statusField = filterForm.elements.namedItem("status");
+      const repositoryField = filterForm.elements.namedItem("repository");
+      const categoryField = filterForm.elements.namedItem("category");
+      const includeSnoozedField = filterForm.elements.namedItem("includeSnoozed");
+      if (statusField) {
+        statusField.addEventListener("change", () => {
+          state.status = String(statusField.value || "").trim();
+          load();
+        });
+      }
+      if (repositoryField) {
+        repositoryField.addEventListener("change", () => {
+          state.repository = String(repositoryField.value || "").trim();
+          localStorage.setItem(repoStorageKey, state.repository);
+          load();
+        });
+      }
+      if (categoryField) {
+        categoryField.addEventListener("change", () => {
+          state.category = String(categoryField.value || "").trim();
+          load();
+        });
+      }
+      if (includeSnoozedField) {
+        includeSnoozedField.addEventListener("change", () => {
+          state.includeSnoozed = Boolean(includeSnoozedField.checked);
+          load();
+        });
+      }
+      document.querySelectorAll(".proposal-action").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const proposalId = button.getAttribute("data-proposal-id");
+          const action = button.getAttribute("data-action");
+          if (!proposalId || !action) {
+            return;
+          }
+          button.disabled = true;
+          try {
+            if (action === "promote") {
+              const response = await apiPromoteProposal(proposalId);
+              const jobId = pick(response, "job", "id");
+              if (jobId) {
+                window.location.href = `/tasks/queue/${encodeURIComponent(String(jobId))}`;
+                return;
+              }
+            } else if (action === "dismiss") {
+              await apiDismissProposal(proposalId);
+            }
+            await load();
+          } catch (error) {
+            console.error(`proposal ${action} failed`, error);
+            state.notice = `Failed to ${action} proposal ${proposalId}.`;
+            renderView();
+          } finally {
+            button.disabled = false;
+          }
+        });
+      });
+    };
+
+    const renderView = () => {
+      const noticeHtml = state.notice
+        ? `<div class="notice error">${escapeHtml(state.notice)}</div>`
+        : "";
+      setView(
+        "Task Proposals",
+        "Worker follow-up queue (promote to Task jobs).",
+        `${noticeHtml}${renderFilters()}${renderTable()}`,
+      );
+      attachHandlers();
+    };
+
+    const load = async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", "200");
+        if (state.status) {
+          params.set("status", state.status);
+        }
+        if (state.repository) {
+          params.set("repository", state.repository);
+        }
+        if (state.category) {
+          params.set("category", state.category);
+        }
+        if (state.includeSnoozed) {
+          params.set("includeSnoozed", "true");
+        }
+        const listEndpoint = proposalsSourceConfig.list || "/api/proposals";
+        const payload = await fetchJson(`${listEndpoint}?${params.toString()}`);
+        state.rows = payload?.items || [];
+        state.notice = "";
+      } catch (error) {
+        console.error("proposals list load failed", error);
+        state.rows = [];
+        state.notice = "Failed to load proposals.";
+      }
+      renderView();
+    };
+
+    setView(
+      "Task Proposals",
+      "Worker follow-up queue (promote to Task jobs).",
+      "<p class='loading'>Loading proposals...</p>",
+    );
+    await load();
+    startPolling(load, pollIntervals.list);
+  }
+
+  async function renderProposalDetailPage(proposalId) {
+    setView(
+      "Proposal Detail",
+      `Proposal ${proposalId}`,
+      "<p class='loading'>Loading proposal...</p>",
+    );
+
+    const renderDetail = (row) => {
+      const origin = pick(row, "origin") || {};
+      const preview = pick(row, "taskPreview") || {};
+      const taskRequest = pick(row, "taskCreateRequest") || {};
+      const payloadNode =
+        taskRequest && typeof taskRequest === "object" && taskRequest.payload && typeof taskRequest.payload === "object"
+          ? taskRequest.payload
+          : {};
+      const taskNode =
+        payloadNode && payloadNode.task && typeof payloadNode.task === "object"
+          ? payloadNode.task
+          : {};
+      const instructions = preview.instructions || taskNode.instructions || "";
+      const originSource = pick(origin, "source") || "-";
+      const originLink =
+        originSource === "queue" && pick(origin, "id")
+          ? `<a href="/tasks/queue/${escapeHtml(
+              String(pick(origin, "id") || ""),
+            )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+          : escapeHtml(originSource);
+      const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+      const dedupHash = pick(row, "dedupHash") || "-";
+      const snoozedUntil = pick(row, "snoozedUntil");
+      const snoozeNote = pick(row, "snoozeNote") || "";
+      const snoozedDisplay = snoozedUntil ? formatTimestamp(snoozedUntil) : "-";
+      const similar = pick(row, "similar") || [];
+      const similarMarkup = similar.length
+        ? `<ul class="stack">${similar
+            .map(
+              (item) =>
+                `<li><a href="/tasks/proposals/${encodeURIComponent(
+                  String(pick(item, "id") || ""),
+                )}">${escapeHtml(pick(item, "title") || "(untitled)")}</a> &middot; ${escapeHtml(
+                  pick(item, "repository") || "-",
+                )} &middot; ${formatTimestamp(pick(item, "createdAt"))}</li>`,
+            )
+            .join("")}</ul>`
+        : "<p class='small'>No similar proposals.</p>";
+      const priorityOptions = ["low", "normal", "high", "urgent"]
+        .map(
+          (value) =>
+            `<option value="${escapeHtml(value)}" ${
+              value.toUpperCase() === priority ? "selected" : ""
+            }>${escapeHtml(value.toUpperCase())}</option>`,
+        )
+        .join("");
+      setView(
+        "Proposal Detail",
+        `Proposal ${proposalId}`,
+        `
+          <div class="grid-2">
+            <div class="card"><strong>Status:</strong> ${statusBadge(
+              "proposals",
+              pick(row, "status"),
+            )}</div>
+            <div class="card"><strong>Repository:</strong> ${escapeHtml(
+              pick(row, "repository") || pick(preview, "repository") || "-",
+            )}</div>
+            <div class="card"><strong>Runtime:</strong> ${escapeHtml(
+              pick(preview, "runtimeMode") || "-",
+            )}</div>
+            <div class="card"><strong>Publish Mode:</strong> ${escapeHtml(
+              pick(preview, "publishMode") || "-",
+            )}</div>
+            <div class="card"><strong>Category:</strong> ${escapeHtml(
+              pick(row, "category") || "-",
+            )}</div>
+            <div class="card"><strong>Origin:</strong> ${originLink}</div>
+            <div class="card"><strong>Priority:</strong> ${escapeHtml(priority)}</div>
+            <div class="card"><strong>Dedup Hash:</strong> <code>${escapeHtml(
+              dedupHash,
+            )}</code></div>
+            <div class="card"><strong>Snoozed Until:</strong> ${escapeHtml(
+              snoozedDisplay,
+            )}</div>
+          </div>
+          <section>
+            <h3>Summary</h3>
+            <p>${escapeHtml(pick(row, "summary") || "-")}</p>
+          </section>
+          <section>
+            <h3>Instructions</h3>
+            <pre>${escapeHtml(instructions || "-")}</pre>
+          </section>
+          <div class="actions">
+            <button type="button" id="proposal-promote-button">Promote to Task</button>
+            <button type="button" class="secondary" id="proposal-edit-button">Edit & Promote</button>
+            <button type="button" class="secondary" id="proposal-dismiss-button">Dismiss</button>
+            <a href="/tasks/proposals"><button type="button" class="secondary">Back</button></a>
+          </div>
+          <section class="stack">
+            <h3>Priority & Snooze</h3>
+            <div class="grid-2">
+              <form id="proposal-priority-form" class="stack card">
+                <label>Priority
+                  <select name="priority">${priorityOptions}</select>
+                </label>
+                <button type="submit">Update Priority</button>
+              </form>
+              <form id="proposal-snooze-form" class="stack card">
+                <label>Snooze Until
+                  <input type="datetime-local" name="until" />
+                </label>
+                <label>Note
+                  <input type="text" name="note" placeholder="Optional context" />
+                </label>
+                <div class="stack compact">
+                  <button type="submit">Snooze</button>
+                  <button type="button" class="secondary" id="proposal-unsnooze-button"${
+                    snoozedUntil ? "" : " disabled"
+                  }>Unsnooze</button>
+                </div>
+                ${
+                  snoozeNote
+                    ? `<p class="small">Latest note: ${escapeHtml(snoozeNote)}</p>`
+                    : ""
+                }
+              </form>
+            </div>
+          </section>
+          <section>
+            <h3>Similar Proposals</h3>
+            ${similarMarkup}
+          </section>
+        `,
+      );
+      const promoteButton = document.getElementById("proposal-promote-button");
+      if (promoteButton) {
+        promoteButton.addEventListener("click", async () => {
+          promoteButton.disabled = true;
+          try {
+            const response = await apiPromoteProposal(proposalId);
+            const jobId = pick(response, "job", "id");
+            if (jobId) {
+              window.location.href = `/tasks/queue/${encodeURIComponent(String(jobId))}`;
+              return;
+            }
+            await load(true);
+          } catch (error) {
+            console.error("proposal promote failed", error);
+            setView(
+              "Proposal Detail",
+              `Proposal ${proposalId}`,
+              "<div class='notice error'>Promotion failed.</div>",
+            );
+          } finally {
+            promoteButton.disabled = false;
+          }
+        });
+      }
+      const dismissButton = document.getElementById("proposal-dismiss-button");
+      if (dismissButton) {
+        dismissButton.addEventListener("click", async () => {
+          dismissButton.disabled = true;
+          try {
+            await apiDismissProposal(proposalId);
+            await load(true);
+          } catch (error) {
+            console.error("proposal dismiss failed", error);
+            setView(
+              "Proposal Detail",
+              `Proposal ${proposalId}`,
+              "<div class='notice error'>Dismissal failed.</div>",
+            );
+          } finally {
+            dismissButton.disabled = false;
+          }
+        });
+      }
+      const editButton = document.getElementById("proposal-edit-button");
+      if (editButton) {
+        editButton.addEventListener("click", async () => {
+          const overrides = buildEditOverrides(row);
+          if (!overrides) {
+            return;
+          }
+          editButton.disabled = true;
+          try {
+            const response = await apiPromoteProposal(proposalId, overrides);
+            const jobId = pick(response, "job", "id");
+            if (jobId) {
+              window.location.href = `/tasks/queue/${encodeURIComponent(String(jobId))}`;
+              return;
+            }
+            await load(true);
+          } catch (error) {
+            console.error("proposal edit-promote failed", error);
+            setView(
+              "Proposal Detail",
+              `Proposal ${proposalId}`,
+              "<div class='notice error'>Edit & Promote failed.</div>",
+            );
+          } finally {
+            editButton.disabled = false;
+          }
+        });
+      }
+      const priorityForm = document.getElementById("proposal-priority-form");
+      if (priorityForm) {
+        priorityForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const priorityField = priorityForm.elements.namedItem("priority");
+          const value = priorityField ? priorityField.value : null;
+          if (!value) {
+            return;
+          }
+          priorityForm.classList.add("loading");
+          try {
+            await apiUpdateProposalPriority(proposalId, value);
+            await load(true);
+          } catch (error) {
+            console.error("priority update failed", error);
+            alert("Failed to update priority.");
+          } finally {
+            priorityForm.classList.remove("loading");
+          }
+        });
+      }
+      const snoozeForm = document.getElementById("proposal-snooze-form");
+      if (snoozeForm) {
+        snoozeForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const untilField = snoozeForm.elements.namedItem("until");
+          const noteField = snoozeForm.elements.namedItem("note");
+          const rawValue = untilField ? untilField.value : "";
+          if (!rawValue) {
+            alert("Select a snooze timestamp first.");
+            return;
+          }
+          const isoValue = new Date(rawValue).toISOString();
+          snoozeForm.classList.add("loading");
+          try {
+            await apiSnoozeProposal(
+              proposalId,
+              isoValue,
+              noteField ? noteField.value : null,
+            );
+            await load(true);
+          } catch (error) {
+            console.error("snooze failed", error);
+            alert("Failed to snooze proposal.");
+          } finally {
+            snoozeForm.classList.remove("loading");
+          }
+        });
+      }
+      const unsnoozeButton = document.getElementById("proposal-unsnooze-button");
+      if (unsnoozeButton) {
+        unsnoozeButton.addEventListener("click", async () => {
+          unsnoozeButton.disabled = true;
+          try {
+            await apiUnsnoozeProposal(proposalId);
+            await load(true);
+          } catch (error) {
+            console.error("unsnooze failed", error);
+            alert("Failed to unsnooze proposal.");
+          } finally {
+            unsnoozeButton.disabled = false;
+          }
+        });
+      }
+    };
+
+    const load = async (silent = false) => {
+      try {
+        const detail = await fetchJson(
+          endpoint(
+            proposalsSourceConfig.detail || "/api/proposals/{id}",
+            { id: proposalId },
+          ),
+        );
+        renderDetail(detail);
+      } catch (error) {
+        console.error("proposal detail load failed", error);
+        if (!silent) {
+          setView(
+            "Proposal Detail",
+            `Proposal ${proposalId}`,
+            "<div class='notice error'>Failed to load proposal.</div>",
+          );
+        }
+      }
+    };
+
+    await load();
+    startPolling(() => load(true), pollIntervals.detail);
+  }
+
   function renderNotFound() {
     setView(
       "Route Not Found",
@@ -3347,6 +4074,7 @@
     const orchestratorDetailMatch = pathname.match(
       /^\/tasks\/orchestrator\/([^/]+)$/,
     );
+    const proposalDetailMatch = pathname.match(/^\/tasks\/proposals\/([^/]+)$/);
 
     if (pathname === "/tasks") {
       await renderActivePage();
@@ -3358,6 +4086,10 @@
     }
     if (pathname === "/tasks/orchestrator") {
       await renderOrchestratorListPage();
+      return;
+    }
+    if (pathname === "/tasks/proposals") {
+      await renderProposalsListPage();
       return;
     }
 
@@ -3376,6 +4108,10 @@
     }
     if (orchestratorDetailMatch) {
       await renderOrchestratorDetailPage(orchestratorDetailMatch[1]);
+      return;
+    }
+    if (proposalDetailMatch) {
+      await renderProposalDetailPage(proposalDetailMatch[1]);
       return;
     }
 

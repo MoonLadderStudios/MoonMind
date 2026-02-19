@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from moonmind.agents.codex_worker.worker import (
     ClaimedJob,
     CodexWorker,
     CodexWorkerConfig,
+    PreparedTaskWorkspace,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
@@ -42,6 +44,7 @@ class FakeQueueClient:
         self.uploaded: list[str] = []
         self.events: list[dict[str, object]] = []
         self.cancel_requested_at: str | None = None
+        self.submitted_proposals: list[dict[str, object]] = []
 
     async def claim_job(
         self,
@@ -114,6 +117,10 @@ class FakeQueueClient:
                 "payload": payload or {},
             }
         )
+
+    async def create_task_proposal(self, *, proposal):
+        self.submitted_proposals.append(dict(proposal))
+        return {"id": str(uuid4())}
 
 
 class FailingUploadQueueClient(FakeQueueClient):
@@ -370,6 +377,76 @@ async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
     )
     assert queue.completed[0][1] is not None
     assert "optional artifact upload(s) failed" in queue.completed[0][1]
+
+
+async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
+    """Workers should submit proposals when the feature flag is enabled."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_task_proposals=True,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    job = ClaimedJob(id=uuid4(), type="task", payload={})
+    context_dir = tmp_path / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    proposals_path = context_dir / "task_proposals.json"
+    proposals_path.write_text(
+        json.dumps(
+            [
+                {
+                    "title": "Add regression tests",
+                    "summary": "Cover auth flow edge cases",
+                    "taskCreateRequest": {
+                        "type": "task",
+                        "priority": 0,
+                        "maxAttempts": 3,
+                        "payload": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "task": {"instructions": "Add tests"},
+                        },
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=context_dir,
+        publish_result_path=tmp_path / "publish-result.log",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="feature/proposal-tests",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+    await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+
+    assert queue.submitted_proposals
+    first = queue.submitted_proposals[0]
+    assert first["origin"]["source"] == "queue"
+    assert first["origin"]["id"] == str(job.id)
+    assert first["origin"]["metadata"]["workingBranch"] == "feature/proposal-tests"
+    assert not proposals_path.exists()
 
 
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
@@ -1778,6 +1855,19 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.container_workspace_volume is None
     assert config.container_default_timeout_seconds == 3600
     assert config.artifact_upload_incremental is True
+
+
+async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
+    """Flag should toggle worker proposal submission behavior."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
+    config = CodexWorkerConfig.from_env()
+    assert config.enable_task_proposals is True
+
+    monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "false")
+    config = CodexWorkerConfig.from_env()
+    assert config.enable_task_proposals is False
 
 
 async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:
