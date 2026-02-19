@@ -2,14 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>MoonMind Tasks</title>
+    <script>
+      (() => {
+        const key = "moonmind.theme";
+        const root = document.documentElement;
+        let stored = null;
+
+        try {
+          const raw = window.localStorage ? window.localStorage.getItem(key) : null;
+          stored = raw === "dark" || raw === "light" ? raw : null;
+          if (raw && !stored && window.localStorage) {
+            window.localStorage.removeItem(key);
+          }
+        } catch (_error) {
+          stored = null;
+        }
+
+        const prefersDark =
+          window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const mode = stored || (prefersDark ? "dark" : "light");
+        root.classList.toggle("dark", mode === "dark");
+        root.dataset.theme = mode;
+      })();
+    </script>
     <link rel="stylesheet" href="/static/task_dashboard/dashboard.css" />
   </head>
   <body>
     <main class="dashboard-root">
       <header class="masthead">
-        <div>
+        <div class="masthead-copy">
           <p class="eyebrow">MoonMind Operations</p>
           <h1>Tasks Dashboard</h1>
           <p class="subhead">

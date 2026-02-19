@@ -103,6 +103,9 @@
       queueSourceConfig.taskStepTemplateFavorite || "/api/task-step-templates/{slug}:favorite",
     ),
   };
+  const THEME_STORAGE_KEY = "moonmind.theme";
+  const THEME_DARK_CLASS = "dark";
+  const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const pollers = [];
@@ -144,6 +147,104 @@
     if (typeof disposer === "function") {
       disposers.push(disposer);
     }
+  }
+
+  function readStoredThemePreference() {
+    try {
+      const raw = window.localStorage ? window.localStorage.getItem(THEME_STORAGE_KEY) : null;
+      if (raw === "dark" || raw === "light") {
+        return raw;
+      }
+      if (raw && window.localStorage) {
+        window.localStorage.removeItem(THEME_STORAGE_KEY);
+      }
+    } catch (_error) {
+      // Ignore storage access failures and fall back to system preference.
+    }
+    return null;
+  }
+
+  function persistThemePreference(mode) {
+    try {
+      if (window.localStorage) {
+        window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+      }
+    } catch (_error) {
+      // Ignore storage failures and keep in-memory mode.
+    }
+  }
+
+  function getSystemThemeMode(mediaQueryList = null) {
+    if (mediaQueryList && typeof mediaQueryList.matches === "boolean") {
+      return mediaQueryList.matches ? "dark" : "light";
+    }
+    if (window.matchMedia) {
+      return window.matchMedia(THEME_MEDIA_QUERY).matches ? "dark" : "light";
+    }
+    return "light";
+  }
+
+  function syncThemeToggle(mode, source) {
+    const toggle = document.querySelector(".theme-toggle");
+    if (!toggle) {
+      return;
+    }
+    const titleCaseMode = mode === "dark" ? "Dark" : "Light";
+    toggle.textContent = `Theme: ${titleCaseMode}`;
+    toggle.setAttribute("aria-label", mode === "dark" ? "Switch to light mode" : "Switch to dark mode");
+    toggle.setAttribute("aria-pressed", mode === "dark" ? "true" : "false");
+    toggle.dataset.themeSource = source;
+  }
+
+  function applyResolvedTheme(mode, source) {
+    const resolvedMode = mode === "dark" ? "dark" : "light";
+    const documentRoot = document.documentElement;
+    documentRoot.classList.toggle(THEME_DARK_CLASS, resolvedMode === "dark");
+    documentRoot.dataset.theme = resolvedMode;
+    documentRoot.dataset.themeSource = source;
+    syncThemeToggle(resolvedMode, source);
+    return resolvedMode;
+  }
+
+  function initTheme() {
+    const mediaQueryList = window.matchMedia ? window.matchMedia(THEME_MEDIA_QUERY) : null;
+    let storedPreference = readStoredThemePreference();
+    let currentMode = applyResolvedTheme(
+      storedPreference || getSystemThemeMode(mediaQueryList),
+      storedPreference ? "user" : "system",
+    );
+
+    const toggle = document.querySelector(".theme-toggle");
+    const handleToggleClick = () => {
+      const nextMode = currentMode === "dark" ? "light" : "dark";
+      storedPreference = nextMode;
+      persistThemePreference(nextMode);
+      currentMode = applyResolvedTheme(nextMode, "user");
+    };
+
+    if (toggle) {
+      toggle.addEventListener("click", handleToggleClick);
+    }
+
+    const handleSystemPreferenceChange = (event) => {
+      if (storedPreference) {
+        return;
+      }
+      currentMode = applyResolvedTheme(event.matches ? "dark" : "light", "system");
+    };
+
+    if (mediaQueryList && typeof mediaQueryList.addEventListener === "function") {
+      mediaQueryList.addEventListener("change", handleSystemPreferenceChange);
+    }
+
+    return () => {
+      if (toggle) {
+        toggle.removeEventListener("click", handleToggleClick);
+      }
+      if (mediaQueryList && typeof mediaQueryList.removeEventListener === "function") {
+        mediaQueryList.removeEventListener("change", handleSystemPreferenceChange);
+      }
+    };
   }
 
   function activateNav(pathname) {
@@ -4118,7 +4219,13 @@
     renderNotFound();
   }
 
-  window.addEventListener("beforeunload", stopPolling);
+  const disposeTheme = initTheme();
+  window.addEventListener("beforeunload", () => {
+    stopPolling();
+    if (typeof disposeTheme === "function") {
+      disposeTheme();
+    }
+  });
   renderForPath(window.location.pathname).catch((error) => {
     console.error("dashboard render failed", error);
     setView(

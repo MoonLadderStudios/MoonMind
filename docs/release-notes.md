@@ -14,7 +14,7 @@
 
 ### Rollout Notes
 - Feature flag: `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` (legacy fallback: `TASK_TEMPLATE_CATALOG=1`).
-- Default remains disabled until environments apply migration `202602180002`.
+- Default remains disabled; enable only after applying migration `202602180002`.
 
 ## 2026-02-18 – Queue Live Logs + SSE
 

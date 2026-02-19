@@ -65,7 +65,7 @@ Task preset APIs provide reusable template expansion for queue submissions:
 
 Feature flag:
 
-- `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` (legacy fallback: `TASK_TEMPLATE_CATALOG=1`)
+- `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` to enable (legacy fallback: `TASK_TEMPLATE_CATALOG=1`)
 
 CLI helper usage is available via `moonmind.agents.cli.task_templates.TaskTemplateClient`.
 Example:
