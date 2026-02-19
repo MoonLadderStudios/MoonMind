@@ -56,6 +56,9 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
     assert "Tasks Dashboard" in body
     assert "task-dashboard-config" in body
     assert "/static/task_dashboard/dashboard.js" in body
+    assert "viewport-fit=cover" in body
+    assert 'class="theme-toggle secondary"' in body
+    assert "moonmind.theme" in body
 
 
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:

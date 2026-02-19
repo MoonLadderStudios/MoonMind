@@ -1,196 +1,203 @@
 # Tailwind Style System
 
-Status: Draft (implementation-ready)  
+Status: Active guidance (Phases 1-3 shipped, Phase 4+ planned)  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-18  
+Last Updated: 2026-02-19
 
 ## 1. Purpose
 
-Introduce **Tailwind CSS** as the styling system for the MoonMind **Tasks Dashboard** while keeping the current dashboard architecture intact (FastAPI-served HTML shell + vanilla JS renderer + static CSS).
+Introduce Tailwind CSS for the MoonMind Tasks Dashboard without changing the dashboard architecture (FastAPI HTML shell + vanilla JS renderer + static CSS).
 
-This doc describes:
+This document is both:
 
-- The **file layout** and **build pipeline** needed to compile Tailwind into the existing `dashboard.css` asset.
-- A **low-risk migration strategy** that does not require rewriting `dashboard.js` or `task_dashboard.html`.
-- Guidance for making the dashboard **dark-mode**, **mobile-friendly**, and **modern/futuristic** (MoonMind branding with **purple** + glass effects).
+- A source of truth for what is already in production.
+- A design and implementation guide for upcoming dark mode and modern UI polish.
 
 ## 2. Background / Current State
 
 The dashboard currently ships as:
 
-- HTML shell: `api_service/templates/task_dashboard.html` :contentReference[oaicite:0]{index=0}
-- JS renderer: `api_service/static/task_dashboard/dashboard.js` :contentReference[oaicite:1]{index=1}
-- CSS stylesheet: `api_service/static/task_dashboard/dashboard.css` :contentReference[oaicite:2]{index=2}
+- Template: `api_service/templates/task_dashboard.html`
+- Renderer: `api_service/static/task_dashboard/dashboard.js`
+- Source CSS: `api_service/static/task_dashboard/dashboard.tailwind.css`
+- Served CSS: `api_service/static/task_dashboard/dashboard.css`
 
-The template links directly to `/static/task_dashboard/dashboard.css` and `/static/task_dashboard/dashboard.js` :contentReference[oaicite:3]{index=3}. The JS renders page content client-side and uses semantic class names such as `masthead`, `route-nav`, `panel`, and dynamic status classes like `status status-${normalized}` :contentReference[oaicite:4]{index=4} :contentReference[oaicite:5]{index=5}.
+Current implementation status:
 
-This makes Tailwind adoption primarily a **CSS build system** change, not a frontend framework change.
+- [x] Tailwind + PostCSS toolchain exists.
+- [x] `dashboard.css` is generated from `dashboard.tailwind.css`.
+- [x] Tokenized light palette is live (`--mm-*` tokens).
+- [x] Purple/cyan/pink visual refresh is live for light mode.
+- [x] Existing semantic class names remain stable (`masthead`, `panel`, `route-nav`, `status-*`, etc).
+- [x] Dark token overrides are live in CSS.
+- [x] Manual theme toggle is present in template/JS with persistence.
+- [ ] Mobile-specific nav/table refinements are not yet complete.
+
+Accuracy note: `tailwind.config.cjs` still uses `darkMode: "class"`, and Phase 3 now ships a `.dark` token scope plus first-paint bootstrap and runtime preference resolution.
 
 ## 3. Goals and Non-Goals
 
 ### 3.1 Goals
 
-1. Keep the public asset path stable:
+1. Keep public asset path stable:
    - Continue serving `/static/task_dashboard/dashboard.css`.
-2. Add Tailwind as a **compile step** so we can:
-   - Use utilities for new UI features.
-   - Use `@apply` to define reusable component classes (optional).
-   - Add consistent tokens (colors, shadows, radii, blur) to support a “liquid glass” direction.
-3. Enable **theme + UX upgrades**:
-   - **Dark mode** (user toggle + system default)
-   - **Mobile-friendly layouts** (responsive tables/forms/nav)
-   - **Modern/futuristic look** (MoonMind purple accent, tasteful gradients, translucency, blur)
+2. Keep migration low-risk:
+   - No framework rewrite.
+   - No class-name churn in `dashboard.js` output.
+3. Deliver a modern 2026 visual style:
+   - Dark mode first-class.
+   - Purple-forward brand direction.
+   - Warm yellow/orange highlight signals where useful.
+   - Liquid-glass depth with practical performance.
+4. Maintain operational readability:
+   - High contrast for logs, tables, forms, status chips, and focus states.
 
 ### 3.2 Non-Goals
 
-- Introducing React/Vue/Svelte, Vite, or a JS bundler.
-- Rewriting dashboard rendering logic in `dashboard.js`.
-- Changing routing, auth, or API contracts.
+- Introducing React/Vue/Svelte or a JS bundler.
+- Rewriting routing, auth, or API contracts.
+- Replacing semantic classes with Tailwind utility strings in JS-rendered HTML.
 
-## 4. Visual Direction: MoonMind (Futuristic, Purple, Liquid Glass)
+## 4. Visual Direction: MoonMind 2026 (Dark, Futuristic, Glass)
 
-MoonMind’s UI should feel:
+MoonMind UI should feel like an operations console:
 
-- **Futuristic**: crisp typography, high contrast, subtle “neon” accents, soft glows.
-- **Glass-like**: semi-transparent surfaces, blur behind panels, luminous borders.
-- **Purple-forward**: purple as the primary accent; cyan/pink as secondary highlights (sparingly).
-- **Operationally readable**: tables, logs, status chips must remain high legibility.
+- Futuristic: clean typography, high signal-to-noise, restrained glow.
+- Purple-forward: violet is the identity color for action and selection.
+- Warm highlights: amber/orange for warnings, urgent callouts, and high-attention states.
+- Liquid glass: translucent layers with blur and edge-light, never muddy.
+- Readable first: data density and contrast take priority over effects.
 
-### 4.1 Recommended palette
+### 4.1 Recommended palette and role mapping
 
-Primary:
-- **Violet/Purple** for actions, links, selected states.
-Secondary:
-- **Cyan** for “running/live/streaming” and system highlights.
-- **Pink/Magenta** for emphasis accents (sparingly).
-Status colors:
-- Queued: amber
-- Running: cyan/sky
-- Awaiting action: violet (brand-consistent)
-- Succeeded: green
-- Failed/cancelled: red/rose
+Use token values as RGB triplets so alpha blending remains flexible.
 
-### 4.2 Performance note on glass
+| Role | Token | Light (current) | Dark (target) | Notes |
+| --- | --- | --- | --- | --- |
+| App background | `--mm-bg` | `248 247 255` | `8 8 16` | Dark theme keeps slight violet bias |
+| Panel surface | `--mm-panel` | `255 255 255` | `20 18 34` | Glass base for cards/panels |
+| Primary text | `--mm-ink` | `18 20 32` | `237 236 255` | Keep strong readability |
+| Muted text | `--mm-muted` | `95 102 122` | `174 170 204` | For metadata only |
+| Borders | `--mm-border` | `214 220 235` | `92 84 136` | Slightly luminous in dark |
+| Primary accent | `--mm-accent` | `139 92 246` | `167 139 250` | Core purple |
+| Secondary accent | `--mm-accent-2` | `34 211 238` | `125 249 255` | Live/streaming/system energy |
+| Warm accent | `--mm-accent-warm` | `244 114 182` | `249 115 22` | Orange emphasis in dark mode |
+| Success | `--mm-ok` | `34 197 94` | `74 222 128` | Success state |
+| Warning / hot highlight | `--mm-warn` | `245 158 11` | `251 191 36` | Primary yellow/orange signal |
+| Error | `--mm-danger` | `244 63 94` | `251 113 133` | Failure/cancelled state |
 
-Blur (`backdrop-filter`) is expensive if used on very large surfaces or animated. Prefer:
-- A small number of major glass containers (masthead, nav, panel)
-- Avoid animating blur or large translucent overlays
-- Provide fallbacks when `backdrop-filter` is unavailable
+Highlight usage guidance:
+
+- Keep purple as the dominant accent (roughly 60-70% of accent usage).
+- Use yellow/orange highlights sparingly (roughly 10-20%) for signal hierarchy.
+- Reserve cyan for live/running/stream feedback.
+
+### 4.2 Liquid glass rules (practical)
+
+1. Use blur on a small set of structural surfaces only:
+   - `masthead`, major `panel`, optional sticky nav strip.
+2. Keep interior data containers more opaque than outer shells.
+3. Use border light and shadow depth, not heavy glow floods.
+4. Do not animate blur.
+5. Provide fallback when `backdrop-filter` is unavailable.
+
+Recommended ranges:
+
+- Glass opacity: `0.55` to `0.78`
+- Border alpha: `0.35` to `0.75`
+- Blur radius: `14px` to `20px`
+- Glow alpha: `<= 0.45`
 
 ## 5. Approach Overview (Recommended)
 
-### 5.1 Keep existing semantic class names
+### 5.1 Keep semantic class names
 
-Safest path is to keep semantic classes currently used by the template and JS:
+Continue styling existing classes used by template and JS:
 
-- `dashboard-root`, `masthead`, `route-nav`, `panel`, `toolbar`, `card`, `grid-2`, etc. :contentReference[oaicite:6]{index=6} :contentReference[oaicite:7]{index=7}
-- Status chips: `status status-queued|running|awaiting_action|succeeded|failed|cancelled` :contentReference[oaicite:8]{index=8}
+- `dashboard-root`, `masthead`, `route-nav`, `panel`, `card`, `toolbar`, `grid-2`
+- Status chips: `status`, `status-queued`, `status-running`, `status-awaiting_action`, `status-succeeded`, `status-failed`, `status-cancelled`
 
-Then implement those classes using Tailwind (`@apply`) + a small amount of bespoke CSS for gradients, blur, and glow.
+This keeps JS stable and avoids dynamic utility-generation problems.
 
-This avoids:
-- Big JS markup churn
-- Tailwind “purge” issues caused by dynamic utility class names
+### 5.2 Compile into existing output file
 
-### 5.2 Compile into the existing output file
-
-Tailwind should compile:
+Build flow:
 
 - Input: `api_service/static/task_dashboard/dashboard.tailwind.css`
-- Output (served): `api_service/static/task_dashboard/dashboard.css`
+- Output: `api_service/static/task_dashboard/dashboard.css`
 
-The HTML template stays unchanged (still references `dashboard.css`). :contentReference[oaicite:9]{index=9}
+Do not hand-edit `dashboard.css` during normal development.
+
+### 5.3 Token-first theming
+
+- Theme behavior should be controlled by tokens (`--mm-*`).
+- Semantic classes consume tokens.
+- Dark mode flips tokens via `.dark`; components adapt automatically.
 
 ## 6. File Layout
 
-Add these files:
-
 ```text
-package.json                     # add tailwind dev deps + scripts (repo root)
-package-lock.json                # commit for reproducible builds
-tailwind.config.cjs              # Tailwind config (repo root)
-postcss.config.cjs               # PostCSS config (repo root)
+package.json
+package-lock.json
+tailwind.config.cjs
+postcss.config.cjs
+
+api_service/templates/
+└── task_dashboard.html
 
 api_service/static/task_dashboard/
-├── dashboard.js                 # existing (unchanged initially)
-├── dashboard.css                # GENERATED output (served)
-└── dashboard.tailwind.css       # NEW source input for tailwind build
-````
+├── dashboard.js
+├── dashboard.tailwind.css   # source of truth
+└── dashboard.css            # generated + served
 
-Optional helper scripts:
-
-```text
 tools/
-└── build-dashboard-css.sh       # convenience wrapper for CI/dev
+└── build-dashboard-css.sh   # optional helper
 ```
 
 ## 7. Tailwind Configuration
 
-### 7.1 `tailwind.config.cjs` (dark mode + token-based colors)
+### 7.1 `tailwind.config.cjs`
 
-Key points:
+Current config expectations:
 
-* `content` MUST include the dashboard template + JS (the UI is rendered in JS).
-* `darkMode: "class"` so we can toggle by adding `dark` to `<html>`.
-* Prefer **CSS variables as RGB triplets** so Tailwind opacity utilities work (`bg-mm-accent/20`, etc).
+- `content` includes template and dashboard JS.
+- `darkMode: "class"` is enabled.
+- `corePlugins.preflight` remains `false` to avoid reset regressions.
+- Token colors map to `rgb(var(--mm-*) / <alpha-value>)`.
+
+Reference snippet:
 
 ```js
-// tailwind.config.cjs
-/** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
     "./api_service/templates/task_dashboard.html",
     "./api_service/static/task_dashboard/**/*.js",
   ],
   darkMode: "class",
-  corePlugins: {
-    // Phase 1 safety: keep false to avoid surprise resets; consider enabling later.
-    preflight: false,
-  },
+  corePlugins: { preflight: false },
   theme: {
     extend: {
       colors: {
-        // Token colors (support alpha): use like bg-mm-bg, text-mm-ink, border-mm-border/40
         "mm-bg": "rgb(var(--mm-bg) / <alpha-value>)",
         "mm-panel": "rgb(var(--mm-panel) / <alpha-value>)",
         "mm-ink": "rgb(var(--mm-ink) / <alpha-value>)",
         "mm-muted": "rgb(var(--mm-muted) / <alpha-value>)",
         "mm-border": "rgb(var(--mm-border) / <alpha-value>)",
-
         "mm-accent": "rgb(var(--mm-accent) / <alpha-value>)",
         "mm-accent-2": "rgb(var(--mm-accent-2) / <alpha-value>)",
         "mm-accent-warm": "rgb(var(--mm-accent-warm) / <alpha-value>)",
-
         "mm-ok": "rgb(var(--mm-ok) / <alpha-value>)",
         "mm-warn": "rgb(var(--mm-warn) / <alpha-value>)",
         "mm-danger": "rgb(var(--mm-danger) / <alpha-value>)",
       },
-      borderRadius: {
-        mm: "0.9rem",
-      },
-      boxShadow: {
-        mm: "var(--mm-shadow)",
-        // optional “neon” glow for selected/active states
-        mmGlow: "0 0 0 1px rgb(var(--mm-accent) / 0.55), 0 10px 40px -20px rgb(var(--mm-accent) / 0.65)",
-      },
-      backdropBlur: {
-        mm: "18px",
-      },
-      transitionTimingFunction: {
-        mm: "cubic-bezier(.2,.8,.2,1)",
-      },
     },
   },
-  safelist: [
-    // Keep small and intentional. Prefer semantic classes for dynamic states.
-  ],
 };
 ```
 
 ### 7.2 `postcss.config.cjs`
 
 ```js
-// postcss.config.cjs
 module.exports = {
   plugins: {
     tailwindcss: {},
@@ -199,482 +206,285 @@ module.exports = {
 };
 ```
 
-## 8. Theme Tokens (Light + Dark) and “Liquid Glass” Foundations
+## 8. Theme Tokens and Liquid-Glass Foundations
 
-Create `api_service/static/task_dashboard/dashboard.tailwind.css` as the source of truth.
-
-### 8.1 Token sets
-
-Define tokens as RGB triplets (space-separated) to enable alpha:
+### 8.1 Current shipped light tokens (accurate as of 2026-02-19)
 
 ```css
-/* api_service/static/task_dashboard/dashboard.tailwind.css */
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  /* Light theme (default) */
-  :root {
-    color-scheme: light;
-
-    --mm-bg: 248 247 255;          /* faint lavender */
-    --mm-panel: 255 255 255;
-    --mm-ink: 18 20 32;
-    --mm-muted: 95 102 122;
-    --mm-border: 214 220 235;
-
-    /* MoonMind accents */
-    --mm-accent: 139 92 246;       /* violet */
-    --mm-accent-2: 34 211 238;     /* cyan */
-    --mm-accent-warm: 244 114 182; /* pink */
-
-    /* Status */
-    --mm-ok: 34 197 94;
-    --mm-warn: 245 158 11;
-    --mm-danger: 244 63 94;
-
-    --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
-  }
-
-  /* Dark theme overrides */
-  .dark {
-    color-scheme: dark;
-
-    --mm-bg: 8 8 16;               /* near-black with a violet bias */
-    --mm-panel: 18 18 30;
-    --mm-ink: 236 236 252;
-    --mm-muted: 170 170 195;
-    --mm-border: 70 70 105;
-
-    --mm-accent: 167 139 250;      /* slightly brighter violet */
-    --mm-accent-2: 103 232 249;
-    --mm-accent-warm: 248 113 200;
-
-    --mm-ok: 74 222 128;
-    --mm-warn: 251 191 36;
-    --mm-danger: 251 113 133;
-
-    --mm-shadow: 0 22px 44px -30px rgb(0 0 0 / 0.85);
-  }
-
-  * { box-sizing: border-box; }
-
-  body {
-    margin: 0;
-    min-height: 100vh;
-    color: rgb(var(--mm-ink));
-    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-
-    /* Futuristic gradient fog (tweak to taste) */
-    background:
-      radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%),
-      radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%),
-      radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%),
-      rgb(var(--mm-bg));
-  }
+:root {
+  color-scheme: light;
+  --mm-bg: 248 247 255;
+  --mm-panel: 255 255 255;
+  --mm-ink: 18 20 32;
+  --mm-muted: 95 102 122;
+  --mm-border: 214 220 235;
+  --mm-accent: 139 92 246;
+  --mm-accent-2: 34 211 238;
+  --mm-accent-warm: 244 114 182;
+  --mm-ok: 34 197 94;
+  --mm-warn: 245 158 11;
+  --mm-danger: 244 63 94;
+  --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
 }
 ```
 
-### 8.2 Glass surfaces (core technique)
+### 8.2 Target dark token overrides (Phase 3)
 
-Define a reusable “glass” class that works in both light and dark themes:
+```css
+.dark {
+  color-scheme: dark;
+  --mm-bg: 8 8 16;
+  --mm-panel: 20 18 34;
+  --mm-ink: 237 236 255;
+  --mm-muted: 174 170 204;
+  --mm-border: 92 84 136;
+  --mm-accent: 167 139 250;
+  --mm-accent-2: 125 249 255;
+  --mm-accent-warm: 249 115 22;
+  --mm-ok: 74 222 128;
+  --mm-warn: 251 191 36;
+  --mm-danger: 251 113 133;
+  --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
+}
+```
+
+### 8.3 Atmospheric background layers
+
+Keep dark mode visually rich, not flat black.
+
+```css
+body {
+  background:
+    radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%),
+    radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%),
+    radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%),
+    rgb(var(--mm-bg));
+}
+
+.dark body {
+  background:
+    radial-gradient(circle at 12% -6%, rgb(var(--mm-accent) / 0.36), transparent 46%),
+    radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%),
+    radial-gradient(circle at 50% 112%, rgb(var(--mm-warn) / 0.18), transparent 56%),
+    rgb(var(--mm-bg));
+}
+```
+
+### 8.4 Core glass utilities
 
 ```css
 @layer components {
   .mm-glass {
-    @apply border rounded-mm shadow-mm;
-    border-color: rgb(var(--mm-border) / 0.55);
+    border: 1px solid rgb(var(--mm-border) / 0.55);
     background: rgb(var(--mm-panel) / 0.62);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    box-shadow: var(--mm-shadow);
+    backdrop-filter: blur(18px) saturate(130%);
+    -webkit-backdrop-filter: blur(18px) saturate(130%);
   }
 
-  /* Fallback when blur isn’t supported */
+  .mm-glass-strong {
+    border: 1px solid rgb(var(--mm-border) / 0.72);
+    background: rgb(var(--mm-panel) / 0.74);
+    box-shadow: var(--mm-shadow), 0 0 0 1px rgb(var(--mm-accent) / 0.20);
+  }
+
   @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-    .mm-glass {
+    .mm-glass,
+    .mm-glass-strong {
       background: rgb(var(--mm-panel) / 0.92);
     }
-  }
-
-  /* Optional “edge glow” for selected/active containers */
-  .mm-glass-glow {
-    box-shadow: var(--mm-shadow), 0 0 0 1px rgb(var(--mm-accent) / 0.35);
   }
 }
 ```
 
-Rule of thumb:
-
-* Use `.mm-glass` on major containers (`masthead`, `panel`, maybe sticky nav)
-* Keep inner cards more opaque (improves readability)
-
 ## 9. Dark Mode Implementation
 
-The dashboard shell is a plain HTML template , so dark mode is best implemented by toggling a `dark` class on `<html>` (Tailwind’s recommended approach when you need a manual toggle).
+### 9.1 Template updates (`task_dashboard.html`)
 
-### 9.1 Update viewport (small improvement)
-
-The template already sets a viewport meta tag . For better iOS behavior, prefer:
-
-* `viewport-fit=cover` (safe areas)
-* keep `initial-scale=1`
-
-Proposed change:
+1. Update viewport:
 
 ```html
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 ```
 
-### 9.2 Add a theme toggle control (in `task_dashboard.html`)
-
-Add a small button in the masthead (minimal markup, no framework). The masthead exists already. 
-
-Example (keep class semantic; style later via Tailwind):
+2. Add a toggle in the masthead controls:
 
 ```html
-<button class="theme-toggle" type="button" aria-label="Toggle dark mode">
+<button class="theme-toggle secondary" type="button" aria-label="Toggle dark mode">
   Theme
 </button>
 ```
 
-### 9.3 Implement theme preference in `dashboard.js`
+### 9.2 Theme preference logic (`dashboard.js`)
 
-Add a tiny, isolated module at the top of the existing IIFE (no architectural rewrite).
-
-Behavior:
-
-* On load: apply stored preference if present, else follow system preference.
-* On toggle: flip `dark` class on `<html>`, store preference.
-* Respect `prefers-color-scheme` when user has not explicitly chosen.
-
-Pseudo-implementation (illustrative):
+Use local preference first, system preference second.
 
 ```js
 function initTheme() {
   const key = "moonmind.theme";
   const root = document.documentElement;
+  const media = window.matchMedia?.("(prefers-color-scheme: dark)");
   const stored = localStorage.getItem(key);
 
-  const systemPrefersDark =
-    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const apply = (mode) => {
+    root.classList.toggle("dark", mode === "dark");
+    root.dataset.theme = mode;
+  };
 
-  const shouldUseDark =
-    stored === "dark" ? true : stored === "light" ? false : systemPrefersDark;
-
-  root.classList.toggle("dark", shouldUseDark);
+  if (stored === "dark" || stored === "light") {
+    apply(stored);
+  } else {
+    apply(media?.matches ? "dark" : "light");
+  }
 
   const button = document.querySelector(".theme-toggle");
-  if (button) {
-    button.addEventListener("click", () => {
-      const next = !root.classList.contains("dark");
-      root.classList.toggle("dark", next);
-      localStorage.setItem(key, next ? "dark" : "light");
-    });
-  }
+  button?.addEventListener("click", () => {
+    const next = root.classList.contains("dark") ? "light" : "dark";
+    apply(next);
+    localStorage.setItem(key, next);
+  });
+
+  media?.addEventListener?.("change", (event) => {
+    if (!localStorage.getItem(key)) {
+      apply(event.matches ? "dark" : "light");
+    }
+  });
 }
 ```
 
-### 9.4 Styling dark mode
+Call `initTheme()` near the top of the dashboard IIFE.
 
-Prefer token changes + semantic classes over sprinkling `dark:` utilities everywhere. Your CSS becomes simpler:
+### 9.3 Prevent theme flash on load
 
-* `.dark` updates variables
-* semantic components automatically adapt
+Set the theme class before CSS paints by adding a tiny inline script in `<head>`:
 
-This is especially helpful for the dashboard’s dynamic UI output and status badges. 
+```html
+<script>
+(() => {
+  const key = "moonmind.theme";
+  const stored = localStorage.getItem(key);
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const useDark = stored ? stored === "dark" : prefersDark;
+  if (useDark) document.documentElement.classList.add("dark");
+})();
+</script>
+```
+
+### 9.4 Styling strategy
+
+- Prefer token swaps and semantic classes.
+- Avoid scattering many `dark:*` utility variants in JS-generated markup.
+- Keep focus indicators highly visible in both themes.
 
 ## 10. Mobile-Friendly System (Responsive + Touch + Tables)
 
-The current CSS already includes a small breakpoint for `grid-2` at 900px . Tailwind should formalize and expand responsiveness.
-
 ### 10.1 Layout targets
 
-* Mobile: 360–430px (single column, sticky nav optional)
-* Tablet: 768px (two-column where useful; tables scroll)
-* Desktop: 1024–1440px (max width, multi-column)
+- Mobile: 360-430px, single-column first.
+- Tablet: 768px, selective two-column layouts.
+- Desktop: 1024-1440px with max-width container.
 
 ### 10.2 Navigation on small screens
 
-The template nav is a row of pills that wraps. 
-For mobile, “wrap” can become tall and push content down.
-
-Recommended pattern:
-
-* Switch to **horizontal scroll** pills on narrow screens
-* Optionally make nav sticky with a glass background
-
-Semantic class approach:
-
-```css
-@layer components {
-  .route-nav {
-    @apply mt-4 flex gap-2;
-  }
-
-  /* Mobile: horizontal scroll nav instead of wrap */
-  @media (max-width: 640px) {
-    .route-nav {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      padding-bottom: 0.25rem;
-    }
-    .route-nav::-webkit-scrollbar { height: 8px; }
-  }
-}
-```
-
-Optional sticky nav (mobile only):
+Switch nav pills from wrapping to horizontal scroll below `640px`.
 
 ```css
 @media (max-width: 640px) {
   .route-nav {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    background: rgb(var(--mm-bg) / 0.55);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.25rem;
   }
 }
 ```
+
+Optional: make nav sticky with a glass strip.
 
 ### 10.3 Tables
 
-Tables are hard on mobile. Current table styles assume desktop width. 
+Wrap tables in a scroll container:
 
-Minimum viable mobile improvement:
-
-* Wrap tables in a scrolling container (`overflow-x:auto`)
-* Give tables a `min-width` that preserves column meaning
-* Add row hover only on pointer devices
-
-Add a wrapper class and use it whenever you render tables in JS:
-
-* Render: `<div class="table-wrap"><table>...</table></div>`
-
-CSS:
-
-```css
-@layer components {
-  .table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    border-radius: 0.75rem;
-  }
-  .table-wrap table {
-    min-width: 760px;
-  }
-
-  @media (hover: none) {
-    tbody tr:hover { background: inherit; }
-  }
-}
+```html
+<div class="table-wrap"><table>...</table></div>
 ```
 
-If you later want “true mobile” tables:
+```css
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
-* Render rows as stacked cards below 640px (JS render switch)
-* Keep desktop table above 640px
+.table-wrap table {
+  min-width: 760px;
+}
+```
 
 ### 10.4 Touch targets and forms
 
-Aim for:
-
-* 44px minimum tap height for buttons/inputs
-* Clear focus states (`:focus-visible`)
-* Less dense spacing on small screens
-
-Use semantic classes:
-
-* `.btn`, `.btn-secondary`, `.input`, `.select`, `.textarea`
-
-Then implement with `@apply` so they adapt in dark mode automatically.
+- Minimum 44px tap target height.
+- Keep `:focus-visible` styles obvious.
+- Avoid very low-contrast placeholders in dark mode.
 
 ## 11. Component Recipes (Modern + Glass + Purple)
 
-This section provides concrete guidance for styling the existing semantic classes without rewriting the JS.
+### 11.1 Containers
 
-### 11.1 Page containers
+- `masthead` and primary `panel` use `mm-glass` or `mm-glass-strong`.
+- Inner cards remain less transparent than outer shell.
+- Keep content rhythm tight but readable (`0.75rem` to `1rem` spacing).
 
-The template uses `dashboard-root`, `masthead`, and `panel`. 
+### 11.2 Typography
 
-Recommended mappings:
+- Continue `IBM Plex Sans` for body, `Barlow Condensed` for headline, and `IBM Plex Mono` for logs/code.
+- Slight uppercase + tracking for overline labels only.
+- Avoid thin weights on glass backgrounds.
 
-```css
-@layer components {
-  .dashboard-root {
-    @apply mx-auto max-w-6xl px-4 pb-12 pt-5;
-  }
+### 11.3 Navigation pills
 
-  .masthead {
-    @apply mm-glass mm-glass-glow p-6;
-    /* Optional gradient sheen that feels “liquid” */
-    background:
-      linear-gradient(
-        135deg,
-        rgb(var(--mm-panel) / 0.66) 0%,
-        rgb(var(--mm-panel) / 0.52) 45%,
-        rgb(var(--mm-panel) / 0.62) 100%
-      );
-  }
+- Base: translucent panel token.
+- Hover/active: purple edge glow.
+- Active text must keep strong contrast in both themes.
 
-  .panel {
-    @apply mm-glass p-4 mt-4;
-    min-height: 320px;
-    animation: panel-enter 220ms var(--mm-ease, ease);
-  }
-}
-```
+### 11.4 Buttons (purple primary, warm highlight option)
 
-### 11.2 Typography (futuristic but readable)
+Primary:
 
-Keep:
+- Purple background (`--mm-accent`) with subtle glow on hover.
 
-* Sans for most UI
-* Condensed display for `h1` (already used in current CSS) 
-* Mono for logs/code (already used) 
+Secondary:
 
-Add subtle “tech” feel:
+- Glass surface, neutral text, accent border on hover.
 
-* Slight letter spacing on eyebrow labels
-* Use higher weight for section titles
-* Avoid ultra-thin type on dark backgrounds
+Warning/highlight action:
 
-### 11.3 Navigation pills (purple-forward)
+- Use `--mm-warn` or `--mm-accent-warm` for yellow/orange emphasis.
+- Reserve for destructive confirmation flows or urgent operator actions.
 
-```css
-@layer components {
-  .route-nav a {
-    @apply rounded-full border px-3 py-2 text-sm font-semibold transition;
-    border-color: rgb(var(--mm-border) / 0.65);
-    color: rgb(var(--mm-ink) / 0.86);
-    background: rgb(var(--mm-panel) / 0.55);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    transition-timing-function: theme(transitionTimingFunction.mm);
-    transition-duration: 140ms;
-  }
+### 11.5 Status chips
 
-  .route-nav a:hover {
-    box-shadow: theme(boxShadow.mmGlow);
-    border-color: rgb(var(--mm-accent) / 0.65);
-    transform: translateY(-1px);
-  }
+Map status consistently:
 
-  .route-nav a.active {
-    box-shadow: theme(boxShadow.mmGlow);
-    border-color: rgb(var(--mm-accent) / 0.8);
-    background: rgb(var(--mm-accent) / 0.12);
-    color: rgb(var(--mm-ink));
-  }
-}
-```
+- `queued` -> amber/yellow (`--mm-warn`)
+- `running` -> cyan (`--mm-accent-2`)
+- `awaiting_action` -> purple (`--mm-accent`)
+- `succeeded` -> green (`--mm-ok`)
+- `failed/cancelled` -> rose/red (`--mm-danger`)
 
-### 11.4 Buttons (purple primary + glass secondary)
+Keep chip fills translucent and borders slightly stronger than fills.
 
-Current `button` is accent blue. 
-Switch to purple token and add better hover/focus:
+### 11.6 Live output pane
 
-```css
-@layer components {
-  .btn,
-  button {
-    @apply rounded-full px-4 py-2 font-bold border transition;
-    border-color: transparent;
-    background: rgb(var(--mm-accent) / 0.92);
-    color: white;
-    transition-timing-function: theme(transitionTimingFunction.mm);
-    transition-duration: 140ms;
-  }
+For `.queue-live-output`:
 
-  .btn:hover,
-  button:hover {
-    box-shadow: theme(boxShadow.mmGlow);
-    background: rgb(var(--mm-accent) / 1);
-    transform: translateY(-1px);
-  }
-
-  .btn:focus-visible,
-  button:focus-visible {
-    outline: 2px solid rgb(var(--mm-accent-2) / 0.85);
-    outline-offset: 2px;
-  }
-
-  .btn.secondary,
-  button.secondary {
-    @apply mm-glass;
-    background: rgb(var(--mm-panel) / 0.55);
-    color: rgb(var(--mm-ink) / 0.9);
-  }
-
-  .btn.secondary:hover,
-  button.secondary:hover {
-    border-color: rgb(var(--mm-accent-2) / 0.55);
-  }
-}
-```
-
-### 11.5 Status chips (brand-consistent)
-
-JS renders status badges like `status status-${normalized}`. 
-
-Implement them as translucent chips with correct colors:
-
-```css
-@layer components {
-  .status {
-    @apply inline-flex items-center rounded-full border px-2 py-0.5 text-[0.74rem] font-semibold uppercase tracking-wide;
-    background: rgb(var(--mm-panel) / 0.5);
-  }
-
-  .status-queued {
-    color: rgb(var(--mm-warn) / 0.95);
-    background: rgb(var(--mm-warn) / 0.14);
-    border-color: rgb(var(--mm-warn) / 0.35);
-  }
-
-  .status-running {
-    color: rgb(var(--mm-accent-2) / 0.95);
-    background: rgb(var(--mm-accent-2) / 0.14);
-    border-color: rgb(var(--mm-accent-2) / 0.35);
-  }
-
-  .status-awaiting_action {
-    color: rgb(var(--mm-accent) / 0.95);
-    background: rgb(var(--mm-accent) / 0.14);
-    border-color: rgb(var(--mm-accent) / 0.35);
-  }
-
-  .status-succeeded {
-    color: rgb(var(--mm-ok) / 0.95);
-    background: rgb(var(--mm-ok) / 0.14);
-    border-color: rgb(var(--mm-ok) / 0.35);
-  }
-
-  .status-failed,
-  .status-cancelled {
-    color: rgb(var(--mm-danger) / 0.95);
-    background: rgb(var(--mm-danger) / 0.14);
-    border-color: rgb(var(--mm-danger) / 0.35);
-  }
-}
-```
-
-### 11.6 Live output (terminal-like, dark-mode friendly)
-
-There’s a live output pane class `.queue-live-output`. 
-Make it feel like a futuristic terminal:
-
-* Use darker translucent background even in light mode
-* Mono font, higher line-height
-* Subtle border glow
+- Dark translucent background even in light mode.
+- Mono font + slightly elevated line-height.
+- Subtle inset border and optional faint purple edge.
+- Preserve long-line wrapping and scanability.
 
 ## 12. Build Commands (Local + CI)
 
-### 12.1 `package.json` scripts (repo root)
+### 12.1 `package.json` scripts (current)
 
 ```json
 {
@@ -693,116 +503,114 @@ Make it feel like a futuristic terminal:
 
 ### 12.2 Developer workflow
 
-1. Install deps:
+1. `npm install`
+2. During CSS work: `npm run dashboard:css:watch`
+3. Before commit: `npm run dashboard:css:min`
 
-   * `npm install`
-2. During styling:
+### 12.3 CI consistency check
 
-   * `npm run dashboard:css:watch`
-3. Before committing:
+1. `npm ci`
+2. `npm run dashboard:css:min`
+3. `git diff --exit-code -- api_service/static/task_dashboard/dashboard.css`
 
-   * `npm run dashboard:css:min`
-   *Note: If the local Node installation omits `npm`, install it or run the commands via Docker/CI before merging so the generated CSS stays in sync.*
+## 13. Migration Plan (Phased, Accurate to Current Status)
 
-### 12.3 CI consistency check (recommended)
+### Phase 1: Toolchain + generated CSS
 
-* `npm ci`
-* `npm run dashboard:css:min`
-* `git diff --exit-code -- api_service/static/task_dashboard/dashboard.css`
+Status: Complete (2026-02-18)
 
-## 13. Migration Plan (with theme/UX upgrades)
+- Tailwind/PostCSS configs and npm scripts landed.
+- Build pipeline compiles `dashboard.tailwind.css` to `dashboard.css`.
 
-### Phase 1: Toolchain + identical output
+### Phase 2: Tokenization + brand refresh
 
-1. Add Tailwind config + PostCSS config.
-2. Add `dashboard.tailwind.css`.
-3. Paste current CSS into it (or progressively port).
-4. Generate `dashboard.css` and verify no regressions.
+Status: Complete (2026-02-18)
 
-### Phase 2: Tokenize colors + purple rebrand
+- Legacy color vars replaced with `--mm-*`.
+- Purple/cyan/pink visual direction applied in light mode.
 
-1. Replace `:root --accent` etc with `--mm-*` tokens.
+### Phase 3: Dark mode system
 
-   * Current CSS uses business-blue accent vars ; migrate to purple tokens.
-2. Update `body` background gradients to purple/cyan/pink.
+Status: Complete (2026-02-19)
 
-### Phase 3: Add dark mode
-
-1. Enable `darkMode: "class"`.
-2. Add `.dark` token overrides.
-3. Add theme toggle + localStorage persistence.
+- `.dark` token overrides shipped in `dashboard.tailwind.css`.
+- Theme toggle shipped in template with runtime persistence in `dashboard.js`.
+- No-flash boot script shipped in `<head>` for pre-paint theme resolution.
+- Readability and accent hierarchy validated by runtime smoke checks and unit suite.
 
 ### Phase 4: Mobile refinement
 
-1. Horizontal scroll nav on mobile.
-2. Table wrappers (`.table-wrap`) and minimum widths.
-3. Touch target sizing + focus-visible.
+Status: Planned
 
-### Phase 5: Glass polish
+- Horizontal-scroll nav on narrow widths.
+- Table wrapper support with minimum widths.
+- Touch target and compact spacing polish.
 
-1. Convert `masthead` and `panel` to `.mm-glass`.
-2. Add subtle glows for active nav, primary buttons, focused inputs.
-3. Keep inner content surfaces slightly more opaque for readability.
+### Phase 5: Glass and motion polish
+
+Status: Planned
+
+- Expand `mm-glass` and `mm-glass-strong` usage.
+- Tune glow and elevation hierarchy.
+- Keep motion subtle (opacity/translate only).
 
 ## 14. Validation Checklist
 
-* [ ] `/static/task_dashboard/dashboard.css` is generated from Tailwind input
-* [ ] Dashboard renders correctly across routes (per contracts) 
-* [x] Glass surfaces include `@supports` fallback backgrounds when `backdrop-filter` is unavailable.
-* [x] Focus states keep a visible indicator in forced-colors mode (`outline` fallback for inputs/selects/textareas).
-* [x] Visual QA spot-check complete in Chromium + Firefox for navigation pills, panel glass treatment, and form controls.
-* [ ] Dark mode:
+Current baseline:
 
-  * [ ] toggle works (persisted)
-  * [ ] system preference respected when no explicit choice
-  * [ ] tables/forms/logs remain readable
-* [ ] Mobile:
+- [x] `dashboard.css` generated from `dashboard.tailwind.css`
+- [x] Semantic classes preserved for JS-rendered views
+- [x] Glass fallback provided for no-`backdrop-filter` browsers
+- [x] Light-mode visual QA completed in Chromium and Firefox
+- [x] Focus indicators remain visible with forced-colors fallback
 
-  * [ ] nav usable without taking over the page
-  * [ ] tables scroll horizontally (no layout break)
-  * [ ] forms/buttons have adequate touch sizes
-* [ ] Glass:
+Dark mode release gate:
 
-  * [ ] blur works where supported; fallback looks fine where not
-  * [ ] performance acceptable (no huge blurred overlays)
-* [ ] Light-mode before/after screenshots saved to `docs/assets/task_dashboard/phase2/` and referenced inside this doc for regression history
+- [x] `.dark` token overrides implemented
+- [x] Theme toggle exists and persists preference
+- [x] System preference respected when no user override exists
+- [x] No first-paint theme flash
+- [x] Tables/forms/log output remain readable in dark mode
+- [x] Purple remains primary accent; yellow/orange highlight usage is restrained and intentional
+
+Mobile release gate:
+
+- [ ] Nav remains usable on small screens without excessive vertical wrapping
+- [ ] Data tables scroll horizontally without layout break
+- [ ] Touch targets meet minimum size guidelines
 
 ## 15. Troubleshooting
 
-### “My Tailwind styles don’t appear”
+### Tailwind classes do not appear
 
-1. Tailwind isn’t scanning the file where your class string exists.
+1. Confirm `tailwind.config.cjs` `content` includes both template and JS paths.
+2. Avoid dynamic utility class construction in JS; use semantic classes.
+3. Confirm CSS was rebuilt (`npm run dashboard:css:min`).
 
-   * Ensure `content` includes `task_dashboard.html` and `static/task_dashboard/**/*.js`
-2. Dynamic Tailwind utility class names are being constructed.
+### `tailwindcss: command not found`
 
-   * Prefer semantic classes + `@apply`.
-3. You’re editing `dashboard.css` directly.
+1. Run `npm install` in repo root.
+2. Verify CLI availability with `npx tailwindcss --help`.
+3. As an emergency-only fallback, keep source and output synchronized manually, then regenerate as soon as CLI is available.
 
-   * Edit `dashboard.tailwind.css` and rebuild.
+### Dark mode controls look wrong
 
-### “tailwindcss: command not found”
+1. Verify `.dark` token scope exists in `dashboard.tailwind.css`.
+2. Verify toggle script runs before dashboard render logic.
+3. Check `color-scheme` values for both light and dark scopes.
 
-1. Some sandboxes ship a Node binary without `npm`. Check `npm --version`; if missing, install Node+NPM locally or run the build inside Docker/CI.
-2. Until the CLI is available, edit both `dashboard.tailwind.css` and `dashboard.css` together so production styles stay in sync, then regenerate via `npm run dashboard:css:min` once npm exists.
-3. `tools/build-dashboard-css.sh` already checks for `tailwindcss` and emits a helpful error if the binary is absent.
+### Blur is too expensive or looks muddy
 
-### “Dark mode makes form controls look wrong”
-
-* Ensure `color-scheme` toggles between light/dark (see token section).
-* Prefer token colors for inputs and borders.
-
-### “Blur looks bad / is slow”
-
-* Reduce the number of blurred containers.
-* Avoid animating translucent/blurred layers.
-* Increase opacity slightly on low-end devices (optional conditional via media queries).
+1. Reduce number of blurred containers.
+2. Increase panel opacity slightly.
+3. Remove blur from high-frequency repaint regions.
 
 ## 16. Related Documents
 
-* `docs/TaskUiArchitecture.md`
-* `docs/TaskUiStrategy1ThinDashboard.md`
-* `specs/017-thin-dashboard-ui/*`
-* `api_service/templates/task_dashboard.html` 
-* `api_service/static/task_dashboard/dashboard.js` 
-* `api_service/static/task_dashboard/dashboard.css`
+- `docs/TaskUiArchitecture.md`
+- `docs/TaskUiStrategy1ThinDashboard.md`
+- `specs/025-tailwind-dashboard/`
+- `api_service/templates/task_dashboard.html`
+- `api_service/static/task_dashboard/dashboard.js`
+- `api_service/static/task_dashboard/dashboard.tailwind.css`
+- `api_service/static/task_dashboard/dashboard.css`
