@@ -1,0 +1,12 @@
+version: "v0"
+metadata:
+  name: "demo"
+embeddings:
+  provider: "openai"
+vectorStore:
+  type: "qdrant"
+dataSources:
+  - id: "repo-docs"
+    type: "GithubRepositoryReader"
+run:
+  dryRun: false

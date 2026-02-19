@@ -15,14 +15,22 @@ from uuid import UUID
 
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.job_types import (
+    CANONICAL_TASK_JOB_TYPE,
+    LEGACY_TASK_JOB_TYPES,
+    MANIFEST_JOB_TYPE,
+    SUPPORTED_QUEUE_JOB_TYPES,
+)
+from moonmind.workflows.agent_queue.manifest_contract import (
+    ManifestContractError,
+    normalize_manifest_job_payload,
+)
 from moonmind.workflows.agent_queue.repositories import (
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (
-    CANONICAL_TASK_JOB_TYPE,
-    LEGACY_TASK_JOB_TYPES,
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
     normalize_queue_job_payload,
@@ -30,7 +38,6 @@ from moonmind.workflows.agent_queue.task_contract import (
 from moonmind.workflows.tasks import compile_task_payload_templates
 
 logger = logging.getLogger(__name__)
-_SUPPORTED_QUEUE_JOB_TYPES = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
 _TELEMETRY_EVENT_FETCH_LIMIT = 100000
 _DEFAULT_TASK_RUNTIME = "codex"
 _DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
@@ -252,8 +259,8 @@ class AgentQueueService:
         candidate_type = job_type.strip()
         if not candidate_type:
             raise AgentQueueValidationError("type must be a non-empty string")
-        if candidate_type not in _SUPPORTED_QUEUE_JOB_TYPES:
-            supported = ", ".join(sorted(_SUPPORTED_QUEUE_JOB_TYPES))
+        if candidate_type not in SUPPORTED_QUEUE_JOB_TYPES:
+            supported = ", ".join(sorted(SUPPORTED_QUEUE_JOB_TYPES))
             raise AgentQueueValidationError(f"type must be one of: {supported}")
         if max_attempts < 1:
             raise AgentQueueValidationError("maxAttempts must be >= 1")
@@ -261,6 +268,11 @@ class AgentQueueService:
         normalized_payload = dict(payload or {})
         if candidate_type == CANONICAL_TASK_JOB_TYPE:
             normalized_payload = self.normalize_task_job_payload(normalized_payload)
+        elif candidate_type == MANIFEST_JOB_TYPE:
+            try:
+                normalized_payload = normalize_manifest_job_payload(normalized_payload)
+            except ManifestContractError as exc:
+                raise AgentQueueValidationError(str(exc)) from exc
         else:
             try:
                 normalized_payload = normalize_queue_job_payload(

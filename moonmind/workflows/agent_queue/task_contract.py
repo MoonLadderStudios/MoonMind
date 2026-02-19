@@ -17,9 +17,9 @@ from pydantic import (
     model_validator,
 )
 
+from .job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
+
 DEFAULT_TASK_RUNTIME = "codex"
-CANONICAL_TASK_JOB_TYPE = "task"
-LEGACY_TASK_JOB_TYPES = {"codex_exec", "codex_skill"}
 SUPPORTED_RUNTIME_MODES = {"codex", "gemini", "claude", "universal"}
 SUPPORTED_EXECUTION_RUNTIMES = {"codex", "gemini", "claude"}
 SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}

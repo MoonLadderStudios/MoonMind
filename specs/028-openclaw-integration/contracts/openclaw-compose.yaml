@@ -1,0 +1,39 @@
+# Compose Contract Snippet for OpenClaw
+version: "3.9"
+services:
+  openclaw:
+    profiles: ["openclaw"]
+    build:
+      context: .
+      dockerfile: ./services/openclaw/Dockerfile
+    user: app
+    env_file:
+      - .env
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      OPENCLAW_MODEL: ${OPENCLAW_MODEL:-gpt-5.3-codex}
+      OPENCLAW_MODEL_LOCK_MODE: ${OPENCLAW_MODEL_LOCK_MODE:-force}
+      CODEX_VOLUME_PATH: ${OPENCLAW_CODEX_VOLUME_PATH:-/home/app/.codex}
+      CODEX_HOME: ${OPENCLAW_CODEX_VOLUME_PATH:-/home/app/.codex}
+      CODEX_CONFIG_HOME: ${OPENCLAW_CODEX_VOLUME_PATH:-/home/app/.codex}
+      CODEX_CONFIG_PATH: ${OPENCLAW_CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
+      CODEX_ENV: ${CODEX_ENV:-prod}
+      MOONMIND_URL: ${MOONMIND_URL:-http://api:5000}
+      MOONMIND_API_TOKEN: ${MOONMIND_API_TOKEN:-}
+    volumes:
+      - openclaw_codex_auth_volume:${OPENCLAW_CODEX_VOLUME_PATH:-/home/app/.codex}
+      - openclaw_data:/var/lib/openclaw
+    networks:
+      - local-network
+    restart: unless-stopped
+
+volumes:
+  openclaw_codex_auth_volume:
+    name: ${OPENCLAW_CODEX_VOLUME_NAME:-openclaw_codex_auth_volume}
+  openclaw_data: {}
+
+networks:
+  local-network:
+    external: true

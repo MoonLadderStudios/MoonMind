@@ -1,0 +1,205 @@
+openapi: 3.1.0
+info:
+  title: Manifest Task System Phase 1 Contracts
+  version: "0.1.0"
+  description: >-
+    Supplements docs/ManifestTaskSystem.md by pinning the API/SSE shapes for
+    manifest worker stage events, artifact listings, and checkpoint updates.
+servers:
+  - url: https://moonmind.local
+paths:
+  /api/queue/jobs/{jobId}/events:
+    get:
+      summary: Stream queue events (SSE) for a specific job
+      description: >-
+        When `job.type == "manifest"`, the event stream emits
+        `ManifestStageEvent` payloads (JSON per line) ordered by stage.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: stream
+          in: query
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ManifestStageEvent'
+  /api/queue/jobs/{jobId}/artifacts:
+    get:
+      summary: List artifacts uploaded by the manifest worker
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Artifact metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ManifestArtifactMetadata'
+  /api/manifests/{name}/state:
+    post:
+      summary: Persist checkpoint state after a successful manifest run
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManifestCheckpointUpdate'
+      responses:
+        '202':
+          description: Checkpoint accepted for persistence
+
+components:
+  schemas:
+    ManifestStageEvent:
+      type: object
+      required:
+        - event
+        - manifestName
+        - status
+      properties:
+        event:
+          type: string
+          enum:
+            - moonmind.manifest.validate
+            - moonmind.manifest.plan
+            - moonmind.manifest.fetch
+            - moonmind.manifest.transform
+            - moonmind.manifest.embed
+            - moonmind.manifest.upsert
+            - moonmind.manifest.finalize
+        manifestName:
+          type: string
+        dataSourceId:
+          type: string
+        documentsFetched:
+          type: integer
+          minimum: 0
+        documentsChanged:
+          type: integer
+          minimum: 0
+        documentsDeleted:
+          type: integer
+          minimum: 0
+        chunksGenerated:
+          type: integer
+          minimum: 0
+        chunksEmbedded:
+          type: integer
+          minimum: 0
+        pointsUpserted:
+          type: integer
+          minimum: 0
+        pointsDeleted:
+          type: integer
+          minimum: 0
+        durationMs:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [running, succeeded, failed, cancelled]
+        artifactPaths:
+          type: array
+          items:
+            type: string
+        errors:
+          type: array
+          items:
+            type: string
+          description: Optional failure details for the stage
+    ManifestArtifactMetadata:
+      type: object
+      required:
+        - path
+        - sizeBytes
+      properties:
+        path:
+          type: string
+          enum:
+            - logs/manifest.log
+            - manifest/input.yaml
+            - manifest/resolved.yaml
+            - reports/plan.json
+            - reports/run_summary.json
+            - reports/checkpoint.json
+            - reports/errors.json
+        sizeBytes:
+          type: integer
+          minimum: 0
+        contentType:
+          type: string
+        sha256:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ManifestCheckpointUpdate:
+      type: object
+      required:
+        - jobId
+        - manifestName
+        - state
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        manifestName:
+          type: string
+        manifestHash:
+          type: string
+        runStartedAt:
+          type: string
+          format: date-time
+        runFinishedAt:
+          type: string
+          format: date-time
+        state:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DataSourceState'
+    DataSourceState:
+      type: object
+      required:
+        - docHashes
+      properties:
+        cursor:
+          type: object
+        docHashes:
+          type: object
+          additionalProperties:
+            type: string
+        documentsProcessed:
+          type: integer
+          minimum: 0
+        lastRunStartedAt:
+          type: string
+          format: date-time
+        lastRunFinishedAt:
+          type: string
+          format: date-time

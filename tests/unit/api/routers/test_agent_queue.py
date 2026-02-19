@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.agent_queue import (
@@ -61,6 +61,64 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         created_at=now,
         updated_at=now,
     )
+
+
+def _build_manifest_job():
+    job = _build_job()
+    job.type = "manifest"
+    job.payload = {
+        "manifest": {
+            "name": "demo-manifest",
+            "action": "run",
+            "source": {
+                "kind": "inline",
+                "name": "demo-manifest",
+                "content": "version: 'v0'\\nmetadata:\\n  name: demo-manifest\\n",
+            },
+            "options": {"dryRun": True},
+        },
+        "manifestHash": "sha256:abc123",
+        "manifestVersion": "v0",
+        "requiredCapabilities": [
+            "manifest",
+            "embeddings",
+            "openai",
+            "qdrant",
+            "confluence",
+        ],
+        "effectiveRunConfig": {"dryRun": True},
+        "manifestSecretRefs": {
+            "profile": [
+                {
+                    "envKey": "OPENAI_API_KEY",
+                    "provider": "openai",
+                    "field": "api_key",
+                    "normalized": "profile://openai#api_key",
+                },
+                {
+                    "envKey": "OPENAI_API_KEY",
+                    "provider": "openai",
+                    "field": "api_key",
+                    "normalized": "profile://openai#api_key",
+                },
+            ],
+            "vault": [
+                {
+                    "ref": "vault://kv/manifests/demo-manifest#token",
+                    "mount": "kv",
+                    "path": "manifests/demo-manifest",
+                    "field": "token",
+                },
+                {
+                    "ref": "vault://kv/manifests/demo-manifest#token",
+                    "mount": "kv",
+                    "path": "manifests/demo-manifest",
+                    "field": "token",
+                },
+            ],
+        },
+    }
+    return job
 
 
 def _build_live_session(
@@ -166,6 +224,77 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert body["status"] == models.AgentJobStatus.QUEUED.value
     assert body["type"] == "codex_exec"
     service.create_job.assert_awaited_once()
+
+
+def test_create_manifest_job_sanitizes_payload(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Manifest submissions should return sanitized payload metadata."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    service.create_job.return_value = job
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "manifest",
+            "payload": {
+                "manifest": {
+                    "name": "demo-manifest",
+                    "source": {"kind": "inline", "content": "version: 'v0'"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()["payload"]
+    assert payload["manifest"]["name"] == "demo-manifest"
+    assert payload["manifest"]["source"]["kind"] == "inline"
+    assert "content" not in payload["manifest"]["source"]
+    assert payload["manifestHash"] == "sha256:abc123"
+    assert payload["manifestSecretRefs"]["profile"] == [
+        {
+            "envKey": "OPENAI_API_KEY",
+            "provider": "openai",
+            "field": "api_key",
+            "normalized": "profile://openai#api_key",
+        }
+    ]
+    assert payload["manifestSecretRefs"]["vault"] == [
+        {
+            "ref": "vault://kv/manifests/demo-manifest#token",
+            "mount": "kv",
+            "path": "manifests/demo-manifest",
+            "field": "token",
+        }
+    ]
+
+
+def test_create_manifest_job_validation_error(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Manifest contract errors should map to HTTP 422."""
+
+    test_client, service = client
+    service.create_job.side_effect = AgentQueueValidationError("invalid manifest")
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "manifest",
+            "payload": {
+                "manifest": {
+                    "name": "demo-manifest",
+                    "source": {"kind": "inline", "content": "version: 'v0'"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
 
 
 def test_claim_job_empty_queue_returns_null(
@@ -451,6 +580,24 @@ def test_list_jobs_rejects_invalid_status_filter(
 
     assert response.status_code == 422
     service.list_jobs.assert_not_awaited()
+
+
+def test_list_jobs_returns_manifest_metadata(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Manifest listings should surface sanitized payload metadata."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    service.list_jobs.return_value = [job]
+
+    response = test_client.get("/api/queue/jobs", params={"type": "manifest"})
+
+    assert response.status_code == 200
+    payload = response.json()["items"][0]["payload"]
+    assert payload["manifestHash"] == "sha256:abc123"
+    assert payload["requiredCapabilities"][0] == "manifest"
+    assert "content" not in payload["manifest"]["source"]
 
 
 def test_fail_job_validation_error_maps_422(
