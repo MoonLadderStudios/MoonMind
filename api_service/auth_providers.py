@@ -20,7 +20,6 @@ from api_service.services.profile_service import ProfileService
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
 from moonmind.config.settings import settings
 
-
 logger = logging.getLogger(__name__)
 
 
