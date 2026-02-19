@@ -153,6 +153,13 @@ class TestFeatureFlagsSettings:
 
         monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
 
+    def test_task_template_catalog_defaults_disabled_without_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog is False
+
 
 class TestSpecWorkflowSettings:
     def test_agent_job_artifact_defaults(self):
