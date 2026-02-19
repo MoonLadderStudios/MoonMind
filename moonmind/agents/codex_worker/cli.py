@@ -129,7 +129,6 @@ def _is_cli_usage_error(message: str) -> bool:
             "no such option",
             "unrecognized option",
             "invalid choice",
-            "usage:",
         )
     )
 
@@ -178,17 +177,11 @@ def _run_claude_auth_status_check(
     except RuntimeError as exc:
         fallback_error = exc
 
-    if first_error is not None and fallback_error is not None:
-        raise RuntimeError(
-            "Claude authentication status check failed for both "
-            "`claude auth status` and `claude login status`: "
-            f"{fallback_error}"
-        ) from fallback_error
-    if first_error is not None:
-        raise first_error
-    if fallback_error is not None:
-        raise fallback_error
-    raise RuntimeError("Claude authentication status check failed.")
+    raise RuntimeError(
+        "Claude authentication status check failed for both "
+        "`claude auth status` and `claude login status`. "
+        f"Primary error: {first_error}. Fallback error: {fallback_error}"
+    ) from fallback_error
 
 
 def run_preflight(env: Mapping[str, str] | None = None) -> None:

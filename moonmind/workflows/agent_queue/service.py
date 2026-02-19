@@ -225,17 +225,13 @@ class AgentQueueService:
     def normalize_task_job_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Normalize canonical task payloads for downstream reuse."""
 
-        default_runtime = (
-            self._clean_optional_str(settings.spec_workflow.default_task_runtime)
-            or _DEFAULT_TASK_RUNTIME
-        ).lower()
         normalized_payload = self._enrich_task_payload_defaults(dict(payload or {}))
         normalized_payload = compile_task_payload_templates(normalized_payload)
         try:
             return normalize_queue_job_payload(
                 job_type=CANONICAL_TASK_JOB_TYPE,
                 payload=normalized_payload,
-                default_runtime=default_runtime,
+                default_runtime=normalized_payload.get("targetRuntime"),
             )
         except TaskContractError as exc:
             raise AgentQueueValidationError(str(exc)) from exc

@@ -442,6 +442,52 @@ def test_run_preflight_claude_runtime_falls_back_to_login_status(monkeypatch) ->
     ]
 
 
+def test_run_preflight_claude_runtime_does_not_fallback_on_auth_error_with_usage_hint(
+    monkeypatch,
+) -> None:
+    """Auth failures with usage hints should still fail preflight without fallback."""
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        if command == ["/usr/bin/claude", "auth", "status"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: not authenticated\n\n"
+                    "Usage: claude auth status [flags]"
+                ),
+            )
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="not authenticated"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "claude",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+    assert calls == [
+        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/claude", "--version"],
+        ["/usr/bin/claude", "auth", "status"],
+    ]
+
+
 def test_run_preflight_universal_checks_codex_and_claude_auth(monkeypatch) -> None:
     """Universal runtime should validate both Codex and Claude auth states."""
 
