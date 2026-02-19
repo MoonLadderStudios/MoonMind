@@ -204,6 +204,7 @@ async def test_update_review_priority_persists_value() -> None:
         review_priority=TaskProposalReviewPriority.NORMAL,
     )
     repo.get_proposal_for_update.return_value = proposal
+
     async def _update_priority(*, proposal, priority, user_id):
         proposal.review_priority = priority
         proposal.decided_by_user_id = user_id
