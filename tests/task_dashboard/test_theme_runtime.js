@@ -61,7 +61,7 @@ function contrastRatio(foreground, background) {
 }
 
 function extractHeadBootstrapScript(html) {
-  const scriptMatches = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  const scriptMatches = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
   assert(scriptMatches.length > 0, "Expected inline bootstrap script in template head");
   return scriptMatches[0][1];
 }
