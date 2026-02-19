@@ -307,6 +307,66 @@ async def test_create_task_job_applies_settings_defaults_for_missing_fields(
     assert job.payload["task"]["runtime"]["effort"] == "high"
 
 
+async def test_create_task_job_uses_configured_default_runtime_when_runtime_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing runtime fields should use configured default task runtime."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+
+    assert job.payload["targetRuntime"] == "claude"
+    assert job.payload["task"]["runtime"]["mode"] == "claude"
+    assert job.payload["requiredCapabilities"] == ["claude", "git"]
+
+
+async def test_create_task_job_explicit_runtime_overrides_default_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit payload runtime should take precedence over configured default."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+
+    assert job.payload["targetRuntime"] == "codex"
+    assert job.payload["task"]["runtime"]["mode"] == "codex"
+    assert "codex" in job.payload["requiredCapabilities"]
+
+
 async def test_create_task_job_defaults_publish_mode_to_pr_when_omitted(
     tmp_path: Path,
 ) -> None:

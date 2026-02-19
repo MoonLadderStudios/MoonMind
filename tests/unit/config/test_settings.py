@@ -193,6 +193,10 @@ class TestSpecWorkflowSettings:
         settings = SpecWorkflowSettings(_env_file=None)
         assert settings.codex_model == "gpt-5.3-codex"
         assert settings.codex_effort == "high"
+        assert settings.default_task_runtime == "codex"
+        assert settings.claude_volume_name == "claude_auth_volume"
+        assert settings.claude_volume_path == "/home/app/.claude"
+        assert settings.claude_home == "/home/app/.claude"
         assert settings.github_repository == "MoonLadderStudios/MoonMind"
 
     def test_task_default_env_overrides(self, monkeypatch):
@@ -200,6 +204,10 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
         monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+        monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+        monkeypatch.setenv("CLAUDE_VOLUME_NAME", "claude_auth_custom")
+        monkeypatch.setenv("CLAUDE_VOLUME_PATH", "/runtime/claude-auth")
+        monkeypatch.setenv("CLAUDE_HOME", "/runtime/claude-home")
         monkeypatch.setenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
         monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
         monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
@@ -208,15 +216,31 @@ class TestSpecWorkflowSettings:
 
         assert settings.codex_model == "gpt-custom-codex"
         assert settings.codex_effort == "medium"
+        assert settings.default_task_runtime == "claude"
+        assert settings.claude_volume_name == "claude_auth_custom"
+        assert settings.claude_volume_path == "/runtime/claude-auth"
+        assert settings.claude_home == "/runtime/claude-home"
         assert settings.github_repository == "Example/Repo"
         assert settings.git_user_name == "Nate Sticco"
         assert settings.git_user_email == "nsticco@gmail.com"
 
         monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
+        monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+        monkeypatch.delenv("CLAUDE_VOLUME_NAME", raising=False)
+        monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
+        monkeypatch.delenv("CLAUDE_HOME", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+
+    def test_default_task_runtime_rejects_invalid_value(self, monkeypatch):
+        """Default runtime should reject values outside supported execution runtimes."""
+
+        monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "universal")
+        with pytest.raises(ValidationError, match="default_task_runtime must be one of"):
+            SpecWorkflowSettings(_env_file=None)
+        monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
 
     def test_skills_defaults(self):
         """Skills-first settings should have stable defaults."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shlex
 import subprocess
 from typing import Mapping, Sequence
 
@@ -117,6 +118,79 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     )
 
 
+def _is_cli_usage_error(message: str) -> bool:
+    """Return whether failure text looks like an unsupported-command error."""
+
+    lowered = message.strip().lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "unknown command",
+            "no such option",
+            "unrecognized option",
+            "invalid choice",
+            "usage:",
+        )
+    )
+
+
+def _run_claude_auth_status_check(
+    *,
+    claude_path: str,
+    source: Mapping[str, str],
+    redaction_values: Sequence[str] = (),
+) -> None:
+    """Validate Claude auth status with a configurable command + compatibility fallback."""
+
+    custom_raw = str(source.get("MOONMIND_CLAUDE_AUTH_STATUS_COMMAND", "")).strip()
+    if custom_raw:
+        custom_command = shlex.split(custom_raw)
+        if not custom_command:
+            raise RuntimeError(
+                "MOONMIND_CLAUDE_AUTH_STATUS_COMMAND cannot be empty when set"
+            )
+        _run_checked_command(
+            custom_command,
+            redaction_values=redaction_values,
+        )
+        return
+
+    first_error: RuntimeError | None = None
+    fallback_error: RuntimeError | None = None
+
+    try:
+        _run_checked_command(
+            [claude_path, "auth", "status"],
+            redaction_values=redaction_values,
+        )
+        return
+    except RuntimeError as exc:
+        first_error = exc
+        if not _is_cli_usage_error(str(exc)):
+            raise
+
+    try:
+        _run_checked_command(
+            [claude_path, "login", "status"],
+            redaction_values=redaction_values,
+        )
+        return
+    except RuntimeError as exc:
+        fallback_error = exc
+
+    if first_error is not None and fallback_error is not None:
+        raise RuntimeError(
+            "Claude authentication status check failed for both "
+            "`claude auth status` and `claude login status`: "
+            f"{fallback_error}"
+        ) from fallback_error
+    if first_error is not None:
+        raise first_error
+    if fallback_error is not None:
+        raise fallback_error
+    raise RuntimeError("Claude authentication status check failed.")
+
+
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
@@ -175,6 +249,11 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     if claude_path is not None:
         _run_checked_command(
             [claude_path, "--version"],
+            redaction_values=redaction_values,
+        )
+        _run_claude_auth_status_check(
+            claude_path=claude_path,
+            source=source,
             redaction_values=redaction_values,
         )
 

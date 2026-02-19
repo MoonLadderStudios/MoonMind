@@ -210,10 +210,34 @@ class SpecWorkflowSettings(BaseSettings):
         env="CODEX_VOLUME_NAME",
         description="Docker volume providing persistent Codex authentication.",
     )
+    claude_volume_name: Optional[str] = Field(
+        None,
+        env="CLAUDE_VOLUME_NAME",
+        description="Docker volume providing persistent Claude authentication.",
+    )
+    claude_volume_path: Optional[str] = Field(
+        None,
+        env="CLAUDE_VOLUME_PATH",
+        description="In-container path where Claude auth data is mounted.",
+    )
+    claude_home: Optional[str] = Field(
+        None,
+        env="CLAUDE_HOME",
+        description="Claude CLI home directory used for persisted OAuth state.",
+    )
     codex_login_check_image: Optional[str] = Field(
         None,
         env="CODEX_LOGIN_CHECK_IMAGE",
         description="Override container image for Codex login status checks.",
+    )
+    default_task_runtime: str = Field(
+        "codex",
+        env=("MOONMIND_DEFAULT_TASK_RUNTIME", "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME"),
+        validation_alias=AliasChoices(
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+        ),
+        description="Fallback runtime for queue task payloads that omit runtime fields.",
     )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
@@ -424,6 +448,9 @@ class SpecWorkflowSettings(BaseSettings):
         "codex_profile",
         "codex_queue",
         "codex_volume_name",
+        "claude_volume_name",
+        "claude_volume_path",
+        "claude_home",
         "codex_login_check_image",
         "git_user_name",
         "git_user_email",
@@ -503,6 +530,18 @@ class SpecWorkflowSettings(BaseSettings):
             raise ValueError("skill_policy_mode must be one of: permissive, allowlist")
         return normalized
 
+    @field_validator("default_task_runtime", mode="before")
+    @classmethod
+    def _normalize_default_task_runtime(cls, value: object) -> str:
+        """Normalize queue runtime fallback and reject unknown values."""
+
+        normalized = str(value or "").strip().lower() or "codex"
+        allowed = {"codex", "gemini", "claude"}
+        if normalized not in allowed:
+            supported = ", ".join(sorted(allowed))
+            raise ValueError(f"default_task_runtime must be one of: {supported}")
+        return normalized
+
     @field_validator("live_session_provider", mode="before")
     @classmethod
     def _normalize_live_session_provider(cls, value: object) -> str:
@@ -550,6 +589,12 @@ class SpecWorkflowSettings(BaseSettings):
             self.codex_model = "gpt-5.3-codex"
         if not self.codex_effort:
             self.codex_effort = "high"
+        if not self.claude_volume_name:
+            self.claude_volume_name = "claude_auth_volume"
+        if not self.claude_volume_path:
+            self.claude_volume_path = "/home/app/.claude"
+        if not self.claude_home:
+            self.claude_home = self.claude_volume_path
         if not self.github_repository:
             self.github_repository = "MoonLadderStudios/MoonMind"
 
