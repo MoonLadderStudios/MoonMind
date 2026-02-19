@@ -2884,7 +2884,6 @@
           : escapeHtml(originSource);
       const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
       const dedupHash = pick(row, "dedupHash") || "-";
-      const dedupKey = pick(row, "dedupKey") || "-";
       const snoozedUntil = pick(row, "snoozedUntil");
       const snoozeNote = pick(row, "snoozeNote") || "";
       const snoozedDisplay = snoozedUntil ? formatTimestamp(snoozedUntil) : "-";

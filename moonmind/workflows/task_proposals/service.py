@@ -423,6 +423,7 @@ class TaskProposalService:
         cursor_tuple = self._decode_cursor(cursor) if cursor else None
         now = datetime.now(UTC)
         await self._repository.expire_snoozed(now=now)
+        await self._repository.commit()
         proposals, has_more = await self._repository.list_proposals(
             status=status,
             category=normalized_category,

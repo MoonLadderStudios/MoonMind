@@ -84,7 +84,7 @@ async def test_promote_proposal_calls_queue_and_updates_record() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
     queue.normalize_task_job_payload = MagicMock(
-        return_value={"repository": "Moon/Repo"}
+        return_value={"repository": "Moon/Repo", "task": {"instructions": "edited"}}
     )
     job = SimpleNamespace(id=uuid4())
     queue.create_job = AsyncMock(return_value=job)
@@ -152,7 +152,7 @@ async def test_promote_proposal_accepts_task_override() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
     queue.normalize_task_job_payload = MagicMock(
-        return_value={"repository": "Moon/Repo"}
+        return_value={"repository": "Moon/Repo", "task": {"instructions": "edited"}}
     )
     job = SimpleNamespace(id=uuid4())
     queue.create_job = AsyncMock(return_value=job)
@@ -204,7 +204,12 @@ async def test_update_review_priority_persists_value() -> None:
         review_priority=TaskProposalReviewPriority.NORMAL,
     )
     repo.get_proposal_for_update.return_value = proposal
-    repo.update_priority.return_value = proposal
+    async def _update_priority(*, proposal, priority, user_id):
+        proposal.review_priority = priority
+        proposal.decided_by_user_id = user_id
+        return proposal
+
+    repo.update_priority.side_effect = _update_priority
     service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
 
     updated = await service.update_review_priority(
@@ -216,7 +221,7 @@ async def test_update_review_priority_persists_value() -> None:
     repo.update_priority.assert_awaited()
     repo.commit.assert_awaited()
     assert updated is proposal
-    assert proposal.review_priority is TaskProposalReviewPriority.URGENT
+    assert updated.review_priority is TaskProposalReviewPriority.URGENT
 
 
 @pytest.mark.asyncio

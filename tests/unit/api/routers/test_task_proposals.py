@@ -168,7 +168,18 @@ def test_list_proposals_supports_snoozed_filter(
 def test_promote_proposal_returns_job(client: tuple[TestClient, AsyncMock]) -> None:
     test_client, service = client
     proposal = _build_proposal()
-    job = SimpleNamespace(id=uuid4(), status="queued")
+    now = datetime.now(UTC)
+    job = SimpleNamespace(
+        id=uuid4(),
+        type="task",
+        status="queued",
+        priority=0,
+        payload={"repository": "Moon/Repo"},
+        attempt=0,
+        max_attempts=3,
+        created_at=now,
+        updated_at=now,
+    )
     service.promote_proposal.return_value = (proposal, job)
 
     response = test_client.post(
@@ -186,7 +197,18 @@ def test_promote_proposal_accepts_override_payload(
 ) -> None:
     test_client, service = client
     proposal = _build_proposal()
-    job = SimpleNamespace(id=uuid4(), status="queued")
+    now = datetime.now(UTC)
+    job = SimpleNamespace(
+        id=uuid4(),
+        type="task",
+        status="queued",
+        priority=0,
+        payload={"repository": "Moon/Repo"},
+        attempt=0,
+        max_attempts=3,
+        created_at=now,
+        updated_at=now,
+    )
     service.promote_proposal.return_value = (proposal, job)
 
     response = test_client.post(
