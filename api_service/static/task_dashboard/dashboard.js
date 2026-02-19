@@ -1438,7 +1438,29 @@
       const priority = Number.isFinite(priorityValue) ? priorityValue : 0;
 
       try {
-        const created = await fetchJson(queueSourceConfig.create || "/api/queue/jobs", {
+        let created;
+        if (sourceKind === "registry") {
+          const registryName = String(formData.get("registryName") || "").trim();
+          const registryRunUrlTemplate =
+            queueSourceConfig.registryRun || "/api/manifests/{name}/runs";
+          const registryRunUrl = registryRunUrlTemplate.replace(
+            "{name}",
+            encodeURIComponent(registryName),
+          );
+          created = await fetchJson(registryRunUrl, {
+            method: "POST",
+            body: JSON.stringify({
+              action,
+              options: Object.keys(options).length > 0 ? options : undefined,
+            }),
+          });
+          window.location.href = `/tasks/queue/${encodeURIComponent(
+            String(created.jobId || ""),
+          )}`;
+          return;
+        }
+
+        created = await fetchJson(queueSourceConfig.create || "/api/queue/jobs", {
           method: "POST",
           body: JSON.stringify({
             type: "manifest",

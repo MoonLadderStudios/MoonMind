@@ -321,7 +321,7 @@ def _normalize_options(options_node: Any) -> dict[str, Any]:
             allowed = ", ".join(sorted(ALLOWED_OPTION_KEYS))
             raise ManifestContractError(f"manifest.options only supports: {allowed}")
         if key in {"dryRun", "forceFull"}:
-            normalized[key] = bool(value)
+            normalized[key] = _parse_manifest_bool_option(key, value)
         elif key == "maxDocs":
             if value is None:
                 normalized[key] = None
@@ -336,6 +336,18 @@ def _normalize_options(options_node: Any) -> dict[str, Any]:
                     raise ManifestContractError("manifest.options.maxDocs must be >= 1")
                 normalized[key] = parsed
     return normalized
+
+
+def _parse_manifest_bool_option(key: str, value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    raise ManifestContractError(f"manifest.options.{key} must be a boolean")
 
 
 def _build_effective_run_config(
@@ -353,7 +365,7 @@ def _parse_manifest_yaml(content: str) -> Mapping[str, Any]:
     try:
         parsed = yaml.safe_load(content)
     except yaml.YAMLError as exc:  # pragma: no cover
-        raise ManifestContractError(f"manifest YAML is invalid: {exc}") from exc
+        raise ManifestContractError("manifest YAML is invalid") from exc
     if not isinstance(parsed, MutableMapping):
         raise ManifestContractError("manifest YAML must decode to an object")
     return parsed
@@ -592,7 +604,7 @@ def _looks_like_base64_secret(value: str) -> bool:
 
 
 def _collect_secret_refs(
-    manifest: Mapping[str, Any]
+    manifest: Mapping[str, Any],
 ) -> dict[str, list[dict[str, str]]]:
     profile_refs: list[ManifestProfileSecretRef] = []
     vault_refs: list[ManifestVaultSecretRef] = []

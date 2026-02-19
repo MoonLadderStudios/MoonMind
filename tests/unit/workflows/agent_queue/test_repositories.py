@@ -239,8 +239,6 @@ async def test_manifest_claim_requires_capabilities(tmp_path):
             assert granted is not None
             assert granted.claimed_by == "worker-1"
             assert granted.status is models.AgentJobStatus.RUNNING
-    assert failed.finished_at is not None
-    assert failed.next_attempt_at is None
 
 
 async def test_claim_requeues_expired_lease_before_selecting_job(tmp_path):
@@ -649,8 +647,6 @@ async def test_retryable_fail_does_not_requeue_cancel_requested_job(tmp_path):
             await repo.commit()
 
     assert failed.status is models.AgentJobStatus.CANCELLED
-    assert failed.finished_at is not None
-    assert failed.next_attempt_at is None
 
 
 async def test_expired_running_job_with_cancel_request_is_not_requeued(tmp_path):

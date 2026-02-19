@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -30,6 +31,7 @@ from moonmind.workflows.agent_queue.manifest_contract import ManifestContractErr
 from moonmind.workflows.agent_queue.service import AgentQueueValidationError
 
 router = APIRouter(prefix="/api/manifests", tags=["manifests"])
+logger = logging.getLogger(__name__)
 
 
 async def _get_service(
@@ -117,9 +119,10 @@ async def upsert_manifest(
     try:
         record = await service.upsert_manifest(name=name, content=payload.content)
     except ManifestContractError as exc:
+        logger.warning("Manifest upsert validation failed.", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_manifest", "message": str(exc)},
+            detail={"code": "invalid_manifest", "message": "Invalid manifest payload"},
         ) from exc
     return _serialize_detail(record)
 

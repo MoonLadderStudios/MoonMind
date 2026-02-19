@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import uuid
 
@@ -18,6 +19,9 @@ from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
 from moonmind.config.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 async def get_default_user_from_db(
@@ -80,7 +84,11 @@ def get_current_user():
             if user_obj is not None:
                 return user_obj
         except (Exception, asyncio.TimeoutError):
-            pass
+            # Preserve fallback behaviour while surfacing lookup failures.
+            logger.warning(
+                "Failed to load default user in disabled auth mode; falling back to stub user.",
+                exc_info=True,
+            )
 
         # Fallback: lightweight stub with the minimal attributes used in code
         from types import SimpleNamespace
