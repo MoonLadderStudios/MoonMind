@@ -32,6 +32,7 @@ class ArtifactUpload:
     name: str
     content_type: str | None = None
     digest: str | None = None
+    required: bool = True
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,7 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -27,6 +27,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     TaskContractError,
     normalize_queue_job_payload,
 )
+from moonmind.workflows.tasks import compile_task_payload_templates
 
 logger = logging.getLogger(__name__)
 _SUPPORTED_QUEUE_JOB_TYPES = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
@@ -221,6 +222,7 @@ class AgentQueueService:
         """Normalize canonical task payloads for downstream reuse."""
 
         normalized_payload = self._enrich_task_payload_defaults(dict(payload or {}))
+        normalized_payload = compile_task_payload_templates(normalized_payload)
         try:
             return normalize_queue_job_payload(
                 job_type=CANONICAL_TASK_JOB_TYPE,
@@ -700,20 +702,36 @@ class AgentQueueService:
         limit: int = 200,
         after: Optional[datetime] = None,
         after_event_id: UUID | None = None,
+        before: Optional[datetime] = None,
+        before_event_id: UUID | None = None,
+        sort: Literal["asc", "desc"] = "asc",
     ) -> list[models.AgentJobEvent]:
         """List queue events for one job."""
 
         if limit < 1 or limit > 500:
             raise AgentQueueValidationError("limit must be between 1 and 500")
+        if after is not None and before is not None:
+            raise AgentQueueValidationError(
+                "after and before cursors are mutually exclusive"
+            )
         if after_event_id is not None and after is None:
             raise AgentQueueValidationError("afterEventId requires after timestamp")
+        if before_event_id is not None and before is None:
+            raise AgentQueueValidationError("beforeEventId requires before timestamp")
+        if sort not in {"asc", "desc"}:
+            raise AgentQueueValidationError("sort must be one of: asc, desc")
         if after is not None and after.tzinfo is None:
             after = after.replace(tzinfo=UTC)
+        if before is not None and before.tzinfo is None:
+            before = before.replace(tzinfo=UTC)
         return await self._repository.list_events(
             job_id=job_id,
             limit=limit,
             after=after,
             after_event_id=after_event_id,
+            before=before,
+            before_event_id=before_event_id,
+            sort=sort,
         )
 
     async def get_live_session(

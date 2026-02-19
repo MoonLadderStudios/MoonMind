@@ -50,6 +50,40 @@ Queue status model:
 - `GET /api/queue/jobs/{jobId}/artifacts`
 - `GET /api/queue/jobs/{jobId}/artifacts/{artifactId}/download`
 
+### 3.2 Task Preset Catalog REST
+
+Task preset APIs provide reusable template expansion for queue submissions:
+
+- `GET /api/task-step-templates`
+- `POST /api/task-step-templates`
+- `GET /api/task-step-templates/{slug}`
+- `GET /api/task-step-templates/{slug}/versions/{version}`
+- `POST /api/task-step-templates/{slug}:expand`
+- `POST /api/task-step-templates/save-from-task`
+- `POST /api/task-step-templates/{slug}:favorite`
+- `DELETE /api/task-step-templates/{slug}:favorite`
+
+Feature flag:
+
+- `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` (legacy fallback: `TASK_TEMPLATE_CATALOG=1`)
+
+CLI helper usage is available via `moonmind.agents.cli.task_templates.TaskTemplateClient`.
+Example:
+
+```python
+from moonmind.agents.cli.task_templates import TaskTemplateClient, merge_expanded_steps
+
+client = TaskTemplateClient(base_url="http://localhost:8000", token="<api-token>")
+items = client.list_templates(scope="global", search="pr")
+expanded = client.expand_template(
+    slug=items[0]["slug"],
+    scope="global",
+    version=items[0]["latestVersion"],
+    inputs={"change_summary": "Fix flaky tests"},
+)
+steps = merge_expanded_steps(existing_steps=[], expanded_steps=expanded["steps"], mode="append")
+```
+
 ### 3.2 MCP Tools
 
 - `queue.enqueue`

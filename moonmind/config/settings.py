@@ -125,7 +125,7 @@ class SpecWorkflowSettings(BaseSettings):
         description="Filesystem location where agent queue artifacts are persisted.",
     )
     agent_job_artifact_max_bytes: int = Field(
-        10 * 1024 * 1024,
+        50 * 1024 * 1024,
         env="AGENT_JOB_ARTIFACT_MAX_BYTES",
         description="Maximum allowed artifact upload size in bytes for queue jobs.",
         gt=0,
