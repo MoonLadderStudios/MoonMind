@@ -99,7 +99,7 @@
 **Purpose**: Reconcile traceability and run final validation gates.
 
 - [X] T028 [P] Reconcile final `DOC-REQ-*` mappings against `specs/013-queue-hardening-quality/contracts/requirements-traceability.md` and update drift.
-- [X] T029 [P] Update operator docs for worker token usage, policy fields, and event polling in `docs/CodexTaskQueue.md` and `specs/013-queue-hardening-quality/quickstart.md` (DOC-REQ-001, DOC-REQ-006).
+- [X] T029 [P] Update operator docs for worker token usage, policy fields, and event polling in `docs/TaskQueueSystem.md` and `specs/013-queue-hardening-quality/quickstart.md` (DOC-REQ-001, DOC-REQ-006).
 - [X] T030 [P] Verify worker token transport/header behavior in integration docs and worker config notes in `docs/CodexCliWorkers.md` (DOC-REQ-001, DOC-REQ-002).
 - [ ] T031 Run unit validation via `./tools/test_unit.sh` including queue hardening tests.
 

@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement Milestone 1 from `docs/CodexTaskQueue.md` by adding a first-class `agent_jobs` queue model in Postgres, repository/service queue lifecycle operations, and authenticated REST APIs for enqueue/claim/heartbeat/complete/fail/get/list. Delivery includes unit coverage for state transitions and concurrent claims using SKIP LOCKED semantics.
+Implement Milestone 1 from `docs/TaskQueueSystem.md` by adding a first-class `agent_jobs` queue model in Postgres, repository/service queue lifecycle operations, and authenticated REST APIs for enqueue/claim/heartbeat/complete/fail/get/list. Delivery includes unit coverage for state transitions and concurrent claims using SKIP LOCKED semantics.
 
 ## Technical Context
 

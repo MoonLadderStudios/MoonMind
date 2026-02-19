@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement Milestone 2 from `docs/CodexTaskQueue.md` by adding artifact ingestion and retrieval for queue jobs: multipart upload endpoint, job-scoped artifact storage root, metadata persistence (`agent_job_artifacts`), artifact list/download endpoints, and validation tests for traversal and upload-size enforcement.
+Implement Milestone 2 from `docs/TaskQueueSystem.md` by adding artifact ingestion and retrieval for queue jobs: multipart upload endpoint, job-scoped artifact storage root, metadata persistence (`agent_job_artifacts`), artifact list/download endpoints, and validation tests for traversal and upload-size enforcement.
 
 ## Technical Context
 

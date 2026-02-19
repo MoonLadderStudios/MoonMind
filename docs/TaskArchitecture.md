@@ -133,7 +133,7 @@ The following invariants define expected behavior regardless of UI strategy:
 Use this document for architecture orientation. Use the following documents for implementation-level detail:
 
 - `docs/TaskUiArchitecture.md` for dashboard route contracts, endpoint mapping, submission payload details, and live UX behavior.
-- `docs/CodexTaskQueue.md` for queue contract and execution-specific details.
+- `docs/TaskQueueSystem.md` for queue contract and execution-specific details.
 - `docs/TaskProposalQueue` for proposal lifecycle and promotion design.
 - `docs/ManifestTaskSystem.md` for manifest ingestion workflow design.
 
