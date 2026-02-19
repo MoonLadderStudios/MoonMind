@@ -463,8 +463,7 @@ def test_run_preflight_claude_runtime_does_not_fallback_on_auth_error_with_usage
                 returncode=1,
                 stdout="",
                 stderr=(
-                    "Error: not authenticated\n\n"
-                    "Usage: claude auth status [flags]"
+                    "Error: not authenticated\n\n" "Usage: claude auth status [flags]"
                 ),
             )
         return subprocess.CompletedProcess(
