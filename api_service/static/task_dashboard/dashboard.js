@@ -628,7 +628,7 @@
   }
 
   function summarizeInstructionPreview(value) {
-    if (value !== null && value !== undefined && typeof value !== "string") {
+    if (typeof value !== "string") {
       return "";
     }
     const raw = String(value ?? "")
