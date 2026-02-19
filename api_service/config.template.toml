@@ -11,5 +11,5 @@ codex_queue = "codex"
 artifact_root = "var/artifacts/spec_workflows"
 
 [feature_flags]
-# Enable the Task Preset Catalog (UI + API).
-task_template_catalog = true
+# Enable the Task Preset Catalog (UI + API). Default off until migrations run.
+task_template_catalog = false
