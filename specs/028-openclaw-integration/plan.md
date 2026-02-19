@@ -5,7 +5,7 @@
 
 ## Summary
 
-Deliver an opt-in `openclaw` Docker Compose service that mounts a **dedicated Codex auth volume**, locks its Codex model via `OPENCLAW_MODEL`, and provides an operator script (`tools/bootstrap-openclaw-codex-volume.sh`) plus documentation (`docs/OpenClawIntegration.md`). Compose wiring, env-surface updates, image/entrypoint, guardrail adapter, and bootstrap verification tests all land in this branch.
+Deliver the OpenClaw integration in staged increments. This branch provides the operator bootstrap script (`tools/bootstrap-openclaw-codex-volume.sh`), `.env-template` surface area, and design/runbook documentation (`docs/OpenClawIntegration.md`) for a dedicated Codex auth volume and model-lock strategy. Compose wiring, image/entrypoint, adapter enforcement code, and verification tests land in follow-up implementation branches.
 
 ## Technical Context
 

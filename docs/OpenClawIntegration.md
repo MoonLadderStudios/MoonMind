@@ -166,10 +166,11 @@ services:
 
 ### 8.1 Recommended Path: `tools/bootstrap-openclaw-codex-volume.sh`
 1. Ensure Docker + `docker compose` are available and that `local-network` exists (create it if missing).
-2. Verify the canonical Codex volume (`${CODEX_VOLUME_NAME:-codex_auth_volume}`) exists and is not mounted by a running container.
-3. Refuse to continue if `openclaw_codex_auth_volume` is attached anywhere—this prevents overwriting live credentials.
-4. Use an `alpine` tar pipe (or equivalent) to copy files from the shared volume into `openclaw_codex_auth_volume` atomically.
-5. Run `docker compose --profile openclaw run --rm --user app openclaw bash -lc 'codex login status'` to validate that OpenClaw can authenticate using its own volume.
+2. Verify the canonical Codex volume (`${CODEX_VOLUME_NAME:-codex_auth_volume}`) exists and is not attached to any container before copying.
+3. Refuse to continue if `openclaw_codex_auth_volume` is attached anywhere. If it is non-empty, require `OPENCLAW_BOOTSTRAP_OVERWRITE=1` to proceed.
+4. Run `docker compose --profile openclaw config --services` preflight checks and fail fast if `openclaw` is not defined.
+5. Use an `alpine` tar pipe (or equivalent) to copy files from the shared volume into `openclaw_codex_auth_volume` and remove MoonMind worker token artifacts from the destination.
+6. Run `docker compose --profile openclaw run --rm --user app openclaw bash -lc 'codex login status'` to validate that OpenClaw can authenticate using its own volume.
 6. Print clear success/failure messages; exit non-zero on any error.
 
 This script is what “triggers” the dedicated Codex auth volume. Run it during initial enablement and any time credentials rotate.
