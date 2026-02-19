@@ -149,7 +149,9 @@ def _seed_catalog_defaults(bind) -> None:
             )
             .on_conflict_do_nothing(index_elements=["id"])
         )
-        if (template_inserted.rowcount or 0) > 0 or (version_inserted.rowcount or 0) > 0:
+        if (template_inserted.rowcount or 0) > 0 or (
+            version_inserted.rowcount or 0
+        ) > 0:
             bind.execute(
                 sa.text(
                     """

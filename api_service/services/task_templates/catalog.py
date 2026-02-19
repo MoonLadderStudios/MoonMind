@@ -263,7 +263,9 @@ def _serialize_template(
         "tags": list(template.tags or []),
         "version": version.version,
         "latestVersion": (
-            template.latest_version.version if template.latest_version else version.version
+            template.latest_version.version
+            if template.latest_version
+            else version.version
         ),
         "inputs": list(version.inputs_schema or []),
         "steps": list(version.steps or []),

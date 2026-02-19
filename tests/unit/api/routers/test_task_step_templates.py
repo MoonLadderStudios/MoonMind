@@ -93,6 +93,7 @@ def test_list_templates_defaults_to_personal_scope_when_omitted() -> None:
     assert kwargs["scope"] == "personal"
     assert kwargs["scope_ref"] is not None
 
+
 def test_expand_template_success() -> None:
     client, catalog, _ = _build_app()
     catalog.expand_template.return_value = {
