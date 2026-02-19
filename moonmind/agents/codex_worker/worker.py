@@ -109,8 +109,8 @@ class CodexWorkerConfig:
     git_user_name: str | None = None
     git_user_email: str | None = None
     live_log_events_enabled: bool = True
-    live_log_events_batch_bytes: int = 4096
-    live_log_events_flush_interval_ms: int = 200
+    live_log_events_batch_bytes: int = 8192
+    live_log_events_flush_interval_ms: int = 300
     live_session_enabled_default: bool = True
     live_session_provider: str = "tmate"
     live_session_ttl_minutes: int = 60
@@ -360,12 +360,12 @@ class CodexWorkerConfig:
             "",
         }
         live_log_events_batch_bytes = int(
-            str(source.get("MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES", "4096")).strip()
+            str(source.get("MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES", "8192")).strip()
         )
         if live_log_events_batch_bytes < 128:
             raise ValueError("MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES must be >= 128")
         live_log_events_flush_interval_ms = int(
-            str(source.get("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS", "200")).strip()
+            str(source.get("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS", "300")).strip()
         )
         if live_log_events_flush_interval_ms < 10:
             raise ValueError("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10")

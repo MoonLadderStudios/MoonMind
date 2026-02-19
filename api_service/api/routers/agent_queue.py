@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import (
@@ -833,6 +833,9 @@ async def list_job_events(
     *,
     after: Optional[datetime] = Query(None, alias="after"),
     after_event_id: UUID | None = Query(None, alias="afterEventId"),
+    before: Optional[datetime] = Query(None, alias="before"),
+    before_event_id: UUID | None = Query(None, alias="beforeEventId"),
+    sort: Literal["asc", "desc"] = Query("asc", alias="sort"),
     limit: int = Query(200, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -845,6 +848,9 @@ async def list_job_events(
             limit=limit,
             after=after,
             after_event_id=after_event_id,
+            before=before,
+            before_event_id=before_event_id,
+            sort=sort,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc

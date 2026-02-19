@@ -160,6 +160,13 @@
     }
   }
 
+  function sanitizeCssToken(value, fallback = "") {
+    const token = String(value ?? "")
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9_-]/g, "");
+    return token || fallback;
+  }
+
   function extractRuntimeFromPayload(payload) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       return null;
@@ -481,7 +488,8 @@
 
   function statusBadge(source, rawStatus) {
     const normalized = normalizeStatus(source, rawStatus);
-    return `<span class="status status-${normalized}">${escapeHtml(normalized)}</span>`;
+    const statusClassToken = sanitizeCssToken(normalized, "queued");
+    return `<span class="status status-${statusClassToken}">${escapeHtml(normalized)}</span>`;
   }
 
   function endpoint(template, replacements) {
@@ -1582,7 +1590,59 @@
     setView(
       "Queue Job Detail",
       `Job ${jobId}`,
-      "<p class='loading'>Loading queue detail...</p>",
+      `
+        <div id="queue-detail-page">
+          <div id="queue-detail-notice"></div>
+          <div id="queue-cancel-notice"></div>
+          <div id="queue-cancel-actions"></div>
+          <div id="queue-job-summary"></div>
+          <div class="stack">
+            <section id="queue-live-session-section"></section>
+            <section>
+              <h3>Events</h3>
+              <p class="small" id="queue-events-summary">Loading events...</p>
+              <div class="queue-events-table-wrap">
+                <table>
+                  <thead><tr><th>Time</th><th>Stage</th><th>Level</th><th>Message</th></tr></thead>
+                  <tbody id="queue-events-body"><tr><td colspan="4" class="small">Loading events...</td></tr></tbody>
+                </table>
+              </div>
+              <div class="actions">
+                <button type="button" id="queue-load-older-events" class="secondary" disabled>Load Older Events</button>
+                <span class="small" id="queue-load-older-status"></span>
+              </div>
+            </section>
+            <section>
+              <div class="actions queue-live-output-toolbar">
+                <label class="queue-inline-toggle">
+                  <input type="checkbox" id="queue-follow-output" checked />
+                  Follow output
+                </label>
+                <label class="queue-inline-filter">
+                  Filter
+                  <select id="queue-output-filter">
+                    <option value="all" selected>All</option>
+                    <option value="stages">Stages</option>
+                    <option value="logs">Logs</option>
+                    <option value="warnings">Warnings/Errors</option>
+                  </select>
+                </label>
+                <button type="button" class="secondary" id="queue-copy-output">Copy</button>
+                <span id="queue-full-log-action" class="small">Download full logs unavailable.</span>
+                <span class="small" id="queue-live-transport-status">Live transport: Polling (idle)</span>
+              </div>
+              <pre id="queue-live-output" class="queue-live-output"></pre>
+            </section>
+            <section>
+              <h3>Artifacts</h3>
+              <table>
+                <thead><tr><th>Name</th><th>Stage</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
+                <tbody id="queue-artifacts-body"><tr><td colspan="5" class="small">Loading artifacts...</td></tr></tbody>
+              </table>
+            </section>
+          </div>
+        </div>
+      `,
     );
 
     const state = {
@@ -1595,47 +1655,109 @@
       liveSessionRwAttach: "",
       liveSessionRwWeb: "",
       liveSessionRwGrantedUntil: "",
+      liveActionNotice: "",
+      liveActionNoticeIsError: false,
       eventIds: new Set(),
       after: null,
       afterEventId: null,
+      oldest: null,
+      oldestEventId: null,
+      hasOlderEvents: false,
+      loadingOlderEvents: false,
       outputFilter: "all",
       followOutput: true,
       eventsTransport: "polling",
       eventsTransportStatus: "idle",
       eventsPollingStarted: false,
+      eventsRenderTimer: null,
+      eventsRenderIntervalMs: 120,
+      maxEvents: 20000,
+      maxVisibleEventRows: 100,
+      maxEventMessageChars: 320,
+      maxLiveOutputLines: 1500,
+      liveOutputLines: [],
+      liveOutputRenderedEventCount: 0,
+      liveOutputRenderedFilter: "all",
+      forceLiveOutputRebuild: true,
+      pendingLiveControlAction: "",
     };
 
-    const appendIncomingEvents = (incomingEvents) => {
-      let changed = false;
-      const ordered = (incomingEvents || []).slice().sort((left, right) => {
-        return (
-          Date.parse(pick(left, "createdAt") || 0) - Date.parse(pick(right, "createdAt") || 0)
-        );
-      });
-      ordered.forEach((event) => {
-        const eventId = String(pick(event, "id") || "");
-        if (!eventId || state.eventIds.has(eventId)) {
-          return;
-        }
-        state.eventIds.add(eventId);
-        state.events.push(event);
-        state.after = pick(event, "createdAt") || state.after;
-        state.afterEventId = eventId;
-        changed = true;
-      });
+    const detailPage = document.getElementById("queue-detail-page");
+    if (!detailPage) {
+      return;
+    }
 
-      const maxEvents = 500;
-      if (state.events.length > maxEvents) {
-        const overflow = state.events.length - maxEvents;
-        const removed = state.events.splice(0, overflow);
-        removed.forEach((event) => {
-          const eventId = String(pick(event, "id") || "");
-          if (eventId) {
-            state.eventIds.delete(eventId);
-          }
-        });
+    const toSortableTimestamp = (value) => Date.parse(String(value || "")) || 0;
+    const compareEventsAsc = (left, right) => {
+      const leftTs = toSortableTimestamp(pick(left, "createdAt"));
+      const rightTs = toSortableTimestamp(pick(right, "createdAt"));
+      if (leftTs !== rightTs) {
+        return leftTs - rightTs;
       }
-      return changed;
+      return String(pick(left, "id") || "").localeCompare(String(pick(right, "id") || ""));
+    };
+
+    const normalizeIncomingEventsAsc = (incomingEvents) =>
+      (incomingEvents || []).slice().sort(compareEventsAsc);
+
+    const setDetailNotice = (message, isError = true) => {
+      const noticeNode = document.getElementById("queue-detail-notice");
+      if (!noticeNode) {
+        return;
+      }
+      if (!message) {
+        noticeNode.innerHTML = "";
+        return;
+      }
+      noticeNode.innerHTML = `<div class="notice ${isError ? "error" : ""}">${escapeHtml(
+        message,
+      )}</div>`;
+    };
+
+    const setCancelNotice = (message, isError = false) => {
+      const noticeNode = document.getElementById("queue-cancel-notice");
+      if (!noticeNode) {
+        return;
+      }
+      if (!message) {
+        noticeNode.innerHTML = "";
+        return;
+      }
+      noticeNode.innerHTML = `<div class="notice ${isError ? "error" : ""}">${escapeHtml(
+        message,
+      )}</div>`;
+    };
+
+    const setLiveNotice = (message, isError = false) => {
+      state.liveActionNotice = String(message || "");
+      state.liveActionNoticeIsError = Boolean(isError);
+      renderLiveSession();
+    };
+
+    const refreshEventCursors = () => {
+      const oldestEvent = state.events.length > 0 ? state.events[0] : null;
+      const newestEvent =
+        state.events.length > 0 ? state.events[state.events.length - 1] : null;
+      state.oldest = oldestEvent ? pick(oldestEvent, "createdAt") || null : null;
+      state.oldestEventId = oldestEvent ? String(pick(oldestEvent, "id") || "") || null : null;
+      state.after = newestEvent ? pick(newestEvent, "createdAt") || null : null;
+      state.afterEventId = newestEvent ? String(pick(newestEvent, "id") || "") || null : null;
+    };
+
+    const trimEventsToLimit = () => {
+      if (state.events.length <= state.maxEvents) {
+        return;
+      }
+      const overflow = state.events.length - state.maxEvents;
+      const removed = state.events.splice(0, overflow);
+      removed.forEach((event) => {
+        const eventId = String(pick(event, "id") || "");
+        if (eventId) {
+          state.eventIds.delete(eventId);
+        }
+      });
+      state.forceLiveOutputRebuild = true;
+      state.hasOlderEvents = true;
     };
 
     const resolveFullLogArtifact = (artifacts) => {
@@ -1657,45 +1779,47 @@
       );
     };
 
-    const render = (loadError) => {
-      const job = state.job;
-      const artifacts = state.artifacts;
-      const events = state.events;
-      const notices = loadError
-        ? `<div class="notice error">${escapeHtml(loadError)}</div>`
-        : "";
-      const normalizedStatus = job ? normalizeStatus("queue", pick(job, "status")) : "";
-      const cancelRequestedAt = job ? pick(job, "cancelRequestedAt") : null;
-      const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
-      const canCancel = Boolean(job) && (normalizedStatus === "queued" || normalizedStatus === "running");
-      const cancelButtonDisabled = !canCancel || cancelPending;
-      const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
-      const eventRows = events
-        .map(
-          (event) => `
-            <tr>
-              <td>${formatTimestamp(pick(event, "createdAt"))}</td>
-              <td>${escapeHtml(deriveStageFromEvent(event))}</td>
-              <td>${escapeHtml(pick(event, "level") || "info")}</td>
-              <td>${escapeHtml(pick(event, "message") || "")}</td>
-            </tr>
-          `,
-        )
-        .join("");
+    const renderTransportStatus = () => {
+      const transportNode = document.getElementById("queue-live-transport-status");
+      if (!transportNode) {
+        return;
+      }
+      const transportLabel = state.eventsTransport === "sse" ? "SSE" : "Polling";
+      transportNode.textContent = `Live transport: ${transportLabel} (${state.eventsTransportStatus})`;
+    };
 
-      const liveOutputText = buildLiveOutput(events, state.outputFilter);
-      const fullLogArtifact = resolveFullLogArtifact(artifacts);
-      const fullLogDownloadUrl = fullLogArtifact
-        ? endpoint("/api/queue/jobs/{id}/artifacts/{artifactId}/download", {
-            id: jobId,
-            artifactId: pick(fullLogArtifact, "id"),
-          })
-        : "";
-      const transportLabel =
-        state.eventsTransport === "sse" ? "SSE" : "Polling";
-      const transportStatus = state.eventsTransportStatus;
+    const renderLoadOlderControls = () => {
+      const button = document.getElementById("queue-load-older-events");
+      const status = document.getElementById("queue-load-older-status");
+      if (!button || !status) {
+        return;
+      }
+      const canLoadOlder = Boolean(
+        state.oldest &&
+          state.oldestEventId &&
+          state.hasOlderEvents &&
+          !state.loadingOlderEvents,
+      );
+      button.disabled = !canLoadOlder;
+      if (state.loadingOlderEvents) {
+        status.textContent = "Loading older events...";
+        return;
+      }
+      if (!state.hasOlderEvents && state.events.length > 0) {
+        status.textContent = "No older events available.";
+        return;
+      }
+      status.textContent = "";
+    };
 
-      const artifactRows = artifacts
+    const renderArtifacts = () => {
+      const bodyNode = document.getElementById("queue-artifacts-body");
+      const fullLogNode = document.getElementById("queue-full-log-action");
+      if (!bodyNode || !fullLogNode) {
+        return;
+      }
+      const artifacts = Array.isArray(state.artifacts) ? state.artifacts : [];
+      const rows = artifacts
         .map((artifact) => {
           const downloadUrl = endpoint(
             "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
@@ -1715,54 +1839,91 @@
           `;
         })
         .join("");
+      bodyNode.innerHTML =
+        rows || "<tr><td colspan='5' class='small'>No artifacts.</td></tr>";
 
-      const detail = job
-        ? `
-            ${(() => {
-              const payload = pick(job, "payload") || {};
-              const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
-              const runtimeModel = extractRuntimeModelFromPayload(payload) || "default";
-              const runtimeEffort = extractRuntimeEffortFromPayload(payload) || "default";
-              const selectedSkill = extractSkillFromPayload(payload) || "auto";
-              return `
-            <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
-              pick(job, "queueName") || defaultQueueName,
-            )}</span></p>
-            <div class="grid-2">
-              <div class="card"><strong>Status:</strong> ${statusBadge("queue", pick(
-                job,
-                "status",
-              ))}</div>
-              <div class="card"><strong>Type:</strong> ${escapeHtml(
-                pick(job, "type") || "",
-              )}</div>
-              <div class="card"><strong>Created:</strong> ${formatTimestamp(
-                pick(job, "createdAt"),
-              )}</div>
-              <div class="card"><strong>Started:</strong> ${formatTimestamp(
-                pick(job, "startedAt"),
-              )}</div>
-              <div class="card"><strong>Runtime Target:</strong> ${escapeHtml(runtimeTarget)}</div>
-              <div class="card"><strong>Runtime Model:</strong> ${escapeHtml(runtimeModel)}</div>
-              <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
-              <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
-              <div class="card"><strong>Cancel Requested:</strong> ${formatTimestamp(
-                pick(job, "cancelRequestedAt"),
-              )}</div>
-              <div class="card"><strong>Cancel Reason:</strong> ${escapeHtml(
-                pick(job, "cancelReason") || "-",
-              )}</div>
-              <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
-                pick(job, "leaseExpiresAt"),
-              )}</div>
-            </div>
-          `;
-            })()}
-          `
-        : "<div class='notice error'>Queue job not found.</div>";
+      const fullLogArtifact = resolveFullLogArtifact(artifacts);
+      if (fullLogArtifact) {
+        const fullLogDownloadUrl = endpoint(
+          "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
+          {
+            id: jobId,
+            artifactId: pick(fullLogArtifact, "id"),
+          },
+        );
+        fullLogNode.innerHTML = `<a href="${escapeHtml(fullLogDownloadUrl)}"><button type="button" class="secondary">Download Full Logs</button></a>`;
+      } else {
+        fullLogNode.textContent = "Download full logs unavailable.";
+      }
+    };
+
+    const renderJobSummary = () => {
+      const summaryNode = document.getElementById("queue-job-summary");
+      const cancelActionsNode = document.getElementById("queue-cancel-actions");
+      if (!summaryNode || !cancelActionsNode) {
+        return;
+      }
+      const job = state.job;
+      if (!job) {
+        cancelActionsNode.innerHTML = "";
+        summaryNode.innerHTML = "<div class='notice error'>Queue job not found.</div>";
+        return;
+      }
+
+      const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
+      const cancelRequestedAt = pick(job, "cancelRequestedAt");
+      const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
+      const canCancel = normalizedStatus === "queued" || normalizedStatus === "running";
+      const cancelButtonDisabled = !canCancel || cancelPending;
+      const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
+      cancelActionsNode.innerHTML = `<div class="actions"><button type="button" id="queue-cancel-button" ${
+        cancelButtonDisabled ? "disabled" : ""
+      }>${escapeHtml(cancelButtonLabel)}</button></div>`;
+
+      const payload = pick(job, "payload") || {};
+      const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
+      const runtimeModel = extractRuntimeModelFromPayload(payload) || "default";
+      const runtimeEffort = extractRuntimeEffortFromPayload(payload) || "default";
+      const selectedSkill = extractSkillFromPayload(payload) || "auto";
+      summaryNode.innerHTML = `
+        <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
+          pick(job, "queueName") || defaultQueueName,
+        )}</span></p>
+        <div class="grid-2">
+          <div class="card"><strong>Status:</strong> ${statusBadge("queue", pick(job, "status"))}</div>
+          <div class="card"><strong>Type:</strong> ${escapeHtml(pick(job, "type") || "")}</div>
+          <div class="card"><strong>Created:</strong> ${formatTimestamp(pick(job, "createdAt"))}</div>
+          <div class="card"><strong>Started:</strong> ${formatTimestamp(pick(job, "startedAt"))}</div>
+          <div class="card"><strong>Runtime Target:</strong> ${escapeHtml(runtimeTarget)}</div>
+          <div class="card"><strong>Runtime Model:</strong> ${escapeHtml(runtimeModel)}</div>
+          <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
+          <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
+          <div class="card"><strong>Cancel Requested:</strong> ${formatTimestamp(
+            pick(job, "cancelRequestedAt"),
+          )}</div>
+          <div class="card"><strong>Cancel Reason:</strong> ${escapeHtml(
+            pick(job, "cancelReason") || "-",
+          )}</div>
+          <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
+            pick(job, "leaseExpiresAt"),
+          )}</div>
+        </div>
+      `;
+    };
+
+    const renderLiveSession = () => {
+      const node = document.getElementById("queue-live-session-section");
+      if (!node) {
+        return;
+      }
+      const job = state.job;
+      if (!job) {
+        node.innerHTML = "";
+        return;
+      }
 
       const jobPayload =
-        job && typeof pick(job, "payload") === "object" && !Array.isArray(pick(job, "payload"))
+        typeof pick(job, "payload") === "object" && !Array.isArray(pick(job, "payload"))
           ? pick(job, "payload")
           : {};
       const liveControl =
@@ -1784,409 +1945,283 @@
       const liveSessionActionsDisabled = liveSessionRouteMissing;
       const showGrantDetails = Boolean(state.liveSessionRwAttach);
       const liveSessionRwWebUrl = sanitizeExternalHttpUrl(state.liveSessionRwWeb);
-      const liveSessionSection = job
-        ? `
-            <section>
-              <h3>Live Session</h3>
-              ${
-                state.liveSessionError
-                  ? `<div class="notice error">${escapeHtml(state.liveSessionError)}</div>`
-                  : ""
-              }
-              <div id="queue-live-session-notice"></div>
-              <div class="grid-2">
-                <div class="card"><strong>Status:</strong> ${escapeHtml(liveSessionStatus)}</div>
-                <div class="card"><strong>Provider:</strong> ${escapeHtml(
-                  String(pick(liveSession || {}, "provider") || "tmate"),
-                )}</div>
-                <div class="card"><strong>Ready:</strong> ${formatTimestamp(
-                  pick(liveSession || {}, "readyAt"),
-                )}</div>
-                <div class="card"><strong>Expires:</strong> ${formatTimestamp(
-                  pick(liveSession || {}, "expiresAt"),
-                )}</div>
-                <div class="card"><strong>RO Attach:</strong> ${escapeHtml(
-                  String(pick(liveSession || {}, "attachRo") || "-"),
-                )}</div>
-                <div class="card"><strong>RW Granted Until:</strong> ${formatTimestamp(
-                  state.liveSessionRwGrantedUntil || pick(liveSession || {}, "rwGrantedUntil"),
-                )}</div>
-              </div>
-              ${
-                showGrantDetails
-                  ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
-                      state.liveSessionRwAttach,
-                    )}</span>${
-                      liveSessionRwWebUrl
-                        ? ` | Web: <a href="${escapeHtml(liveSessionRwWebUrl)}" target="_blank" rel="noreferrer">open</a>`
-                        : ""
-                    }</p>`
-                  : ""
-              }
-              <div class="actions">
-                <button type="button" id="queue-live-enable" ${
-                  liveSessionActionsDisabled
-                    ? "disabled"
-                    : liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
-                      ? "disabled"
-                      : ""
-                }>Enable Live Session</button>
-                <button type="button" id="queue-live-grant" ${
-                  liveSessionReady && !liveSessionActionsDisabled ? "" : "disabled"
-                }>Grant Write (15m)</button>
-                <button type="button" id="queue-live-revoke" ${
-                  liveSessionCreated && !liveSessionActionsDisabled ? "" : "disabled"
-                }>Revoke Session</button>
-                <button type="button" id="queue-live-pause">${
-                  pauseActive ? "Resume" : "Pause"
-                }</button>
-                <button type="button" id="queue-live-takeover">Takeover</button>
-              </div>
-              <div class="actions">
-                <input id="queue-operator-message" placeholder="Send operator message..." />
-                <button type="button" id="queue-operator-send">Send</button>
-              </div>
-            </section>
-          `
-        : "";
 
-      setView(
-        "Queue Job Detail",
-        `Job ${jobId}`,
-        `
-          ${notices}
-          ${job ? `<div id="queue-cancel-notice"></div>` : ""}
-          ${job ? `<div class="actions"><button type="button" id="queue-cancel-button" ${
-            cancelButtonDisabled ? "disabled" : ""
-          }>${escapeHtml(cancelButtonLabel)}</button></div>` : ""}
-          ${detail}
-          <div class="stack">
-            ${liveSessionSection}
-            <section>
-              <h3>Events</h3>
-              <table>
-                <thead><tr><th>Time</th><th>Stage</th><th>Level</th><th>Message</th></tr></thead>
-                <tbody>${eventRows || "<tr><td colspan='4' class='small'>No events.</td></tr>"}</tbody>
-              </table>
-            </section>
-            <section>
-              <div class="actions queue-live-output-toolbar">
-                <label class="queue-inline-toggle">
-                  <input type="checkbox" id="queue-follow-output" ${
-                    state.followOutput ? "checked" : ""
-                  } />
-                  Follow output
-                </label>
-                <label class="queue-inline-filter">
-                  Filter
-                  <select id="queue-output-filter">
-                    <option value="all" ${state.outputFilter === "all" ? "selected" : ""}>All</option>
-                    <option value="stages" ${
-                      state.outputFilter === "stages" ? "selected" : ""
-                    }>Stages</option>
-                    <option value="logs" ${state.outputFilter === "logs" ? "selected" : ""}>Logs</option>
-                    <option value="warnings" ${
-                      state.outputFilter === "warnings" ? "selected" : ""
-                    }>Warnings/Errors</option>
-                  </select>
-                </label>
-                <button type="button" class="secondary" id="queue-copy-output">Copy</button>
-                ${
-                  fullLogArtifact
-                    ? `<a href="${escapeHtml(fullLogDownloadUrl)}"><button type="button" class="secondary">Download Full Logs</button></a>`
-                    : "<span class='small'>Download full logs unavailable.</span>"
-                }
-                <span class="small">Live transport: ${escapeHtml(
-                  `${transportLabel} (${transportStatus})`,
-                )}</span>
-              </div>
-              <pre id="queue-live-output" class="queue-live-output">${escapeHtml(
-                liveOutputText || "",
-              )}</pre>
-            </section>
-            <section>
-              <h3>Artifacts</h3>
-              <table>
-                <thead><tr><th>Name</th><th>Stage</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
-                <tbody>${artifactRows || "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"}</tbody>
-              </table>
-            </section>
-          </div>
-        `,
-      );
-
-      const cancelButton = document.getElementById("queue-cancel-button");
-      const cancelNotice = document.getElementById("queue-cancel-notice");
-      if (cancelButton && job) {
-        cancelButton.addEventListener("click", async () => {
-          cancelButton.disabled = true;
-          if (cancelNotice) {
-            cancelNotice.className = "notice";
-            cancelNotice.textContent = "Submitting cancellation request...";
-          }
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.cancel || "/api/queue/jobs/{id}/cancel",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ reason: "Cancellation requested from dashboard" }),
-              },
-            );
-            if (cancelNotice) {
-              cancelNotice.className = "notice";
-              cancelNotice.textContent = "Cancellation request submitted.";
-            }
-            await loadEvents();
-            await loadDetail();
-          } catch (error) {
-            console.error("queue cancellation request failed", error);
-            if (cancelNotice) {
-              cancelNotice.className = "notice error";
-              cancelNotice.textContent = "Failed to cancel queue job.";
-            }
-            cancelButton.disabled = false;
-          }
-        });
-      }
-
-      const liveNotice = document.getElementById("queue-live-session-notice");
-      const setLiveNotice = (text, isError = false) => {
-        if (!liveNotice) {
-          return;
+      node.innerHTML = `
+        <h3>Live Session</h3>
+        ${
+          state.liveSessionError
+            ? `<div class="notice error">${escapeHtml(state.liveSessionError)}</div>`
+            : ""
         }
-        if (!text) {
-          liveNotice.className = "";
-          liveNotice.textContent = "";
-          return;
+        ${
+          state.liveActionNotice
+            ? `<div class="notice ${state.liveActionNoticeIsError ? "error" : ""}">${escapeHtml(
+                state.liveActionNotice,
+              )}</div>`
+            : ""
         }
-        liveNotice.className = isError ? "notice error" : "notice";
-        liveNotice.textContent = text;
-      };
+        <div class="grid-2">
+          <div class="card"><strong>Status:</strong> ${escapeHtml(liveSessionStatus)}</div>
+          <div class="card"><strong>Provider:</strong> ${escapeHtml(
+            String(pick(liveSession || {}, "provider") || "tmate"),
+          )}</div>
+          <div class="card"><strong>Ready:</strong> ${formatTimestamp(
+            pick(liveSession || {}, "readyAt"),
+          )}</div>
+          <div class="card"><strong>Expires:</strong> ${formatTimestamp(
+            pick(liveSession || {}, "expiresAt"),
+          )}</div>
+          <div class="card"><strong>RO Attach:</strong> ${escapeHtml(
+            String(pick(liveSession || {}, "attachRo") || "-"),
+          )}</div>
+          <div class="card"><strong>RW Granted Until:</strong> ${formatTimestamp(
+            state.liveSessionRwGrantedUntil || pick(liveSession || {}, "rwGrantedUntil"),
+          )}</div>
+        </div>
+        ${
+          showGrantDetails
+            ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
+                state.liveSessionRwAttach,
+              )}</span>${
+                liveSessionRwWebUrl
+                  ? ` | Web: <a href="${escapeHtml(liveSessionRwWebUrl)}" target="_blank" rel="noreferrer">open</a>`
+                  : ""
+              }</p>`
+            : ""
+        }
+        <div class="actions">
+          <button type="button" id="queue-live-enable" ${
+            state.pendingLiveControlAction === "enable"
+              ? "disabled"
+              : liveSessionActionsDisabled
+                ? "disabled"
+                : liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
+                  ? "disabled"
+                  : ""
+          }>Enable Live Session</button>
+          <button type="button" id="queue-live-grant" ${
+            state.pendingLiveControlAction === "grant"
+              ? "disabled"
+              : liveSessionReady && !liveSessionActionsDisabled
+                ? ""
+                : "disabled"
+          }>Grant Write (15m)</button>
+          <button type="button" id="queue-live-revoke" ${
+            state.pendingLiveControlAction === "revoke"
+              ? "disabled"
+              : liveSessionCreated && !liveSessionActionsDisabled
+                ? ""
+                : "disabled"
+          }>Revoke Session</button>
+          <button type="button" id="queue-live-pause" ${
+            state.pendingLiveControlAction === "pause" ? "disabled" : ""
+          }>${pauseActive ? "Resume" : "Pause"}</button>
+          <button type="button" id="queue-live-takeover" ${
+            state.pendingLiveControlAction === "takeover" ? "disabled" : ""
+          }>Takeover</button>
+        </div>
+        <div class="actions">
+          <input id="queue-operator-message" placeholder="Send operator message..." />
+          <button type="button" id="queue-operator-send" ${
+            state.pendingLiveControlAction === "operator-message" ? "disabled" : ""
+          }>Send</button>
+        </div>
+      `;
+    };
 
-      const liveEnableButton = document.getElementById("queue-live-enable");
-      if (liveEnableButton) {
-        liveEnableButton.addEventListener("click", async () => {
-          liveEnableButton.disabled = true;
-          setLiveNotice("Enabling live session...");
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.liveSession || "/api/queue/jobs/{id}/live-session",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({}),
-              },
-            );
-            state.liveSessionRwAttach = "";
-            state.liveSessionRwWeb = "";
-            state.liveSessionRwGrantedUntil = "";
-            await loadDetail();
-            await loadEvents();
-            setLiveNotice("Live session enabled.");
-          } catch (error) {
-            console.error("live session enable failed", error);
-            setLiveNotice("Failed to enable live session.", true);
-            liveEnableButton.disabled = false;
-          }
-        });
+    const renderEventsTable = () => {
+      const bodyNode = document.getElementById("queue-events-body");
+      const summaryNode = document.getElementById("queue-events-summary");
+      if (!bodyNode || !summaryNode) {
+        return;
+      }
+      if (state.events.length === 0) {
+        bodyNode.innerHTML = "<tr><td colspan='4' class='small'>No events.</td></tr>";
+        summaryNode.textContent = "No events loaded.";
+        return;
       }
 
-      const liveGrantButton = document.getElementById("queue-live-grant");
-      if (liveGrantButton) {
-        liveGrantButton.addEventListener("click", async () => {
-          liveGrantButton.disabled = true;
-          setLiveNotice("Requesting temporary write access...");
-          try {
-            const grant = await fetchJson(
-              endpoint(
-                queueSourceConfig.liveSessionGrantWrite ||
-                  "/api/queue/jobs/{id}/live-session/grant-write",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ ttlMinutes: 15 }),
-              },
-            );
-            state.liveSessionRwAttach = String(pick(grant, "attachRw") || "");
-            state.liveSessionRwWeb = String(pick(grant, "webRw") || "");
-            state.liveSessionRwGrantedUntil = String(pick(grant, "grantedUntil") || "");
-            await loadDetail();
-            await loadEvents();
-            setLiveNotice("RW access granted.");
-          } catch (error) {
-            console.error("live session grant failed", error);
-            setLiveNotice("Failed to grant write access.", true);
-            liveGrantButton.disabled = false;
+      const visibleEvents = state.hasOlderEvents
+        ? state.events.slice(0, state.maxVisibleEventRows)
+        : state.events.slice(-state.maxVisibleEventRows);
+      const hiddenCount = Math.max(0, state.events.length - visibleEvents.length);
+      const rows = visibleEvents
+        .map((event) => {
+          const rawMessage = String(pick(event, "message") || "").replaceAll("\r", "");
+          const singleLine = rawMessage.replaceAll("\n", " ");
+          const truncated =
+            singleLine.length > state.maxEventMessageChars
+              ? `${singleLine.slice(0, state.maxEventMessageChars - 1)}...`
+              : singleLine;
+          const titleText = rawMessage.length > 2048 ? `${rawMessage.slice(0, 2048)}...` : rawMessage;
+          return `
+            <tr>
+              <td>${formatTimestamp(pick(event, "createdAt"))}</td>
+              <td>${escapeHtml(deriveStageFromEvent(event))}</td>
+              <td>${escapeHtml(pick(event, "level") || "info")}</td>
+              <td class="queue-event-message" title="${escapeHtml(titleText)}">${escapeHtml(
+                truncated,
+              )}</td>
+            </tr>
+          `;
+        })
+        .join("");
+      bodyNode.innerHTML = rows;
+      summaryNode.textContent =
+        hiddenCount > 0
+          ? `Showing latest ${visibleEvents.length} rows of ${state.events.length} loaded events.`
+          : `Showing ${state.events.length} loaded events.`;
+    };
+
+    const updateLiveOutputLines = () => {
+      const shouldRebuild =
+        state.forceLiveOutputRebuild ||
+        state.liveOutputRenderedFilter !== state.outputFilter ||
+        state.liveOutputRenderedEventCount > state.events.length;
+
+      if (shouldRebuild) {
+        const lines = [];
+        state.events.forEach((event) => {
+          if (eventMatchesOutputFilter(event, state.outputFilter)) {
+            lines.push(formatLiveOutputLine(event));
           }
         });
+        if (lines.length > state.maxLiveOutputLines) {
+          lines.splice(0, lines.length - state.maxLiveOutputLines);
+        }
+        state.liveOutputLines = lines;
+        state.liveOutputRenderedEventCount = state.events.length;
+        state.liveOutputRenderedFilter = state.outputFilter;
+        state.forceLiveOutputRebuild = false;
+        return;
       }
 
-      const liveRevokeButton = document.getElementById("queue-live-revoke");
-      if (liveRevokeButton) {
-        liveRevokeButton.addEventListener("click", async () => {
-          liveRevokeButton.disabled = true;
-          setLiveNotice("Revoking live session...");
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.liveSessionRevoke ||
-                  "/api/queue/jobs/{id}/live-session/revoke",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ reason: "Revoked from dashboard" }),
-              },
-            );
-            state.liveSessionRwAttach = "";
-            state.liveSessionRwWeb = "";
-            state.liveSessionRwGrantedUntil = "";
-            await loadDetail();
-            await loadEvents();
-            setLiveNotice("Live session revoked.");
-          } catch (error) {
-            console.error("live session revoke failed", error);
-            setLiveNotice("Failed to revoke live session.", true);
-            liveRevokeButton.disabled = false;
+      if (state.liveOutputRenderedEventCount < state.events.length) {
+        for (
+          let index = state.liveOutputRenderedEventCount;
+          index < state.events.length;
+          index += 1
+        ) {
+          const event = state.events[index];
+          if (eventMatchesOutputFilter(event, state.outputFilter)) {
+            state.liveOutputLines.push(formatLiveOutputLine(event));
           }
-        });
+        }
+        if (state.liveOutputLines.length > state.maxLiveOutputLines) {
+          state.liveOutputLines.splice(
+            0,
+            state.liveOutputLines.length - state.maxLiveOutputLines,
+          );
+        }
+        state.liveOutputRenderedEventCount = state.events.length;
       }
+    };
 
-      const pauseButton = document.getElementById("queue-live-pause");
-      if (pauseButton) {
-        pauseButton.addEventListener("click", async () => {
-          pauseButton.disabled = true;
-          const action = pauseButton.textContent === "Resume" ? "resume" : "pause";
-          setLiveNotice(action === "pause" ? "Pausing worker..." : "Resuming worker...");
-          try {
-            await fetchJson(
-              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
-                id: jobId,
-              }),
-              {
-                method: "POST",
-                body: JSON.stringify({ action }),
-              },
-            );
-            await loadDetail();
-            await loadEvents();
-            setLiveNotice(action === "pause" ? "Pause requested." : "Resume requested.");
-          } catch (error) {
-            console.error("task control action failed", error);
-            setLiveNotice("Failed to apply control action.", true);
-            pauseButton.disabled = false;
-          }
-        });
-      }
-
-      const takeoverButton = document.getElementById("queue-live-takeover");
-      if (takeoverButton) {
-        takeoverButton.addEventListener("click", async () => {
-          takeoverButton.disabled = true;
-          setLiveNotice("Requesting takeover...");
-          try {
-            await fetchJson(
-              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
-                id: jobId,
-              }),
-              {
-                method: "POST",
-                body: JSON.stringify({ action: "takeover" }),
-              },
-            );
-            await loadDetail();
-            await loadEvents();
-            setLiveNotice("Takeover requested.");
-          } catch (error) {
-            console.error("task takeover action failed", error);
-            setLiveNotice("Failed to request takeover.", true);
-            takeoverButton.disabled = false;
-          }
-        });
-      }
-
-      const operatorMessageInput = document.getElementById("queue-operator-message");
-      const operatorSendButton = document.getElementById("queue-operator-send");
-      if (operatorMessageInput && operatorSendButton) {
-        operatorSendButton.addEventListener("click", async () => {
-          const messageText = String(operatorMessageInput.value || "").trim();
-          if (!messageText) {
-            return;
-          }
-          operatorSendButton.disabled = true;
-          setLiveNotice("Sending operator message...");
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.operatorMessages ||
-                  "/api/queue/jobs/{id}/operator-messages",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ message: messageText }),
-              },
-            );
-            operatorMessageInput.value = "";
-            await loadEvents();
-            setLiveNotice("Operator message sent.");
-          } catch (error) {
-            console.error("operator message failed", error);
-            setLiveNotice("Failed to send operator message.", true);
-          } finally {
-            operatorSendButton.disabled = false;
-          }
-        });
-      }
-
-      const followOutput = document.getElementById("queue-follow-output");
-      if (followOutput) {
-        followOutput.addEventListener("change", () => {
-          state.followOutput = Boolean(followOutput.checked);
-          if (state.followOutput) {
-            const outputNode = document.getElementById("queue-live-output");
-            if (outputNode) {
-              outputNode.scrollTop = outputNode.scrollHeight;
-            }
-          }
-        });
-      }
-
-      const outputFilter = document.getElementById("queue-output-filter");
-      if (outputFilter) {
-        outputFilter.addEventListener("change", () => {
-          state.outputFilter = String(outputFilter.value || "all");
-          render(null);
-        });
-      }
-
-      const copyOutput = document.getElementById("queue-copy-output");
-      if (copyOutput) {
-        copyOutput.addEventListener("click", async () => {
-          const content = buildLiveOutput(state.events, state.outputFilter);
-          if (!content) {
-            return;
-          }
-          try {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-              await navigator.clipboard.writeText(content);
-            }
-          } catch (error) {
-            console.error("copy live output failed", error);
-          }
-        });
-      }
-
+    const renderLiveOutput = () => {
       const outputNode = document.getElementById("queue-live-output");
-      if (outputNode && state.followOutput) {
+      if (!outputNode) {
+        return;
+      }
+      updateLiveOutputLines();
+      outputNode.textContent = state.liveOutputLines.join("\n");
+      if (state.followOutput) {
         outputNode.scrollTop = outputNode.scrollHeight;
       }
+    };
+
+    const flushEventPanelsRender = () => {
+      renderEventsTable();
+      renderLiveOutput();
+      renderLoadOlderControls();
+    };
+
+    const scheduleEventPanelsRender = ({ forceLiveOutputRebuild = false } = {}) => {
+      if (forceLiveOutputRebuild) {
+        state.forceLiveOutputRebuild = true;
+      }
+      if (state.eventsRenderTimer !== null) {
+        return;
+      }
+      state.eventsRenderTimer = window.setTimeout(() => {
+        state.eventsRenderTimer = null;
+        flushEventPanelsRender();
+      }, state.eventsRenderIntervalMs);
+    };
+
+    registerDisposer(() => {
+      if (state.eventsRenderTimer !== null) {
+        clearTimeout(state.eventsRenderTimer);
+        state.eventsRenderTimer = null;
+      }
+    });
+
+    const appendIncomingEvents = (incomingEvents) => {
+      let changed = false;
+      const ordered = normalizeIncomingEventsAsc(incomingEvents);
+      ordered.forEach((event) => {
+        const eventId = String(pick(event, "id") || "");
+        if (!eventId || state.eventIds.has(eventId)) {
+          return;
+        }
+        state.eventIds.add(eventId);
+        state.events.push(event);
+        changed = true;
+      });
+      if (!changed) {
+        return false;
+      }
+      trimEventsToLimit();
+      refreshEventCursors();
+      scheduleEventPanelsRender();
+      return true;
+    };
+
+    const prependOlderEvents = (incomingEvents) => {
+      const ordered = normalizeIncomingEventsAsc(incomingEvents);
+      const toPrepend = [];
+      ordered.forEach((event) => {
+        const eventId = String(pick(event, "id") || "");
+        if (!eventId || state.eventIds.has(eventId)) {
+          return;
+        }
+        state.eventIds.add(eventId);
+        toPrepend.push(event);
+      });
+      if (toPrepend.length === 0) {
+        return false;
+      }
+      state.events = [...toPrepend, ...state.events];
+      trimEventsToLimit();
+      refreshEventCursors();
+      scheduleEventPanelsRender({ forceLiveOutputRebuild: true });
+      return true;
+    };
+
+    const buildEventsQuery = ({
+      limit = 200,
+      after = null,
+      afterEventId = null,
+      before = null,
+      beforeEventId = null,
+      sort = "asc",
+    }) => {
+      const queryParams = [`limit=${encodeURIComponent(String(limit))}`];
+      if (after) {
+        queryParams.push(`after=${encodeURIComponent(String(after))}`);
+      }
+      if (afterEventId) {
+        queryParams.push(`afterEventId=${encodeURIComponent(String(afterEventId))}`);
+      }
+      if (before) {
+        queryParams.push(`before=${encodeURIComponent(String(before))}`);
+      }
+      if (beforeEventId) {
+        queryParams.push(`beforeEventId=${encodeURIComponent(String(beforeEventId))}`);
+      }
+      if (sort && sort !== "asc") {
+        queryParams.push(`sort=${encodeURIComponent(String(sort))}`);
+      }
+      return `?${queryParams.join("&")}`;
     };
 
     const loadDetail = async () => {
@@ -2222,7 +2257,10 @@
         state.liveSession = liveSession;
         state.liveSessionError = liveSessionError;
         state.liveSessionRouteMissing = liveSessionRouteMissing;
-        render(null);
+        setDetailNotice("");
+        renderJobSummary();
+        renderLiveSession();
+        renderArtifacts();
       } catch (error) {
         console.error("queue detail load failed", error);
         state.job = null;
@@ -2230,29 +2268,86 @@
         state.liveSession = null;
         state.liveSessionError = null;
         state.liveSessionRouteMissing = false;
-        render("Failed to load queue detail.");
+        setDetailNotice("Failed to load queue detail.");
+        renderJobSummary();
+        renderLiveSession();
+        renderArtifacts();
       }
     };
 
-    const loadEvents = async () => {
-      const queryParams = ["limit=200"];
-      if (state.after) {
-        queryParams.push(`after=${encodeURIComponent(state.after)}`);
-      }
-      if (state.afterEventId) {
-        queryParams.push(`afterEventId=${encodeURIComponent(state.afterEventId)}`);
-      }
-      const query = `?${queryParams.join("&")}`;
+    const loadLatestEvents = async () => {
+      const query = buildEventsQuery({ limit: 200, sort: "desc" });
       try {
         const payload = await fetchJson(
           endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
             query,
         );
-        if (appendIncomingEvents(payload?.items || [])) {
-          render(null);
-        }
+        state.events = [];
+        state.eventIds.clear();
+        const newestFirst = Array.isArray(payload?.items) ? payload.items : [];
+        const newestFirstCount = newestFirst.length;
+        const orderedAsc = normalizeIncomingEventsAsc(newestFirst);
+        orderedAsc.forEach((event) => {
+          const eventId = String(pick(event, "id") || "");
+          if (!eventId || state.eventIds.has(eventId)) {
+            return;
+          }
+          state.eventIds.add(eventId);
+          state.events.push(event);
+        });
+        refreshEventCursors();
+        state.hasOlderEvents = newestFirstCount >= 200;
+        scheduleEventPanelsRender({ forceLiveOutputRebuild: true });
+      } catch (error) {
+        console.error("queue initial event load failed", error);
+      }
+    };
+
+    const loadNewEvents = async () => {
+      const query = buildEventsQuery({
+        limit: 200,
+        after: state.after,
+        afterEventId: state.afterEventId,
+      });
+      try {
+        const payload = await fetchJson(
+          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
+            query,
+        );
+        appendIncomingEvents(payload?.items || []);
       } catch (error) {
         console.error("queue event poll failed", error);
+      }
+    };
+
+    const loadOlderEvents = async () => {
+      if (state.loadingOlderEvents || !state.oldest || !state.oldestEventId) {
+        return;
+      }
+      state.loadingOlderEvents = true;
+      renderLoadOlderControls();
+      const query = buildEventsQuery({
+        limit: 200,
+        before: state.oldest,
+        beforeEventId: state.oldestEventId,
+        sort: "desc",
+      });
+      try {
+        const payload = await fetchJson(
+          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
+            query,
+        );
+        const older = Array.isArray(payload?.items) ? payload.items : [];
+        const added = prependOlderEvents(older);
+        state.hasOlderEvents = older.length >= 200;
+        if (!added && older.length === 0) {
+          state.hasOlderEvents = false;
+        }
+      } catch (error) {
+        console.error("queue load older events failed", error);
+      } finally {
+        state.loadingOlderEvents = false;
+        renderLoadOlderControls();
       }
     };
 
@@ -2263,8 +2358,8 @@
       state.eventsPollingStarted = true;
       state.eventsTransport = "polling";
       state.eventsTransportStatus = "active";
-      render(null);
-      startPolling(loadEvents, pollIntervals.events);
+      renderTransportStatus();
+      startPolling(loadNewEvents, pollIntervals.events);
     };
 
     const startEventStream = () => {
@@ -2273,22 +2368,20 @@
       if (typeof window.EventSource !== "function") {
         state.eventsTransport = "polling";
         state.eventsTransportStatus = "unsupported";
+        renderTransportStatus();
         beginPollingEvents();
         return;
       }
 
-      const queryParams = ["limit=200"];
-      if (state.after) {
-        queryParams.push(`after=${encodeURIComponent(state.after)}`);
-      }
-      if (state.afterEventId) {
-        queryParams.push(`afterEventId=${encodeURIComponent(state.afterEventId)}`);
-      }
-      const query = `?${queryParams.join("&")}`;
+      const query = buildEventsQuery({
+        limit: 200,
+        after: state.after,
+        afterEventId: state.afterEventId,
+      });
       const streamUrl = endpoint(streamTemplate, { id: jobId }) + query;
       state.eventsTransport = "sse";
       state.eventsTransportStatus = "connecting";
-      render(null);
+      renderTransportStatus();
 
       const source = new window.EventSource(streamUrl);
       registerDisposer(() => source.close());
@@ -2299,9 +2392,7 @@
         }
         try {
           const parsed = JSON.parse(rawData);
-          if (appendIncomingEvents([parsed])) {
-            render(null);
-          }
+          appendIncomingEvents([parsed]);
         } catch (error) {
           console.error("queue event stream parse failed", error);
         }
@@ -2310,18 +2401,24 @@
       source.addEventListener("open", () => {
         state.eventsTransport = "sse";
         state.eventsTransportStatus = "active";
-        render(null);
+        renderTransportStatus();
       });
 
       source.addEventListener("queue_event", (event) => {
-        state.eventsTransport = "sse";
-        state.eventsTransportStatus = "active";
+        if (state.eventsTransportStatus !== "active") {
+          state.eventsTransport = "sse";
+          state.eventsTransportStatus = "active";
+          renderTransportStatus();
+        }
         handleMessage(event.data);
       });
 
       source.onmessage = (event) => {
-        state.eventsTransport = "sse";
-        state.eventsTransportStatus = "active";
+        if (state.eventsTransportStatus !== "active") {
+          state.eventsTransport = "sse";
+          state.eventsTransportStatus = "active";
+          renderTransportStatus();
+        }
         handleMessage(event.data);
       };
 
@@ -2329,14 +2426,265 @@
         console.error("queue event stream failed; switching to polling", error);
         state.eventsTransport = "polling";
         state.eventsTransportStatus = "error";
-        render(null);
+        renderTransportStatus();
         source.close();
         beginPollingEvents();
       };
     };
 
+    const onDetailClick = async (event) => {
+      const button = event.target instanceof HTMLElement ? event.target.closest("button") : null;
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+
+      if (button.id === "queue-cancel-button") {
+        button.disabled = true;
+        setCancelNotice("Submitting cancellation request...");
+        try {
+          await fetchJson(
+            endpoint(queueSourceConfig.cancel || "/api/queue/jobs/{id}/cancel", { id: jobId }),
+            {
+              method: "POST",
+              body: JSON.stringify({ reason: "Cancellation requested from dashboard" }),
+            },
+          );
+          setCancelNotice("Cancellation request submitted.");
+          await Promise.all([loadNewEvents(), loadDetail()]);
+        } catch (error) {
+          console.error("queue cancellation request failed", error);
+          setCancelNotice("Failed to cancel queue job.", true);
+          button.disabled = false;
+        }
+        return;
+      }
+
+      if (button.id === "queue-load-older-events") {
+        await loadOlderEvents();
+        return;
+      }
+
+      const runLiveAction = async (actionKey, action) => {
+        state.pendingLiveControlAction = actionKey;
+        renderLiveSession();
+        try {
+          await action();
+        } finally {
+          state.pendingLiveControlAction = "";
+          renderLiveSession();
+        }
+      };
+
+      if (button.id === "queue-live-enable") {
+        await runLiveAction("enable", async () => {
+          setLiveNotice("Enabling live session...");
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.liveSession || "/api/queue/jobs/{id}/live-session",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({}),
+              },
+            );
+            state.liveSessionRwAttach = "";
+            state.liveSessionRwWeb = "";
+            state.liveSessionRwGrantedUntil = "";
+            await Promise.all([loadDetail(), loadNewEvents()]);
+            setLiveNotice("Live session enabled.");
+          } catch (error) {
+            console.error("live session enable failed", error);
+            setLiveNotice("Failed to enable live session.", true);
+          }
+        });
+        return;
+      }
+
+      if (button.id === "queue-live-grant") {
+        await runLiveAction("grant", async () => {
+          setLiveNotice("Requesting temporary write access...");
+          try {
+            const grant = await fetchJson(
+              endpoint(
+                queueSourceConfig.liveSessionGrantWrite ||
+                  "/api/queue/jobs/{id}/live-session/grant-write",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ ttlMinutes: 15 }),
+              },
+            );
+            state.liveSessionRwAttach = String(pick(grant, "attachRw") || "");
+            state.liveSessionRwWeb = String(pick(grant, "webRw") || "");
+            state.liveSessionRwGrantedUntil = String(pick(grant, "grantedUntil") || "");
+            await Promise.all([loadDetail(), loadNewEvents()]);
+            setLiveNotice("RW access granted.");
+          } catch (error) {
+            console.error("live session grant failed", error);
+            setLiveNotice("Failed to grant write access.", true);
+          }
+        });
+        return;
+      }
+
+      if (button.id === "queue-live-revoke") {
+        await runLiveAction("revoke", async () => {
+          setLiveNotice("Revoking live session...");
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.liveSessionRevoke ||
+                  "/api/queue/jobs/{id}/live-session/revoke",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ reason: "Revoked from dashboard" }),
+              },
+            );
+            state.liveSessionRwAttach = "";
+            state.liveSessionRwWeb = "";
+            state.liveSessionRwGrantedUntil = "";
+            await Promise.all([loadDetail(), loadNewEvents()]);
+            setLiveNotice("Live session revoked.");
+          } catch (error) {
+            console.error("live session revoke failed", error);
+            setLiveNotice("Failed to revoke live session.", true);
+          }
+        });
+        return;
+      }
+
+      if (button.id === "queue-live-pause") {
+        await runLiveAction("pause", async () => {
+          const action = button.textContent === "Resume" ? "resume" : "pause";
+          setLiveNotice(action === "pause" ? "Pausing worker..." : "Resuming worker...");
+          try {
+            await fetchJson(
+              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
+                id: jobId,
+              }),
+              {
+                method: "POST",
+                body: JSON.stringify({ action }),
+              },
+            );
+            await Promise.all([loadDetail(), loadNewEvents()]);
+            setLiveNotice(action === "pause" ? "Pause requested." : "Resume requested.");
+          } catch (error) {
+            console.error("task control action failed", error);
+            setLiveNotice("Failed to apply control action.", true);
+          }
+        });
+        return;
+      }
+
+      if (button.id === "queue-live-takeover") {
+        await runLiveAction("takeover", async () => {
+          setLiveNotice("Requesting takeover...");
+          try {
+            await fetchJson(
+              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
+                id: jobId,
+              }),
+              {
+                method: "POST",
+                body: JSON.stringify({ action: "takeover" }),
+              },
+            );
+            await Promise.all([loadDetail(), loadNewEvents()]);
+            setLiveNotice("Takeover requested.");
+          } catch (error) {
+            console.error("task takeover action failed", error);
+            setLiveNotice("Failed to request takeover.", true);
+          }
+        });
+        return;
+      }
+
+      if (button.id === "queue-operator-send") {
+        const input = document.getElementById("queue-operator-message");
+        const messageText =
+          input instanceof HTMLInputElement ? String(input.value || "").trim() : "";
+        if (!messageText) {
+          return;
+        }
+        await runLiveAction("operator-message", async () => {
+          setLiveNotice("Sending operator message...");
+          try {
+            await fetchJson(
+              endpoint(
+                queueSourceConfig.operatorMessages ||
+                  "/api/queue/jobs/{id}/operator-messages",
+                { id: jobId },
+              ),
+              {
+                method: "POST",
+                body: JSON.stringify({ message: messageText }),
+              },
+            );
+            if (input instanceof HTMLInputElement) {
+              input.value = "";
+            }
+            await loadNewEvents();
+            setLiveNotice("Operator message sent.");
+          } catch (error) {
+            console.error("operator message failed", error);
+            setLiveNotice("Failed to send operator message.", true);
+          }
+        });
+      }
+    };
+
+    detailPage.addEventListener("click", onDetailClick);
+    registerDisposer(() => detailPage.removeEventListener("click", onDetailClick));
+
+    const followOutput = document.getElementById("queue-follow-output");
+    if (followOutput instanceof HTMLInputElement) {
+      followOutput.addEventListener("change", () => {
+        state.followOutput = Boolean(followOutput.checked);
+        if (state.followOutput) {
+          const outputNode = document.getElementById("queue-live-output");
+          if (outputNode) {
+            outputNode.scrollTop = outputNode.scrollHeight;
+          }
+        }
+      });
+    }
+
+    const outputFilter = document.getElementById("queue-output-filter");
+    if (outputFilter instanceof HTMLSelectElement) {
+      outputFilter.addEventListener("change", () => {
+        state.outputFilter = String(outputFilter.value || "all");
+        scheduleEventPanelsRender({ forceLiveOutputRebuild: true });
+      });
+    }
+
+    const copyOutput = document.getElementById("queue-copy-output");
+    if (copyOutput) {
+      copyOutput.addEventListener("click", async () => {
+        const outputNode = document.getElementById("queue-live-output");
+        const content = outputNode ? String(outputNode.textContent || "") : "";
+        if (!content) {
+          return;
+        }
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(content);
+          }
+        } catch (error) {
+          console.error("copy live output failed", error);
+        }
+      });
+    }
+
+    renderTransportStatus();
+    renderLoadOlderControls();
     await loadDetail();
-    await loadEvents();
+    await loadLatestEvents();
     startPolling(loadDetail, pollIntervals.detail);
     startEventStream();
   }
