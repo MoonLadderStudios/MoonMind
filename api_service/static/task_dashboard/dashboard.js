@@ -76,6 +76,29 @@
   );
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+  const taskTemplateCatalogConfig =
+    systemConfig.taskTemplateCatalog &&
+    typeof systemConfig.taskTemplateCatalog === "object" &&
+    !Array.isArray(systemConfig.taskTemplateCatalog)
+      ? systemConfig.taskTemplateCatalog
+      : {};
+  const taskTemplateCatalogEnabled = Boolean(taskTemplateCatalogConfig.enabled);
+  const taskTemplateSaveEnabled = Boolean(taskTemplateCatalogConfig.templateSaveEnabled);
+  const taskTemplateEndpoints = {
+    list: String(queueSourceConfig.taskStepTemplates || "/api/task-step-templates"),
+    detail: String(
+      queueSourceConfig.taskStepTemplateDetail || "/api/task-step-templates/{slug}",
+    ),
+    expand: String(
+      queueSourceConfig.taskStepTemplateExpand || "/api/task-step-templates/{slug}:expand",
+    ),
+    save: String(
+      queueSourceConfig.taskStepTemplateSave || "/api/task-step-templates/save-from-task",
+    ),
+    favorite: String(
+      queueSourceConfig.taskStepTemplateFavorite || "/api/task-step-templates/{slug}:favorite",
+    ),
+  };
 
   const pollers = [];
   const disposers = [];
@@ -1007,6 +1030,59 @@
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`
       : "Set a repository in this form (no system default repository is configured).";
+    const templateControlsHtml = taskTemplateCatalogEnabled
+      ? `
+        <div class="card">
+          <div class="actions">
+            <strong>Task Presets</strong>
+          </div>
+          <div class="grid-2">
+            <label>Scope
+              <select id="queue-template-scope">
+                <option value="global">global</option>
+                <option value="personal">personal</option>
+                <option value="team">team</option>
+              </select>
+            </label>
+            <label>Scope Ref (optional)
+              <input id="queue-template-scope-ref" placeholder="team-id (team scope only)" />
+            </label>
+          </div>
+          <div class="grid-2">
+            <label>Search
+              <input id="queue-template-search" placeholder="filter by title, slug, tags" />
+            </label>
+            <label>Preset
+              <select id="queue-template-select">
+                <option value="">Select preset...</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid-2">
+            <label>Apply Mode
+              <select id="queue-template-apply-mode">
+                <option value="append">append</option>
+                <option value="replace">replace</option>
+              </select>
+            </label>
+            <label>Version
+              <input id="queue-template-version" readonly />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="button" id="queue-template-reload">Reload Presets</button>
+            <button type="button" id="queue-template-preview">Preview</button>
+            <button type="button" id="queue-template-apply">Apply</button>
+            ${
+              taskTemplateSaveEnabled
+                ? '<button type="button" id="queue-template-save-current">Save Current Steps as Preset</button>'
+                : ""
+            }
+          </div>
+          <p class="small" id="queue-template-message"></p>
+        </div>
+        `
+      : "";
 
     setView(
       "Submit Queue Task",
@@ -1025,6 +1101,7 @@
           <span class="small">Step 1 is required and defines default task instructions + skill. Add more steps for multi-step runs.</span>
           <div id="queue-steps-list"></div>
         </div>
+        ${templateControlsHtml}
         <datalist id="queue-skill-options">
           <option value="auto"></option>
         </datalist>
@@ -1127,9 +1204,12 @@
       skillId: "",
       skillArgs: "",
       skillRequiredCapabilities: "",
+      templateStepId: "",
+      templateInstructions: "",
       ...overrides,
     });
     const stepState = [createStepStateEntry()];
+    let appliedTemplateState = [];
     const ensurePrimaryStep = () => {
       if (stepState.length === 0) {
         stepState.push(createStepStateEntry());
@@ -1291,12 +1371,430 @@
           return;
         }
         stepState[index][field] = fieldInput.value || "";
+        if (
+          field === "instructions" &&
+          stepState[index].templateStepId &&
+          stepState[index].id === stepState[index].templateStepId &&
+          fieldInput.value !== stepState[index].templateInstructions
+        ) {
+          stepState[index].id = "";
+        }
       });
     }
     renderStepEditor();
     loadAvailableSkillIds().then((skillIds) => {
       populateSkillDatalist("queue-skill-options", skillIds);
     });
+
+    const templateMessage = document.getElementById("queue-template-message");
+    const templateScope = document.getElementById("queue-template-scope");
+    const templateScopeRef = document.getElementById("queue-template-scope-ref");
+    const templateSearch = document.getElementById("queue-template-search");
+    const templateSelect = document.getElementById("queue-template-select");
+    const templateVersion = document.getElementById("queue-template-version");
+    const templateApplyMode = document.getElementById("queue-template-apply-mode");
+    const templateReload = document.getElementById("queue-template-reload");
+    const templatePreview = document.getElementById("queue-template-preview");
+    const templateApply = document.getElementById("queue-template-apply");
+    const templateSaveCurrent = document.getElementById("queue-template-save-current");
+    let templateItems = [];
+
+    const setTemplateMessage = (text, isError = false) => {
+      if (!templateMessage) {
+        return;
+      }
+      templateMessage.className = isError ? "notice error" : "small";
+      templateMessage.textContent = text;
+    };
+
+    const currentTemplateScope = () =>
+      templateScope instanceof HTMLSelectElement ? templateScope.value : "global";
+    const currentTemplateScopeRef = () =>
+      templateScopeRef instanceof HTMLInputElement
+        ? String(templateScopeRef.value || "").trim()
+        : "";
+    const currentTemplateSearch = () =>
+      templateSearch instanceof HTMLInputElement
+        ? String(templateSearch.value || "").trim()
+        : "";
+
+    const renderTemplateSelect = () => {
+      if (!(templateSelect instanceof HTMLSelectElement)) {
+        return;
+      }
+      const searchFilter = currentTemplateSearch().toLowerCase();
+      const filtered = templateItems.filter((item) => {
+        if (!searchFilter) {
+          return true;
+        }
+        const haystack = `${item.slug} ${item.title} ${(item.tags || []).join(" ")}`.toLowerCase();
+        return haystack.includes(searchFilter);
+      });
+      templateSelect.innerHTML = [
+        '<option value="">Select preset...</option>',
+        ...filtered.map(
+          (item) =>
+            `<option value="${escapeHtml(item.slug)}">${escapeHtml(item.title)} (${escapeHtml(
+              item.latestVersion || item.version || "1.0.0",
+            )})</option>`,
+        ),
+      ].join("");
+      if (templateVersion instanceof HTMLInputElement) {
+        templateVersion.value = "";
+      }
+    };
+
+    const fetchTemplateList = async () => {
+      if (!taskTemplateCatalogEnabled) {
+        return;
+      }
+      const scope = currentTemplateScope();
+      const scopeRef = currentTemplateScopeRef();
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      if (scopeRef) {
+        params.set("scopeRef", scopeRef);
+      }
+      setTemplateMessage("Loading presets...");
+      try {
+        const payload = await fetchJson(`${taskTemplateEndpoints.list}?${params.toString()}`);
+        templateItems = Array.isArray(payload?.items) ? payload.items : [];
+        renderTemplateSelect();
+        setTemplateMessage(`Loaded ${templateItems.length} presets.`);
+      } catch (error) {
+        console.error("template list fetch failed", error);
+        templateItems = [];
+        renderTemplateSelect();
+        setTemplateMessage(
+          "Failed to load presets: " + String(error?.message || "request failed"),
+          true,
+        );
+      }
+    };
+
+    const selectedTemplate = () => {
+      if (!(templateSelect instanceof HTMLSelectElement)) {
+        return null;
+      }
+      const slug = String(templateSelect.value || "").trim();
+      if (!slug) {
+        return null;
+      }
+      return templateItems.find((item) => String(item.slug || "").trim() === slug) || null;
+    };
+
+    const promptTemplateInputs = (inputs) => {
+      const values = {};
+      for (const definition of Array.isArray(inputs) ? inputs : []) {
+        const name = String(definition?.name || "").trim();
+        const label = String(definition?.label || name).trim() || name;
+        if (!name) {
+          continue;
+        }
+        const required = Boolean(definition?.required);
+        const defaultValue = definition?.default;
+        const initial = defaultValue === null || defaultValue === undefined ? "" : String(defaultValue);
+        const entered = window.prompt(`${label}${required ? " (required)" : ""}`, initial);
+        if (entered === null) {
+          if (required) {
+            throw new Error(`Input '${label}' is required.`);
+          }
+          continue;
+        }
+        const normalized = String(entered).trim();
+        if (!normalized) {
+          if (required) {
+            throw new Error(`Input '${label}' is required.`);
+          }
+          continue;
+        }
+        if (String(definition?.type || "").toLowerCase() === "enum") {
+          const options = Array.isArray(definition?.options) ? definition.options : [];
+          if (options.length > 0 && !options.includes(normalized)) {
+            throw new Error(
+              `Input '${label}' must be one of: ${options.join(", ")}.`,
+            );
+          }
+        }
+        values[name] = normalized;
+      }
+      return values;
+    };
+
+    const mapExpandedStepToState = (step) => {
+      const skill = step && typeof step.skill === "object" && !Array.isArray(step.skill) ? step.skill : null;
+      const caps = Array.isArray(skill?.requiredCapabilities)
+        ? skill.requiredCapabilities.join(",")
+        : "";
+      const args = skill && skill.args && typeof skill.args === "object" && !Array.isArray(skill.args)
+        ? JSON.stringify(skill.args)
+        : "";
+      const stepId = String(step?.id || "").trim();
+      const instructions = String(step?.instructions || "").trim();
+      return createStepStateEntry({
+        id: stepId,
+        title: String(step?.title || "").trim(),
+        instructions,
+        skillId: String(skill?.id || "").trim(),
+        skillArgs: args,
+        skillRequiredCapabilities: caps,
+        templateStepId: stepId,
+        templateInstructions: instructions,
+      });
+    };
+
+    const applySelectedTemplate = async ({ previewOnly }) => {
+      const selected = selectedTemplate();
+      if (!selected) {
+        setTemplateMessage("Choose a preset first.", true);
+        return;
+      }
+      const scope = currentTemplateScope();
+      const scopeRef = currentTemplateScopeRef();
+      const scopeParams = new URLSearchParams({ scope });
+      if (scopeRef) {
+        scopeParams.set("scopeRef", scopeRef);
+      }
+
+      setTemplateMessage(previewOnly ? "Loading preview..." : "Applying preset...");
+      try {
+        const detail = await fetchJson(
+          `${endpoint(taskTemplateEndpoints.detail, { slug: selected.slug })}?${scopeParams.toString()}`,
+        );
+        const inputs = promptTemplateInputs(detail?.inputs || []);
+        const expanded = await fetchJson(
+          `${endpoint(taskTemplateEndpoints.expand, { slug: selected.slug })}?${scopeParams.toString()}`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              version: detail?.version || detail?.latestVersion || selected.latestVersion || "1.0.0",
+              inputs,
+              options: { enforceStepLimit: true },
+            }),
+          },
+        );
+        const expandedSteps = Array.isArray(expanded?.steps) ? expanded.steps : [];
+        if (templateVersion instanceof HTMLInputElement) {
+          templateVersion.value = String(
+            expanded?.appliedTemplate?.version ||
+              detail?.version ||
+              detail?.latestVersion ||
+              selected.latestVersion ||
+              "",
+          );
+        }
+        if (previewOnly) {
+          const previewLines = expandedSteps.map((step, index) => {
+            const title = String(step?.title || "").trim() || `Step ${index + 1}`;
+            return `${index + 1}. ${title}`;
+          });
+          const warningText =
+            Array.isArray(expanded?.warnings) && expanded.warnings.length > 0
+              ? `\\nWarnings: ${expanded.warnings.join("; ")}`
+              : "";
+          window.alert(
+            `Preset preview (${expandedSteps.length} steps):\\n${previewLines.join(
+              "\\n",
+            )}${warningText}`,
+          );
+          setTemplateMessage(`Preview loaded (${expandedSteps.length} steps).`);
+          return;
+        }
+
+        const mappedSteps = expandedSteps.map(mapExpandedStepToState);
+        const applyMode =
+          templateApplyMode instanceof HTMLSelectElement ? templateApplyMode.value : "append";
+        if (applyMode === "replace") {
+          stepState.splice(0, stepState.length, ...(mappedSteps.length > 0 ? mappedSteps : [createStepStateEntry()]));
+          appliedTemplateState = [];
+        } else {
+          stepState.push(...mappedSteps);
+        }
+        if (mappedSteps.length > 0) {
+          const appliedTemplate = expanded?.appliedTemplate || {};
+          appliedTemplateState.push({
+            slug: String(appliedTemplate.slug || selected.slug),
+            version: String(
+              appliedTemplate.version ||
+                detail?.version ||
+                selected.latestVersion ||
+                "1.0.0",
+            ),
+            inputs:
+              appliedTemplate.inputs && typeof appliedTemplate.inputs === "object"
+                ? appliedTemplate.inputs
+                : inputs,
+            stepIds: Array.isArray(appliedTemplate.stepIds)
+              ? appliedTemplate.stepIds
+              : mappedSteps.map((step) => step.id).filter((id) => Boolean(id)),
+            appliedAt:
+              String(appliedTemplate.appliedAt || "").trim() ||
+              new Date().toISOString(),
+            capabilities: Array.isArray(expanded?.capabilities) ? expanded.capabilities : [],
+          });
+        }
+        renderStepEditor();
+        setTemplateMessage(`Applied preset '${selected.title}' (${mappedSteps.length} steps).`);
+      } catch (error) {
+        console.error("template apply failed", error);
+        setTemplateMessage(
+          "Failed to apply preset: " + String(error?.message || "request failed"),
+          true,
+        );
+      }
+    };
+
+    const saveCurrentStepsAsTemplate = async () => {
+      if (!taskTemplateSaveEnabled) {
+        return;
+      }
+      const title = window.prompt("Preset title", "");
+      if (title === null || !String(title).trim()) {
+        setTemplateMessage("Preset save cancelled.");
+        return;
+      }
+      const description = window.prompt("Preset description", `Saved from queue draft: ${title}`) || "";
+      const scope = (window.prompt("Scope (personal/team)", "personal") || "personal")
+        .trim()
+        .toLowerCase();
+      if (!["personal", "team"].includes(scope)) {
+        setTemplateMessage("Scope must be personal or team.", true);
+        return;
+      }
+      const scopeRef =
+        scope === "team"
+          ? String(window.prompt("Team scopeRef (required for team)", "") || "").trim()
+          : "";
+      if (scope === "team" && !scopeRef) {
+        setTemplateMessage("Team scopeRef is required for team presets.", true);
+        return;
+      }
+
+      const steps = stepState
+        .map((step) => {
+          const instructions = String(step.instructions || "").trim();
+          if (!instructions) {
+            return null;
+          }
+          const blueprint = {
+            ...(String(step.title || "").trim() ? { title: String(step.title).trim() } : {}),
+            instructions,
+          };
+          const skillId = String(step.skillId || "").trim();
+          const caps = parseCapabilitiesCsv(step.skillRequiredCapabilities || "");
+          const skillArgsRaw = String(step.skillArgs || "").trim();
+          if (skillId || skillArgsRaw || caps.length > 0) {
+            let skillArgs = {};
+            if (skillArgsRaw) {
+              try {
+                const parsed = JSON.parse(skillArgsRaw);
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                  skillArgs = parsed;
+                }
+              } catch (_error) {
+                // Best-effort save path: drop invalid JSON skill args instead of aborting.
+                skillArgs = {};
+              }
+            }
+            blueprint.skill = {
+              id: skillId || "auto",
+              args: skillArgs,
+              ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
+            };
+          }
+          return blueprint;
+        })
+        .filter((item) => Boolean(item));
+
+      if (steps.length === 0) {
+        setTemplateMessage("Add at least one step with instructions before saving.", true);
+        return;
+      }
+
+      setTemplateMessage("Saving preset...");
+      try {
+        const body = {
+          scope,
+          ...(scopeRef ? { scopeRef } : {}),
+          title: String(title).trim(),
+          description: String(description).trim() || String(title).trim(),
+          steps,
+          suggestedInputs: [],
+          tags: [],
+        };
+        const created = await fetchJson(taskTemplateEndpoints.save, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        setTemplateMessage(`Saved preset '${created?.title || body.title}'. Reloading catalog...`);
+        await fetchTemplateList();
+      } catch (error) {
+        console.error("template save failed", error);
+        setTemplateMessage(
+          "Failed to save preset: " + String(error?.message || "request failed"),
+          true,
+        );
+      }
+    };
+
+    if (templateScope instanceof HTMLSelectElement) {
+      templateScope.addEventListener("change", () => {
+        fetchTemplateList().catch((error) => {
+          console.error("template scope change failed", error);
+        });
+      });
+    }
+    if (templateScopeRef instanceof HTMLInputElement) {
+      templateScopeRef.addEventListener("change", () => {
+        fetchTemplateList().catch((error) => {
+          console.error("template scopeRef change failed", error);
+        });
+      });
+    }
+    if (templateSearch instanceof HTMLInputElement) {
+      templateSearch.addEventListener("input", renderTemplateSelect);
+    }
+    if (templateSelect instanceof HTMLSelectElement && templateVersion instanceof HTMLInputElement) {
+      templateSelect.addEventListener("change", () => {
+        const selected = selectedTemplate();
+        templateVersion.value = selected
+          ? String(selected.latestVersion || selected.version || "")
+          : "";
+      });
+    }
+    if (templateReload instanceof HTMLButtonElement) {
+      templateReload.addEventListener("click", () => {
+        fetchTemplateList().catch((error) => {
+          console.error("template reload failed", error);
+        });
+      });
+    }
+    if (templatePreview instanceof HTMLButtonElement) {
+      templatePreview.addEventListener("click", () => {
+        applySelectedTemplate({ previewOnly: true }).catch((error) => {
+          console.error("template preview failed", error);
+        });
+      });
+    }
+    if (templateApply instanceof HTMLButtonElement) {
+      templateApply.addEventListener("click", () => {
+        applySelectedTemplate({ previewOnly: false }).catch((error) => {
+          console.error("template apply failed", error);
+        });
+      });
+    }
+    if (templateSaveCurrent instanceof HTMLButtonElement) {
+      templateSaveCurrent.addEventListener("click", () => {
+        saveCurrentStepsAsTemplate().catch((error) => {
+          console.error("template save-current failed", error);
+        });
+      });
+    }
+    if (taskTemplateCatalogEnabled) {
+      fetchTemplateList().catch((error) => {
+        console.error("initial template load failed", error);
+      });
+    }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1459,14 +1957,44 @@
           ]
         : [];
 
+      const templateCapabilities = [];
+      const appliedStepTemplates = [];
+      for (const entry of appliedTemplateState) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        const slug = String(entry.slug || "").trim();
+        const version = String(entry.version || "").trim();
+        if (!slug || !version) {
+          continue;
+        }
+        const templateEntry = {
+          slug,
+          version,
+          inputs: entry.inputs && typeof entry.inputs === "object" ? entry.inputs : {},
+          stepIds: Array.isArray(entry.stepIds) ? entry.stepIds : [],
+          appliedAt: String(entry.appliedAt || "").trim() || new Date().toISOString(),
+        };
+        if (Array.isArray(entry.capabilities)) {
+          templateCapabilities.push(...entry.capabilities);
+          templateEntry.capabilities = entry.capabilities;
+        }
+        appliedStepTemplates.push(templateEntry);
+      }
+      const mergedCapabilities = Array.from(
+        new Set(
+          deriveRequiredCapabilities({
+            runtimeMode,
+            publishMode,
+            taskSkillRequiredCapabilities,
+            stepSkillRequiredCapabilities,
+          }).concat(parseCapabilitiesCsv(templateCapabilities.join(","))),
+        ),
+      );
+
       const payload = {
         repository,
-        requiredCapabilities: deriveRequiredCapabilities({
-          runtimeMode,
-          publishMode,
-          taskSkillRequiredCapabilities,
-          stepSkillRequiredCapabilities,
-        }),
+        requiredCapabilities: mergedCapabilities,
         targetRuntime: runtimeMode,
         task: {
           instructions,
@@ -1487,6 +2015,9 @@
             prBody: null,
           },
           ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
+          ...(appliedStepTemplates.length > 0
+            ? { appliedStepTemplates }
+            : {}),
         },
       };
 

@@ -1,5 +1,21 @@
 # MoonMind Release Notes
 
+## 2026-02-18 – Task Preset Catalog (Beta)
+
+### Highlights
+- Added a server-hosted task preset catalog with template/version persistence tables:
+  `task_step_templates`, `task_step_template_versions`, `task_step_template_favorites`,
+  and `task_step_template_recents`.
+- Added REST APIs for listing, creating, expanding, favoriting, reviewing, and saving presets from task steps:
+  `/api/task-step-templates/*`.
+- Added dashboard queue-submit preset controls for browse/preview/apply and “Save Current Steps as Preset”.
+- Added queue payload compiler support for `task.appliedStepTemplates` metadata and capability merging.
+- Added seed presets under `api_service/data/task_step_templates/*.yaml`.
+
+### Rollout Notes
+- Feature flag: `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` (legacy fallback: `TASK_TEMPLATE_CATALOG=1`).
+- Default remains disabled until environments apply migration `202602180002`.
+
 ## 2026-02-18 – Queue Live Logs + SSE
 
 ### Highlights

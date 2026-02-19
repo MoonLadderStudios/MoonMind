@@ -126,6 +126,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "liveSessionRevoke": "/api/queue/jobs/{id}/live-session/revoke",
                 "taskControl": "/api/queue/jobs/{id}/control",
                 "operatorMessages": "/api/queue/jobs/{id}/operator-messages",
+                "taskStepTemplates": "/api/task-step-templates",
+                "taskStepTemplateDetail": "/api/task-step-templates/{slug}",
+                "taskStepTemplateExpand": "/api/task-step-templates/{slug}:expand",
+                "taskStepTemplateSave": "/api/task-step-templates/save-from-task",
+                "taskStepTemplateFavorite": "/api/task-step-templates/{slug}:favorite",
             },
             "orchestrator": {
                 "list": "/orchestrator/runs",
@@ -149,6 +154,12 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
+            "taskTemplateCatalog": {
+                "enabled": bool(settings.feature_flags.task_template_catalog),
+                "templateSaveEnabled": bool(
+                    settings.feature_flags.task_template_catalog
+                ),
+            },
         },
     }
 

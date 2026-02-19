@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
+from pathlib import Path
 from typing import Union
 
 import sqlalchemy as sa
+import yaml
 from alembic import op
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 revision: str = "202602180002"
 down_revision: Union[str, None] = "202602180001"
@@ -31,6 +35,136 @@ TASK_TEMPLATE_RELEASE_STATUS = postgresql.ENUM(
 
 def _json_variant() -> sa.JSON:
     return sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+
+
+def _seed_catalog_defaults(bind) -> None:
+    seed_dir = Path(__file__).resolve().parents[2] / "data" / "task_step_templates"
+    if not seed_dir.exists():
+        return
+
+    templates_table = sa.table(
+        "task_step_templates",
+        sa.column("id", sa.Uuid()),
+        sa.column("slug", sa.String()),
+        sa.column(
+            "scope_type",
+            postgresql.ENUM(name="tasktemplatescopetype", create_type=False),
+        ),
+        sa.column("scope_ref", sa.String()),
+        sa.column("title", sa.String()),
+        sa.column("description", sa.Text()),
+        sa.column("tags", _json_variant()),
+        sa.column("required_capabilities", _json_variant()),
+        sa.column("latest_version_id", sa.Uuid()),
+        sa.column("is_active", sa.Boolean()),
+        sa.column("created_by", sa.Uuid()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+    )
+    versions_table = sa.table(
+        "task_step_template_versions",
+        sa.column("id", sa.Uuid()),
+        sa.column("template_id", sa.Uuid()),
+        sa.column("version", sa.String()),
+        sa.column("inputs_schema", _json_variant()),
+        sa.column("steps", _json_variant()),
+        sa.column("annotations", _json_variant()),
+        sa.column("required_capabilities", _json_variant()),
+        sa.column("max_step_count", sa.Integer()),
+        sa.column(
+            "release_status",
+            postgresql.ENUM(name="tasktemplatereleasestatus", create_type=False),
+        ),
+        sa.column("reviewed_by", sa.Uuid()),
+        sa.column("reviewed_at", sa.DateTime(timezone=True)),
+        sa.column("notes", sa.Text()),
+        sa.column("seed_source", sa.String()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+    )
+
+    for seed_file in sorted(seed_dir.glob("*.yaml")):
+        document = yaml.safe_load(seed_file.read_text(encoding="utf-8")) or {}
+        if not isinstance(document, dict):
+            continue
+        slug = str(document.get("slug") or "").strip()
+        title = str(document.get("title") or "").strip()
+        description = str(document.get("description") or "").strip()
+        scope = str(document.get("scope") or "global").strip().lower() or "global"
+        scope_ref = document.get("scopeRef")
+        version = str(document.get("version") or "1.0.0").strip() or "1.0.0"
+        tags = list(document.get("tags") or [])
+        inputs = list(document.get("inputs") or [])
+        steps = list(document.get("steps") or [])
+        required_capabilities = list(document.get("requiredCapabilities") or [])
+        annotations = dict(document.get("annotations") or {})
+
+        if not slug or not title or not description or not steps:
+            continue
+        template_uuid = uuid.uuid5(
+            uuid.NAMESPACE_DNS, f"task-template:{scope}:{scope_ref}:{slug}"
+        )
+        version_uuid = uuid.uuid5(
+            uuid.NAMESPACE_DNS,
+            f"task-template-version:{scope}:{scope_ref}:{slug}:{version}",
+        )
+        now = sa.func.now()
+        template_inserted = bind.execute(
+            pg_insert(templates_table)
+            .values(
+                id=template_uuid,
+                slug=slug,
+                scope_type=scope,
+                scope_ref=scope_ref,
+                title=title,
+                description=description,
+                tags=tags,
+                required_capabilities=required_capabilities,
+                latest_version_id=None,
+                is_active=True,
+                created_by=None,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        version_inserted = bind.execute(
+            pg_insert(versions_table)
+            .values(
+                id=version_uuid,
+                template_id=template_uuid,
+                version=version,
+                inputs_schema=inputs,
+                steps=steps,
+                annotations=annotations,
+                required_capabilities=required_capabilities,
+                max_step_count=max(1, len(steps)),
+                release_status="active",
+                reviewed_by=None,
+                reviewed_at=None,
+                notes=None,
+                seed_source=str(seed_file),
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        if (template_inserted.rowcount or 0) > 0 or (
+            version_inserted.rowcount or 0
+        ) > 0:
+            bind.execute(
+                sa.text(
+                    """
+                    UPDATE task_step_templates
+                    SET latest_version_id = :version_id
+                    WHERE id = :template_id
+                    """
+                ),
+                {
+                    "template_id": str(template_uuid),
+                    "version_id": str(version_uuid),
+                },
+            )
 
 
 def upgrade() -> None:
@@ -94,6 +228,13 @@ def upgrade() -> None:
         "task_step_templates",
         ["is_active"],
         unique=False,
+    )
+    op.create_index(
+        "uq_task_step_template_slug_global",
+        "task_step_templates",
+        ["slug", "scope_type"],
+        unique=True,
+        postgresql_where=sa.text("scope_ref IS NULL"),
     )
 
     op.create_table(
@@ -198,6 +339,11 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["user_id"], ["user.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "user_id",
+            "template_version_id",
+            name="uq_task_template_recent_user_version",
+        ),
     )
     op.create_index(
         "ix_task_step_template_recents_user",
@@ -205,6 +351,7 @@ def upgrade() -> None:
         ["user_id"],
         unique=False,
     )
+    _seed_catalog_defaults(bind)
 
 
 def downgrade() -> None:
@@ -231,6 +378,7 @@ def downgrade() -> None:
     op.drop_table("task_step_template_versions")
 
     op.drop_index("ix_task_step_templates_active", table_name="task_step_templates")
+    op.drop_index("uq_task_step_template_slug_global", table_name="task_step_templates")
     op.drop_index("ix_task_step_templates_slug", table_name="task_step_templates")
     op.drop_index("ix_task_step_templates_scope", table_name="task_step_templates")
     op.drop_table("task_step_templates")
