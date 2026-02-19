@@ -1,8 +1,7 @@
 from __future__ import annotations  # Ensure this is at the very top
 
-from collections.abc import AsyncGenerator  # Use collections.abc for Python 3.9+
-
 import os
+from collections.abc import AsyncGenerator  # Use collections.abc for Python 3.9+
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker

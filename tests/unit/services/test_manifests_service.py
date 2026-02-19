@@ -62,13 +62,17 @@ async def test_upsert_manifest_persists_normalized_hash_and_version(
             queue_service = SimpleNamespace(create_job=None)
             service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
 
-            record = await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
+            record = await service.upsert_manifest(
+                name="demo", content=REGISTRY_MANIFEST
+            )
             assert record.name == "demo"
             assert record.version == "v0"
             assert record.content_hash.startswith("sha256:")
             first_hash = record.content_hash
 
-            updated = await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
+            updated = await service.upsert_manifest(
+                name="demo", content=REGISTRY_MANIFEST
+            )
             assert updated.id == record.id
             assert updated.content_hash == first_hash
 
@@ -91,7 +95,10 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
                     id=job_id,
                     type=MANIFEST_JOB_TYPE,
                     status=queue_models.AgentJobStatus.QUEUED,
-                    payload={"manifestHash": "sha256:abc", "requiredCapabilities": ["manifest"]},
+                    payload={
+                        "manifestHash": "sha256:abc",
+                        "requiredCapabilities": ["manifest"],
+                    },
                     created_at=datetime.now(UTC),
                 )
 

@@ -34,6 +34,7 @@ class DatabaseSettings(BaseSettings):
         extra="ignore",
     )
 
+
 class CelerySettings(BaseSettings):
     """Celery broker and result backend settings."""
 

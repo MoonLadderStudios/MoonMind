@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,10 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.api.schemas import (
     ManifestDetailModel,
     ManifestListResponse,
+    ManifestRunMetadataModel,
+    ManifestRunQueueMetadata,
     ManifestRunRequest,
     ManifestRunResponse,
-    ManifestRunQueueMetadata,
-    ManifestRunMetadataModel,
     ManifestStateModel,
     ManifestSummaryModel,
     ManifestUpsertRequest,
@@ -85,7 +84,9 @@ async def list_manifests(
     _user: User = Depends(get_current_user()),
 ) -> ManifestListResponse:
     records = await service.list_manifests(limit=limit, search=search)
-    return ManifestListResponse(items=[_serialize_summary(record) for record in records])
+    return ManifestListResponse(
+        items=[_serialize_summary(record) for record in records]
+    )
 
 
 @router.get("/{name}", response_model=ManifestDetailModel)
@@ -98,7 +99,10 @@ async def get_manifest(
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "manifest_not_found", "message": f"Manifest '{name}' not found"},
+            detail={
+                "code": "manifest_not_found",
+                "message": f"Manifest '{name}' not found",
+            },
         )
     return _serialize_detail(record)
 
@@ -145,7 +149,10 @@ async def create_manifest_run(
     except ManifestRegistryNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "manifest_not_found", "message": f"Manifest '{name}' not found"},
+            detail={
+                "code": "manifest_not_found",
+                "message": f"Manifest '{name}' not found",
+            },
         ) from exc
     except AgentQueueValidationError as exc:
         raise HTTPException(

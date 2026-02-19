@@ -7,9 +7,9 @@ import re
 from typing import Any, Mapping, MutableMapping, TypedDict
 from urllib.parse import urlsplit
 
-from moonmind.config.settings import settings
-
 import yaml
+
+from moonmind.config.settings import settings
 
 _BASE_ALLOWED_SOURCE_KINDS = frozenset({"inline", "registry"})
 _PROFILE_PROVIDER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -301,7 +301,9 @@ def _normalize_source(
     elif kind == "path":
         path_value = _clean_str(source_node.get("path"))
         if not path_value:
-            raise ManifestContractError("manifest.source.path must be defined for path sources")
+            raise ManifestContractError(
+                "manifest.source.path must be defined for path sources"
+            )
         source["path"] = path_value
 
     return source, content
@@ -317,9 +319,7 @@ def _normalize_options(options_node: Any) -> dict[str, Any]:
     for key, value in options_node.items():
         if key not in ALLOWED_OPTION_KEYS:
             allowed = ", ".join(sorted(ALLOWED_OPTION_KEYS))
-            raise ManifestContractError(
-                f"manifest.options only supports: {allowed}"
-            )
+            raise ManifestContractError(f"manifest.options only supports: {allowed}")
         if key in {"dryRun", "forceFull"}:
             normalized[key] = bool(value)
         elif key == "maxDocs":
@@ -333,9 +333,7 @@ def _normalize_options(options_node: Any) -> dict[str, Any]:
                         "manifest.options.maxDocs must be an integer"
                     ) from exc
                 if parsed < 1:
-                    raise ManifestContractError(
-                        "manifest.options.maxDocs must be >= 1"
-                    )
+                    raise ManifestContractError("manifest.options.maxDocs must be >= 1")
                 normalized[key] = parsed
     return normalized
 
@@ -580,7 +578,10 @@ def _looks_like_jwt(value: str) -> bool:
         return False
     header, payload, signature = value.split(".", 2)
     segments = (header, payload, signature)
-    return all(len(segment) >= 10 and _JWT_SEGMENT_RE.fullmatch(segment) for segment in segments)
+    return all(
+        len(segment) >= 10 and _JWT_SEGMENT_RE.fullmatch(segment)
+        for segment in segments
+    )
 
 
 def _looks_like_base64_secret(value: str) -> bool:
@@ -590,7 +591,9 @@ def _looks_like_base64_secret(value: str) -> bool:
     return bool(_BASE64ISH_RE.fullmatch(compact))
 
 
-def _collect_secret_refs(manifest: Mapping[str, Any]) -> dict[str, list[dict[str, str]]]:
+def _collect_secret_refs(
+    manifest: Mapping[str, Any]
+) -> dict[str, list[dict[str, str]]]:
     profile_refs: list[ManifestProfileSecretRef] = []
     vault_refs: list[ManifestVaultSecretRef] = []
     seen_profile: set[str] = set()
@@ -636,7 +639,9 @@ def _collect_secret_refs(manifest: Mapping[str, Any]) -> dict[str, list[dict[str
 def _parse_profile_reference(value: str) -> ManifestProfileSecretRef:
     parsed = urlsplit(value)
     if parsed.scheme.lower() != "profile":
-        raise ManifestContractError("profile secret references must use profile:// scheme")
+        raise ManifestContractError(
+            "profile secret references must use profile:// scheme"
+        )
     provider = parsed.netloc.strip()
     field = parsed.fragment.strip()
     if not provider or not field:
@@ -644,7 +649,9 @@ def _parse_profile_reference(value: str) -> ManifestProfileSecretRef:
             "profile secret references must include provider and #field segments"
         )
     if not _PROFILE_PROVIDER_RE.fullmatch(provider):
-        raise ManifestContractError("profile secret provider contains invalid characters")
+        raise ManifestContractError(
+            "profile secret provider contains invalid characters"
+        )
     if not _PROFILE_FIELD_RE.fullmatch(field):
         raise ManifestContractError("profile secret field contains invalid characters")
     env_key = _profile_env_key(provider, field)

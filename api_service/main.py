@@ -27,8 +27,8 @@ from api_service.api.routers.agent_queue import router as agent_queue_router
 from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
-from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.manifests import router as manifests_router
+from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.planning import router as planning_router
