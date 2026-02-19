@@ -238,7 +238,9 @@ class TestSpecWorkflowSettings:
         """Default runtime should reject values outside supported execution runtimes."""
 
         monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "universal")
-        with pytest.raises(ValidationError, match="default_task_runtime must be one of"):
+        with pytest.raises(
+            ValidationError, match="default_task_runtime must be one of"
+        ):
             SpecWorkflowSettings(_env_file=None)
         monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
 
