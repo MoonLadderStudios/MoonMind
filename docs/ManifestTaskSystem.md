@@ -253,6 +253,10 @@ When creating a `manifest` job, the API MUST also compute and store:
 * `payload.manifestHash`: hash of the input YAML content (or registry content at submission time)
 * `payload.manifestVersion`: `"v0"` or `"legacy"` (phase-1 supports v0; legacy is optional)
 * `payload.requiredCapabilities`: derived as above (client-supplied values are ignored/overwritten)
+* `payload.manifestSecretRefs`: optional map describing deduplicated secret references found in the manifest. The API emits:
+
+  * `profile`: list of `{provider, field, envKey, normalized}` entries so workers know which profile/env keys to request.
+  * `vault`: list of `{mount, path, field, ref}` entries the worker can pass directly to its Vault resolver.
 
 These fields improve auditability and allow the worker to detect “registry changed mid-run”.
 
@@ -639,7 +643,7 @@ Cancellation policy:
 
 Add a new dashboard category:
 
-* **Manifests** (Agent Queue jobs where `type="manifest"`)
+* **Manifests** (Agent Queue jobs where `type="manifest"`) surfaced at `/tasks/manifests`.
 
 This category is distinct from runtime selection (codex/gemini/claude).
 
@@ -659,6 +663,8 @@ Fields:
 * Force full checkbox
 * Max docs (optional)
 * Priority
+
+The dashboard implementation exposes `/tasks/manifests/new`, which posts to `/api/queue/jobs` with `type="manifest"`. Inline submissions paste YAML directly; registry mode prompts for the stored manifest name and reuses `/api/manifests/{name}` content.
 
 UI submits:
 
@@ -707,6 +713,7 @@ Support these modes (in order of operational maturity):
   * registry submission can specify “use my profile”
   * worker can fetch a short-lived token or resolved credentials via API (control plane)
 * Queue payload remains token-free.
+* Worker tokens that advertise the `manifest` capability may call `POST /api/queue/jobs/{jobId}/manifest/secrets` to resolve profile-backed credentials. The response echoes the sanitized `manifestSecretRefs.profile` entries along with resolved `value` fields (redacted in logs) while simply passing through Vault references so the worker can contact Vault directly.
 
 3. **Vault mode (hardening)**
 

@@ -34,7 +34,6 @@ class DatabaseSettings(BaseSettings):
         extra="ignore",
     )
 
-
 class CelerySettings(BaseSettings):
     """Celery broker and result backend settings."""
 
@@ -129,6 +128,16 @@ class SpecWorkflowSettings(BaseSettings):
         env="AGENT_JOB_ARTIFACT_MAX_BYTES",
         description="Maximum allowed artifact upload size in bytes for queue jobs.",
         gt=0,
+    )
+    allow_manifest_path_source: bool = Field(
+        False,
+        env="MOONMIND_ALLOW_MANIFEST_PATH_SOURCE",
+        description="Allow manifest.source.kind='path' submissions (intended for dev/test images).",
+    )
+    manifest_required_capabilities: tuple[str, ...] = Field(
+        ("manifest",),
+        env="SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+        description="Comma-delimited list of base capability labels applied to manifest jobs.",
     )
     job_image: str = Field(
         "moonmind/spec-automation-job:latest",
@@ -437,6 +446,30 @@ class SpecWorkflowSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("manifest_required_capabilities", mode="before")
+    @classmethod
+    def _split_manifest_capabilities(
+        cls, value: Optional[str | Sequence[str]]
+    ) -> tuple[str, ...] | None:
+        """Allow comma-delimited strings for manifest capability flags."""
+
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            return value
+
+        tokens = [str(item).strip() for item in raw_items if str(item).strip()]
+        if not tokens:
+            return ()
+        return tuple(dict.fromkeys(tokens))
 
     @field_validator(
         "metrics_host",

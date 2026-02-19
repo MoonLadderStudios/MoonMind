@@ -16,6 +16,8 @@ if is_wsl && [[ "${MOONMIND_FORCE_LOCAL_TESTS:-0}" != "1" ]]; then
     exec "$SCRIPT_DIR/test_unit_docker.sh"
 fi
 
+export MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP=1
+
 # Run only unit tests locally.
 # Prefer repository-local virtualenv when present to avoid system Python drift.
 if [[ -x ".venv/bin/python" ]]; then

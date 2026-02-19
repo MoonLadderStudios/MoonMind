@@ -80,6 +80,13 @@ def test_build_runtime_config_contains_expected_keys() -> None:
         config["sources"]["queue"]["taskStepTemplateFavorite"]
         == "/api/task-step-templates/{slug}:favorite"
     )
+    assert config["sources"]["manifests"]["list"].startswith("/api/queue/jobs?type=manifest")
+    assert config["sources"]["manifests"]["create"] == "/api/queue/jobs"
+    assert config["sources"]["manifests"]["registry"] == "/api/manifests"
+    assert (
+        config["sources"]["manifests"]["registryRun"]
+        == "/api/manifests/{name}/runs"
+    )
     assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]

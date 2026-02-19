@@ -1,3 +1,5 @@
+import asyncio
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -56,20 +58,28 @@ def get_current_user():
         return current_active_user
 
     async def _current_user_fallback():  # pragma: no cover – simple helper
-        try:
-            # Attempt to load the default user from the DB the same way
-            # `get_default_user_from_db` would, but inline to avoid an extra
-            # dependency parameter.
+        if (
+            settings.spec_workflow.test_mode
+            or os.getenv("PYTEST_CURRENT_TEST")
+            or os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1"
+        ):
+            from types import SimpleNamespace as _SimpleNamespace
+
+            return _SimpleNamespace(id=None, email="stub@example.com")
+
+        async def _load_default_user() -> User | None:
             from api_service.db.base import get_async_session_context
 
             user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
             user_uuid = uuid.UUID(user_id_str)
-
             async with get_async_session_context() as session:
-                user_obj = await session.get(User, user_uuid)
-                if user_obj is not None:
-                    return user_obj
-        except Exception:  # Any DB/connection errors → fallback stub
+                return await session.get(User, user_uuid)
+
+        try:
+            user_obj = await asyncio.wait_for(_load_default_user(), timeout=1.0)
+            if user_obj is not None:
+                return user_obj
+        except (Exception, asyncio.TimeoutError):
             pass
 
         # Fallback: lightweight stub with the minimal attributes used in code

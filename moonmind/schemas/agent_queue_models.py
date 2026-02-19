@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
+from moonmind.workflows.agent_queue.manifest_contract import sanitize_manifest_payload
 
 
 class CreateJobRequest(BaseModel):
@@ -78,6 +80,15 @@ class CancelJobAckRequest(BaseModel):
 
     worker_id: str = Field(..., alias="workerId")
     message: Optional[str] = Field(None, alias="message")
+
+
+class ManifestSecretResolutionRequest(BaseModel):
+    """Request payload for manifest secret resolution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    include_profile: bool = Field(True, alias="includeProfile")
+    include_vault: bool = Field(True, alias="includeVault")
 
 
 class AppendJobEventRequest(BaseModel):
@@ -195,6 +206,12 @@ class JobModel(BaseModel):
     finished_at: Optional[datetime] = Field(None, alias="finishedAt")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+    @model_validator(mode="after")
+    def _sanitize_manifest_payload(self) -> "JobModel":
+        if self.type == MANIFEST_JOB_TYPE:
+            self.payload = sanitize_manifest_payload(self.payload)
+        return self
 
 
 class ClaimJobResponse(BaseModel):
@@ -356,6 +373,40 @@ class WorkerTokenListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[WorkerTokenModel] = Field(default_factory=list, alias="items")
+
+
+class ManifestSecretProfileValue(BaseModel):
+    """Resolved profile-backed secret value for manifest jobs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    provider: Optional[str] = Field(None, alias="provider")
+    field: Optional[str] = Field(None, alias="field")
+    env_key: str = Field(..., alias="envKey")
+    normalized: Optional[str] = Field(None, alias="normalized")
+    value: str = Field(..., alias="value")
+
+
+class ManifestSecretVaultValue(BaseModel):
+    """Pass-through vault reference metadata for manifest jobs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mount: Optional[str] = Field(None, alias="mount")
+    path: Optional[str] = Field(None, alias="path")
+    field: Optional[str] = Field(None, alias="field")
+    ref: str = Field(..., alias="ref")
+
+
+class ManifestSecretResolutionResponse(BaseModel):
+    """Response payload containing resolved manifest secret material."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    profile: list[ManifestSecretProfileValue] = Field(
+        default_factory=list, alias="profile"
+    )
+    vault: list[ManifestSecretVaultValue] = Field(default_factory=list, alias="vault")
 
 
 class MigrationFailureBucketModel(BaseModel):

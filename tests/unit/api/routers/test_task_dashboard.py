@@ -37,6 +37,8 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
     assert _is_allowed_path("orchestrator/run-1")
+    assert _is_allowed_path("manifests")
+    assert _is_allowed_path("manifests/new")
 
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
@@ -66,6 +68,8 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/queue/new",
         "/tasks/orchestrator",
         "/tasks/orchestrator/new",
+        "/tasks/manifests",
+        "/tasks/manifests/new",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -76,6 +80,7 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         f"/tasks/queue/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
+        f"/tasks/manifests/{uuid4()}",
     ):
         response = client.get(path)
         assert response.status_code == 200

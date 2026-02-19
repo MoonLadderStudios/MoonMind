@@ -2,12 +2,17 @@ from __future__ import annotations  # Ensure this is at the very top
 
 from collections.abc import AsyncGenerator  # Use collections.abc for Python 3.9+
 
+import os
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from moonmind.config.settings import settings
 
-DATABASE_URL = settings.database.POSTGRES_URL
+if os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1":
+    DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+else:
+    DATABASE_URL = settings.database.POSTGRES_URL
 
 engine = create_async_engine(DATABASE_URL)
 async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

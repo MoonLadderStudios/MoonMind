@@ -29,6 +29,8 @@ _STATIC_PATHS = {
     "orchestrator",
     "orchestrator/new",
     "proposals",
+    "manifests",
+    "manifests/new",
 }
 
 
@@ -70,7 +72,7 @@ def _is_allowed_path(path: str) -> bool:
         return True
     return any(
         _is_dynamic_detail(path, source)
-        for source in ("queue", "orchestrator", "proposals")
+        for source in ("queue", "orchestrator", "proposals", "manifests")
     )
 
 

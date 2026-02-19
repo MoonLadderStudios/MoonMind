@@ -198,6 +198,47 @@ async def test_fail_retryable_requeues_until_attempt_limit(tmp_path):
             await repo.commit()
 
     assert failed.status is models.AgentJobStatus.DEAD_LETTER
+
+
+async def test_manifest_claim_requires_capabilities(tmp_path):
+    """Manifest jobs should only be claimed by workers advertising every capability."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            manifest_payload = {
+                "manifest": {
+                    "name": "demo",
+                    "source": {"kind": "registry", "name": "demo"},
+                },
+                "manifestHash": "sha256:abc",
+                "manifestVersion": "v0",
+                "requiredCapabilities": ["manifest", "qdrant"],
+            }
+            await _create_job(
+                repo,
+                job_type="manifest",
+                payload=manifest_payload,
+                priority=5,
+            )
+            await repo.commit()
+
+            denied = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["manifest"],
+            )
+            assert denied is None
+
+            granted = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["manifest", "qdrant"],
+            )
+            await repo.commit()
+            assert granted is not None
+            assert granted.claimed_by == "worker-1"
+            assert granted.status is models.AgentJobStatus.RUNNING
     assert failed.finished_at is not None
     assert failed.next_attempt_at is None
 

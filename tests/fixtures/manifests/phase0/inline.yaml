@@ -1,0 +1,17 @@
+version: "v0"
+metadata:
+  name: "demo-manifest"
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-small"
+vectorStore:
+  type: "qdrant"
+  indexName: "manifest-phase0"
+dataSources:
+  - id: "repo-docs"
+    type: "GithubRepositoryReader"
+    params:
+      owner: "moon"
+      repo: "mind"
+run:
+  dryRun: false

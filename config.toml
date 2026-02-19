@@ -22,6 +22,8 @@ google_application_credentials = "/path/to/your/service-account-file.json"
 [spec_workflow]
 job_image = "moonmind/spec-automation-job:latest"
 workspace_root = "/work"
+allow_manifest_path_source = false
+manifest_required_capabilities = ["manifest"]
 # Leave blank to inherit the primary Celery broker credentials.
 celery_broker_url = ""
 # Leave blank to inherit the primary Celery result backend configuration.
