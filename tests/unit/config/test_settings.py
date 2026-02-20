@@ -250,8 +250,8 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("CLAUDE_VOLUME_PATH", "/runtime/claude-auth")
         monkeypatch.setenv("CLAUDE_HOME", "/runtime/claude-home")
         monkeypatch.setenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
 
         settings = SpecWorkflowSettings(_env_file=None)
 
@@ -272,8 +272,8 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
         monkeypatch.delenv("CLAUDE_HOME", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
 
     def test_default_task_runtime_rejects_invalid_value(self, monkeypatch):
         """Default runtime should reject values outside supported execution runtimes."""

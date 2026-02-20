@@ -370,7 +370,7 @@ class CodexWorkerConfig:
                 source.get(
                     "MOONMIND_GIT_USER_NAME",
                     source.get(
-                        "SPEC_WORKFLOW_GIT_USER_NAME",
+                        "WORKFLOW_GIT_USER_NAME",
                         settings.spec_workflow.git_user_name or "",
                     ),
                 )
@@ -382,7 +382,7 @@ class CodexWorkerConfig:
                 source.get(
                     "MOONMIND_GIT_USER_EMAIL",
                     source.get(
-                        "SPEC_WORKFLOW_GIT_USER_EMAIL",
+                        "WORKFLOW_GIT_USER_EMAIL",
                         settings.spec_workflow.git_user_email or "",
                     ),
                 )
