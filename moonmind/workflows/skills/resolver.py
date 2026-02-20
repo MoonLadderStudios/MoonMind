@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,12 +11,15 @@ from urllib.parse import urlparse
 
 from moonmind.config.settings import settings
 
+logger = logging.getLogger(__name__)
+
 
 class SkillResolutionError(ValueError):
     """Raised when a run skill selection cannot be resolved."""
 
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_BUILTIN_FALLBACK_WARNED: set[str] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,8 +332,15 @@ def _resolve_source_uri(
     if local_source:
         return local_source
 
-    # Preserve backward compatibility for the built-in Speckit execution path.
+    # Deprecated compatibility path: prefer local/shared skill mirrors instead.
     if skill_name == "speckit":
+        if skill_name not in _BUILTIN_FALLBACK_WARNED:
+            logger.warning(
+                "Skill '%s' resolved through deprecated builtin source fallback. "
+                "Configure local/shared skill mirrors to remove this compatibility path.",
+                skill_name,
+            )
+            _BUILTIN_FALLBACK_WARNED.add(skill_name)
         return "builtin://speckit"
 
     raise SkillResolutionError(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from moonmind.workflows.skills.registry import resolve_stage_execution
 from moonmind.workflows.skills.runner import execute_stage
 from moonmind.workflows.skills.speckit_adapter import SkillAdapterError
@@ -145,6 +147,28 @@ def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
 
     assert decision.selected_skill == "custom"
     assert decision.execution_path == "skill"
+
+
+def test_execute_stage_unregistered_skill_fails_fast(monkeypatch):
+    _set_skill_defaults(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
+        ("speckit", "custom"),
+        raising=False,
+    )
+
+    calls: list[str] = []
+    context = {"skill_overrides": {"submit_codex_job": "custom"}}
+
+    with pytest.raises(SkillAdapterError, match="skill_adapter_not_registered"):
+        execute_stage(
+            stage_name="submit_codex_job",
+            run_id="run-unregistered",
+            context=context,
+            execute_direct=lambda: calls.append("direct"),
+        )
+
+    assert calls == []
 
 
 def test_execute_stage_fallback_when_adapter_errors(monkeypatch):

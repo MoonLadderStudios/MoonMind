@@ -15,6 +15,10 @@ from celery_worker.startup_checks import (
     validate_shared_skills_mirror,
 )
 from moonmind.config.settings import settings
+from moonmind.workflows.skills.registry import (
+    configured_stage_skills,
+    configured_stage_skills_require_speckit,
+)
 from moonmind.workflows.speckit_celery import celery_app as speckit_celery_app
 from moonmind.workflows.speckit_celery import models as speckit_models
 from moonmind.workflows.speckit_celery import tasks as speckit_tasks
@@ -369,7 +373,13 @@ else:
 _log_codex_cli_version()
 _log_gemini_cli_version()
 _log_claude_cli_version()
-_log_speckit_cli_version()
+if configured_stage_skills_require_speckit():
+    _log_speckit_cli_version()
+else:
+    logger.info(
+        "Skipping Spec Kit CLI health check because configured stage skills do not require Speckit.",
+        extra={"configured_stage_skills": configured_stage_skills()},
+    )
 _log_queue_configuration()
 _validate_embedding_profile()
 _validate_shared_skills_profile()

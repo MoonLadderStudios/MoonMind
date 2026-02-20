@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Annotated, Any, Optional, Sequence
 
 from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
@@ -52,18 +52,22 @@ class CelerySettings(BaseSettings):
     )
     default_queue: str = Field(
         "moonmind.jobs",
-        env="CELERY_DEFAULT_QUEUE",
-        description="Default queue name for Spec Kit workflow tasks.",
+        validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE", "CELERY_DEFAULT_QUEUE"),
+        description="Default queue name for workflow tasks.",
     )
     default_exchange: str = Field(
         "moonmind.jobs",
-        env="CELERY_DEFAULT_EXCHANGE",
-        description="Default exchange for Spec Kit workflow tasks.",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_EXCHANGE", "CELERY_DEFAULT_EXCHANGE"
+        ),
+        description="Default exchange for workflow tasks.",
     )
     default_routing_key: str = Field(
         "moonmind.jobs",
-        env="CELERY_DEFAULT_ROUTING_KEY",
-        description="Default routing key used by the Spec Kit queue.",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_ROUTING_KEY", "CELERY_DEFAULT_ROUTING_KEY"
+        ),
+        description="Default routing key used by the workflow queue.",
     )
     task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
     result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
@@ -113,12 +117,20 @@ class SpecWorkflowSettings(BaseSettings):
     repo_root: str = Field(
         ".",
         env="SPEC_WORKFLOW_REPO_ROOT",
-        validation_alias=AliasChoices("SPEC_WORKFLOW_REPO_ROOT"),
+        validation_alias=AliasChoices("WORKFLOW_REPO_ROOT", "SPEC_WORKFLOW_REPO_ROOT"),
     )
-    tasks_root: str = Field("specs", env="SPEC_WORKFLOW_TASKS_ROOT")
+    tasks_root: str = Field(
+        "specs",
+        validation_alias=AliasChoices("WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"),
+    )
     artifacts_root: str = Field(
         "var/artifacts/spec_workflows",
         env=("SPEC_WORKFLOW_ARTIFACT_ROOT", "SPEC_WORKFLOW_ARTIFACTS_ROOT"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_ARTIFACTS_ROOT",
+            "SPEC_WORKFLOW_ARTIFACT_ROOT",
+            "SPEC_WORKFLOW_ARTIFACTS_ROOT",
+        ),
         description="Filesystem location where Spec workflow artifacts are persisted.",
     )
     agent_job_artifact_root: str = Field(
@@ -183,7 +195,10 @@ class SpecWorkflowSettings(BaseSettings):
         description="Namespace/prefix applied to emitted Spec Automation metrics.",
     )
     default_feature_key: str = Field(
-        "001-celery-chain-workflow", env="SPEC_WORKFLOW_DEFAULT_FEATURE_KEY"
+        "001-celery-chain-workflow",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_FEATURE_KEY", "SPEC_WORKFLOW_DEFAULT_FEATURE_KEY"
+        ),
     )
     codex_environment: Optional[str] = Field(None, env="CODEX_ENV")
     codex_model: Optional[str] = Field(
@@ -214,7 +229,12 @@ class SpecWorkflowSettings(BaseSettings):
     )
     codex_queue: Optional[str] = Field(
         None,
-        env=("MOONMIND_QUEUE", "SPEC_WORKFLOW_CODEX_QUEUE", "CODEX_QUEUE"),
+        env=(
+            "MOONMIND_QUEUE",
+            "WORKFLOW_CODEX_QUEUE",
+            "SPEC_WORKFLOW_CODEX_QUEUE",
+            "CODEX_QUEUE",
+        ),
         description="Explicit Codex queue name assigned to this worker.",
     )
     codex_volume_name: Optional[str] = Field(
@@ -347,36 +367,57 @@ class SpecWorkflowSettings(BaseSettings):
     )
     default_skill: str = Field(
         "speckit",
-        env="SPEC_WORKFLOW_DEFAULT_SKILL",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_SKILL",
+            "SPEC_WORKFLOW_DEFAULT_SKILL",
+            "MOONMIND_DEFAULT_SKILL",
+        ),
         description="Default skill identifier for workflow stage execution.",
     )
     discover_skill: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_DISCOVER_SKILL",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DISCOVER_SKILL",
+            "SPEC_WORKFLOW_DISCOVER_SKILL",
+            "MOONMIND_DISCOVER_SKILL",
+        ),
         description="Optional skill override for discovery stage.",
     )
     submit_skill: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_SUBMIT_SKILL",
+        validation_alias=AliasChoices(
+            "WORKFLOW_SUBMIT_SKILL",
+            "SPEC_WORKFLOW_SUBMIT_SKILL",
+            "MOONMIND_SUBMIT_SKILL",
+        ),
         description="Optional skill override for submit stage.",
     )
     publish_skill: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_PUBLISH_SKILL",
+        validation_alias=AliasChoices(
+            "WORKFLOW_PUBLISH_SKILL",
+            "SPEC_WORKFLOW_PUBLISH_SKILL",
+            "MOONMIND_PUBLISH_SKILL",
+        ),
         description="Optional skill override for publish stage.",
     )
     skill_policy_mode: str = Field(
         "permissive",
-        env=(
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILL_POLICY_MODE",
             "SPEC_WORKFLOW_SKILL_POLICY_MODE",
             "MOONMIND_SKILL_POLICY_MODE",
             "SKILL_POLICY_MODE",
         ),
         description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces SPEC_WORKFLOW_ALLOWED_SKILLS.",
     )
-    allowed_skills: tuple[str, ...] = Field(
+    allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
         ("speckit",),
-        env="SPEC_WORKFLOW_ALLOWED_SKILLS",
+        validation_alias=AliasChoices(
+            "WORKFLOW_ALLOWED_SKILLS",
+            "SPEC_WORKFLOW_ALLOWED_SKILLS",
+            "MOONMIND_ALLOWED_SKILLS",
+        ),
         description="Allowlisted skills that can be selected for workflow stages.",
     )
     skills_cache_root: str = Field(
@@ -536,6 +577,7 @@ class SpecWorkflowSettings(BaseSettings):
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     @field_validator("manifest_required_capabilities", mode="before")

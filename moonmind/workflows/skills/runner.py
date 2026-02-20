@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from .contracts import StageExecutionOutcome
-from .registry import get_stage_adapter, resolve_stage_execution
+from .registry import resolve_stage_execution
 from .speckit_adapter import SkillAdapterError, run_speckit_stage
 
 T = TypeVar("T")
@@ -17,6 +17,7 @@ def _set_context_execution(
     context: dict[str, object],
     stage_name: str,
     selected_skill: str,
+    adapter_id: str | None,
     execution_path: str,
     used_skills: bool,
     used_fallback: bool,
@@ -27,6 +28,7 @@ def _set_context_execution(
         return
     execution[stage_name] = {
         "selectedSkill": selected_skill,
+        "adapterId": adapter_id,
         "executionPath": execution_path,
         "usedSkills": used_skills,
         "usedFallback": used_fallback,
@@ -54,6 +56,7 @@ def execute_stage(
             context=context,
             stage_name=stage_name,
             selected_skill=decision.selected_skill,
+            adapter_id=decision.adapter_id,
             execution_path="direct_only",
             used_skills=False,
             used_fallback=False,
@@ -63,6 +66,7 @@ def execute_stage(
         return StageExecutionOutcome(
             stage_name=stage_name,
             selected_skill=decision.selected_skill,
+            adapter_id=decision.adapter_id,
             execution_path="direct_only",
             used_fallback=False,
             used_skills=False,
@@ -70,35 +74,37 @@ def execute_stage(
             result=result,
         )
 
-    adapter_id = get_stage_adapter(decision.selected_skill)
+    adapter_id = decision.adapter_id
+    if adapter_id is None:
+        raise SkillAdapterError(
+            "skill_adapter_not_registered: "
+            f"No adapter is registered for skill '{decision.selected_skill}' "
+            f"while executing stage '{stage_name}'. Register a skill adapter or "
+            "select a supported skill."
+        )
+    if adapter_id != "speckit":
+        raise SkillAdapterError(
+            "skill_adapter_not_registered: "
+            f"Adapter '{adapter_id}' for skill '{decision.selected_skill}' "
+            "is not wired into the stage runner."
+        )
 
     try:
-        if adapter_id == "speckit":
-            _set_context_execution(
-                context=context,
-                stage_name=stage_name,
-                selected_skill=decision.selected_skill,
-                execution_path="skill",
-                used_skills=True,
-                used_fallback=False,
-                shadow_mode_requested=decision.shadow_mode,
-            )
-            result = run_speckit_stage(execute_direct=execute_direct)
-        else:
-            # Non-Speckit skills currently resolve through the compatibility path.
-            _set_context_execution(
-                context=context,
-                stage_name=stage_name,
-                selected_skill=decision.selected_skill,
-                execution_path="skill",
-                used_skills=True,
-                used_fallback=False,
-                shadow_mode_requested=decision.shadow_mode,
-            )
-            result = execute_direct()
+        _set_context_execution(
+            context=context,
+            stage_name=stage_name,
+            selected_skill=decision.selected_skill,
+            adapter_id=adapter_id,
+            execution_path="skill",
+            used_skills=True,
+            used_fallback=False,
+            shadow_mode_requested=decision.shadow_mode,
+        )
+        result = run_speckit_stage(execute_direct=execute_direct)
         return StageExecutionOutcome(
             stage_name=stage_name,
             selected_skill=decision.selected_skill,
+            adapter_id=adapter_id,
             execution_path="skill",
             used_fallback=False,
             used_skills=True,
@@ -112,6 +118,7 @@ def execute_stage(
             context=context,
             stage_name=stage_name,
             selected_skill=decision.selected_skill,
+            adapter_id=adapter_id,
             execution_path="direct_fallback",
             used_skills=True,
             used_fallback=True,
@@ -121,6 +128,7 @@ def execute_stage(
         return StageExecutionOutcome(
             stage_name=stage_name,
             selected_skill=decision.selected_skill,
+            adapter_id=adapter_id,
             execution_path="direct_fallback",
             used_fallback=True,
             used_skills=True,

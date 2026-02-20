@@ -35,12 +35,13 @@ from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
     materialize_run_skill_workspace,
 )
-from moonmind.workflows.skills.registry import resolve_stage_execution
+from moonmind.workflows.skills.registry import get_stage_adapter, resolve_stage_execution
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     resolve_run_skill_selection,
 )
 from moonmind.workflows.skills.runner import execute_stage
+from moonmind.workflows.skills.speckit_adapter import SkillAdapterError
 from moonmind.workflows.skills.workspace_links import (
     SkillWorkspaceError,
     SkillWorkspaceLinks,
@@ -77,6 +78,26 @@ T = TypeVar("T")
 
 _SPEC_KIT_CLI_LOCK = threading.Lock()
 _SPEC_KIT_CLI_LOGGED = threading.Event()
+
+
+def _stage_requires_speckit(*, selected_skill: str, use_skills: bool) -> bool:
+    """Return whether the current stage execution requires Speckit CLI checks."""
+
+    if not use_skills:
+        return False
+    return get_stage_adapter(selected_skill) == "speckit"
+
+
+def _skill_adapter_error_payload(exc: SkillAdapterError) -> dict[str, str]:
+    """Return structured payload for adapter registration/execution errors."""
+
+    message = str(exc)
+    code = (
+        "skill_adapter_not_registered"
+        if "skill_adapter_not_registered" in message
+        else "skill_adapter_error"
+    )
+    return {"code": code, "message": message}
 
 
 def _log_spec_kit_cli_availability() -> None:
@@ -1291,6 +1312,7 @@ def _set_stage_execution_payload(
     stage_name: str,
     *,
     selected_skill: str,
+    adapter_id: str | None = None,
     execution_path: str,
     used_skills: bool,
     used_fallback: bool,
@@ -1302,6 +1324,7 @@ def _set_stage_execution_payload(
     if isinstance(execution, dict):
         execution[stage_name] = {
             "selectedSkill": selected_skill,
+            "adapterId": adapter_id,
             "executionPath": execution_path,
             "usedSkills": used_skills,
             "usedFallback": used_fallback,
@@ -1322,6 +1345,7 @@ def _stage_execution_payload(
         return {}
     return {
         "selectedSkill": entry.get("selectedSkill"),
+        "adapterId": entry.get("adapterId"),
         "executionPath": entry.get("executionPath"),
         "usedSkills": entry.get("usedSkills"),
         "usedFallback": entry.get("usedFallback"),
@@ -1484,8 +1508,6 @@ def discover_next_phase(
 ) -> dict[str, Any]:
     """Locate the next unchecked task in the Spec Kit tasks document."""
 
-    _log_spec_kit_cli_availability()
-
     stage_context: dict[str, Any] = {
         "feature_key": feature_key,
         "force_phase": force_phase,
@@ -1501,11 +1523,17 @@ def discover_next_phase(
         stage_context,
         TASK_DISCOVER,
         selected_skill=decision.selected_skill,
+        adapter_id=decision.adapter_id,
         execution_path=decision.execution_path,
         used_skills=decision.use_skills,
         used_fallback=False,
         shadow_mode_requested=decision.shadow_mode,
     )
+    if _stage_requires_speckit(
+        selected_skill=decision.selected_skill,
+        use_skills=decision.use_skills,
+    ):
+        _log_spec_kit_cli_availability()
 
     run_uuid = UUID(run_id)
     observer = TaskObserver(
@@ -1685,6 +1713,22 @@ def discover_next_phase(
             execute_direct=lambda: _run_coro(_execute()),
         )
         context = outcome.result
+    except SkillAdapterError as exc:
+        adapter_error = _skill_adapter_error_payload(exc)
+        observer.failed(
+            exc,
+            details={
+                "run_id": run_id,
+                "attempt": attempt,
+                "feature_key": feature_key,
+                "force_phase": force_phase,
+                "selected_skill": decision.selected_skill,
+                "execution_path": decision.execution_path,
+                "code": adapter_error["code"],
+                "message": adapter_error["message"],
+            },
+        )
+        raise
     except Exception as exc:
         observer.failed(
             exc,
@@ -1704,6 +1748,7 @@ def discover_next_phase(
             context,
             TASK_DISCOVER,
             selected_skill=outcome.selected_skill,
+            adapter_id=outcome.adapter_id,
             execution_path=outcome.execution_path,
             used_skills=outcome.used_skills,
             used_fallback=outcome.used_fallback,
@@ -1731,8 +1776,6 @@ def discover_next_phase(
 def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
     """Submit the discovered task to Codex Cloud and persist metadata."""
 
-    _log_spec_kit_cli_availability()
-
     run_uuid = UUID(context["run_id"])
     attempt = _prepare_retry_context(context)
     decision = resolve_stage_execution(
@@ -1744,11 +1787,17 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
         context,
         TASK_SUBMIT,
         selected_skill=decision.selected_skill,
+        adapter_id=decision.adapter_id,
         execution_path=decision.execution_path,
         used_skills=decision.use_skills,
         used_fallback=False,
         shadow_mode_requested=decision.shadow_mode,
     )
+    if _stage_requires_speckit(
+        selected_skill=decision.selected_skill,
+        use_skills=decision.use_skills,
+    ):
+        _log_spec_kit_cli_availability()
     observer = TaskObserver(
         task_name=TASK_SUBMIT,
         run_id=context["run_id"],
@@ -1987,6 +2036,12 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             execute_direct=lambda: _run_coro(_execute()),
         )
         result = outcome.result
+    except SkillAdapterError as exc:
+        adapter_error = _skill_adapter_error_payload(exc)
+        failure_context = dict(context)
+        failure_context.update(adapter_error)
+        observer.failed(exc, details=failure_context)
+        raise
     except Exception as exc:
         observer.failed(exc, details=context)
         raise
@@ -1996,6 +2051,7 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
             result,
             TASK_SUBMIT,
             selected_skill=outcome.selected_skill,
+            adapter_id=outcome.adapter_id,
             execution_path=outcome.execution_path,
             used_skills=outcome.used_skills,
             used_fallback=outcome.used_fallback,
@@ -2022,8 +2078,6 @@ def submit_codex_job(context: dict[str, Any]) -> dict[str, Any]:
 def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
     """Retrieve the Codex patch and publish the resulting PR."""
 
-    _log_spec_kit_cli_availability()
-
     run_uuid = UUID(context["run_id"])
     attempt = _prepare_retry_context(context)
     decision = resolve_stage_execution(
@@ -2035,11 +2089,17 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
         context,
         TASK_PUBLISH,
         selected_skill=decision.selected_skill,
+        adapter_id=decision.adapter_id,
         execution_path=decision.execution_path,
         used_skills=decision.use_skills,
         used_fallback=False,
         shadow_mode_requested=decision.shadow_mode,
     )
+    if _stage_requires_speckit(
+        selected_skill=decision.selected_skill,
+        use_skills=decision.use_skills,
+    ):
+        _log_spec_kit_cli_availability()
     observer = TaskObserver(
         task_name=TASK_PUBLISH,
         run_id=context["run_id"],
@@ -2298,6 +2358,12 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             execute_direct=lambda: _run_coro(_execute()),
         )
         result = outcome.result
+    except SkillAdapterError as exc:
+        adapter_error = _skill_adapter_error_payload(exc)
+        failure_context = dict(context)
+        failure_context.update(adapter_error)
+        observer.failed(exc, details=failure_context)
+        raise
     except Exception as exc:
         observer.failed(exc, details=context)
         raise
@@ -2307,6 +2373,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
             result,
             TASK_PUBLISH,
             selected_skill=outcome.selected_skill,
+            adapter_id=outcome.adapter_id,
             execution_path=outcome.execution_path,
             used_skills=outcome.used_skills,
             used_fallback=outcome.used_fallback,

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -47,10 +48,44 @@ from moonmind.workflows.speckit_celery.serializers import (
 )
 from moonmind.workflows.speckit_celery.tasks import run_codex_preflight_check
 
-router = APIRouter(prefix="/api/workflows/speckit", tags=["speckit-workflows"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+canonical_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+legacy_router = APIRouter(
+    prefix="/api/workflows/speckit",
+    tags=["speckit-workflows"],
+)
 
 
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _canonicalize_legacy_path(path: str) -> str:
+    if path.startswith("/api/workflows/speckit"):
+        suffix = path[len("/api/workflows/speckit") :]
+        return f"/api/workflows{suffix}"
+    return path
+
+
+async def _mark_legacy_route_usage(request: Request, response: Response) -> None:
+    path = request.url.path
+    if not path.startswith("/api/workflows/speckit"):
+        return
+
+    canonical_path = _canonicalize_legacy_path(path)
+    response.headers["Deprecation"] = "true"
+    response.headers["X-MoonMind-Deprecated-Route"] = "/api/workflows/speckit"
+    response.headers["X-MoonMind-Canonical-Route"] = canonical_path
+
+    logger.info(
+        "Legacy workflow API route used",
+        extra={
+            "legacy_path": path,
+            "canonical_path": canonical_path,
+            "run_id": request.path_params.get("run_id"),
+        },
+    )
 
 
 def _ensure_utc_timestamp(timestamp: datetime | None) -> datetime:
@@ -110,7 +145,13 @@ def _serialize_run_model(
     return SpecWorkflowRunModel.model_validate(serialized)
 
 
-@router.get("/codex/shards", response_model=CodexShardListResponse)
+@canonical_router.get("/codex/shards", response_model=CodexShardListResponse)
+@legacy_router.get(
+    "/codex/shards",
+    response_model=CodexShardListResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_codex_shards(
     repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
@@ -140,9 +181,15 @@ async def list_codex_shards(
     return CodexShardListResponse(shards=shards)
 
 
-@router.post(
+@canonical_router.post(
     "/runs/{run_id}/codex/preflight",
     response_model=CodexPreflightResultModel,
+)
+@legacy_router.post(
+    "/runs/{run_id}/codex/preflight",
+    response_model=CodexPreflightResultModel,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def trigger_codex_preflight(
     run_id: UUID,
@@ -264,10 +311,17 @@ async def trigger_codex_preflight(
     )
 
 
-@router.post(
+@canonical_router.post(
     "/runs",
     response_model=SpecWorkflowRunModel,
     status_code=status.HTTP_202_ACCEPTED,
+)
+@legacy_router.post(
+    "/runs",
+    response_model=SpecWorkflowRunModel,
+    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def create_workflow_run(
     payload: CreateWorkflowRunRequest,
@@ -306,7 +360,13 @@ async def create_workflow_run(
     return _serialize_run_model(run)
 
 
-@router.get("/runs", response_model=WorkflowRunCollectionResponse)
+@canonical_router.get("/runs", response_model=WorkflowRunCollectionResponse)
+@legacy_router.get(
+    "/runs",
+    response_model=WorkflowRunCollectionResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_workflow_runs(
     *,
     status: Optional[str] = Query(None, alias="status"),
@@ -372,7 +432,13 @@ async def list_workflow_runs(
     )
 
 
-@router.get("/runs/{run_id}", response_model=SpecWorkflowRunModel)
+@canonical_router.get("/runs/{run_id}", response_model=SpecWorkflowRunModel)
+@legacy_router.get(
+    "/runs/{run_id}",
+    response_model=SpecWorkflowRunModel,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def get_workflow_run(
     run_id: UUID,
     include_tasks: bool = Query(True, alias="includeTasks"),
@@ -401,7 +467,15 @@ async def get_workflow_run(
     )
 
 
-@router.get("/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse)
+@canonical_router.get(
+    "/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse
+)
+@legacy_router.get(
+    "/runs/{run_id}/tasks",
+    response_model=WorkflowTaskStateListResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_workflow_run_tasks(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
@@ -424,7 +498,15 @@ async def list_workflow_run_tasks(
     return WorkflowTaskStateListResponse.model_validate(payload)
 
 
-@router.get("/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse)
+@canonical_router.get(
+    "/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse
+)
+@legacy_router.get(
+    "/runs/{run_id}/artifacts",
+    response_model=WorkflowArtifactListResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_workflow_run_artifacts(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
@@ -447,10 +529,17 @@ async def list_workflow_run_artifacts(
     return WorkflowArtifactListResponse.model_validate(payload)
 
 
-@router.post(
+@canonical_router.post(
     "/runs/{run_id}/retry",
     response_model=SpecWorkflowRunModel,
     status_code=status.HTTP_202_ACCEPTED,
+)
+@legacy_router.post(
+    "/runs/{run_id}/retry",
+    response_model=SpecWorkflowRunModel,
+    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def retry_workflow_run(
     run_id: UUID,
@@ -484,6 +573,10 @@ async def retry_workflow_run(
     refreshed = await repo.get_run(triggered.run_id, with_relations=True)
     run = refreshed or triggered.run
     return _serialize_run_model(run)
+
+
+router.include_router(canonical_router)
+router.include_router(legacy_router)
 
 
 __all__ = ["router"]

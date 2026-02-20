@@ -121,9 +121,10 @@ Note: home/.codex/ is a nested mount backed by a named Docker volume. It survive
 
 Monitor the Celery chain from two angles:
 
-- **API polling** – `/api/workflows/speckit/runs/{run_id}` returns the run plus the latest task snapshot; `/runs/{run_id}/tasks`
+- **API polling** – `/api/workflows/runs/{run_id}` returns the run plus the latest task snapshot; `/runs/{run_id}/tasks`
   exposes the full timeline including `status`, `message`, `startedAt`/`finishedAt`, and any `artifactPaths` emitted by the task
   (Codex logs, patch diffs, apply output, PR payload). `/runs/{run_id}/artifacts` lists the same paths for download.
+  Legacy `/api/workflows/speckit/*` aliases remain available for compatibility and return deprecation headers.
 - **Worker logs** – every phase logs `Spec workflow task <name> started/succeeded/failed` with attempt numbers and shard/volume
   details. You should see a `Codex preflight` line before submission and `apply_and_publish` summary lines once the PR payload is
   written. Missing updates in the task list usually correlate with Celery errors in these logs.
@@ -146,7 +147,7 @@ entries include a `message` that should match the Celery exception output.
 
 ### Health Checks for Bundled CLIs
 
-- Celery worker bootstrap should invoke `codex --version`, `codex login status`, and `speckit --version` once when the process starts.
+- Celery worker bootstrap should invoke `codex --version` and runtime-auth checks once when the process starts; `speckit --version` runs only when configured stage skills require the Speckit adapter.
 - Missing binaries or non-zero exit codes must mark the worker unhealthy before it accepts jobs.
 - Log messages should record the detected versions and point to rebuild instructions when versions drift from the pinned Docker build args (`CODEX_CLI_VERSION`, `SPEC_KIT_VERSION`).
 
@@ -183,12 +184,12 @@ docker run --rm -it \
    If you must authenticate elsewhere, copy your local ~/.codex into each volume with care (avoid duplicating to many places).
 3. Start Services – `docker compose up -d rabbitmq api celery-codex-0 celery-codex-1 celery-codex-2` (and any non-Codex workers).
 4. Dispatch Runs – unchanged.
-5. Monitor – Celery logs will show which codex-* queue and which codex_auth_* volume were selected. Operators can also poll `/api/workflows/speckit/codex/shards` for the current shard inventory:
+5. Monitor – Celery logs will show which codex-* queue and which codex_auth_* volume were selected. Operators can also poll `/api/workflows/codex/shards` for the current shard inventory:
 
    ```bash
    curl -s \
      -H "Authorization: Bearer ${API_TOKEN}" \
-     https://api.moonmind.local/api/workflows/speckit/codex/shards | jq
+     https://api.moonmind.local/api/workflows/codex/shards | jq
    ```
 
    The response lists each queue, its mapped volume, the volumeStatus (`ready`, `needs_auth`, or `error`), and the latest pre-flight outcome recorded for that shard.
@@ -199,7 +200,7 @@ docker run --rm -it \
      -H "Authorization: Bearer ${API_TOKEN}" \
      -H "Content-Type: application/json" \
      -d '{"forceRefresh": true}' \
-     https://api.moonmind.local/api/workflows/speckit/runs/<run_id>/codex/preflight | jq
+     https://api.moonmind.local/api/workflows/runs/<run_id>/codex/preflight | jq
    ```
 
    A `status: "passed"` response updates the run and marks the auth volume `ready`. If it returns `failed`, re-run `codex login --device-auth` for the reported `volumeName` before retrying the workflow.

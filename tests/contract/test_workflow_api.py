@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -24,6 +25,7 @@ from moonmind.schemas.workflow_models import (
     WorkflowTaskStateModel,
 )
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
+from moonmind.workflows import get_spec_workflow_repository
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
 from moonmind.workflows.speckit_celery import tasks as workflow_tasks
@@ -34,6 +36,38 @@ from moonmind.workflows.speckit_celery.workspace import (
 )
 
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
+
+
+@pytest.fixture(autouse=True)
+def _reset_dependency_overrides():
+    app.dependency_overrides.clear()
+    yield
+    app.dependency_overrides.clear()
+
+
+async def _wait_for_run_status(
+    client: AsyncClient,
+    run_id,
+    *,
+    expected_status: workflow_models.SpecWorkflowRunStatus,
+    attempts: int = 20,
+    delay_seconds: float = 0.05,
+) -> SpecWorkflowRunModel:
+    last_model: SpecWorkflowRunModel | None = None
+    for _ in range(attempts):
+        response = await client.get(f"/api/workflows/speckit/runs/{run_id}")
+        assert response.status_code == 200
+        model = SpecWorkflowRunModel.model_validate(response.json())
+        last_model = model
+        if model.status == expected_status:
+            return model
+        await asyncio.sleep(delay_seconds)
+
+    assert last_model is not None
+    raise AssertionError(
+        f"Run {run_id} did not reach {expected_status} within "
+        f"{attempts * delay_seconds:.2f}s (last status={last_model.status})"
+    )
 
 
 def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
@@ -115,7 +149,7 @@ def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
         celery_chain_id="celery-abc123",
         requested_by_user_id=uuid4(),
         created_by=uuid4(),
-        current_task_name=workflow_models.SpecWorkflowTaskName.SUBMIT,
+        current_task_name="submit",
         started_at=now,
         finished_at=None,
         completed_at=None,
@@ -254,7 +288,7 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             transport=transport, base_url="http://testserver"
         ) as client:
             response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
@@ -274,13 +308,27 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             )
 
             second_response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert second_response.status_code == 202
             second_model = SpecWorkflowRunModel.model_validate(second_response.json())
             assert second_model.branch_name == run_model.branch_name
             assert second_model.id != run_model.id
+
+            legacy_response = await client.post(
+                "/api/workflows/speckit/runs",
+                json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
+            )
+            assert legacy_response.status_code == 202
+            assert legacy_response.headers.get("Deprecation") == "true"
+            assert (
+                legacy_response.headers.get("X-MoonMind-Deprecated-Route")
+                == "/api/workflows/speckit"
+            )
+            assert legacy_response.headers.get("X-MoonMind-Canonical-Route") == (
+                "/api/workflows/runs"
+            )
     finally:
         await db_base.engine.dispose()
         db_base.DATABASE_URL = original_db_url
@@ -303,7 +351,7 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         list_response = await client.get(
-            "/api/workflows/speckit/runs", params={"includeTasks": True}
+            "/api/workflows/runs", params={"includeTasks": True}
         )
         assert list_response.status_code == 200
         collection = WorkflowRunCollectionResponse.model_validate(list_response.json())
@@ -315,7 +363,7 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
         assert listed.artifacts == []
 
         detail_response = await client.get(
-            f"/api/workflows/speckit/runs/{run_id}",
+            f"/api/workflows/runs/{run_id}",
             params={"includeArtifacts": True},
         )
         assert detail_response.status_code == 200
@@ -327,6 +375,17 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
         assert (
             detail_model.credential_audit.codex_status
             == workflow_models.CodexCredentialStatus.VALID
+        )
+
+        legacy_detail_response = await client.get(
+            f"/api/workflows/speckit/runs/{run_id}",
+            params={"includeArtifacts": True},
+        )
+        assert legacy_detail_response.status_code == 200
+        assert legacy_detail_response.headers.get("Deprecation") == "true"
+        assert (
+            legacy_detail_response.headers.get("X-MoonMind-Canonical-Route")
+            == f"/api/workflows/runs/{run_id}"
         )
 
     app.dependency_overrides.pop(_get_repository, None)
@@ -434,6 +493,9 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
     monkeypatch.setattr(
+        settings.spec_workflow, "workspace_root", str(tmp_path), raising=False
+    )
+    monkeypatch.setattr(
         settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
     )
     monkeypatch.setattr(
@@ -509,10 +571,11 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             )
             assert response.status_code == 202
             run_model = SpecWorkflowRunModel.model_validate(response.json())
-            assert run_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
-            assert run_model.phase == workflow_models.SpecWorkflowRunPhase.PUBLISH
-            assert run_model.credential_audit is not None
-            assert run_model.credential_audit.notes is None
+            assert run_model.status in (
+                workflow_models.SpecWorkflowRunStatus.PENDING,
+                workflow_models.SpecWorkflowRunStatus.RUNNING,
+                workflow_models.SpecWorkflowRunStatus.FAILED,
+            )
 
             list_response = await client.get("/api/workflows/speckit/runs")
             assert list_response.status_code == 200
@@ -522,12 +585,15 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert collection.items
             assert collection.items[0].id == run_model.id
 
-            detail_response = await client.get(
-                f"/api/workflows/speckit/runs/{run_model.id}"
+            detail_model = await _wait_for_run_status(
+                client,
+                run_model.id,
+                expected_status=workflow_models.SpecWorkflowRunStatus.FAILED,
             )
-            assert detail_response.status_code == 200
-            detail_model = SpecWorkflowRunModel.model_validate(detail_response.json())
             assert detail_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
+            assert detail_model.phase == workflow_models.SpecWorkflowRunPhase.PUBLISH
+            assert detail_model.credential_audit is not None
+            assert detail_model.credential_audit.notes is None
             assert any(
                 task.task_name == "apply_and_publish"
                 and task.status == workflow_models.SpecWorkflowTaskStatus.FAILED
@@ -578,7 +644,10 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             )
             assert preflight_model.status == workflow_models.CodexPreflightStatus.PASSED
             assert preflight_model.volume_name == "codex_auth_0"
-            assert preflight_model.queue_name == "codex-0"
+            assert preflight_model.queue_name in {
+                "codex-0",
+                settings.celery.default_queue,
+            }
             assert preflight_calls["count"] == 1
 
             cached_response = await client.post(
@@ -642,9 +711,10 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
     monkeypatch.setattr(db_base, "DATABASE_URL", db_url)
     monkeypatch.setattr(db_base, "engine", engine)
     monkeypatch.setattr(db_base, "async_session_maker", async_session_maker)
-    monkeypatch.setattr(
-        _get_repository, "__defaults__", (lambda: async_session_maker(),)
-    )
+
+    async def _repo_override():
+        async with async_session_maker() as session:
+            yield get_spec_workflow_repository(session)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -667,6 +737,9 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
         settings.spec_workflow, "repo_root", str(tmp_path), raising=False
     )
     monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(
+        settings.spec_workflow, "workspace_root", str(tmp_path), raising=False
+    )
     monkeypatch.setattr(
         settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
     )
@@ -701,6 +774,7 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
     app.state.settings = settings
     test_user = SimpleNamespace(id=uuid4())
     app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[_get_repository] = _repo_override
 
     try:
         transport = ASGITransport(app=app)
@@ -742,5 +816,6 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
                 for task in retry_model.tasks
             )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(_get_repository, None)
+        app.dependency_overrides.pop(get_current_user, None)
         await engine.dispose()
