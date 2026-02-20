@@ -1940,6 +1940,40 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.git_user_email == "nsticco@gmail.com"
 
 
+async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) -> None:
+    """Legacy SPEC_WORKFLOW git user env vars should remain supported by worker config."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+    monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+    monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
+    monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
+    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "Legacy Name")
+    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "legacy@example.com")
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.git_user_name == "Legacy Name"
+    assert config.git_user_email == "legacy@example.com"
+
+
+async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
+    """Worker config should resolve git user vars as WORKFLOW > SPEC_WORKFLOW > MOONMIND."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
+    monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
+    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "Spec Name")
+    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
+    monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Workflow Name")
+    monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "workflow@example.com")
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.git_user_name == "Workflow Name"
+    assert config.git_user_email == "workflow@example.com"
+
+
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     """Unset optional values should fall back to defaults."""
 

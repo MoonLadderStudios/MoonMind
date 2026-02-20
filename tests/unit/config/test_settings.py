@@ -250,8 +250,8 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("CLAUDE_VOLUME_PATH", "/runtime/claude-auth")
         monkeypatch.setenv("CLAUDE_HOME", "/runtime/claude-home")
         monkeypatch.setenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
 
         settings = SpecWorkflowSettings(_env_file=None)
 
@@ -272,8 +272,8 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
         monkeypatch.delenv("CLAUDE_HOME", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
 
     def test_default_task_runtime_rejects_invalid_value(self, monkeypatch):
         """Default runtime should reject values outside supported execution runtimes."""
@@ -284,6 +284,48 @@ class TestSpecWorkflowSettings:
         ):
             SpecWorkflowSettings(_env_file=None)
         monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+
+    def test_git_user_accepts_legacy_spec_env_vars(self, monkeypatch):
+        """Legacy SPEC_WORKFLOW git user env vars should remain supported."""
+
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
+        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "  Legacy User  ")
+        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "  legacy@example.com  ")
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.git_user_name == "Legacy User"
+        assert settings.git_user_email == "legacy@example.com"
+
+        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+
+    def test_git_user_env_precedence_prefers_workflow_then_spec_then_moonmind(
+        self, monkeypatch
+    ):
+        """Git user resolution should follow WORKFLOW > SPEC_WORKFLOW > MOONMIND."""
+
+        monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
+        monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
+        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "Spec Name")
+        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Workflow Name")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "workflow@example.com")
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.git_user_name == "Workflow Name"
+        assert settings.git_user_email == "workflow@example.com"
+
+        monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
 
     def test_skills_defaults(self):
         """Skills-first settings should have stable defaults."""

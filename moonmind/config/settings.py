@@ -256,17 +256,29 @@ class SpecWorkflowSettings(BaseSettings):
     )
     git_user_name: Optional[str] = Field(
         None,
-        env=("SPEC_WORKFLOW_GIT_USER_NAME", "MOONMIND_GIT_USER_NAME"),
+        env=(
+            "WORKFLOW_GIT_USER_NAME",
+            "SPEC_WORKFLOW_GIT_USER_NAME",
+            "MOONMIND_GIT_USER_NAME",
+        ),
         validation_alias=AliasChoices(
-            "SPEC_WORKFLOW_GIT_USER_NAME", "MOONMIND_GIT_USER_NAME"
+            "WORKFLOW_GIT_USER_NAME",
+            "SPEC_WORKFLOW_GIT_USER_NAME",
+            "MOONMIND_GIT_USER_NAME",
         ),
         description="Optional Git author/committer display name used by worker publish stages.",
     )
     git_user_email: Optional[str] = Field(
         None,
-        env=("SPEC_WORKFLOW_GIT_USER_EMAIL", "MOONMIND_GIT_USER_EMAIL"),
+        env=(
+            "WORKFLOW_GIT_USER_EMAIL",
+            "SPEC_WORKFLOW_GIT_USER_EMAIL",
+            "MOONMIND_GIT_USER_EMAIL",
+        ),
         validation_alias=AliasChoices(
-            "SPEC_WORKFLOW_GIT_USER_EMAIL", "MOONMIND_GIT_USER_EMAIL"
+            "WORKFLOW_GIT_USER_EMAIL",
+            "SPEC_WORKFLOW_GIT_USER_EMAIL",
+            "MOONMIND_GIT_USER_EMAIL",
         ),
         description="Optional Git author/committer email used by worker publish stages.",
     )
