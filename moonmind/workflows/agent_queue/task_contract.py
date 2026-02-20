@@ -396,9 +396,7 @@ class TaskProposalPolicy(BaseModel):
 
     targets: list[str] | None = Field(None, alias="targets")
     max_items: dict[str, int] | None = Field(None, alias="maxItems")
-    min_severity_for_moonmind: str | None = Field(
-        None, alias="minSeverityForMoonMind"
-    )
+    min_severity_for_moonmind: str | None = Field(None, alias="minSeverityForMoonMind")
 
     @field_validator("targets", mode="before")
     @classmethod
@@ -522,9 +520,7 @@ class TaskExecutionSpec(BaseModel):
     )
     steps: list[TaskStepSpec] = Field(default_factory=list, alias="steps")
     container: TaskContainerSelection | None = Field(None, alias="container")
-    proposal_policy: TaskProposalPolicy | None = Field(
-        None, alias="proposalPolicy"
-    )
+    proposal_policy: TaskProposalPolicy | None = Field(None, alias="proposalPolicy")
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -968,12 +964,12 @@ def build_effective_proposal_policy(
         str(token or "").strip().lower()
         for token in (severity_vocabulary or _PROPOSAL_SEVERITIES)
     ]
-    filtered_vocab = [token for token in normalized_vocab if token in _PROPOSAL_SEVERITIES]
+    filtered_vocab = [
+        token for token in normalized_vocab if token in _PROPOSAL_SEVERITIES
+    ]
     if not filtered_vocab:
         filtered_vocab = list(_PROPOSAL_SEVERITIES)
-    severity_rank = {
-        token: index for index, token in enumerate(filtered_vocab)
-    }
+    severity_rank = {token: index for index, token in enumerate(filtered_vocab)}
 
     default_targets_normalized = str(default_targets or "").strip().lower()
     if default_targets_normalized == "both":
@@ -982,7 +978,9 @@ def build_effective_proposal_policy(
         default_target_list = [default_targets_normalized]
     else:
         default_target_list = ["project"]
-    configured_targets = list(policy.targets) if policy and policy.targets else default_target_list
+    configured_targets = (
+        list(policy.targets) if policy and policy.targets else default_target_list
+    )
     allow_project = "project" in configured_targets
     allow_moonmind = "moonmind" in configured_targets
     if not allow_project and not allow_moonmind:

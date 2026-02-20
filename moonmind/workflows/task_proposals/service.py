@@ -101,9 +101,9 @@ class TaskProposalService:
         )
         self._similar_limit = 10
         self._moonmind_repository = (
-            str(
-                getattr(settings.task_proposals, "moonmind_ci_repository", "") or ""
-            ).strip().lower()
+            str(getattr(settings.task_proposals, "moonmind_ci_repository", "") or "")
+            .strip()
+            .lower()
         )
 
     async def resolve_worker_token(self, raw_token: str | None) -> WorkerAuthPolicy:
@@ -507,11 +507,9 @@ class TaskProposalService:
             derived_priority, derived_reason = self._derive_moonmind_priority(
                 normalized_tags, metadata
             )
-            if (
-                derived_priority is not None
-                and self._priority_rank(derived_priority)
-                > self._priority_rank(requested_priority)
-            ):
+            if derived_priority is not None and self._priority_rank(
+                derived_priority
+            ) > self._priority_rank(requested_priority):
                 requested_priority = derived_priority
                 priority_override_reason = derived_reason
 

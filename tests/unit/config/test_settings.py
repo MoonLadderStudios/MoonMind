@@ -516,9 +516,7 @@ def test_task_proposal_policy_settings_defaults(app_settings_defaults):
     assert settings.spec_workflow.proposal_moonmind_severity_floor == "high"
 
 
-def test_task_proposal_policy_env_overrides(
-    app_settings_defaults, monkeypatch
-) -> None:
+def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
     """Environment variables should override policy defaults everywhere."""
 
     monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")

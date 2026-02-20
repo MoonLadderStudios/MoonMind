@@ -473,7 +473,9 @@ async def test_worker_emits_moonmind_proposals(tmp_path: Path, monkeypatch) -> N
     """Workers should emit MoonMind proposals when policy allows."""
 
     monkeypatch.setattr(settings.spec_workflow, "proposal_targets_default", "both")
-    monkeypatch.setattr(settings.spec_workflow, "proposal_moonmind_severity_floor", "low")
+    monkeypatch.setattr(
+        settings.spec_workflow, "proposal_moonmind_severity_floor", "low"
+    )
     config = CodexWorkerConfig(
         moonmind_url="http://localhost:5000",
         worker_id="worker-1",
@@ -492,7 +494,10 @@ async def test_worker_emits_moonmind_proposals(tmp_path: Path, monkeypatch) -> N
     job = ClaimedJob(
         id=uuid4(),
         type="task",
-        payload={"repository": "moon/org", "task": {"proposalPolicy": {"targets": ["project", "moonmind"]}}},
+        payload={
+            "repository": "moon/org",
+            "task": {"proposalPolicy": {"targets": ["project", "moonmind"]}},
+        },
     )
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
@@ -546,11 +551,15 @@ async def test_worker_emits_moonmind_proposals(tmp_path: Path, monkeypatch) -> N
     assert len(queue.submitted_proposals) == 2
     moonmind_repo = settings.task_proposals.moonmind_ci_repository
     moonmind_payload = next(
-        proposal for proposal in queue.submitted_proposals if proposal["repository"] == moonmind_repo
+        proposal
+        for proposal in queue.submitted_proposals
+        if proposal["repository"] == moonmind_repo
     )
     assert moonmind_payload["category"] == "run_quality"
     assert moonmind_payload["tags"] == ["loop_detected"]
-    assert moonmind_payload["taskCreateRequest"]["payload"]["repository"] == moonmind_repo
+    assert (
+        moonmind_payload["taskCreateRequest"]["payload"]["repository"] == moonmind_repo
+    )
     assert moonmind_payload["title"].startswith("[run_quality]")
     assert "(tags: loop_detected)" in moonmind_payload["title"]
 
@@ -561,7 +570,9 @@ async def test_worker_skips_moonmind_when_severity_below_floor(
     """MoonMind proposals should honor severity floor."""
 
     monkeypatch.setattr(settings.spec_workflow, "proposal_targets_default", "moonmind")
-    monkeypatch.setattr(settings.spec_workflow, "proposal_moonmind_severity_floor", "high")
+    monkeypatch.setattr(
+        settings.spec_workflow, "proposal_moonmind_severity_floor", "high"
+    )
     config = CodexWorkerConfig(
         moonmind_url="http://localhost:5000",
         worker_id="worker-1",

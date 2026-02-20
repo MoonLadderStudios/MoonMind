@@ -1103,9 +1103,7 @@ class TaskProposalSettings(BaseSettings):
 
     @field_validator("severity_vocabulary", mode="before")
     @classmethod
-    def _normalize_setting_severity_vocab(
-        cls, value: object
-    ) -> tuple[str, ...]:
+    def _normalize_setting_severity_vocab(cls, value: object) -> tuple[str, ...]:
         if value is None or value == "":
             return _ALLOWED_PROPOSAL_SEVERITIES
         if isinstance(value, str):
@@ -1123,8 +1121,7 @@ class TaskProposalSettings(BaseSettings):
         if invalid:
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
-                "task_proposals.severity_vocabulary must be subset of: "
-                f"{allowed}"
+                "task_proposals.severity_vocabulary must be subset of: " f"{allowed}"
             )
         return normalized
 

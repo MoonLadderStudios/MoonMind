@@ -4398,9 +4398,7 @@ class CodexWorker:
                         return dict(signal)
             return {}
 
-        def _ensure_task_request(
-            payload: dict[str, Any], *, repository: str
-        ) -> bool:
+        def _ensure_task_request(payload: dict[str, Any], *, repository: str) -> bool:
             request_node = payload.get("taskCreateRequest")
             if not isinstance(request_node, Mapping):
                 logger.warning(
@@ -4486,9 +4484,7 @@ class CodexWorker:
 
             if effective_policy.has_project_capacity():
                 project_payload = copy.deepcopy(payload)
-                if _ensure_task_request(
-                    project_payload, repository=project_repository
-                ):
+                if _ensure_task_request(project_payload, repository=project_repository):
                     try:
                         await self._queue_client.create_task_proposal(
                             proposal=project_payload
