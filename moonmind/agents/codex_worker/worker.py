@@ -3850,8 +3850,7 @@ class CodexWorker:
         else:
             step_instruction = (
                 step_instruction_value
-                if step_instruction_value
-                else "(no step-specific instructions; continue based on objective)"
+                or "(no step-specific instructions; continue based on objective)"
             )
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"

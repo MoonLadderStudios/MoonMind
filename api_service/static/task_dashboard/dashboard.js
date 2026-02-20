@@ -2106,9 +2106,9 @@
         return "";
       }
       let fallback = "";
+      let preferred = "";
       for (const [rawKey, rawValue] of Object.entries(rawInputs)) {
-        const normalizedKey = normalizeTemplateInputKey(rawKey);
-        if (normalizedKey !== "featurerequest") {
+        if (normalizeTemplateInputKey(rawKey) !== "featurerequest") {
           continue;
         }
         const candidate = String(rawValue || "").trim();
@@ -2116,18 +2116,22 @@
           continue;
         }
         if (String(rawKey || "").trim().toLowerCase() === "feature_request") {
-          return candidate;
+          preferred = candidate;
+          break;
         }
         if (!fallback) {
           fallback = candidate;
         }
       }
-      return fallback;
+      return preferred || fallback;
     };
     const resolveObjectiveInstructions = (primaryInstructions) => {
       const explicitFeatureRequest = currentTemplateFeatureRequest();
       if (explicitFeatureRequest) {
         return explicitFeatureRequest;
+      }
+      if (primaryInstructions) {
+        return primaryInstructions;
       }
       for (let index = appliedTemplateState.length - 1; index >= 0; index -= 1) {
         const candidate = valueForFeatureRequestInput(appliedTemplateState[index]?.inputs);
@@ -2816,8 +2820,13 @@
         }
         additionalSteps.push(stepPayload);
       }
+      const includePrimaryStepForObjectiveOverride =
+        Boolean(instructions) && objectiveInstructions !== instructions;
       const includeExplicitSteps =
-        additionalSteps.length > 0 || Boolean(primaryStepId) || Boolean(primaryStepTitle);
+        additionalSteps.length > 0 ||
+        Boolean(primaryStepId) ||
+        Boolean(primaryStepTitle) ||
+        includePrimaryStepForObjectiveOverride;
       const normalizedSteps = includeExplicitSteps
         ? [
             {
