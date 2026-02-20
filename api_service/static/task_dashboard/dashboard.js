@@ -118,6 +118,14 @@
   const AUTO_REFRESH_STORAGE_KEY = "moonmind.tasks.autoRefresh";
   const autoRefreshChangeListeners = new Set();
 
+  function errorNameForLog(error) {
+    if (!error || typeof error !== "object") {
+      return "unknown";
+    }
+    const name = error.name;
+    return name ? String(name) : "unknown";
+  }
+
   function readStoredAutoRefreshPreference() {
     try {
       const raw = window.localStorage
@@ -129,8 +137,10 @@
       if (raw && raw !== "active" && window.localStorage) {
         window.localStorage.removeItem(AUTO_REFRESH_STORAGE_KEY);
       }
-    } catch (_error) {
-      // Ignore storage read failures and fall back to default.
+    } catch (error) {
+      console.warn("auto refresh preference read failed", {
+        name: errorNameForLog(error),
+      });
     }
     return false;
   }
@@ -145,8 +155,10 @@
       } else {
         window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, "active");
       }
-    } catch (_error) {
-      // Ignore persistence failures and rely on in-memory state.
+    } catch (error) {
+      console.warn("auto refresh preference persist failed", {
+        name: errorNameForLog(error),
+      });
     }
   }
 
@@ -162,13 +174,16 @@
       try {
         listener(enabled);
       } catch (error) {
-        console.error("auto refresh listener failed", error);
+        console.error("auto refresh listener failed", {
+          name: errorNameForLog(error),
+        });
       }
     });
   }
 
   function onAutoRefreshChange(listener) {
     if (typeof listener !== "function") {
+      console.warn("onAutoRefreshChange requires a function listener");
       return () => {};
     }
     autoRefreshChangeListeners.add(listener);
@@ -251,7 +266,8 @@
     }
   }
 
-  function startPolling(task, intervalMs) {
+  function startPolling(task, intervalMs, options = {}) {
+    const runImmediately = options.runImmediately !== false;
     const run = (forced = false) => {
       if (!forced) {
         if (!isAutoRefreshActive()) {
@@ -266,7 +282,9 @@
       });
     };
 
-    run(true);
+    if (runImmediately) {
+      run(true);
+    }
     const timer = window.setInterval(() => run(false), intervalMs);
     pollers.push(timer);
     const disposeAutoRefreshListener = onAutoRefreshChange((enabled) => {
@@ -3694,18 +3712,43 @@
       }
     };
 
+    let eventSource = null;
+
+    const stopEventStream = () => {
+      if (!eventSource) {
+        return;
+      }
+      eventSource.onmessage = null;
+      eventSource.onerror = null;
+      eventSource.close();
+      eventSource = null;
+    };
+
+    registerDisposer(() => stopEventStream());
+
     const beginPollingEvents = () => {
       if (state.eventsPollingStarted) {
         return;
       }
       state.eventsPollingStarted = true;
       state.eventsTransport = "polling";
-      state.eventsTransportStatus = "active";
+      state.eventsTransportStatus = isAutoRefreshActive() ? "active" : "paused";
       renderTransportStatus();
-      startPolling(loadNewEvents, pollIntervals.events);
+      startPolling(loadNewEvents, pollIntervals.events, {
+        runImmediately: isAutoRefreshActive(),
+      });
     };
 
     const startEventStream = () => {
+      if (!isAutoRefreshActive()) {
+        state.eventsTransport = "sse";
+        state.eventsTransportStatus = "paused";
+        renderTransportStatus();
+        return;
+      }
+      if (eventSource || state.eventsPollingStarted) {
+        return;
+      }
       const streamTemplate =
         queueSourceConfig.eventsStream || "/api/queue/jobs/{id}/events/stream";
       if (typeof window.EventSource !== "function") {
@@ -3726,8 +3769,7 @@
       state.eventsTransportStatus = "connecting";
       renderTransportStatus();
 
-      const source = new window.EventSource(streamUrl);
-      registerDisposer(() => source.close());
+      eventSource = new window.EventSource(streamUrl);
 
       const handleMessage = (rawData) => {
         if (!rawData || !isAutoRefreshActive()) {
@@ -3741,13 +3783,13 @@
         }
       };
 
-      source.addEventListener("open", () => {
+      eventSource.addEventListener("open", () => {
         state.eventsTransport = "sse";
         state.eventsTransportStatus = "active";
         renderTransportStatus();
       });
 
-      source.addEventListener("queue_event", (event) => {
+      eventSource.addEventListener("queue_event", (event) => {
         if (state.eventsTransportStatus !== "active") {
           state.eventsTransport = "sse";
           state.eventsTransportStatus = "active";
@@ -3756,7 +3798,7 @@
         handleMessage(event.data);
       });
 
-      source.onmessage = (event) => {
+      eventSource.onmessage = (event) => {
         if (state.eventsTransportStatus !== "active") {
           state.eventsTransport = "sse";
           state.eventsTransportStatus = "active";
@@ -3765,12 +3807,12 @@
         handleMessage(event.data);
       };
 
-      source.onerror = (error) => {
+      eventSource.onerror = (error) => {
         console.error("queue event stream failed; switching to polling", error);
         state.eventsTransport = "polling";
         state.eventsTransportStatus = "error";
         renderTransportStatus();
-        source.close();
+        stopEventStream();
         beginPollingEvents();
       };
     };
@@ -4026,10 +4068,21 @@
 
     registerDisposer(
       onAutoRefreshChange((enabled) => {
-        if (enabled) {
-          loadDetail();
-          loadNewEvents();
+        if (!enabled) {
+          stopEventStream();
+          state.eventsTransportStatus = "paused";
+          renderTransportStatus();
+          return;
         }
+        if (state.eventsPollingStarted) {
+          state.eventsTransport = "polling";
+          state.eventsTransportStatus = "active";
+          renderTransportStatus();
+        } else {
+          startEventStream();
+        }
+        loadDetail();
+        loadNewEvents();
       }),
     );
 
