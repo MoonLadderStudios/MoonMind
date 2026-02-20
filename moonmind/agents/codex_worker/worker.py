@@ -44,7 +44,6 @@ from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
     TaskProposalPolicy,
-    _default_publish_mode,
     build_canonical_task_view,
     build_effective_proposal_policy,
     build_task_stage_plan,
