@@ -107,7 +107,9 @@ class AgentQueueArtifactStorage:
         """Resolve the JSON file path for a specific step checkpoint."""
 
         job_path = self.get_job_path(job_id)
-        destination = (job_path / "state" / "steps" / f"step-{step_index:04d}.json").resolve()
+        destination = (
+            job_path / "state" / "steps" / f"step-{step_index:04d}.json"
+        ).resolve()
         if not destination.is_relative_to(job_path):
             raise ValueError("step state path resolves outside job directory")
         return destination

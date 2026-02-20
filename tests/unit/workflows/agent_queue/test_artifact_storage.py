@@ -74,11 +74,7 @@ def test_self_heal_attempt_path_scoped_to_job(tmp_path: Path) -> None:
     path = storage.get_self_heal_attempt_path(job_id, step_index=1, attempt=2)
 
     expected = (
-        tmp_path
-        / str(job_id)
-        / "state"
-        / "self_heal"
-        / "attempt-0001-0002.json"
+        tmp_path / str(job_id) / "state" / "self_heal" / "attempt-0001-0002.json"
     ).resolve()
     assert path == expected
     assert path.is_relative_to((tmp_path / str(job_id)).resolve())

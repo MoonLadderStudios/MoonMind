@@ -30,6 +30,11 @@ from moonmind.agents.codex_worker.handlers import (
     WorkerExecutionResult,
 )
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
+from moonmind.agents.codex_worker.secret_refs import (
+    SecretReferenceError,
+    VaultSecretResolver,
+    load_vault_token,
+)
 from moonmind.agents.codex_worker.self_heal import (
     FailureClass,
     HardResetWorkspaceBuilder,
@@ -42,11 +47,6 @@ from moonmind.agents.codex_worker.self_heal import (
     WorkspaceReplayError,
     build_failure_signature,
     is_failure_retryable,
-)
-from moonmind.agents.codex_worker.secret_refs import (
-    SecretReferenceError,
-    VaultSecretResolver,
-    load_vault_token,
 )
 from moonmind.config.settings import settings
 from moonmind.rag.settings import RagRuntimeSettings
@@ -2632,14 +2632,16 @@ class CodexWorker:
             "stepId": step.step_id,
             "stepIndex": step.step_index,
             "attempts": snapshot.attempt,
-            "finishedAt": snapshot.finished_at.isoformat()
-            if snapshot.finished_at
-            else None,
+            "finishedAt": (
+                snapshot.finished_at.isoformat() if snapshot.finished_at else None
+            ),
             "diffHash": snapshot.diff_hash,
             "changedFiles": list(snapshot.changed_files),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     def _write_attempt_state_file(
         self,
@@ -2652,12 +2654,12 @@ class CodexWorker:
             "stepIndex": snapshot.step_index,
             "attempt": snapshot.attempt,
             "startedAt": snapshot.started_at.isoformat(),
-            "finishedAt": snapshot.finished_at.isoformat()
-            if snapshot.finished_at
-            else None,
-            "failureClass": snapshot.failure_class.value
-            if snapshot.failure_class
-            else None,
+            "finishedAt": (
+                snapshot.finished_at.isoformat() if snapshot.finished_at else None
+            ),
+            "failureClass": (
+                snapshot.failure_class.value if snapshot.failure_class else None
+            ),
             "failureSignature": snapshot.failure_signature,
             "failureSignatureHash": snapshot.failure_signature_hash,
             "diffHash": snapshot.diff_hash,
@@ -2665,7 +2667,9 @@ class CodexWorker:
             "strategy": snapshot.strategy.value if snapshot.strategy else None,
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     async def _emit_stage_event(
         self,
@@ -3472,7 +3476,10 @@ class CodexWorker:
         retry_context: StepRetryContext | None = None
         next_strategy = SelfHealStrategy.NONE
         step_log_base = (
-            prepared.artifacts_dir / "logs" / "steps" / f"step-{step.step_index:04d}.log"
+            prepared.artifacts_dir
+            / "logs"
+            / "steps"
+            / f"step-{step.step_index:04d}.log"
         )
         step_patch_base = (
             prepared.artifacts_dir
@@ -3480,8 +3487,8 @@ class CodexWorker:
             / "steps"
             / f"step-{step.step_index:04d}.patch"
         )
-        step_state_path = (
-            prepared.step_state_dir / self._step_state_filename(step.step_index)
+        step_state_path = prepared.step_state_dir / self._step_state_filename(
+            step.step_index
         )
         event_payload: dict[str, Any] = {
             "stepIndex": step.step_index,
@@ -3682,9 +3689,9 @@ class CodexWorker:
             retry_context = StepRetryContext(
                 attempt=attempt.attempt,
                 failure_class=failure_class,
-                failure_signature=failure_signature.value
-                if failure_signature
-                else None,
+                failure_signature=(
+                    failure_signature.value if failure_signature else None
+                ),
                 failure_summary=result.error_message,
                 diff_hash=diff_hash,
                 changed_files=changed_files,
@@ -3717,9 +3724,7 @@ class CodexWorker:
                         "stepId": step.step_id,
                         "stepIndex": step.step_index,
                         "attempt": attempt.attempt,
-                        "failureClass": failure_class.value
-                        if failure_class
-                        else None,
+                        "failureClass": failure_class.value if failure_class else None,
                     },
                 )
                 return StepRunOutcome(
@@ -4316,7 +4321,9 @@ class CodexWorker:
                 f"- Failure class: {retry_context.failure_class or 'unknown'}\n"
             )
             if retry_context.failure_signature:
-                instruction += f"- Failure signature: {retry_context.failure_signature}\n"
+                instruction += (
+                    f"- Failure signature: {retry_context.failure_signature}\n"
+                )
             if retry_context.failure_summary:
                 instruction += f"- Summary: {retry_context.failure_summary}\n"
             if retry_context.diff_hash:
@@ -4701,7 +4708,11 @@ class CodexWorker:
                 timeout=self._self_heal_config.step_timeout_seconds,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            if idle_task in done and idle_watcher.triggered and attempt_task not in done:
+            if (
+                idle_task in done
+                and idle_watcher.triggered
+                and attempt_task not in done
+            ):
                 attempt_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await attempt_task

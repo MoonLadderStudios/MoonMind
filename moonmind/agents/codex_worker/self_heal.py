@@ -82,7 +82,9 @@ class SelfHealConfig:
 
         source = env or os.environ
         return cls(
-            step_max_attempts=_read_positive_int(source, "STEP_MAX_ATTEMPTS", default=3),
+            step_max_attempts=_read_positive_int(
+                source, "STEP_MAX_ATTEMPTS", default=3
+            ),
             step_timeout_seconds=_read_positive_int(
                 source, "STEP_TIMEOUT_SECONDS", default=900
             ),
