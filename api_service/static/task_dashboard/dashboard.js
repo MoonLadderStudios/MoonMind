@@ -161,6 +161,8 @@
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const pollers = [];
   const disposers = [];
+  const persistentPollers = [];
+  const persistentDisposers = [];
   let cachedAvailableSkillIds = null;
   const AUTO_REFRESH_STORAGE_KEY = "moonmind.tasks.autoRefresh";
   const autoRefreshChangeListeners = new Set();
@@ -313,9 +315,26 @@
     }
   }
 
+  function stopPersistentPolling() {
+    while (persistentPollers.length > 0) {
+      clearInterval(persistentPollers.pop());
+    }
+    while (persistentDisposers.length > 0) {
+      const dispose = persistentDisposers.pop();
+      if (typeof dispose === "function") {
+        try {
+          dispose();
+        } catch (error) {
+          console.error("persistent polling disposer failed", error);
+        }
+      }
+    }
+  }
+
   function startPolling(task, intervalMs, options = {}) {
     const runImmediately = options.runImmediately !== false;
     const skipAutoRefresh = options.skipAutoRefresh === true;
+    const persistent = options.persistent === true;
     const run = (forced = false) => {
       if (!forced) {
         if (!skipAutoRefresh && !isAutoRefreshActive()) {
@@ -334,21 +353,26 @@
       run(true);
     }
     const timer = window.setInterval(() => run(false), intervalMs);
-    pollers.push(timer);
+    (persistent ? persistentPollers : pollers).push(timer);
     if (!skipAutoRefresh) {
       const disposeAutoRefreshListener = onAutoRefreshChange((enabled) => {
         if (enabled) {
           run(true);
         }
       });
-      registerDisposer(() => disposeAutoRefreshListener());
+      registerDisposer(() => disposeAutoRefreshListener(), { persistent });
     }
   }
 
-  function registerDisposer(disposer) {
-    if (typeof disposer === "function") {
-      disposers.push(disposer);
+  function registerDisposer(disposer, options = {}) {
+    if (typeof disposer !== "function") {
+      return;
     }
+    if (options.persistent === true) {
+      persistentDisposers.push(disposer);
+      return;
+    }
+    disposers.push(disposer);
   }
 
   function initWorkerPauseBanner(workerPauseSettings) {
@@ -5147,13 +5171,14 @@
     startPolling(
       () => workerPauseController.refresh(),
       workerPauseController.pollInterval,
-      { runImmediately: true, skipAutoRefresh: true },
+      { runImmediately: true, skipAutoRefresh: true, persistent: true },
     );
   }
 
   const disposeTheme = initTheme();
   window.addEventListener("beforeunload", () => {
     stopPolling();
+    stopPersistentPolling();
     if (typeof disposeTheme === "function") {
       disposeTheme();
     }

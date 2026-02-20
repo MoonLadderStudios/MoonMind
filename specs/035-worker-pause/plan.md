@@ -1,6 +1,6 @@
 # Implementation Plan: Worker Pause System
 
-**Branch**: `002-worker-pause` | **Date**: 2026-02-20 | **Spec**: `specs/002-worker-pause/spec.md`
+**Branch**: `035-worker-pause` | **Date**: 2026-02-20 | **Spec**: `specs/035-worker-pause/spec.md`
 
 MoonMind needs a global Worker Pause System per `docs/WorkerPauseSystem.md` so operators can enter Pause → Drain → Upgrade → Resume, guard queue claim paths, surface telemetry, and coordinate Codex/Gemini/Claude workers plus the dashboard. This plan covers schema changes, API/services, worker + MCP runtime behavior, UI controls, and validation artifacts required before implementation.
 
@@ -29,7 +29,7 @@ The constitution file at `.specify/memory/constitution.md` is placeholder-only (
 ### Documentation (feature artifacts)
 
 ```text
-specs/002-worker-pause/
+specs/035-worker-pause/
 ├── spec.md
 ├── plan.md
 ├── research.md

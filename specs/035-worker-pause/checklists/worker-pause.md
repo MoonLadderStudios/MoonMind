@@ -8,5 +8,5 @@
 
 ## Manual Quickstart Verification (2026-02-20)
 
-- [X] Captured quickstart rehearsal evidence in `specs/002-worker-pause/manual_verification.log`, mapping each Pause → Drain → Upgrade → Resume plus Quiesce step to the exercised unit suites from `./tools/test_unit.sh`.
+- [X] Captured quickstart rehearsal evidence in `specs/035-worker-pause/manual_verification.log`, mapping each Pause → Drain → Upgrade → Resume plus Quiesce step to the exercised unit suites from `./tools/test_unit.sh`.
 - [X] Noted runtime constraint: sqlite+aiosqlite connections hang inside the Codex adapter, so the manual replay uses the executed API/service/worker/dashboard tests as the authoritative verification surface.

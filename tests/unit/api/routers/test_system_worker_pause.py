@@ -11,8 +11,11 @@ import pytest
 from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.system_worker_pause import _get_service, router
-from api_service.auth_providers import get_current_user
+from api_service.api.routers.system_worker_pause import (
+    _CURRENT_USER,
+    _get_service,
+    router,
+)
 from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
     QueueSystemMetadata,
@@ -56,16 +59,20 @@ def client() -> tuple[TestClient, AsyncMock]:
     app.include_router(router)
     mock_service = AsyncMock()
 
-    mock_user = SimpleNamespace(id=uuid4(), email="tester@example.com")
+    mock_user = SimpleNamespace(
+        id=uuid4(),
+        email="tester@example.com",
+        is_superuser=True,
+    )
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_current_user()] = lambda: mock_user
+    app.dependency_overrides[_CURRENT_USER] = lambda: mock_user
 
     with TestClient(app) as test_client:
         yield test_client, mock_service
 
 
 def test_get_worker_pause_snapshot_returns_payload(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """GET endpoint should return serialized snapshot."""
 
@@ -104,7 +111,7 @@ def test_apply_worker_pause_state_success(client: tuple[TestClient, AsyncMock]) 
 
 
 def test_apply_worker_pause_state_validation_error(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Validation errors should map to HTTP 400 with detail."""
 
@@ -121,3 +128,47 @@ def test_apply_worker_pause_state_validation_error(
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     detail = response.json()["detail"]
     assert detail["code"] == "worker_pause_invalid_request"
+
+
+def test_apply_worker_pause_state_requires_operator_role() -> None:
+    """Non-superusers should not be allowed to toggle global worker pause."""
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+
+    mock_user = SimpleNamespace(
+        id=uuid4(), email="user@example.com", is_superuser=False
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[_CURRENT_USER] = lambda: mock_user
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/system/worker-pause",
+            json={"action": "resume", "reason": "done", "forceResume": True},
+        )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "worker_pause_forbidden"
+
+
+def test_apply_worker_pause_state_requires_actor_identity() -> None:
+    """Missing actor id should be rejected to keep audit trails complete."""
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+
+    mock_user = SimpleNamespace(id=None, email="user@example.com", is_superuser=True)
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[_CURRENT_USER] = lambda: mock_user
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/system/worker-pause",
+            json={"action": "resume", "reason": "done", "forceResume": True},
+        )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "worker_pause_actor_missing"

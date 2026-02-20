@@ -976,14 +976,20 @@ class AgentQueueRepository:
 
         return True
 
+    async def _seed_pause_state(self) -> models.SystemWorkerPauseState:
+        """Create and flush the singleton pause state row."""
+
+        state = models.SystemWorkerPauseState(id=1, paused=False, version=1)
+        self._session.add(state)
+        await self._session.flush()
+        return state
+
     async def get_pause_state(self) -> models.SystemWorkerPauseState:
         """Return the singleton worker pause state, creating it if missing."""
 
         state = await self._session.get(models.SystemWorkerPauseState, 1)
         if state is None:
-            state = models.SystemWorkerPauseState(id=1, paused=False, version=1)
-            self._session.add(state)
-            await self._session.flush()
+            return await self._seed_pause_state()
         return state
 
     async def get_pause_state_for_update(self) -> models.SystemWorkerPauseState:
@@ -997,9 +1003,7 @@ class AgentQueueRepository:
         result = await self._session.execute(stmt)
         state = result.scalars().first()
         if state is None:
-            state = models.SystemWorkerPauseState(id=1, paused=False, version=1)
-            self._session.add(state)
-            await self._session.flush()
+            return await self._seed_pause_state()
         return state
 
     async def update_pause_state(

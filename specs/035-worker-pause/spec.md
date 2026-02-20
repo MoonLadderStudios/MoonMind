@@ -1,6 +1,6 @@
 # Feature Specification: Worker Pause System
 
-**Feature Branch**: `002-worker-pause`  
+**Feature Branch**: `035-worker-pause`  
 **Created**: 2026-02-20  
 **Status**: Draft  
 **Input**: User description: "Implement the Worker Pause System described in docs/WorkerPauseSystem.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."  

@@ -1,14 +1,14 @@
 # Tasks: Worker Pause System
 
-**Input**: Design documents from `/specs/002-worker-pause/`
+**Input**: Design documents from `/specs/035-worker-pause/`
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
 
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: Confirm feature context + tooling before touching runtime code
 
-- [X] T001 Run `.specify/scripts/bash/check-prerequisites.sh --json` to confirm `FEATURE_DIR=/specs/002-worker-pause` artifacts exist before editing runtime files (DOC-REQ-001 readiness).
-- [X] T002 Review `docs/WorkerPauseSystem.md` against `specs/002-worker-pause/spec.md` and record clarifications in `specs/002-worker-pause/checklists/worker-pause.md` so acceptance criteria cover DOC-REQ-001–DOC-REQ-010.
+- [X] T001 Run `.specify/scripts/bash/check-prerequisites.sh --json` to confirm `FEATURE_DIR=/specs/035-worker-pause` artifacts exist before editing runtime files (DOC-REQ-001 readiness).
+- [X] T002 Review `docs/WorkerPauseSystem.md` against `specs/035-worker-pause/spec.md` and record clarifications in `specs/035-worker-pause/checklists/worker-pause.md` so acceptance criteria cover DOC-REQ-001–DOC-REQ-010.
 
 ---
 
@@ -61,7 +61,7 @@
 - [X] T019 [P] [US2] Inject worker pause endpoint URLs + polling intervals into `api_service/api/routers/task_dashboard_view_model.py` for dashboard consumption (DOC-REQ-008, DOC-REQ-009).
 - [X] T020 [P] [US2] Add the global worker banner + Pause/Resume form markup to `api_service/templates/task_dashboard.html`, ensuring auth tokens flow into the form (DOC-REQ-008).
 - [X] T021 [P] [US2] Implement polling, POST submission, warnings, and styling inside `api_service/static/task_dashboard/dashboard.js` and `api_service/static/task_dashboard/dashboard.css` (DOC-REQ-008, DOC-REQ-009, DOC-REQ-010).
-- [X] T022 [US2] Document Pause → Drain → Upgrade → Resume drills (plus dashboard guidance) in `specs/002-worker-pause/quickstart.md` (DOC-REQ-009, DOC-REQ-010).
+- [X] T022 [US2] Document Pause → Drain → Upgrade → Resume drills (plus dashboard guidance) in `specs/035-worker-pause/quickstart.md` (DOC-REQ-009, DOC-REQ-010).
 
 ---
 
@@ -91,7 +91,7 @@
 
 - [X] T030 Run `./tools/test_unit.sh` to execute Python + dashboard suites and capture logs for the Worker Pause feature (DOC-REQ-001–DOC-REQ-010 validation gate).
 - [X] T031 [P] Refresh `docs/WorkerPauseSystem.md` with the implemented API/UI behavior, linking to metrics fields and MCP propagation (DOC-REQ-001, DOC-REQ-009).
-- [X] T032 Verify Pause → Drain → Upgrade → Resume plus Quiesce workflows manually using `specs/002-worker-pause/quickstart.md` and record results in `specs/002-worker-pause/checklists/worker-pause.md` (DOC-REQ-001, DOC-REQ-009).
+- [X] T032 Verify Pause → Drain → Upgrade → Resume plus Quiesce workflows manually using `specs/035-worker-pause/quickstart.md` and record results in `specs/035-worker-pause/checklists/worker-pause.md` (DOC-REQ-001, DOC-REQ-009).
 
 ---
 

@@ -294,15 +294,7 @@ class QueueToolRegistry:
     ) -> QueueSystemMetadataModel | None:
         if metadata is None:
             return None
-        return QueueSystemMetadataModel(
-            workersPaused=metadata.workers_paused,
-            mode=metadata.mode.value if metadata.mode else None,
-            reason=metadata.reason,
-            version=metadata.version,
-            requestedByUserId=metadata.requested_by_user_id,
-            requestedAt=metadata.requested_at,
-            updatedAt=metadata.updated_at,
-        )
+        return QueueSystemMetadataModel.from_service_metadata(metadata)
 
     async def _handle_enqueue(
         self,

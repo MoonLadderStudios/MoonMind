@@ -498,7 +498,7 @@ class AgentQueueService:
         action: Literal["pause", "resume"],
         mode: Optional[str],
         reason: str,
-        actor_user_id: Optional[UUID],
+        actor_user_id: UUID,
         force_resume: bool = False,
         audit_limit: int = 5,
     ) -> WorkerPauseSnapshot:
@@ -511,6 +511,8 @@ class AgentQueueService:
         normalized_reason = self._clean_optional_str(reason)
         if not normalized_reason:
             raise AgentQueueValidationError("reason must be a non-empty string")
+        if actor_user_id is None:
+            raise AgentQueueValidationError("actor_user_id is required")
 
         state = await self._repository.get_pause_state()
         now = datetime.now(UTC)
@@ -553,8 +555,7 @@ class AgentQueueService:
                 "worker pause enabled",
                 extra={
                     "mode": pause_mode.value,
-                    "reason": normalized_reason,
-                    "operator": str(actor_user_id) if actor_user_id else None,
+                    "operator": str(actor_user_id),
                 },
             )
         else:
@@ -583,8 +584,7 @@ class AgentQueueService:
                 "worker pause disabled",
                 extra={
                     "forceResume": force_resume,
-                    "reason": normalized_reason,
-                    "operator": str(actor_user_id) if actor_user_id else None,
+                    "operator": str(actor_user_id),
                     "runningBeforeResume": metrics.running,
                     "staleRunningBeforeResume": metrics.stale_running,
                 },

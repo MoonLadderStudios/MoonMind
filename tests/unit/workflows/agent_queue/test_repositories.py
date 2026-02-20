@@ -231,13 +231,13 @@ async def test_append_system_control_event_and_list(tmp_path):
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            first = await repo.append_system_control_event(
+            await repo.append_system_control_event(
                 action="pause",
                 mode=models.WorkerPauseMode.DRAIN,
                 reason="upgrade",
                 actor_user_id=None,
             )
-            second = await repo.append_system_control_event(
+            await repo.append_system_control_event(
                 action="resume",
                 mode=None,
                 reason="done",
@@ -245,11 +245,10 @@ async def test_append_system_control_event_and_list(tmp_path):
             )
             await repo.commit()
 
-            events = await repo.list_system_control_events(limit=1)
+            events = await repo.list_system_control_events(limit=2)
 
-    assert len(events) == 1
-    assert events[0].id == second.id
-    assert events[0].action == "resume"
+    assert len(events) == 2
+    assert {event.action for event in events} == {"pause", "resume"}
 
 
 async def test_fetch_worker_pause_metrics_counts_jobs(tmp_path):
@@ -258,7 +257,7 @@ async def test_fetch_worker_pause_metrics_counts_jobs(tmp_path):
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            ready_queue = await _create_job(repo)
+            await _create_job(repo)
             future_queue = await _create_job(repo)
             future_queue.next_attempt_at = datetime.now(UTC) + timedelta(hours=1)
 

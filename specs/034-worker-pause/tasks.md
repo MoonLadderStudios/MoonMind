@@ -1,6 +1,6 @@
 # Tasks: Worker Pause System
 
-**Input**: Design documents from `/specs/001-worker-pause/`
+**Input**: Design documents from `/specs/034-worker-pause/`
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
@@ -81,7 +81,7 @@
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T024 Document the Pause → Drain → Upgrade → Resume workflow updates in `specs/001-worker-pause/quickstart.md` and ensure `docs/WorkerPauseSystem.md` reflects the implemented API details.
+- [ ] T024 Document the Pause → Drain → Upgrade → Resume workflow updates in `specs/034-worker-pause/quickstart.md` and ensure `docs/WorkerPauseSystem.md` reflects the implemented API details.
 - [ ] T025 Run the full test suite via `./tools/test_unit.sh` and capture results for the implementation report.
 - [ ] T026 Add StatsD/observability hooks plus structured logging for pause/resume transitions (state gauge + action counters) inside `system_worker_pause` router and queue service so operators can alert on long-lived pauses (NFR-002, FR-010).
 - [ ] T027 Extend existing API/service tests (or new dedicated tests) to assert instrumentation hooks execute without raising errors by injecting mock StatsD/log handlers (NFR-002, FR-010).

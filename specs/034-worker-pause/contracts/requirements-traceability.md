@@ -1,6 +1,6 @@
 # Requirements Traceability Matrix: Worker Pause System
 
-**Feature**: `001-worker-pause`  
+**Feature**: `034-worker-pause`  
 **Source**: `docs/WorkerPauseSystem.md`
 
 | DOC-REQ ID | Mapped FR(s) | Planned Implementation Surface | Validation Strategy |

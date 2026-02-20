@@ -126,15 +126,7 @@ def _serialize_job(
 def _serialize_system_metadata(
     metadata: QueueSystemMetadata,
 ) -> QueueSystemMetadataModel:
-    return QueueSystemMetadataModel(
-        workers_paused=metadata.workers_paused,
-        mode=metadata.mode.value if metadata.mode else None,
-        reason=metadata.reason,
-        version=metadata.version,
-        requested_by_user_id=metadata.requested_by_user_id,
-        requested_at=metadata.requested_at,
-        updated_at=metadata.updated_at,
-    )
+    return QueueSystemMetadataModel.from_service_metadata(metadata)
 
 
 def _serialize_artifact(artifact: models.AgentJobArtifact) -> ArtifactModel:
@@ -467,7 +459,7 @@ async def claim_job(
             if worker_auth.capabilities
             else payload.worker_capabilities
         )
-        result = await service.claim_job(
+        claim_result = await service.claim_job(
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
             allowed_types=merged_types,
@@ -480,8 +472,10 @@ async def claim_job(
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    serialized_job = _serialize_job(result.job) if result.job is not None else None
-    system_model = _serialize_system_metadata(result.system)
+    serialized_job = (
+        _serialize_job(claim_result.job) if claim_result.job is not None else None
+    )
+    system_model = _serialize_system_metadata(claim_result.system)
     return ClaimJobResponse(job=serialized_job, system=system_model)
 
 
@@ -496,14 +490,14 @@ async def heartbeat_job(
 
     try:
         _ensure_worker_identity(payload.worker_id, worker_auth)
-        result = await service.heartbeat(
+        heartbeat_result = await service.heartbeat(
             job_id=job_id,
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return _serialize_job(result.job, result.system)
+    return _serialize_job(heartbeat_result.job, heartbeat_result.system)
 
 
 @router.post("/jobs/{job_id}/complete", response_model=JobModel)

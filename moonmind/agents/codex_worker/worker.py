@@ -908,11 +908,17 @@ class QueueApiClient:
     @staticmethod
     def _parse_system_metadata(node: Any) -> QueueSystemStatus:
         metadata = node if isinstance(node, Mapping) else {}
+        try:
+            version = int(metadata.get("version") or 1)
+        except (TypeError, ValueError):
+            version = 1
+        if version < 1:
+            version = 1
         return QueueSystemStatus(
             workers_paused=bool(metadata.get("workersPaused")),
             mode=str(metadata.get("mode") or "").strip() or None,
             reason=str(metadata.get("reason") or "").strip() or None,
-            version=int(metadata.get("version") or 1),
+            version=version,
             requested_at=QueueApiClient._parse_iso_datetime(
                 metadata.get("requestedAt")
             ),
@@ -4324,7 +4330,7 @@ class CodexWorker:
         """Return whether this run should start a live session for current config/state."""
 
         if self._config.live_session_enabled_default:
-            return "claimed"
+            return True
         payload = await self._queue_client.get_live_session(job_id=job_id)
         if not isinstance(payload, Mapping):
             return False

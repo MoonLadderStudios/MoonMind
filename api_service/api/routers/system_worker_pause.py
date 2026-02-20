@@ -32,6 +32,34 @@ from moonmind.workflows.agent_queue.service import (
 router = APIRouter(prefix="/api/system/worker-pause", tags=["system-worker-pause"])
 logger = logging.getLogger(__name__)
 
+_CURRENT_USER = get_current_user()
+
+
+def _require_worker_pause_operator(user: User) -> None:
+    """Require elevated privileges for global worker pause operations."""
+
+    if not bool(getattr(user, "is_superuser", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_pause_forbidden",
+                "message": "Operator privileges are required for worker pause controls.",
+            },
+        )
+
+
+def _require_actor_user_id(user: User):
+    actor_user_id = getattr(user, "id", None)
+    if actor_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_pause_actor_missing",
+                "message": "Authenticated operator identity is required.",
+            },
+        )
+    return actor_user_id
+
 
 class WorkerPauseActionRequest(BaseModel):
     """Request payload for pause/resume actions."""
@@ -59,10 +87,11 @@ async def _get_service(
 @router.get("", response_model=WorkerPauseSnapshotResponse)
 async def get_worker_pause_state(
     service: AgentQueueService = Depends(_get_service),
-    _user: User = Depends(get_current_user()),
+    _user: User = Depends(_CURRENT_USER),
 ) -> WorkerPauseSnapshotResponse:
     """Return the current worker pause snapshot."""
 
+    _require_worker_pause_operator(_user)
     snapshot = await service.get_worker_pause_snapshot()
     return _serialize_worker_pause_snapshot(snapshot)
 
@@ -71,16 +100,19 @@ async def get_worker_pause_state(
 async def apply_worker_pause_state(
     payload: WorkerPauseActionRequest,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User = Depends(_CURRENT_USER),
 ) -> WorkerPauseSnapshotResponse:
     """Pause or resume workers via the global control."""
+
+    _require_worker_pause_operator(user)
+    actor_user_id = _require_actor_user_id(user)
 
     try:
         snapshot = await service.apply_worker_pause_action(
             action=payload.action,
             mode=payload.mode,
             reason=payload.reason,
-            actor_user_id=getattr(user, "id", None),
+            actor_user_id=actor_user_id,
             force_resume=payload.force_resume,
         )
     except AgentQueueValidationError as exc:
@@ -124,15 +156,7 @@ def _serialize_worker_pause_snapshot(
 def _serialize_system_metadata(
     metadata: QueueSystemMetadata,
 ) -> QueueSystemMetadataModel:
-    return QueueSystemMetadataModel(
-        workers_paused=metadata.workers_paused,
-        mode=metadata.mode.value if metadata.mode else None,
-        reason=metadata.reason,
-        version=metadata.version,
-        requested_by_user_id=metadata.requested_by_user_id,
-        requested_at=metadata.requested_at,
-        updated_at=metadata.updated_at,
-    )
+    return QueueSystemMetadataModel.from_service_metadata(metadata)
 
 
 def _serialize_audit_event(

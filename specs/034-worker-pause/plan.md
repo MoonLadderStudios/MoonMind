@@ -1,7 +1,7 @@
 # Implementation Plan: Worker Pause System
 
-**Branch**: `001-worker-pause` | **Date**: 2026-02-20 | **Spec**: specs/001-worker-pause/spec.md  
-**Input**: Feature specification from `/specs/001-worker-pause/spec.md`
+**Branch**: `034-worker-pause` | **Date**: 2026-02-20 | **Spec**: specs/034-worker-pause/spec.md  
+**Input**: Feature specification from `/specs/034-worker-pause/spec.md`
 
 ## Summary
 Implement the Worker Pause System described in `docs/WorkerPauseSystem.md` by adding persistent pause state + audit tables, guarded queue claim/heartbeat paths that surface pause metadata, operator APIs/UI controls, and worker runtime handling for Drain/Quiesce modes. Research decisions cover persistence location, service-layer guardrails, shared schema design, and dashboard propagation (see `research.md`).
@@ -27,7 +27,7 @@ Implement the Worker Pause System described in `docs/WorkerPauseSystem.md` by ad
 ### Documentation (this feature)
 
 ```text
-specs/001-worker-pause/
+specs/034-worker-pause/
 ├── spec.md
 ├── plan.md
 ├── research.md

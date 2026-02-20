@@ -256,6 +256,12 @@ async def test_queue_cancel_dispatches_to_service() -> None:
         context=_build_context(service),
     )
 
+    assert result["id"] == str(job.id)
+    assert result["status"] == "cancelled"
+    called = service.request_cancel.await_args.kwargs
+    assert called["job_id"] == job.id
+    assert called["reason"] == "operator request"
+
 
 def _build_system_metadata(paused: bool = False) -> QueueSystemMetadata:
     now = datetime.now(UTC)
@@ -268,9 +274,3 @@ def _build_system_metadata(paused: bool = False) -> QueueSystemMetadata:
         requested_at=None,
         updated_at=now,
     )
-
-    assert result["id"] == str(job.id)
-    assert result["status"] == "cancelled"
-    called = service.request_cancel.await_args.kwargs
-    assert called["job_id"] == job.id
-    assert called["reason"] == "operator request"

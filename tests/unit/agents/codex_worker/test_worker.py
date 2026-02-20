@@ -1761,7 +1761,7 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
     stop_event.set()
     task.cancel()
     with suppress(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert len(queue.heartbeats) >= 2
 
@@ -1807,9 +1807,32 @@ async def test_heartbeat_loop_sets_pause_event_for_quiesce(tmp_path: Path) -> No
     stop_event.set()
     task.cancel()
     with suppress(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert pause_event.is_set()
+
+
+async def test_should_bootstrap_live_session_respects_default_enable(
+    tmp_path: Path,
+) -> None:
+    """Default-enabled live sessions should always bootstrap."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        live_session_enabled_default=True,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    assert await worker._should_bootstrap_live_session(job_id=uuid4()) is True
 
 
 async def test_ensure_live_session_started_skips_opt_in_without_request(

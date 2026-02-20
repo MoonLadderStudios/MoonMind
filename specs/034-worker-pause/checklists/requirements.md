@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-02-20  
-**Feature**: [specs/002-worker-pause/spec.md](../spec.md)
+**Feature**: specs/034-worker-pause/spec.md
 
 ## Content Quality
 
@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Reviewed on 2026-02-20; all checklist items satisfied without exceptions.
+Spec references DOC-REQ IDs for every requirement and documents runtime deliverables, so no blockers remain before planning.
