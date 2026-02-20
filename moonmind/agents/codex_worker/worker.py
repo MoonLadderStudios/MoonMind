@@ -315,17 +315,21 @@ class CodexWorkerConfig:
         )
         if container_default_timeout_seconds < 1:
             raise ValueError("MOONMIND_CONTAINER_TIMEOUT_SECONDS must be >= 1")
-        stage_command_timeout_seconds = int(
-            str(
+        stage_command_timeout_raw = str(
+            source.get(
+                "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
                 source.get(
-                    "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-                    source.get(
-                        "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-                        str(settings.spec_workflow.stage_command_timeout_seconds),
-                    ),
-                )
-            ).strip()
-        )
+                    "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+                    str(settings.spec_workflow.stage_command_timeout_seconds),
+                ),
+            )
+        ).strip()
+        try:
+            stage_command_timeout_seconds = int(stage_command_timeout_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer"
+            ) from exc
         if stage_command_timeout_seconds < 1:
             raise ValueError("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be >= 1")
 
@@ -2709,7 +2713,7 @@ class CodexWorker:
                     f"{timeout_display}s: {' '.join(redacted_command)}"
                 )
                 self._append_stage_log(log_path, timeout_msg)
-                raise TimeoutError(timeout_msg) from exc
+                raise asyncio.TimeoutError(timeout_msg) from exc
         redacted_command = self._redact_command_for_log(
             command, redaction_values=merged_redaction_values
         )
@@ -3706,19 +3710,14 @@ class CodexWorker:
             )
             run_command_env = dict(environ)
             run_command_env.update(run_env)
-            run_result = await asyncio.wait_for(
-                self._run_stage_command(
-                    run_command,
-                    cwd=prepared.repo_dir,
-                    log_path=prepared.execute_log_path,
-                    check=False,
-                    env=run_command_env,
-                    redaction_values=tuple(
-                        value for value in run_env.values() if value
-                    ),
-                    timeout_seconds=float(container_spec.timeout_seconds),
-                ),
-                timeout=float(container_spec.timeout_seconds),
+            run_result = await self._run_stage_command(
+                run_command,
+                cwd=prepared.repo_dir,
+                log_path=prepared.execute_log_path,
+                check=False,
+                env=run_command_env,
+                redaction_values=tuple(value for value in run_env.values() if value),
+                timeout_seconds=float(container_spec.timeout_seconds),
             )
             if run_result.returncode != 0:
                 error_message = f"container command failed ({run_result.returncode})"
