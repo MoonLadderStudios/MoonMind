@@ -1606,7 +1606,7 @@
           <label>Starting Branch (optional)
             <input name="startingBranch" placeholder="repo default branch" />
           </label>
-          <label>Finishing Branch (optional)
+          <label>Target Branch (optional)
             <input name="newBranch" placeholder="auto-generated unless starting branch is non-default" />
           </label>
         </div>
