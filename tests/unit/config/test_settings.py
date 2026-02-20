@@ -235,6 +235,7 @@ class TestSpecWorkflowSettings:
         assert settings.codex_model == "gpt-5.3-codex"
         assert settings.codex_effort == "high"
         assert settings.default_task_runtime == "codex"
+        assert settings.default_publish_mode == "pr"
         assert settings.claude_volume_name == "claude_auth_volume"
         assert settings.claude_volume_path == "/home/app/.claude"
         assert settings.claude_home == "/home/app/.claude"
@@ -246,6 +247,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
         monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
         monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+        monkeypatch.setenv("MOONMIND_DEFAULT_PUBLISH_MODE", "branch")
         monkeypatch.setenv("CLAUDE_VOLUME_NAME", "claude_auth_custom")
         monkeypatch.setenv("CLAUDE_VOLUME_PATH", "/runtime/claude-auth")
         monkeypatch.setenv("CLAUDE_HOME", "/runtime/claude-home")
@@ -258,6 +260,7 @@ class TestSpecWorkflowSettings:
         assert settings.codex_model == "gpt-custom-codex"
         assert settings.codex_effort == "medium"
         assert settings.default_task_runtime == "claude"
+        assert settings.default_publish_mode == "branch"
         assert settings.claude_volume_name == "claude_auth_custom"
         assert settings.claude_volume_path == "/runtime/claude-auth"
         assert settings.claude_home == "/runtime/claude-home"
@@ -268,12 +271,23 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
         monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+        monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
         monkeypatch.delenv("CLAUDE_VOLUME_NAME", raising=False)
         monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
         monkeypatch.delenv("CLAUDE_HOME", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+
+    def test_default_publish_mode_rejects_invalid_value(self, monkeypatch):
+        """Default publish mode should validate supported options."""
+
+        monkeypatch.setenv("MOONMIND_DEFAULT_PUBLISH_MODE", "auto")
+        with pytest.raises(
+            ValidationError, match="default_publish_mode must be one of"
+        ):
+            SpecWorkflowSettings(_env_file=None)
+        monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
 
     def test_default_task_runtime_rejects_invalid_value(self, monkeypatch):
         """Default runtime should reject values outside supported execution runtimes."""

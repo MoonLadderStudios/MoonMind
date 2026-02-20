@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.task_contract import (
     TaskContractError,
     build_canonical_task_view,
@@ -54,6 +55,30 @@ def test_normalize_task_payload_defaults_publish_mode_to_pr() -> None:
 
     assert normalized["task"]["publish"]["mode"] == "pr"
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
+
+
+def test_normalize_task_payload_respects_default_publish_mode_override(
+    monkeypatch,
+) -> None:
+    """Default publish mode should follow configurable setting when publish missing."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "Run tests",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+            },
+        },
+    )
+
+    assert normalized["task"]["publish"]["mode"] == "branch"
+    assert normalized["requiredCapabilities"] == ["codex", "git"]
 
 
 def test_normalize_task_payload_container_enabled_adds_docker_capability() -> None:

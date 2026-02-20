@@ -249,6 +249,14 @@ class SpecWorkflowSettings(BaseSettings):
         ),
         description="Fallback runtime for queue task payloads that omit runtime fields.",
     )
+    default_publish_mode: str = Field(
+        "pr",
+        env=(
+            "MOONMIND_DEFAULT_PUBLISH_MODE",
+            "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
+        ),
+        description="Fallback publish mode applied when queue task payloads omit publish.mode.",
+    )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
         env="SPEC_WORKFLOW_GITHUB_REPOSITORY",
@@ -611,6 +619,18 @@ class SpecWorkflowSettings(BaseSettings):
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_task_runtime must be one of: {supported}")
+        return normalized
+
+    @field_validator("default_publish_mode", mode="before")
+    @classmethod
+    def _normalize_default_publish_mode(cls, value: object) -> str:
+        """Normalize default publish mode and reject unsupported values."""
+
+        normalized = str(value or "").strip().lower() or "pr"
+        allowed = {"none", "branch", "pr"}
+        if normalized not in allowed:
+            supported = ", ".join(sorted(allowed))
+            raise ValueError(f"default_publish_mode must be one of: {supported}")
         return normalized
 
     @field_validator("live_session_provider", mode="before")
