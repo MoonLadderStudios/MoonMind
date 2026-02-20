@@ -55,22 +55,38 @@ def _first_non_empty(
 def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     default_skill = _first_non_empty(
         source,
-        ("MOONMIND_DEFAULT_SKILL", "SPEC_WORKFLOW_DEFAULT_SKILL"),
+        (
+            "WORKFLOW_DEFAULT_SKILL",
+            "SPEC_WORKFLOW_DEFAULT_SKILL",
+            "MOONMIND_DEFAULT_SKILL",
+        ),
         default="speckit",
     )
     discover_skill = _first_non_empty(
         source,
-        ("MOONMIND_DISCOVER_SKILL", "SPEC_WORKFLOW_DISCOVER_SKILL"),
+        (
+            "WORKFLOW_DISCOVER_SKILL",
+            "SPEC_WORKFLOW_DISCOVER_SKILL",
+            "MOONMIND_DISCOVER_SKILL",
+        ),
         default=default_skill,
     )
     submit_skill = _first_non_empty(
         source,
-        ("MOONMIND_SUBMIT_SKILL", "SPEC_WORKFLOW_SUBMIT_SKILL"),
+        (
+            "WORKFLOW_SUBMIT_SKILL",
+            "SPEC_WORKFLOW_SUBMIT_SKILL",
+            "MOONMIND_SUBMIT_SKILL",
+        ),
         default=default_skill,
     )
     publish_skill = _first_non_empty(
         source,
-        ("MOONMIND_PUBLISH_SKILL", "SPEC_WORKFLOW_PUBLISH_SKILL"),
+        (
+            "WORKFLOW_PUBLISH_SKILL",
+            "SPEC_WORKFLOW_PUBLISH_SKILL",
+            "MOONMIND_PUBLISH_SKILL",
+        ),
         default=default_skill,
     )
     values = [
@@ -85,7 +101,10 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
 def _configured_skills_require_speckit(source: Mapping[str, str]) -> bool:
     """Return whether current worker config requires Speckit executable checks."""
 
-    if not _env_flag(str(source.get("SPEC_WORKFLOW_USE_SKILLS", "")), default=True):
+    if not _env_flag(
+        _first_non_empty(source, ("WORKFLOW_USE_SKILLS", "SPEC_WORKFLOW_USE_SKILLS")),
+        default=True,
+    ):
         return False
     return any(
         get_stage_adapter(skill_name) == "speckit"

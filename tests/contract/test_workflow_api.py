@@ -36,6 +36,7 @@ from moonmind.workflows.speckit_celery.workspace import (
 )
 
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
+CURRENT_USER_DEP = get_current_user()
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +71,12 @@ async def _wait_for_run_status(
     )
 
 
-def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
+def _build_sample_run(
+    now: datetime | None = None,
+    *,
+    owner_id=None,
+    requested_by_user_id=None,
+) -> SimpleNamespace:
     now = now or datetime(2024, 5, 1, tzinfo=UTC)
     run_id = uuid4()
     task_states = [
@@ -131,6 +137,9 @@ def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
         checked_at=now,
         notes="token ok",
     )
+    owner = owner_id or uuid4()
+    requested_by = requested_by_user_id or owner
+
     return SimpleNamespace(
         id=run_id,
         feature_key="US2-monitoring",
@@ -147,8 +156,8 @@ def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
         codex_logs_path="/artifacts/codex_logs.jsonl",
         codex_patch_path="/artifacts/patch.diff",
         celery_chain_id="celery-abc123",
-        requested_by_user_id=uuid4(),
-        created_by=uuid4(),
+        requested_by_user_id=requested_by,
+        created_by=owner,
         current_task_name="submit",
         started_at=now,
         finished_at=None,
@@ -278,7 +287,7 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
 
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run_store)
     test_user = SimpleNamespace(id=uuid4())
-    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: test_user
 
     feature_key = "FR-008/idempotent-branch"
 
@@ -335,18 +344,19 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
         app.dependency_overrides.pop(_get_repository, None)
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
 async def test_monitor_workflow_contract_endpoints(monkeypatch):
     """Contract coverage for run listing and detail retrieval endpoints."""
 
-    run = _build_sample_run()
+    user_id = uuid4()
+    run = _build_sample_run(owner_id=user_id)
     run_id = run.id
 
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=user_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -389,7 +399,38 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
         )
 
     app.dependency_overrides.pop(_get_repository, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
+
+
+@pytest.mark.asyncio
+async def test_workflow_endpoints_hide_non_owned_runs(monkeypatch):
+    """Non-owner callers should not be able to access another user's run details."""
+
+    owner_id = uuid4()
+    run = _build_sample_run(owner_id=owner_id)
+    app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=uuid4())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        detail_response = await client.get(f"/api/workflows/runs/{run.id}")
+        assert detail_response.status_code == 404
+
+        tasks_response = await client.get(f"/api/workflows/runs/{run.id}/tasks")
+        assert tasks_response.status_code == 404
+
+        artifacts_response = await client.get(
+            f"/api/workflows/runs/{run.id}/artifacts"
+        )
+        assert artifacts_response.status_code == 404
+
+        preflight_response = await client.post(
+            f"/api/workflows/runs/{run.id}/codex/preflight", json={}
+        )
+        assert preflight_response.status_code == 404
+
+    app.dependency_overrides.pop(_get_repository, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -397,10 +438,11 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
 async def test_workflow_task_listing_contract(monkeypatch):
     """Pending contract test for /runs/{id}/tasks until implementation lands."""
 
-    run = _build_sample_run()
+    user_id = uuid4()
+    run = _build_sample_run(owner_id=user_id)
 
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=user_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -415,7 +457,7 @@ async def test_workflow_task_listing_contract(monkeypatch):
         )
 
     app.dependency_overrides.pop(_get_repository, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -423,9 +465,10 @@ async def test_workflow_task_listing_contract(monkeypatch):
 async def test_workflow_artifact_listing_contract(monkeypatch):
     """Pending contract test for /runs/{id}/artifacts until implementation lands."""
 
-    run = _build_sample_run()
+    user_id = uuid4()
+    run = _build_sample_run(owner_id=user_id)
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=user_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -440,7 +483,7 @@ async def test_workflow_artifact_listing_contract(monkeypatch):
         )
 
     app.dependency_overrides.pop(_get_repository, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -558,7 +601,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     app.state.settings = settings
 
     test_user = SimpleNamespace(id=uuid4())
-    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: test_user
 
     try:
         transport = ASGITransport(app=app)
@@ -695,7 +738,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -773,7 +816,7 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
 
     app.state.settings = settings
     test_user = SimpleNamespace(id=uuid4())
-    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: test_user
     app.dependency_overrides[_get_repository] = _repo_override
 
     try:
@@ -817,5 +860,5 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
             )
     finally:
         app.dependency_overrides.pop(_get_repository, None)
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(CURRENT_USER_DEP, None)
         await engine.dispose()

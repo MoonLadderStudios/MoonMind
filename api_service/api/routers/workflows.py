@@ -61,6 +61,37 @@ legacy_router = APIRouter(
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
+def _is_workflow_admin(user: User | None) -> bool:
+    return bool(user and getattr(user, "is_superuser", False))
+
+
+def _run_owned_by_user(run: object, user: User | None) -> bool:
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return False
+    created_by = getattr(run, "created_by", None)
+    requested_by_user_id = getattr(run, "requested_by_user_id", None)
+    return created_by == user_id or requested_by_user_id == user_id
+
+
+def _raise_workflow_not_found(run_id: UUID) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "workflow_not_found",
+            "message": f"Workflow run {run_id} was not found",
+        },
+    )
+
+
+def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> object:
+    if run is None:
+        _raise_workflow_not_found(run_id)
+    if _is_workflow_admin(user) or _run_owned_by_user(run, user):
+        return run
+    _raise_workflow_not_found(run_id)
+
+
 def _canonicalize_legacy_path(path: str) -> str:
     if path.startswith("/api/workflows/speckit"):
         suffix = path[len("/api/workflows/speckit") :]
@@ -199,15 +230,11 @@ async def trigger_codex_preflight(
 ) -> CodexPreflightResultModel:
     """Run the Codex login status check for the specified workflow run."""
 
-    run = await repo.get_run(run_id, with_relations=True)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": f"Workflow run {run_id} was not found",
-            },
-        )
+    run = _assert_run_access(
+        await repo.get_run(run_id, with_relations=True),
+        run_id,
+        _user,
+    )
 
     router = get_codex_shard_router()
     queue_name = run.codex_queue
@@ -390,11 +417,24 @@ async def list_workflow_runs(
                 detail={"code": "invalid_status", "message": str(exc)},
             ) from exc
 
+    if _is_workflow_admin(_user):
+        effective_created_by = created_by
+    else:
+        if created_by is not None and created_by != _user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "workflow_forbidden",
+                    "message": "Cannot list workflow runs for another user.",
+                },
+            )
+        effective_created_by = _user.id
+
     try:
         paginated_runs = await repo.list_runs(
             status=status_enum,
             feature_key=feature_key,
-            created_by=created_by,
+            created_by=effective_created_by,
             cursor=cursor,
             limit=limit,
             with_relations=False,
@@ -449,15 +489,11 @@ async def get_workflow_run(
 ) -> SpecWorkflowRunModel:
     """Retrieve a single workflow run with related metadata."""
 
-    run = await repo.get_run(run_id, with_relations=True)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": f"Workflow run {run_id} was not found",
-            },
-        )
+    run = _assert_run_access(
+        await repo.get_run(run_id, with_relations=True),
+        run_id,
+        _user,
+    )
 
     return _serialize_run_model(
         run,
@@ -482,6 +518,8 @@ async def list_workflow_run_tasks(
     _user: User = Depends(get_current_user()),
 ) -> WorkflowTaskStateListResponse:
     """Return ordered task states for the specified workflow run."""
+
+    _assert_run_access(await repo.get_run(run_id, with_relations=False), run_id, _user)
 
     try:
         states = await repo.list_task_states(run_id, require_run=True)
@@ -514,15 +552,7 @@ async def list_workflow_run_artifacts(
 ) -> WorkflowArtifactListResponse:
     """Return artifact metadata for the specified workflow run."""
 
-    run = await repo.get_run(run_id)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": f"Workflow run {run_id} was not found",
-            },
-        )
+    _assert_run_access(await repo.get_run(run_id), run_id, _user)
 
     artifacts = await repo.list_artifacts(run_id)
     payload = serialize_artifact_collection(run_id, artifacts)
@@ -552,6 +582,8 @@ async def retry_workflow_run(
     request = payload or RetryWorkflowRunRequest()
     notes = request.notes
     mode = request.mode or RetryWorkflowMode.RESUME_FAILED_TASK
+
+    _assert_run_access(await repo.get_run(run_id, with_relations=False), run_id, _user)
 
     try:
         triggered = await retry_spec_workflow_run(run_id, notes=notes, mode=mode)
