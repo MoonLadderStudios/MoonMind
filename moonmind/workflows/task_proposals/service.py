@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 import httpx
@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 _PROPOSALS_WRITE_CAPABILITY = "proposals_write"
 _NOTIFICATION_CATEGORIES = {"security", "tests"}
 _DEDUP_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
+_MOONMIND_SIGNAL_TAGS = frozenset(
+    {
+        "retry",
+        "duplicate_output",
+        "missing_ref",
+        "conflicting_instructions",
+        "flaky_test",
+        "loop_detected",
+        "artifact_gap",
+    }
+)
 
 
 class TaskProposalError(RuntimeError):
@@ -89,6 +100,11 @@ class TaskProposalService:
             self._notification_webhook
         )
         self._similar_limit = 10
+        self._moonmind_repository = (
+            str(getattr(settings.task_proposals, "moonmind_ci_repository", "") or "")
+            .strip()
+            .lower()
+        )
 
     async def resolve_worker_token(self, raw_token: str | None) -> WorkerAuthPolicy:
         """Validate worker token capability for proposals_write."""
@@ -158,6 +174,104 @@ class TaskProposalService:
             normalized.append(candidate)
             seen.add(candidate)
         return normalized
+
+    def _is_moonmind_repository(self, repository: str) -> bool:
+        if not repository:
+            return False
+        return repository.strip().lower() == self._moonmind_repository
+
+    def _normalize_moonmind_title(self, title: str, tags: Sequence[str]) -> str:
+        normalized = title.strip()
+        if not normalized.lower().startswith("[run_quality]"):
+            normalized = f"[run_quality] {normalized or 'MoonMind proposal'}".strip()
+        slug_items = sorted({tag for tag in tags if tag})
+        if slug_items:
+            slug_text = "+".join(slug_items)
+            marker = f"(tags: {slug_text})"
+            if marker not in normalized:
+                normalized = f"{normalized} (tags: {slug_text})"
+        return normalized
+
+    def _enforce_moonmind_policy(
+        self,
+        *,
+        title: str,
+        category: str | None,
+        tags: list[str],
+        metadata: dict[str, Any],
+    ) -> tuple[str, list[str], str]:
+        normalized_category = (category or "run_quality").lower()
+        if normalized_category == "moonmind_ci":
+            normalized_category = "run_quality"
+        if normalized_category != "run_quality":
+            raise TaskProposalValidationError(
+                "MoonMind proposals must use category 'run_quality'"
+            )
+        allowed_tags = [tag for tag in tags if tag in _MOONMIND_SIGNAL_TAGS]
+        if not allowed_tags:
+            raise TaskProposalValidationError(
+                "MoonMind proposals require at least one approved signal tag"
+            )
+        trigger_repo = self._clean_str(metadata.get("triggerRepo"))
+        trigger_job = self._clean_str(metadata.get("triggerJobId"))
+        signal_payload = metadata.get("signal")
+        if not trigger_repo or not trigger_job:
+            raise TaskProposalValidationError(
+                "MoonMind proposals must include triggerRepo and triggerJobId metadata"
+            )
+        if not isinstance(signal_payload, dict):
+            raise TaskProposalValidationError(
+                "MoonMind proposals must provide origin_metadata.signal details"
+            )
+        metadata["triggerRepo"] = trigger_repo
+        metadata["triggerJobId"] = trigger_job
+        metadata["signal"] = dict(signal_payload)
+        normalized_title = self._normalize_moonmind_title(title, allowed_tags)
+        return normalized_category, allowed_tags, normalized_title
+
+    @staticmethod
+    def _priority_rank(value: TaskProposalReviewPriority) -> int:
+        ordering = {
+            TaskProposalReviewPriority.LOW: 0,
+            TaskProposalReviewPriority.NORMAL: 1,
+            TaskProposalReviewPriority.HIGH: 2,
+            TaskProposalReviewPriority.URGENT: 3,
+        }
+        return ordering.get(value, 1)
+
+    def _derive_moonmind_priority(
+        self, tags: Sequence[str], metadata: Mapping[str, Any]
+    ) -> tuple[TaskProposalReviewPriority | None, str | None]:
+        signal = metadata.get("signal")
+        signal_dict = signal if isinstance(signal, Mapping) else {}
+        severity = self._clean_str(signal_dict.get("severity")).lower()
+        if severity in {"high", "critical"}:
+            return TaskProposalReviewPriority.HIGH, "signal:severity"
+        tag_set = {tag for tag in tags}
+        if "loop_detected" in tag_set:
+            return TaskProposalReviewPriority.HIGH, "signal:loop_detected"
+        if "conflicting_instructions" in tag_set:
+            return TaskProposalReviewPriority.HIGH, "signal:conflicting_instructions"
+        if "missing_ref" in tag_set:
+            missing_refs = signal_dict.get("missingRefs") or signal_dict.get(
+                "missing_refs"
+            )
+            if isinstance(missing_refs, (list, tuple)) and missing_refs:
+                return TaskProposalReviewPriority.HIGH, "signal:missing_ref"
+        if "retry" in tag_set:
+            retries = signal_dict.get("retries")
+            try:
+                retry_count = int(retries)
+            except (TypeError, ValueError):
+                retry_count = 0
+            if retry_count >= 2:
+                return TaskProposalReviewPriority.HIGH, "signal:retry_exhausted"
+            return TaskProposalReviewPriority.NORMAL, "signal:retry"
+        if "duplicate_output" in tag_set or "artifact_gap" in tag_set:
+            return TaskProposalReviewPriority.NORMAL, "signal:quality_gap"
+        if "flaky_test" in tag_set:
+            return TaskProposalReviewPriority.LOW, "signal:flaky_test"
+        return None, None
 
     def _normalize_origin_source(self, raw_source: object) -> TaskProposalOriginSource:
         text = self._clean_str(raw_source).lower()
@@ -350,6 +464,7 @@ class TaskProposalService:
         origin_metadata: dict[str, Any] | None,
         proposed_by_worker_id: str | None,
         proposed_by_user_id: UUID | None,
+        review_priority: object | None = None,
     ) -> TaskProposal:
         if not proposed_by_worker_id and not proposed_by_user_id:
             raise TaskProposalValidationError(
@@ -371,9 +486,33 @@ class TaskProposalService:
         normalized_tags = self._normalize_tags(tags)
         origin = self._normalize_origin_source(origin_source)
         metadata = origin_metadata if isinstance(origin_metadata, dict) else {}
+        requested_priority = (
+            self._normalize_review_priority(review_priority)
+            if review_priority is not None
+            else TaskProposalReviewPriority.NORMAL
+        )
+        priority_override_reason: str | None = None
 
         envelope, repository = self._prepare_task_create_request(task_create_request)
         scrubbed_request = self._scrub_json(envelope)
+        if self._is_moonmind_repository(repository):
+            normalized_category, normalized_tags, cleaned_title = (
+                self._enforce_moonmind_policy(
+                    title=cleaned_title,
+                    category=normalized_category,
+                    tags=normalized_tags,
+                    metadata=metadata,
+                )
+            )
+            derived_priority, derived_reason = self._derive_moonmind_priority(
+                normalized_tags, metadata
+            )
+            if derived_priority is not None and self._priority_rank(
+                derived_priority
+            ) > self._priority_rank(requested_priority):
+                requested_priority = derived_priority
+                priority_override_reason = derived_reason
+
         dedup_key, dedup_hash = self._compute_dedup_fields(
             repository=repository, title=cleaned_title
         )
@@ -392,7 +531,8 @@ class TaskProposalService:
             origin_metadata=metadata,
             dedup_key=dedup_key,
             dedup_hash=dedup_hash,
-            review_priority=TaskProposalReviewPriority.NORMAL,
+            review_priority=requested_priority,
+            priority_override_reason=priority_override_reason,
         )
         await self._repository.commit()
         await self._emit_notification(proposal)

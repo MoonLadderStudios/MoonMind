@@ -520,7 +520,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
-    job = ClaimedJob(id=uuid4(), type="task", payload={})
+    job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
     proposals_path = context_dir / "task_proposals.json"

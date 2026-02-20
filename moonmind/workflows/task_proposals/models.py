@@ -107,6 +107,7 @@ class TaskProposal(Base):
         nullable=False,
         default=TaskProposalReviewPriority.NORMAL,
     )
+    priority_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     task_create_request: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )

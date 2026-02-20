@@ -140,6 +140,7 @@ def _serialize_proposal(
         "dedupKey": proposal.dedup_key,
         "dedupHash": proposal.dedup_hash,
         "reviewPriority": proposal.review_priority,
+        "priorityOverrideReason": proposal.priority_override_reason,
         "proposedByWorkerId": proposal.proposed_by_worker_id,
         "proposedByUserId": proposal.proposed_by_user_id,
         "promotedJobId": proposal.promoted_job_id,
@@ -211,6 +212,7 @@ async def create_proposal(
             origin_metadata=payload.origin.metadata,
             proposed_by_worker_id=proposed_by_worker_id,
             proposed_by_user_id=proposed_by_user_id,
+            review_priority=payload.review_priority,
         )
     except TaskProposalValidationError as exc:
         raise HTTPException(

@@ -10,6 +10,15 @@ celery_result_backend = ""
 codex_queue = "codex"
 artifact_root = "var/artifacts/spec_workflows"
 
+[task_proposals]
+# Proposal routing defaults shared by the API and workers. These map to
+# MOONMIND_PROPOSAL_TARGETS/MOONMIND_CI_REPOSITORY when sourced from env.
+proposal_targets_default = "project"
+moonmind_ci_repository = "MoonLadderStudios/MoonMind"
+max_items_project_default = 3
+max_items_moonmind_default = 2
+moonmind_severity_floor_default = "high"
+
 [feature_flags]
 # Disable the Task Preset Catalog (UI + API) when required.
 disable_task_template_catalog = false

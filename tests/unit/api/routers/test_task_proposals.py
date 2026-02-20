@@ -51,6 +51,7 @@ def _build_proposal() -> SimpleNamespace:
         dedup_key="moon/repo:add-tests",
         dedup_hash="abcd1234",
         review_priority=TaskProposalReviewPriority.NORMAL,
+        priority_override_reason=None,
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
         promoted_job_id=None,
@@ -84,6 +85,7 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
             "summary": "Ensure coverage",
             "category": "tests",
             "tags": ["auth"],
+            "reviewPriority": "high",
             "origin": {"source": "queue", "id": str(uuid4())},
             "taskCreateRequest": {
                 "type": "task",
@@ -96,6 +98,8 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
 
     assert response.status_code == 201
     service.create_proposal.assert_awaited()
+    kwargs = service.create_proposal.await_args.kwargs
+    assert kwargs["review_priority"] == "high"
     payload = response.json()
     assert payload["repository"] == "Moon/Repo"
 

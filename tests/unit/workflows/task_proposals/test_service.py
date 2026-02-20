@@ -11,7 +11,10 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalReviewPriority,
     TaskProposalStatus,
 )
-from moonmind.workflows.task_proposals.service import TaskProposalService
+from moonmind.workflows.task_proposals.service import (
+    TaskProposalService,
+    TaskProposalValidationError,
+)
 
 
 @pytest.mark.asyncio
@@ -20,7 +23,7 @@ async def test_create_proposal_persists_normalized_payload() -> None:
     queue = SimpleNamespace()
     queue.normalize_task_job_payload = MagicMock(
         return_value={
-            "repository": "MoonLadderStudios/MoonMind",
+            "repository": "Moon/Repo",
             "task": {"instructions": "tests"},
         }
     )
@@ -31,7 +34,7 @@ async def test_create_proposal_persists_normalized_payload() -> None:
         summary="Add follow-up",
         category="tests",
         tags=["tests"],
-        repository="MoonLadderStudios/MoonMind",
+        repository="Moon/Repo",
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
         promoted_job_id=None,
@@ -59,7 +62,7 @@ async def test_create_proposal_persists_normalized_payload() -> None:
             "type": "task",
             "priority": 0,
             "maxAttempts": 3,
-            "payload": {"repository": "MoonLadderStudios/MoonMind"},
+            "payload": {"repository": "Moon/Repo"},
         },
         origin_source="queue",
         origin_id=None,
@@ -70,13 +73,173 @@ async def test_create_proposal_persists_normalized_payload() -> None:
 
     repo.create_proposal.assert_awaited_once()
     args, kwargs = repo.create_proposal.await_args
-    assert kwargs["repository"] == "MoonLadderStudios/MoonMind"
+    assert kwargs["repository"] == "Moon/Repo"
     assert kwargs["category"] == "tests"
-    assert kwargs["dedup_key"].startswith("moonladderstudios/moonmind")
+    assert kwargs["dedup_key"].startswith("moon/repo")
     assert len(kwargs["dedup_hash"]) == 64
     assert kwargs["review_priority"] is TaskProposalReviewPriority.NORMAL
+    assert kwargs["priority_override_reason"] is None
     service._emit_notification.assert_awaited_once()
     assert proposal is record
+
+
+@pytest.mark.asyncio
+async def test_create_proposal_enforces_moonmind_metadata() -> None:
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.normalize_task_job_payload = MagicMock(
+        return_value={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {"instructions": "tests"},
+        }
+    )
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError):
+        await service.create_proposal(
+            title="Run quality issue",
+            summary="Missing metadata should fail",
+            category="run_quality",
+            tags=["loop_detected"],
+            task_create_request={
+                "type": "task",
+                "priority": 0,
+                "maxAttempts": 3,
+                "payload": {"repository": "MoonLadderStudios/MoonMind"},
+            },
+            origin_source="queue",
+            origin_id=None,
+            origin_metadata={"triggerRepo": "moon/org"},
+            proposed_by_worker_id="worker-1",
+            proposed_by_user_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_proposal_overrides_priority_for_moonmind() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Run Quality",
+        summary="Fix loop",
+        category="run_quality",
+        tags=["loop_detected"],
+        repository="MoonLadderStudios/MoonMind",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_job_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.QUEUE,
+        origin_id=None,
+        origin_metadata={},
+        task_create_request={},
+    )
+    repo.create_proposal.return_value = record
+    queue = SimpleNamespace()
+    queue.normalize_task_job_payload = MagicMock(
+        return_value={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {"instructions": "tests"},
+        }
+    )
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="[run_quality] Fix loop",
+        summary="Detected loop",
+        category="run_quality",
+        tags=["loop_detected"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "MoonLadderStudios/MoonMind"},
+        },
+        origin_source="queue",
+        origin_id=None,
+        origin_metadata={
+            "triggerRepo": "moon/org",
+            "triggerJobId": str(uuid4()),
+            "signal": {"severity": "medium"},
+        },
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+    )
+
+    kwargs = repo.create_proposal.await_args.kwargs
+    assert kwargs["review_priority"] is TaskProposalReviewPriority.HIGH
+    assert kwargs["priority_override_reason"] == "signal:loop_detected"
+
+
+@pytest.mark.asyncio
+async def test_create_proposal_honors_requested_priority_when_higher() -> None:
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.normalize_task_job_payload = MagicMock(
+        return_value={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {"instructions": "tests"},
+        }
+    )
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Run Quality",
+        summary="Fix retry",
+        category="run_quality",
+        tags=["retry"],
+        repository="MoonLadderStudios/MoonMind",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_job_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.QUEUE,
+        origin_id=None,
+        origin_metadata={},
+        task_create_request={},
+    )
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="[run_quality] Retry failure",
+        summary="Retry flake",
+        category="run_quality",
+        tags=["retry"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "MoonLadderStudios/MoonMind"},
+        },
+        origin_source="queue",
+        origin_id=None,
+        origin_metadata={
+            "triggerRepo": "moon/org",
+            "triggerJobId": str(uuid4()),
+            "signal": {"severity": "medium", "retries": 1},
+        },
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        review_priority="urgent",
+    )
+
+    kwargs = repo.create_proposal.await_args.kwargs
+    assert kwargs["review_priority"] is TaskProposalReviewPriority.URGENT
+    assert kwargs["priority_override_reason"] is None
 
 
 @pytest.mark.asyncio

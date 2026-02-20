@@ -4559,6 +4559,7 @@
       status: "open",
       repository: localStorage.getItem(repoStorageKey) || "",
       category: "",
+      tag: "",
       includeSnoozed: false,
       rows: [],
       notice: "",
@@ -4598,6 +4599,11 @@
               state.category,
             )}" />
           </label>
+          <label>Signal Tag
+            <input name="tag" placeholder="loop_detected" value="${escapeHtml(
+              state.tag,
+            )}" />
+          </label>
           <label class="checkbox stack">
             <span>
               <input type="checkbox" name="includeSnoozed" ${
@@ -4614,7 +4620,17 @@
       if (!state.rows.length) {
         return "<p class='small'>No proposals found for the current filters.</p>";
       }
-      const rows = state.rows
+      const filteredRows = state.rows.filter((row) => {
+        if (!state.tag) {
+          return true;
+        }
+        const tagNeedle = state.tag.toLowerCase();
+        const tagList = (pick(row, "tags") || []).map((tag) =>
+          String(tag || "").toLowerCase(),
+        );
+        return tagList.includes(tagNeedle);
+      });
+      const rows = filteredRows
         .map((row) => {
           const id = pick(row, "id");
           const preview = pick(row, "taskPreview") || {};
@@ -4630,9 +4646,14 @@
           const instructions = pick(preview, "instructions") || "";
           const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
           const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+          const overrideReason = pick(row, "priorityOverrideReason");
           const priorityBadge = `<span class="badge priority-${escapeHtml(
             priority.toLowerCase(),
-          )}">${escapeHtml(priority)}</span>`;
+          )}" ${
+            overrideReason
+              ? `title="Override: ${escapeHtml(String(overrideReason))}"`
+              : ""
+          }>${escapeHtml(priority)}</span>`;
           const snoozedUntil = pick(row, "snoozedUntil");
           const snoozedDisplay = snoozedUntil
             ? `${formatTimestamp(snoozedUntil)}`
@@ -4709,6 +4730,7 @@
       const statusField = filterForm.elements.namedItem("status");
       const repositoryField = filterForm.elements.namedItem("repository");
       const categoryField = filterForm.elements.namedItem("category");
+      const tagField = filterForm.elements.namedItem("tag");
       const includeSnoozedField = filterForm.elements.namedItem("includeSnoozed");
       if (statusField) {
         statusField.addEventListener("change", () => {
@@ -4726,6 +4748,12 @@
       if (categoryField) {
         categoryField.addEventListener("change", () => {
           state.category = String(categoryField.value || "").trim();
+          load();
+        });
+      }
+      if (tagField) {
+        tagField.addEventListener("change", () => {
+          state.tag = String(tagField.value || "").trim();
           load();
         });
       }
@@ -4836,6 +4864,7 @@
           : {};
       const instructions = preview.instructions || taskNode.instructions || "";
       const originSource = pick(origin, "source") || "-";
+      const metadata = pick(origin, "metadata") || {};
       const originLink =
         originSource === "queue" && pick(origin, "id")
           ? `<a href="/tasks/queue/${escapeHtml(
@@ -4843,9 +4872,16 @@
             )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
           : escapeHtml(originSource);
       const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+      const priorityOverride = pick(row, "priorityOverrideReason") || "";
       const dedupHash = pick(row, "dedupHash") || "-";
       const snoozedUntil = pick(row, "snoozedUntil");
       const snoozeNote = pick(row, "snoozeNote") || "";
+      const triggerRepo = pick(metadata, "triggerRepo") || "-";
+      const triggerJobId = pick(metadata, "triggerJobId") || "-";
+      const signalMetadata = pick(metadata, "signal");
+      const signalMarkup = signalMetadata
+        ? `<pre>${escapeHtml(JSON.stringify(signalMetadata, null, 2))}</pre>`
+        : "<p class='small'>No signal metadata supplied.</p>";
       const snoozedDisplay = snoozedUntil ? formatTimestamp(snoozedUntil) : "-";
       const similar = pick(row, "similar") || [];
       const similarMarkup = similar.length
@@ -4890,12 +4926,22 @@
               pick(row, "category") || "-",
             )}</div>
             <div class="card"><strong>Origin:</strong> ${originLink}</div>
-            <div class="card"><strong>Priority:</strong> ${escapeHtml(priority)}</div>
+            <div class="card"><strong>Priority:</strong> ${escapeHtml(priority)}${
+              priorityOverride
+                ? `<br/><span class="tiny">Override: ${escapeHtml(priorityOverride)}</span>`
+                : ""
+            }</div>
             <div class="card"><strong>Dedup Hash:</strong> <code>${escapeHtml(
               dedupHash,
             )}</code></div>
             <div class="card"><strong>Snoozed Until:</strong> ${escapeHtml(
               snoozedDisplay,
+            )}</div>
+            <div class="card"><strong>Trigger Repo:</strong> ${escapeHtml(
+              triggerRepo,
+            )}</div>
+            <div class="card"><strong>Trigger Job ID:</strong> ${escapeHtml(
+              triggerJobId,
             )}</div>
           </div>
           <section>
@@ -4905,6 +4951,10 @@
           <section>
             <h3>Instructions</h3>
             <pre>${escapeHtml(instructions || "-")}</pre>
+          </section>
+          <section>
+            <h3>Signal Metadata</h3>
+            ${signalMarkup}
           </section>
           <div class="actions">
             <button type="button" id="proposal-promote-button">Promote to Task</button>

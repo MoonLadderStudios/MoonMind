@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -30,6 +31,8 @@ _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
+_PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
+_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 
 
 class TaskContractError(ValueError):
@@ -394,6 +397,75 @@ class TaskContainerSelection(BaseModel):
         return self
 
 
+class TaskProposalPolicy(BaseModel):
+    """Optional policy block controlling worker proposal emission."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    targets: list[str] | None = Field(None, alias="targets")
+    max_items: dict[str, int] | None = Field(None, alias="maxItems")
+    min_severity_for_moonmind: str | None = Field(None, alias="minSeverityForMoonMind")
+
+    @field_validator("targets", mode="before")
+    @classmethod
+    def _normalize_targets(cls, value: object) -> list[str] | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.proposalPolicy.targets must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            target = _clean_optional_str(raw)
+            if not target:
+                continue
+            lowered = target.lower()
+            if lowered not in _PROPOSAL_POLICY_TARGETS:
+                raise TaskContractError(
+                    "task.proposalPolicy.targets entries must be 'project' or 'moonmind'"
+                )
+            if lowered in seen:
+                continue
+            normalized.append(lowered)
+            seen.add(lowered)
+        return normalized or None
+
+    @field_validator("max_items", mode="before")
+    @classmethod
+    def _normalize_max_items(cls, value: object) -> dict[str, int] | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, Mapping):
+            raise TaskContractError("task.proposalPolicy.maxItems must be an object")
+        normalized: dict[str, int] = {}
+        for key in _PROPOSAL_POLICY_TARGETS:
+            raw = value.get(key)
+            if raw is None:
+                continue
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if parsed <= 0:
+                continue
+            normalized[key] = parsed
+        return normalized or None
+
+    @field_validator("min_severity_for_moonmind", mode="before")
+    @classmethod
+    def _normalize_min_severity(cls, value: object) -> str | None:
+        cleaned = _clean_optional_str(value)
+        if not cleaned:
+            return None
+        lowered = cleaned.lower()
+        if lowered not in _PROPOSAL_SEVERITIES:
+            allowed = ", ".join(_PROPOSAL_SEVERITIES)
+            raise TaskContractError(
+                f"task.proposalPolicy.minSeverityForMoonMind must be one of: {allowed}"
+            )
+        return lowered
+
+
 class TaskStepSpec(BaseModel):
     """Optional execution step contained within a canonical task payload."""
 
@@ -456,6 +528,7 @@ class TaskExecutionSpec(BaseModel):
     )
     steps: list[TaskStepSpec] = Field(default_factory=list, alias="steps")
     container: TaskContainerSelection | None = Field(None, alias="container")
+    proposal_policy: TaskProposalPolicy | None = Field(None, alias="proposalPolicy")
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -502,6 +575,58 @@ class TaskExecutionSpec(BaseModel):
                 "task.steps is not supported when task.container.enabled=true"
             )
         return self
+
+
+@dataclass
+class EffectiveProposalPolicy:
+    """Resolved proposal policy derived from config and optional overrides."""
+
+    allow_project: bool
+    allow_moonmind: bool
+    max_items_project: int
+    max_items_moonmind: int
+    min_severity_for_moonmind: str
+    severity_rank: dict[str, int]
+    remaining_project_slots: int = field(init=False)
+    remaining_moonmind_slots: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.remaining_project_slots = (
+            self.max_items_project if self.allow_project else 0
+        )
+        self.remaining_moonmind_slots = (
+            self.max_items_moonmind if self.allow_moonmind else 0
+        )
+
+    def consume_project_slot(self) -> bool:
+        if not self.allow_project or self.remaining_project_slots <= 0:
+            return False
+        self.remaining_project_slots -= 1
+        return True
+
+    def consume_moonmind_slot(self) -> bool:
+        if not self.allow_moonmind or self.remaining_moonmind_slots <= 0:
+            return False
+        self.remaining_moonmind_slots -= 1
+        return True
+
+    def has_project_capacity(self) -> bool:
+        return self.allow_project and self.remaining_project_slots > 0
+
+    def has_moonmind_capacity(self) -> bool:
+        return self.allow_moonmind and self.remaining_moonmind_slots > 0
+
+    def severity_meets_floor(self, severity: str | None) -> bool:
+        if not self.allow_moonmind:
+            return False
+        normalized = str(severity or "").strip().lower()
+        if not normalized:
+            return False
+        candidate_rank = self.severity_rank.get(normalized)
+        if candidate_rank is None:
+            return False
+        floor_rank = self.severity_rank.get(self.min_severity_for_moonmind, 0)
+        return candidate_rank >= floor_rank
 
 
 class CanonicalTaskPayload(BaseModel):
@@ -840,6 +965,76 @@ def build_canonical_task_view(
 
     canonical["requiredCapabilities"] = _normalize_capabilities(tuple(required))
     return canonical
+
+
+def build_effective_proposal_policy(
+    *,
+    policy: TaskProposalPolicy | None,
+    default_targets: str,
+    default_max_items_project: int,
+    default_max_items_moonmind: int,
+    default_moonmind_severity_floor: str,
+    severity_vocabulary: Sequence[str] | None = None,
+) -> EffectiveProposalPolicy:
+    """Merge defaults + overrides into a runtime proposal policy helper."""
+
+    normalized_vocab = [
+        str(token or "").strip().lower()
+        for token in (severity_vocabulary or _PROPOSAL_SEVERITIES)
+    ]
+    filtered_vocab = [
+        token for token in normalized_vocab if token in _PROPOSAL_SEVERITIES
+    ]
+    if not filtered_vocab:
+        filtered_vocab = list(_PROPOSAL_SEVERITIES)
+
+    # Preserve canonical severity progression regardless of operator-provided order.
+    severity_rank = {token: index for index, token in enumerate(_PROPOSAL_SEVERITIES)}
+
+    default_targets_normalized = str(default_targets or "").strip().lower()
+    if default_targets_normalized == "both":
+        default_target_list = list(_PROPOSAL_POLICY_TARGETS)
+    elif default_targets_normalized in _PROPOSAL_POLICY_TARGETS:
+        default_target_list = [default_targets_normalized]
+    else:
+        default_target_list = ["project"]
+    configured_targets = (
+        list(policy.targets) if policy and policy.targets else default_target_list
+    )
+    allow_project = "project" in configured_targets
+    allow_moonmind = "moonmind" in configured_targets
+    if not allow_project and not allow_moonmind:
+        allow_project = True
+
+    max_items = dict(policy.max_items or {}) if policy and policy.max_items else {}
+    max_items_project = int(max_items.get("project") or 0)
+    if max_items_project <= 0:
+        max_items_project = max(1, int(default_max_items_project or 1))
+    max_items_moonmind = int(max_items.get("moonmind") or 0)
+    if max_items_moonmind <= 0:
+        max_items_moonmind = max(1, int(default_max_items_moonmind or 1))
+
+    severity_floor = (
+        (policy.min_severity_for_moonmind or "").strip().lower()
+        if policy and policy.min_severity_for_moonmind
+        else str(default_moonmind_severity_floor or "").strip().lower()
+    )
+    if not severity_floor:
+        severity_floor = "high"
+    if severity_floor not in severity_rank:
+        if "high" in severity_rank:
+            severity_floor = "high"
+        else:
+            severity_floor = filtered_vocab[-1]
+
+    return EffectiveProposalPolicy(
+        allow_project=allow_project,
+        allow_moonmind=allow_moonmind,
+        max_items_project=max_items_project,
+        max_items_moonmind=max_items_moonmind,
+        min_severity_for_moonmind=severity_floor,
+        severity_rank=severity_rank,
+    )
 
 
 def normalize_queue_job_payload(
