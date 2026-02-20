@@ -3,7 +3,7 @@
 **Feature Branch**: `009-agent-queue-mvp`  
 **Created**: 2026-02-13  
 **Status**: Draft  
-**Input**: User description: "Implement Milestone 1 of docs/CodexTaskQueue.md"
+**Input**: User description: "Implement Milestone 1 of docs/TaskQueueSystem.md"
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -62,16 +62,16 @@ As a platform operator, I need claim behavior to remain correct under concurrent
 
 ### Source Document Requirements
 
-- **DOC-REQ-001** (Source: `docs/CodexTaskQueue.md:454`, `docs/CodexTaskQueue.md:456`): Milestone 1 MUST add an `agent_jobs` table and Alembic migration.
-- **DOC-REQ-002** (Source: `docs/CodexTaskQueue.md:44`): `agent_jobs` MUST include identity, type, status, priority, payload, ownership/lease, attempts, summary/error, artifact path, and lifecycle timestamps.
-- **DOC-REQ-003** (Source: `docs/CodexTaskQueue.md:48`): Queue status model MUST include `queued`, `running`, `succeeded`, `failed`, `cancelled`.
-- **DOC-REQ-004** (Source: `docs/CodexTaskQueue.md:91`, `docs/CodexTaskQueue.md:99`): Claim operation MUST use atomic transactional selection with `FOR UPDATE SKIP LOCKED`.
-- **DOC-REQ-005** (Source: `docs/CodexTaskQueue.md:93`): Claim operation MUST process expired leases before selecting the next queued job.
-- **DOC-REQ-006** (Source: `docs/CodexTaskQueue.md:106`, `docs/CodexTaskQueue.md:117`): Queue behavior MUST be implemented through repository and service methods.
-- **DOC-REQ-007** (Source: `docs/CodexTaskQueue.md:125`, `docs/CodexTaskQueue.md:460`): REST MVP MUST expose enqueue, claim, heartbeat, complete, fail, get, and list operations.
-- **DOC-REQ-008** (Source: `docs/CodexTaskQueue.md:131`, `docs/CodexTaskQueue.md:136`): Queue REST API MUST live in a dedicated router under the queue API prefix and be mounted in the API service.
-- **DOC-REQ-009** (Source: `docs/CodexTaskQueue.md:183`): Queue endpoints MUST follow existing MoonMind authentication dependency patterns.
-- **DOC-REQ-010** (Source: `docs/CodexTaskQueue.md:461`): Milestone 1 MUST include unit tests for state transitions and claim concurrency with SKIP LOCKED semantics.
+- **DOC-REQ-001** (Source: `docs/TaskQueueSystem.md:454`, `docs/TaskQueueSystem.md:456`): Milestone 1 MUST add an `agent_jobs` table and Alembic migration.
+- **DOC-REQ-002** (Source: `docs/TaskQueueSystem.md:44`): `agent_jobs` MUST include identity, type, status, priority, payload, ownership/lease, attempts, summary/error, artifact path, and lifecycle timestamps.
+- **DOC-REQ-003** (Source: `docs/TaskQueueSystem.md:48`): Queue status model MUST include `queued`, `running`, `succeeded`, `failed`, `cancelled`.
+- **DOC-REQ-004** (Source: `docs/TaskQueueSystem.md:91`, `docs/TaskQueueSystem.md:99`): Claim operation MUST use atomic transactional selection with `FOR UPDATE SKIP LOCKED`.
+- **DOC-REQ-005** (Source: `docs/TaskQueueSystem.md:93`): Claim operation MUST process expired leases before selecting the next queued job.
+- **DOC-REQ-006** (Source: `docs/TaskQueueSystem.md:106`, `docs/TaskQueueSystem.md:117`): Queue behavior MUST be implemented through repository and service methods.
+- **DOC-REQ-007** (Source: `docs/TaskQueueSystem.md:125`, `docs/TaskQueueSystem.md:460`): REST MVP MUST expose enqueue, claim, heartbeat, complete, fail, get, and list operations.
+- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md:131`, `docs/TaskQueueSystem.md:136`): Queue REST API MUST live in a dedicated router under the queue API prefix and be mounted in the API service.
+- **DOC-REQ-009** (Source: `docs/TaskQueueSystem.md:183`): Queue endpoints MUST follow existing MoonMind authentication dependency patterns.
+- **DOC-REQ-010** (Source: `docs/TaskQueueSystem.md:461`): Milestone 1 MUST include unit tests for state transitions and claim concurrency with SKIP LOCKED semantics.
 
 ### Functional Requirements
 

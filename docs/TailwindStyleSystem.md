@@ -608,7 +608,7 @@ Mobile release gate:
 ## 16. Related Documents
 
 - `docs/TaskUiArchitecture.md`
-- `docs/TaskUiStrategy1ThinDashboard.md`
+- `docs/TaskArchitecture.md`
 - `specs/025-tailwind-dashboard/`
 - `api_service/templates/task_dashboard.html`
 - `api_service/static/task_dashboard/dashboard.js`

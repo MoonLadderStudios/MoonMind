@@ -3,7 +3,7 @@
 Status: Implemented
 Owners: MoonMind Engineering
 Last Updated: 2026-02-18
-Related: `docs/TaskArchitecture.md`, `docs/CodexTaskQueue.md`, `docs/TaskUiArchitecture.md`, `api_service/static/task_dashboard/dashboard.js`
+Related: `docs/TaskArchitecture.md`, `docs/TaskQueueSystem.md`, `docs/TaskUiArchitecture.md`, `api_service/static/task_dashboard/dashboard.js`
 
 ---
 

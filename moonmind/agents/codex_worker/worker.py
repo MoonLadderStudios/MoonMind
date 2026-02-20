@@ -62,6 +62,21 @@ logger = logging.getLogger(__name__)
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
+_FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+_SECRET_LIKE_METADATA_PATTERN = re.compile(
+    r"""(?ix)
+    (?:
+        gh[pousr]_[A-Za-z0-9]{8,}
+        | github_pat_[A-Za-z0-9_]{10,}
+        | AIza[0-9A-Za-z_-]{10,}
+        | ATATT[A-Za-z0-9_-]{6,}
+        | AKIA[0-9A-Z]{8,}
+        | -----BEGIN [A-Z ]+PRIVATE KEY-----
+        | (?:token|password|secret)\s*[:=]
+    )
+    """
+)
+_SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 
 
 class QueueClientError(RuntimeError):
@@ -1908,6 +1923,137 @@ class CodexWorker:
             )
             raise
 
+    @staticmethod
+    def _normalize_publish_text_line(value: str | None) -> str | None:
+        """Collapse whitespace and return None when content is empty."""
+
+        if value is None:
+            return None
+        normalized = " ".join(str(value).split())
+        return normalized or None
+
+    @staticmethod
+    def _resolve_publish_text_override(value: Any) -> str | None:
+        """Return explicit publish override verbatim when non-empty."""
+
+        if value is None:
+            return None
+        candidate = str(value)
+        if not candidate.strip():
+            return None
+        return candidate
+
+    @staticmethod
+    def _sanitize_metadata_footer_value(
+        value: str | None, *, fallback: str = "unknown"
+    ) -> str:
+        """Normalize footer values and redact secret-like tokens."""
+
+        normalized = " ".join(str(value or "").split())
+        if not normalized:
+            return fallback
+        if _SECRET_LIKE_METADATA_PATTERN.search(normalized):
+            return "[REDACTED]"
+        return normalized
+
+    @classmethod
+    def _extract_instruction_title(cls, instructions: str | None) -> str | None:
+        """Return first sentence/line from task instructions for title fallback."""
+
+        if instructions is None:
+            return None
+        for raw_line in str(instructions).splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            sentence = re.split(r"(?<=[.!?])\s+", line, maxsplit=1)[0]
+            return cls._normalize_publish_text_line(sentence or line)
+        return None
+
+    @staticmethod
+    def _sanitize_pr_title(title: str, *, max_chars: int = 90) -> str:
+        """Keep generated PR titles concise and avoid full UUID text."""
+
+        sanitized = _FULL_UUID_PATTERN.sub("job", title).strip()
+        if not sanitized:
+            sanitized = "MoonMind task result"
+        if len(sanitized) <= max_chars:
+            return sanitized
+        return f"{sanitized[: max_chars - 3].rstrip()}..."
+
+    @classmethod
+    def _derive_default_pr_title(
+        cls,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+    ) -> str:
+        """Derive PR title using documented fallback order."""
+
+        for step in resolved_steps:
+            candidate = cls._normalize_publish_text_line(step.title)
+            if candidate:
+                return cls._sanitize_pr_title(candidate)
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        instruction_candidate = cls._extract_instruction_title(
+            str(task.get("instructions") or "").strip() or None
+        )
+        if instruction_candidate:
+            return cls._sanitize_pr_title(instruction_candidate)
+
+        return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
+
+    @staticmethod
+    def _resolve_publish_runtime_mode(canonical_payload: Mapping[str, Any]) -> str:
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        runtime_node = task.get("runtime")
+        runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
+        runtime_mode = (
+            str(runtime.get("mode") or canonical_payload.get("targetRuntime") or "")
+            .strip()
+            .lower()
+        )
+        return runtime_mode or "codex"
+
+    @staticmethod
+    def _resolve_pr_base_branch(
+        *,
+        publish: Mapping[str, Any],
+        starting_branch: str,
+    ) -> str:
+        return str(publish.get("prBaseBranch") or "").strip() or starting_branch
+
+    @classmethod
+    def _derive_default_pr_body(
+        cls,
+        *,
+        job_id: UUID,
+        runtime_mode: str,
+        base_branch: str,
+        head_branch: str,
+    ) -> str:
+        runtime_value = cls._sanitize_metadata_footer_value(
+            runtime_mode, fallback="codex"
+        )
+        base_value = cls._sanitize_metadata_footer_value(base_branch)
+        head_value = cls._sanitize_metadata_footer_value(head_branch)
+        lines = [
+            "Automated PR generated by MoonMind queue publish stage.",
+            "",
+            "---",
+            "<!-- moonmind:begin -->",
+            f"MoonMind Job: {job_id}",
+            f"Runtime: {runtime_value}",
+            f"Base: {base_value}",
+            f"Head: {head_value}",
+            "<!-- moonmind:end -->",
+        ]
+        return "\n".join(lines)
+
     async def _run_publish_stage(
         self,
         *,
@@ -2022,14 +2168,16 @@ class CodexWorker:
                 env=prepared.publish_command_env,
             )
 
-            commit_message = str(publish.get("commitMessage") or "").strip() or (
-                f"MoonMind task result for job {job_id}"
+            commit_message = (
+                self._resolve_publish_text_override(publish.get("commitMessage"))
+                or f"MoonMind task result for job {job_id}"
             )
             await self._run_stage_command(
                 ["git", "commit", "-m", commit_message],
                 cwd=prepared.repo_dir,
                 log_path=prepared.publish_log_path,
                 env=prepared.publish_command_env,
+                redaction_values=(commit_message,),
             )
             await self._run_stage_command(
                 ["git", "push", "-u", "origin", prepared.working_branch],
@@ -2041,15 +2189,24 @@ class CodexWorker:
             pr_url: str | None = None
             publish_note = f"published branch {prepared.working_branch}"
             if publish_mode == "pr":
-                pr_base = (
-                    str(publish.get("prBaseBranch") or "").strip()
-                    or prepared.starting_branch
+                pr_base = self._resolve_pr_base_branch(
+                    publish=publish,
+                    starting_branch=prepared.starting_branch,
                 )
-                pr_title = str(publish.get("prTitle") or "").strip() or (
-                    f"MoonMind task result for job {job_id}"
+                pr_title = self._resolve_publish_text_override(
+                    publish.get("prTitle")
+                ) or self._derive_default_pr_title(
+                    job_id=job_id,
+                    canonical_payload=canonical_payload,
+                    resolved_steps=self._resolve_task_steps(canonical_payload),
                 )
-                pr_body = str(publish.get("prBody") or "").strip() or (
-                    "Automated PR generated by moonmind-codex-worker."
+                pr_body = self._resolve_publish_text_override(
+                    publish.get("prBody")
+                ) or self._derive_default_pr_body(
+                    job_id=job_id,
+                    runtime_mode=self._resolve_publish_runtime_mode(canonical_payload),
+                    base_branch=pr_base,
+                    head_branch=prepared.working_branch,
                 )
                 pr_result = await self._run_stage_command(
                     [
@@ -2068,6 +2225,7 @@ class CodexWorker:
                     cwd=prepared.repo_dir,
                     log_path=prepared.publish_log_path,
                     env=prepared.publish_command_env,
+                    redaction_values=(pr_title, pr_body),
                 )
                 pr_url = self._extract_pr_url(pr_result.stdout)
                 publish_note = (
@@ -2481,6 +2639,18 @@ class CodexWorker:
             raise JobCancellationRequested(
                 "cancellation requested before command start"
             )
+        merged_redaction_values = tuple(
+            dict.fromkeys(
+                [
+                    value
+                    for value in (
+                        *self._dynamic_redaction_values,
+                        *redaction_values,
+                    )
+                    if value
+                ]
+            )
+        )
         live_log_callback: OutputChunkCallback | None = None
         inferred_job_id = self._job_id_from_log_path(log_path)
         if inferred_job_id is not None:
@@ -2491,18 +2661,6 @@ class CodexWorker:
             )
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
-            merged_redaction_values = tuple(
-                dict.fromkeys(
-                    [
-                        value
-                        for value in (
-                            *self._dynamic_redaction_values,
-                            *redaction_values,
-                        )
-                        if value
-                    ]
-                )
-            )
             return await runner(
                 command,
                 cwd=cwd,
@@ -2513,8 +2671,51 @@ class CodexWorker:
                 cancel_event=effective_cancel_event,
                 output_chunk_callback=live_log_callback,
             )
-        self._append_stage_log(log_path, f"$ {' '.join(command)}")
-        return CommandResult(tuple(command), 0, "", "")
+        redacted_command = self._redact_command_for_log(
+            command, redaction_values=merged_redaction_values
+        )
+        self._append_stage_log(log_path, f"$ {' '.join(redacted_command)}")
+        raise RuntimeError("Codex execution handler is missing command runner")
+
+    @staticmethod
+    def _mask_sensitive_command_args(command: Sequence[str]) -> list[str]:
+        masked: list[str] = []
+        redact_next = False
+        for part in command:
+            if redact_next:
+                masked.append("[REDACTED]")
+                redact_next = False
+                continue
+            if part in _SENSITIVE_COMMAND_FLAGS:
+                masked.append(part)
+                redact_next = True
+                continue
+            if part.startswith("--title="):
+                masked.append("--title=[REDACTED]")
+                continue
+            if part.startswith("--body="):
+                masked.append("--body=[REDACTED]")
+                continue
+            if part.startswith("--message="):
+                masked.append("--message=[REDACTED]")
+                continue
+            masked.append(part)
+        return masked
+
+    def _redact_command_for_log(
+        self,
+        command: Sequence[str],
+        *,
+        redaction_values: Sequence[str] = (),
+    ) -> list[str]:
+        redacted: list[str] = []
+        for part in self._mask_sensitive_command_args(command):
+            cleaned = part
+            for value in redaction_values:
+                if value:
+                    cleaned = cleaned.replace(value, "[REDACTED]")
+            redacted.append(self._redact_text(cleaned))
+        return redacted
 
     def _resolve_clone_url(self, repository: str) -> str:
         to_clone_url = getattr(self._codex_exec_handler, "_to_clone_url", None)

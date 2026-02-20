@@ -50,7 +50,7 @@ Repository methods perform DB operations; service methods enforce transition val
 
 ### Rationale
 
-- Matches existing MoonMind architecture guidance in `docs/CodexTaskQueue.md`.
+- Matches existing MoonMind architecture guidance in `docs/TaskQueueSystem.md`.
 - Keeps router code thin and testable.
 - Makes lifecycle rules reusable if MCP tools are added later.
 

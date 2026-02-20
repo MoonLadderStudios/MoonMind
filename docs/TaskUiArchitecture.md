@@ -2,255 +2,475 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-18
+Last Updated: 2026-02-19
 
 ## 1. Purpose
 
-Define a web UI architecture for MoonMind that lets users:
+Define the concrete implementation architecture for the MoonMind Tasks Dashboard.
 
-- Submit new Tasks with typed controls.
-- See currently running and queued work.
-- Inspect logs/events and artifacts per execution.
-- Monitor Agent Queue jobs and Orchestrator runs from one UI surface, with SpecKit workloads represented as queue tasks using skill selection.
+This document contains UI-specific behavior and contracts:
 
-Execution semantics are defined by `docs/TaskArchitecture.md`; this document defines how the UI maps to those contracts.
+- Routes and page responsibilities.
+- Endpoint-level integrations.
+- Task submit payload construction.
+- Realtime/polling behavior.
+- Run detail controls.
 
-## 2. Goals and Non-Goals
+High-level system architecture intentionally lives in `docs/TaskArchitecture.md`.
 
-### Goals
+### 1.1 Selected strategy
 
-- Deliver a production-usable MVP quickly using existing REST endpoints.
-- Provide typed Task submission fields with safe defaults.
-- Keep authentication aligned with current MoonMind auth provider behavior.
-- Avoid coupling UI implementation to one runtime.
+The dashboard follows a thin UI strategy over existing REST endpoints:
 
-### Non-Goals
+- Reuse queue/orchestrator/proposal/manifest APIs instead of introducing a UI-specific backend.
+- Keep dashboard concerns focused on typed submit forms, list/detail rendering, and operator controls.
+- Minimize operational risk by avoiding high-churn architectural changes in task execution services.
 
-- Replacing Open-WebUI.
-- Rewriting existing workflow/orchestrator backends.
-- Redefining worker execution semantics outside `docs/TaskArchitecture.md`.
+### 1.2 Scope
 
-## 3. Existing Backend Capabilities
+In scope:
 
-As of 2026-02-18, MoonMind exposes submit plus monitor primitives for queue and orchestrator dashboard categories, while SpecKit APIs remain available for backend workflows.
+- Dedicated dashboard task operations UI under `/tasks*`.
+- Views for active, queued, and historical work by source.
+- Typed submit forms for queue task jobs, orchestrator runs, and manifests.
+- Detail pages with events/logs, artifacts, and supported controls.
+- Polling refresh with queue detail SSE when available.
 
-### 3.1 Agent Queue (`/api/queue`)
+Out of scope:
 
-Implemented in `api_service/api/routers/agent_queue.py`.
+- WebSocket migration for queue events (SSE + polling fallback is current design).
+- Unified backend `runs` table across all workflow systems.
+- Worker/fleet heartbeat model redesign.
+- Open-WebUI plugin internals.
 
-- `POST /api/queue/jobs` creates jobs.
-- `GET /api/queue/jobs` lists jobs with `status`, `type`, `limit` filters.
-- `GET /api/queue/jobs/{job_id}` returns one job.
-- `GET /api/queue/jobs/{job_id}/events` returns append-only events with `after` cursor support.
-- `GET /api/queue/jobs/{job_id}/events/stream` streams the same queue events via SSE (`text/event-stream`).
-- `GET /api/queue/jobs/{job_id}/artifacts` lists artifacts.
-- `GET /api/queue/jobs/{job_id}/artifacts/{artifact_id}/download` downloads artifact bytes.
+---
 
-Status model supports dashboard needs: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `dead_letter`.
+## 2. Implementation Snapshot
 
-### 3.2 SpecKit Workflows (`/api/workflows/speckit`)
+The current dashboard is a thin, server-hosted web app:
 
-Implemented in `api_service/api/routers/workflows.py`.
+- HTML shell: `api_service/templates/task_dashboard.html`
+- Client app: `api_service/static/task_dashboard/dashboard.js`
+- Runtime config builder: `api_service/api/routers/task_dashboard_view_model.py`
+- Route shell router: `api_service/api/routers/task_dashboard.py`
 
-These endpoints continue to support backend workflow operations, but the dashboard no longer exposes a dedicated SpecKit category. Operators launch SpecKit behavior from queue task submissions by selecting a SpecKit skill id and optional skill args.
+Runtime config currently injects:
 
-### 3.3 Orchestrator (`/orchestrator`)
+- Poll intervals: list `5000ms`, detail `2000ms`, events `1000ms`
+- Source endpoint templates for queue/orchestrator/proposals/manifests
+- Status normalization maps
+- System defaults (queue name, runtime, model/effort defaults, default repository)
+- Task template catalog feature-flag metadata
 
-Implemented in `api_service/api/routers/orchestrator.py`.
+Default/fallback values in current code path:
 
-- `POST /orchestrator/runs` creates runs.
-- `GET /orchestrator/runs` lists runs with `status` and `service` filters.
-- `GET /orchestrator/runs/{run_id}` returns run detail including plan steps.
-- `GET /orchestrator/runs/{run_id}/artifacts` lists artifacts.
-- `POST /orchestrator/runs/{run_id}/approvals` grants approvals.
-- `POST /orchestrator/runs/{run_id}/retry` retries runs.
+- Default task runtime: `codex` (unless configured runtime resolves to `gemini` or `claude`)
+- Default codex model: `gpt-5.3-codex`
+- Default codex effort: `high`
+- Default repository fallback: `MoonLadderStudios/MoonMind`
 
-## 4. Recommended Architecture
+---
 
-### 4.1 Recommendation
+## 3. Route Map
 
-Adopt Strategy 1 as the default MVP: a thin dashboard over existing REST APIs, with polling baseline and SSE on queue detail.
+Current dashboard routes rendered by `dashboard.js`:
 
-Adopt Strategy 2 for deployment ergonomics: run dashboard as a sidecar service and link from Open-WebUI.
+| Route | Purpose |
+| --- | --- |
+| `/tasks` | Unified active view across queue + orchestrator running/queued workloads |
+| `/tasks/queue` | Queue job list with runtime/skill/status/publish filters |
+| `/tasks/queue/new` | Typed queue Task submit form (`type="task"`) |
+| `/tasks/queue/:jobId` | Queue job detail (summary, events, live output, artifacts, controls) |
+| `/tasks/orchestrator` | Orchestrator run list |
+| `/tasks/orchestrator/new` | Orchestrator submit form |
+| `/tasks/orchestrator/:runId` | Orchestrator run detail |
+| `/tasks/manifests` | Manifest run list (queue jobs filtered by `type=manifest`) |
+| `/tasks/manifests/new` | Manifest submit flow (inline or registry-backed) |
+| `/tasks/proposals` | Proposal queue list and triage actions |
+| `/tasks/proposals/:proposalId` | Proposal detail, promote/dismiss/priority/snooze actions |
 
-Prepare for Strategy 3 and Strategy 5 by implementing a frontend normalization layer now.
+Notes:
 
-### 4.2 Why this approach
+- Server route allowlist currently accepts manifest detail paths (`/tasks/manifests/{id}`), but the client router does not render a manifest detail page yet.
+- The "Active" page intentionally fans out to queue + orchestrator sources only.
 
-- Fast path to typed Task UX with near-zero backend rework.
-- Keeps backend ownership boundaries unchanged.
-- Supports resilient realtime behavior with SSE primary + polling fallback and client fan-out to unified runs endpoints.
+---
 
-## 5. UI Information Architecture
+## 4. Backend Integration Contracts
 
-### 5.1 Routes
+### 4.1 Queue endpoints (`/api/queue/*`)
 
-Use a dedicated dashboard app with route groups:
+Used by dashboard pages:
 
-- `/tasks` unified running view (aggregated client-side from queue and orchestrator).
-- `/tasks/queue` list of Agent Queue jobs.
-- `/tasks/queue/new` submit typed Task job (`type="task"`).
-- `/tasks/queue/:jobId` job detail with events and artifacts.
-- `/tasks/orchestrator` list of Orchestrator runs.
-- `/tasks/orchestrator/new` submit Orchestrator run.
-- `/tasks/orchestrator/:runId` run detail with plan steps, approvals, retry, artifacts.
+- `POST /api/queue/jobs`
+- `GET /api/queue/jobs`
+- `GET /api/queue/jobs/{job_id}`
+- `POST /api/queue/jobs/{job_id}/cancel`
+- `GET /api/queue/jobs/{job_id}/events`
+- `GET /api/queue/jobs/{job_id}/events/stream`
+- `GET /api/queue/jobs/{job_id}/artifacts`
+- `GET /api/queue/jobs/{job_id}/artifacts/{artifact_id}/download`
+- `GET /api/queue/telemetry/migration`
 
-### 5.2 Shared Components
+Queue detail operational controls:
 
-- `RunTable` with status, owner, created time, duration, source system.
-- `StatusBadge` for normalized and source-native status display.
-- `EventLogPanel` with incremental loading for queue events.
-- `ArtifactList` with size/type and download actions.
-- `TaskSubmitForm` for typed fields from `docs/TaskArchitecture.md`.
+- `GET /api/queue/jobs/{job_id}/live-session`
+- `POST /api/queue/jobs/{job_id}/live-session`
+- `POST /api/queue/jobs/{job_id}/live-session/grant-write`
+- `POST /api/queue/jobs/{job_id}/live-session/revoke`
+- `POST /api/queue/jobs/{job_id}/control`
+- `POST /api/queue/jobs/{job_id}/operator-messages`
 
-## 6. Task Submit Contract (UI -> Queue)
+### 4.2 Orchestrator endpoints (`/orchestrator/*`)
 
-Queue submit is a typed Task form, not a raw payload editor.
+- `POST /orchestrator/runs`
+- `GET /orchestrator/runs`
+- `GET /orchestrator/runs/{run_id}`
+- `GET /orchestrator/runs/{run_id}/artifacts`
+- `POST /orchestrator/runs/{run_id}/approvals`
+- `POST /orchestrator/runs/{run_id}/retry`
 
-### 6.1 Fields Presented to Users
+### 4.3 Proposal endpoints (`/api/proposals/*`)
 
-- `instructions` (required)
-- `skill` (optional, default `auto`)
-- `skillArgs` (optional JSON object, default `{}`)
-- `runtime` (optional, default system runtime)
-- `model` (optional)
-- `effort` (optional)
-- `repository` (optional, default system repo)
-- `startingBranch` (optional, default repo default branch at execution)
-- `newBranch` (optional)
-- `publishMode` (optional, default `branch`)
+- `GET /api/proposals`
+- `GET /api/proposals/{proposal_id}`
+- `POST /api/proposals/{proposal_id}/promote`
+- `POST /api/proposals/{proposal_id}/dismiss`
+- `POST /api/proposals/{proposal_id}/priority`
+- `POST /api/proposals/{proposal_id}/snooze`
+- `POST /api/proposals/{proposal_id}/unsnooze`
 
-### 6.2 Request Envelope
+### 4.4 Manifest endpoints
 
-UI submits `CreateJobRequest`:
+Queue-backed list/submit:
 
-- `type: "task"`
-- `payload: CanonicalTaskPayload`
-- `priority: number` (default `0`)
-- `affinityKey?: string`
-- `maxAttempts?: number` (default `3`)
+- `GET /api/queue/jobs?type=manifest&limit=200`
+- `POST /api/queue/jobs` with `type="manifest"` (inline source flow)
 
-### 6.3 Payload Emitted by UI
+Registry-backed submit:
+
+- `GET /api/manifests`
+- `POST /api/manifests/{name}/runs`
+
+### 4.5 Task template catalog endpoints (`/api/task-step-templates/*`)
+
+Used when `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1`:
+
+- `GET /api/task-step-templates`
+- `GET /api/task-step-templates/{slug}`
+- `POST /api/task-step-templates/{slug}:expand`
+- `POST /api/task-step-templates/save-from-task`
+- `POST /api/task-step-templates/{slug}:favorite`
+
+### 4.6 Skills endpoint
+
+- `GET /api/tasks/skills`  
+  Used to populate queue submit skill suggestions.
+
+---
+
+## 5. Queue Task Submit: Detailed Contract
+
+Queue Task submit is fully typed and emits canonical queue create requests (`type="task"`).
+
+### 5.1 Form model
+
+Current UI fields:
+
+- Runtime (`codex`/`gemini`/`claude`)
+- Step editor (primary step plus optional additional steps)
+- Optional task preset/template controls
+- Model override
+- Effort override
+- Repository
+- Starting branch
+- New branch
+- Publish mode (`pr` default, `branch`, `none`)
+- Queue priority
+- Max attempts
+- Optional affinity key
+
+Primary step:
+
+- Must include instructions.
+- Skill id/args/capabilities map to `task.skill`.
+
+Additional steps:
+
+- Optional `id`, `title`, `instructions`, `skill`.
+- Serialized into `task.steps` when non-empty.
+
+### 5.2 Validation rules in UI
+
+- At least one step must exist.
+- Primary step instructions are required.
+- Repository must be one of:
+  - `owner/repo`
+  - `https://<host>/<path>` without embedded credentials
+  - `git@<host>:<path>`
+- Runtime must be one of supported task runtimes.
+- Publish mode must be `none`, `branch`, or `pr`.
+- `priority` must be an integer.
+- `maxAttempts` must be integer >= 1.
+- Skill args (primary and per-step) must be JSON objects when provided.
+
+### 5.3 Payload assembly behavior
+
+The submit flow:
+
+1. Derives `requiredCapabilities` from runtime + publish mode + skill capability extensions.
+2. Builds canonical payload shape under `payload.task`.
+3. Optionally includes:
+   - `task.steps`
+   - `task.appliedStepTemplates` metadata
+4. Emits queue create envelope with `type`, `payload`, `priority`, `maxAttempts`, and optional `affinityKey`.
+
+Security constraint:
+
+- The dashboard form must remain token-free.
+- Optional auth references are backend-governed; raw credentials are never entered in dashboard fields.
+
+Example emitted request body:
 
 ```json
 {
-  "repository": "owner/repo",
-  "requiredCapabilities": ["git", "codex"],
-  "targetRuntime": "codex",
-  "auth": { "repoAuthRef": null, "publishAuthRef": null },
-  "task": {
-    "instructions": "Implement feature X",
-    "skill": { "id": "auto", "args": {} },
-    "runtime": { "mode": "codex", "model": null, "effort": null },
-    "git": { "startingBranch": null, "newBranch": null },
-    "publish": {
-      "mode": "branch",
-      "prBaseBranch": null,
-      "commitMessage": null,
-      "prTitle": null,
-      "prBody": null
+  "type": "task",
+  "priority": 0,
+  "maxAttempts": 3,
+  "affinityKey": "optional-key",
+  "payload": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "requiredCapabilities": ["codex", "git", "gh"],
+    "targetRuntime": "codex",
+    "task": {
+      "instructions": "Implement feature and add tests",
+      "skill": {
+        "id": "auto",
+        "args": {}
+      },
+      "runtime": {
+        "mode": "codex",
+        "model": "gpt-5.3-codex",
+        "effort": "high"
+      },
+      "git": {
+        "startingBranch": null,
+        "newBranch": null
+      },
+      "publish": {
+        "mode": "pr",
+        "prBaseBranch": null,
+        "commitMessage": null,
+        "prTitle": null,
+        "prBody": null
+      },
+      "steps": [
+        {
+          "id": "step-1",
+          "title": "Implement",
+          "instructions": "Implement feature and add tests"
+        }
+      ]
     }
   }
 }
 ```
 
-Defaults that depend on repository state (for example default branch) are resolved by worker Pre stage at execution time.
-The Task UI remains token-free: it does not collect or submit raw credential values.
+Server-side normalization still applies after submit and remains source-of-truth.
 
-## 7. API-to-Page Contract
+---
 
-### 7.1 Running View (`/tasks`)
+## 6. Other Submit Flows
 
-UI performs parallel fetches and merges rows client-side.
+### 6.1 Orchestrator submit
 
-- Queue running: `GET /api/queue/jobs?status=running&limit=200`
-- Queue queued: `GET /api/queue/jobs?status=queued&limit=200`
-- Orchestrator running: `GET /orchestrator/runs?status=running&limit=100`
-- Orchestrator pending approval: `GET /orchestrator/runs?status=awaiting_approval&limit=100`
+Fields:
 
-### 7.2 Queue Detail (`/tasks/queue/:jobId`)
+- `instruction` (required)
+- `targetService` (required)
+- `priority` (`normal` or `high`)
+- Optional `approvalToken`
 
-- Primary data: `GET /api/queue/jobs/{job_id}`
-- Event timeline: `GET /api/queue/jobs/{job_id}/events?after=<timestamp>`
-- Event stream (preferred): `GET /api/queue/jobs/{job_id}/events/stream`
-- Artifacts: `GET /api/queue/jobs/{job_id}/artifacts`
+Request:
 
-## 8. Frontend Data Normalization
+- `POST /orchestrator/runs`
 
-```ts
-export type UnifiedRun = {
-  source: "queue" | "orchestrator";
-  id: string;
-  title: string;
-  status: "queued" | "running" | "awaiting_action" | "succeeded" | "failed" | "cancelled";
-  rawStatus: string;
-  createdAt?: string;
-  startedAt?: string;
-  finishedAt?: string;
-  requestedBy?: string;
-  link: string;
-};
-```
+### 6.2 Manifest submit
 
-Normalization rules:
+Fields:
 
-- Queue `queued -> queued`, `running -> running`, `succeeded -> succeeded`, `failed|dead_letter -> failed`, `cancelled -> cancelled`.
-- Orchestrator `pending -> queued`, `running -> running`, `awaiting_approval -> awaiting_action`, `succeeded|rolled_back -> succeeded`, `failed -> failed`.
+- Manifest name
+- Action (`run` or `plan`)
+- Source kind (`inline` or `registry`)
+- Optional options (`dryRun`, `forceFull`, `maxDocs`)
+- Queue priority (inline flow)
 
-## 9. Realtime Strategy
+Request routing:
 
-### 9.1 Current Behavior
+- `sourceKind=inline`: `POST /api/queue/jobs` with `type="manifest"`
+- `sourceKind=registry`: `POST /api/manifests/{name}/runs`
+
+---
+
+## 7. List Pages and Triage Flows
+
+### 7.1 Active page (`/tasks`)
+
+Client fan-out:
+
+- `GET /api/queue/jobs?status=running&limit=200`
+- `GET /api/queue/jobs?status=queued&limit=200`
+- `GET /orchestrator/runs?status=running&limit=100`
+- `GET /orchestrator/runs?status=pending&limit=100`
+- `GET /orchestrator/runs?status=awaiting_approval&limit=100`
+
+### 7.2 Queue list (`/tasks/queue`)
+
+Behavior:
+
+- Loads `GET /api/queue/jobs?limit=200`
+- Loads migration telemetry from `GET /api/queue/telemetry/migration?windowHours=168`
+- Supports client filters:
+  - runtime
+  - skill
+  - normalized stage status
+  - publish mode
+
+### 7.3 Manifest list (`/tasks/manifests`)
+
+Behavior:
+
+- Loads `GET /api/queue/jobs?type=manifest&limit=200`
+- Renders rows as a dedicated "Manifests" source label.
+
+### 7.4 Proposals list/detail (`/tasks/proposals*`)
+
+List supports:
+
+- status, repository, category filters
+- include snoozed toggle
+- inline promote/dismiss actions
+
+Detail supports:
+
+- promote
+- edit + promote override flow
+- dismiss
+- priority update
+- snooze and unsnooze
+- similar proposal links
+
+---
+
+## 8. Queue Detail Page Behavior
+
+Queue detail (`/tasks/queue/:jobId`) combines:
+
+- Job summary and cancellation state
+- Event timeline table
+- Live output panel
+- Artifact table/download links
+- Live session and operator controls
+
+### 8.1 Data loading
+
+Primary fetches:
+
+- `GET /api/queue/jobs/{job_id}`
+- `GET /api/queue/jobs/{job_id}/artifacts`
+- `GET /api/queue/jobs/{job_id}/live-session` (best-effort; handles missing route/state)
+
+Events:
+
+- Initial load via `GET /events?limit=200&sort=desc`
+- Incremental polling via `after` + `afterEventId`
+- "Load older" pagination via `before` + `beforeEventId`
+- SSE stream via `/events/stream` when available
+
+### 8.2 Live output panel
+
+Features:
+
+- Follow-output toggle
+- Output filters (`all`, `stages`, `logs`, `warnings`)
+- Copy-to-clipboard
+- Transport status indicator (`SSE` vs `Polling`)
+- Full-log quick download when a log artifact is detected
+
+### 8.3 Operator controls
+
+Current control actions exposed:
+
+- Cancel job
+- Enable live session
+- Grant write access (15 minutes)
+- Revoke live session
+- Pause/resume
+- Takeover request
+- Send operator message
+
+All control actions post through queue control/live-session endpoints, then refresh detail/events.
+
+---
+
+## 9. Status Normalization
+
+Dashboard normalized statuses:
+
+| Source | Raw status -> Normalized |
+| --- | --- |
+| Queue | `queued,pending -> queued`; `running -> running`; `succeeded,success,completed -> succeeded`; `failed,error,dead_letter -> failed`; `cancelled -> cancelled` |
+| Orchestrator | `pending -> queued`; `running -> running`; `awaiting_approval -> awaiting_action`; `succeeded,rolled_back -> succeeded`; `failed -> failed` |
+| Proposals | `open -> queued`; `promoted,accepted -> succeeded`; `dismissed -> cancelled`; `rejected -> failed` |
+
+Unknown values use fallback logic (running/success/failure keyword checks, else queued).
+
+---
+
+## 10. Polling and Realtime
+
+Current behavior:
 
 - List pages poll every 5 seconds.
 - Detail pages poll every 2 seconds.
-- Queue detail events use SSE (`EventSource`) against `/events/stream` when supported.
-- Queue detail falls back to incremental polling (`after` cursor every 1 second) when SSE is unavailable or errors.
-- Pause polling when document is hidden.
+- Queue event polling interval is 1 second.
+- Polling skips while the document is hidden.
+- Queue detail uses SSE first and falls back to polling when unavailable/error.
 
-### 9.2 Compatibility
+There is no generalized exponential backoff layer in current dashboard polling.
 
-- Polling endpoint behavior remains backward-compatible for existing clients.
-- SSE uses the same event source/service as polling and does not require schema changes.
+---
 
-## 10. Authentication and Authorization
+## 11. Authentication and Authorization
 
-### 10.1 User actions
+### 11.1 Dashboard/UI access
 
-UI calls submit/list/detail endpoints using end-user auth context.
+- `/tasks` shell routes require authenticated user context.
+- `/api/tasks/skills` requires authenticated user context.
 
-### 10.2 Worker actions
+### 11.2 User vs worker API boundaries
 
-Queue mutation endpoints used by workers (`claim`, `heartbeat`, `complete`, `fail`, event append, artifact upload) require worker auth via `X-MoonMind-Worker-Token` or OIDC worker identity.
+- User-facing read/write endpoints (queue list/detail/create/cancel, proposals, manifests) are accessed with end-user auth context.
+- Worker mutation endpoints (claim/heartbeat/complete/fail/event append/artifact upload) require worker identity (`X-MoonMind-Worker-Token` or OIDC worker auth).
 
-### 10.3 Current gap
+### 11.3 Known auth gap
 
-`/orchestrator/*` routes currently do not enforce `get_current_user()` dependencies, unlike queue/workflow routes. Align this before broad multi-user deployment.
+`/orchestrator/*` routes currently do not enforce the same explicit `get_current_user()` dependency pattern used by queue/proposal/manifests routes. Alignment is still pending.
 
-## 11. Delivery Plan
+---
 
-### Phase 1: Thin dashboard MVP
+## 12. Known UX/Route Gaps
 
-- Implement route groups and submit/detail/list pages.
-- Implement typed Task submit form and unified running page.
-- No new backend endpoints required for baseline submission and monitoring.
+- `/tasks/manifests/{id}` passes server allowlist checks, but no client renderer is implemented yet.
+- Active page focuses on queue + orchestrator fan-out; proposals and manifests remain dedicated pages.
+- Proposal edit/promote and template save paths currently use prompt-driven UX; they are functional but not yet fully structured form experiences.
 
-### Phase 2: UX hardening
+---
 
-- Add contextual validation/help for skill/runtime/publish options.
-- Add filters and saved views.
-- Add explicit empty/error states and retry UX.
-
-### Phase 3: Live logs
-
-- Completed for queue detail: SSE stream endpoint + `EventSource` client path with polling fallback.
-- Future extensions can add SSE to additional pages if needed.
-
-## 12. Related
+## 13. Related Documents
 
 - `docs/TaskArchitecture.md`
-- `docs/TaskUiStrategy1ThinDashboard.md`
-- `docs/CodexTaskQueue.md`
-
-## 13. Recent Updates
-
-- **2026-02-18 – Tailwind Style System Phase 2**: The dashboard stylesheet now compiles from `dashboard.tailwind.css` with `npm run dashboard:css`. Tokens were renamed to the `--mm-*` palette, gradients shifted to purple/cyan/pink, and status chips/cards adopt the “liquid glass” direction described in `docs/TailwindStyleSystem.md`. Screenshot assets live under `docs/assets/task_dashboard/phase2/` for regression tracking.
+- `docs/TaskQueueSystem.md`
+- `docs/TaskProposalQueue`
+- `docs/ManifestTaskSystem.md`
+- `docs/TailwindStyleSystem.md`
