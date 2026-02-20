@@ -36,6 +36,14 @@ metrics_namespace = "spec_automation"
 metrics_host = ""
 metrics_port = 8125
 
+[spec_workflow.self_heal]
+# Default self-heal budgets enforced by Codex workers (docs/WorkerSelfHealSystem.md §8)
+step_max_attempts = 3
+step_timeout_seconds = 900
+step_idle_timeout_seconds = 300
+step_no_progress_limit = 2
+job_self_heal_max_resets = 1
+
 [orchestrator]
 celery_queue = "orchestrator.run"
 artifact_root = "var/artifacts/spec_workflows"

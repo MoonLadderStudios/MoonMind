@@ -50,3 +50,35 @@ def test_resolve_storage_path_rejects_traversal(tmp_path: Path) -> None:
     storage = AgentQueueArtifactStorage(tmp_path)
     with pytest.raises(ValueError):
         storage.resolve_storage_path("../other-job/file.log")
+
+
+def test_step_state_path_scoped_to_job(tmp_path: Path) -> None:
+    """Resolved step state files must remain under the job directory."""
+
+    storage = AgentQueueArtifactStorage(tmp_path)
+    job_id = uuid4()
+
+    path = storage.get_step_state_path(job_id, step_index=3)
+
+    expected = (tmp_path / str(job_id) / "state" / "steps" / "step-0003.json").resolve()
+    assert path == expected
+    assert path.is_relative_to((tmp_path / str(job_id)).resolve())
+
+
+def test_self_heal_attempt_path_scoped_to_job(tmp_path: Path) -> None:
+    """Resolved self-heal attempt files must remain under the job directory."""
+
+    storage = AgentQueueArtifactStorage(tmp_path)
+    job_id = uuid4()
+
+    path = storage.get_self_heal_attempt_path(job_id, step_index=1, attempt=2)
+
+    expected = (
+        tmp_path
+        / str(job_id)
+        / "state"
+        / "self_heal"
+        / "attempt-0001-0002.json"
+    ).resolve()
+    assert path == expected
+    assert path.is_relative_to((tmp_path / str(job_id)).resolve())

@@ -1,0 +1,146 @@
+openapi: 3.0.3
+info:
+  title: Task Run Recovery Controls
+  version: 0.1.0
+  description: >-
+    Minimal OpenAPI surface describing the new recovery actions exposed via the
+    task-run control API and live-control heartbeat payloads.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /api/task-runs/{taskRunId}/control:
+    post:
+      summary: Apply pause/resume/takeover or recovery actions to a running task
+      operationId: applyTaskRunControl
+      parameters:
+        - in: path
+          name: taskRunId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRunControlRequest'
+      responses:
+        '200':
+          description: Updated job payload including `liveControl.recovery`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+        '400':
+          description: Invalid action or missing stepId for resume commands
+        '403':
+          description: Operator lacks access to the task run
+  /api/queue/jobs/{jobId}/heartbeat:
+    post:
+      summary: Worker heartbeat that now carries recovery metadata
+      operationId: heartbeatJob
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+      responses:
+        '200':
+          description: Job snapshot with optional recovery directive
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/JobModel'
+                  - type: object
+                    properties:
+                      payload:
+                        allOf:
+                          - type: object
+                          - $ref: '#/components/schemas/JobPayload'
+components:
+  schemas:
+    TaskRunControlRequest:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          description: >-
+            Supported values: `pause`, `resume`, `takeover`, `retry_step`,
+            `hard_reset_step`, `resume_from_step`.
+        stepId:
+          type: string
+          description: Optional step identifier required for `resume_from_step` and
+            `retry_step` actions. Accepts canonical IDs or `step-{index}`.
+        strategy:
+          type: string
+          description: Optional override (`soft_reset`, `hard_reset_step`) when
+            forcing a specific strategy.
+        reason:
+          type: string
+          description: Operator-supplied context stored in control events.
+    JobModel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        payload:
+          $ref: '#/components/schemas/JobPayload'
+    JobPayload:
+      type: object
+      properties:
+        liveControl:
+          $ref: '#/components/schemas/LiveControl'
+    LiveControl:
+      type: object
+      properties:
+        paused:
+          type: boolean
+        takeover:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+        recovery:
+          $ref: '#/components/schemas/LiveControlRecovery'
+    LiveControlRecovery:
+      type: object
+      required:
+        - action
+        - updatedAt
+      properties:
+        action:
+          type: string
+          description: >-
+            `retry_step`, `hard_reset_step`, or `resume_from_step`. Workers ignore
+            unknown actions but log an error.
+        stepId:
+          type: string
+          description: Target step identifier (optional for `hard_reset_step` when
+            repeating the current step).
+        strategy:
+          type: string
+          description: Explicit strategy override (`soft_reset`, `hard_reset_step`).
+        requestedBy:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
