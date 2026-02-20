@@ -3603,12 +3603,39 @@ class CodexWorker:
                     error_message=error_message,
                     artifacts=(),
                 )
+            except Exception as exc:
+                error_message = self._redact_text(str(exc) or "step execution failed")
+                result = WorkerExecutionResult(
+                    succeeded=False,
+                    summary=None,
+                    error_message=error_message,
+                    artifacts=(),
+                )
             diff_hash, changed_files = await self._capture_step_diff_state(
                 repo_dir=prepared.repo_dir
             )
             attempt.finished_at = datetime.now(UTC)
             attempt.diff_hash = diff_hash
             attempt.changed_files = changed_files
+            duration_seconds = max(
+                0.0,
+                (attempt.finished_at - attempt.started_at).total_seconds(),
+            )
+            self._worker_metrics.record_step_duration(
+                step_index=step.step_index,
+                attempt=attempt.attempt,
+                duration_seconds=duration_seconds,
+            )
+            if idle_timeout:
+                self._worker_metrics.record_idle_timeout(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                )
+            if wall_timeout:
+                self._worker_metrics.record_wall_timeout(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                )
             failure_signature = build_failure_signature(
                 message=result.error_message,
                 step_id=step.step_id,
@@ -3618,16 +3645,7 @@ class CodexWorker:
             if failure_signature is not None:
                 attempt.failure_signature = failure_signature.value
                 attempt.failure_signature_hash = failure_signature.fingerprint
-            self._write_attempt_state_file(path=attempt_state_path, snapshot=attempt)
-            normalized_artifacts = self._normalize_step_artifacts(
-                step=step,
-                result_artifacts=result.artifacts,
-                step_log_path=step_log_path,
-                step_patch_path=step_patch_path,
-                step_state_path=step_state_path if result.succeeded else None,
-                self_heal_state_paths=(attempt_state_path,),
-            )
-            artifacts = normalized_artifacts
+
             if result.succeeded:
                 controller.reset_after_success()
                 self._write_step_state_file(
@@ -3635,6 +3653,30 @@ class CodexWorker:
                     step=step,
                     snapshot=attempt,
                 )
+                self._write_attempt_state_file(path=attempt_state_path, snapshot=attempt)
+                normalized_artifacts = self._normalize_step_artifacts(
+                    step=step,
+                    result_artifacts=result.artifacts,
+                    step_log_path=step_log_path,
+                    step_patch_path=step_patch_path,
+                    step_state_path=step_state_path,
+                    self_heal_state_paths=(attempt_state_path,),
+                )
+                artifacts = normalized_artifacts
+                self._worker_metrics.record_self_heal_attempt(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                    failure_class=None,
+                    strategy=attempt.strategy.value,
+                    outcome="success",
+                )
+                if attempt.attempt > 1 or attempt.strategy is not SelfHealStrategy.NONE:
+                    self._worker_metrics.record_self_heal_recovered(
+                        step_index=step.step_index,
+                        attempt=attempt.attempt,
+                        failure_class=None,
+                        strategy=attempt.strategy.value,
+                    )
                 await self._emit_event(
                     job_id=job_id,
                     level="info",
@@ -3659,21 +3701,15 @@ class CodexWorker:
                 )
                 return StepRunOutcome(result=result, artifacts=artifacts)
 
-            await self._emit_event(
-                job_id=job_id,
-                level="error",
-                message="task.step.attempt.failed",
-                payload={
-                    "stepId": step.step_id,
-                    "stepIndex": step.step_index,
-                    "attempt": attempt.attempt,
-                    "error": result.error_message,
-                },
-            )
             no_progress = controller.active_step.record_failure(
                 signature=failure_signature,
                 diff_hash=diff_hash,
             )
+            if no_progress:
+                self._worker_metrics.record_no_progress_trip(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                )
             escalated = bool(
                 no_progress
                 and controller.active_step.consecutive_no_progress
@@ -3686,13 +3722,37 @@ class CodexWorker:
                 no_progress=no_progress,
             )
             attempt.failure_class = failure_class
+            self._write_attempt_state_file(path=attempt_state_path, snapshot=attempt)
+            normalized_artifacts = self._normalize_step_artifacts(
+                step=step,
+                result_artifacts=result.artifacts,
+                step_log_path=step_log_path,
+                step_patch_path=step_patch_path,
+                step_state_path=None,
+                self_heal_state_paths=(attempt_state_path,),
+            )
+            artifacts = normalized_artifacts
+            redacted_error_message = self._redact_text(
+                str(result.error_message or "step execution failed")
+            )
+            await self._emit_event(
+                job_id=job_id,
+                level="error",
+                message="task.step.attempt.failed",
+                payload={
+                    "stepId": step.step_id,
+                    "stepIndex": step.step_index,
+                    "attempt": attempt.attempt,
+                    "error": redacted_error_message,
+                },
+            )
             retry_context = StepRetryContext(
                 attempt=attempt.attempt,
                 failure_class=failure_class,
                 failure_signature=(
                     failure_signature.value if failure_signature else None
                 ),
-                failure_summary=result.error_message,
+                failure_summary=redacted_error_message,
                 diff_hash=diff_hash,
                 changed_files=changed_files,
             )
@@ -3703,6 +3763,13 @@ class CodexWorker:
                 no_progress_escalated=escalated,
             )
             if strategy is SelfHealStrategy.NONE:
+                self._worker_metrics.record_self_heal_attempt(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                    failure_class=failure_class.value if failure_class else None,
+                    strategy=strategy.value,
+                    outcome="failed",
+                )
                 await self._emit_event(
                     job_id=job_id,
                     level="error",
@@ -3711,11 +3778,24 @@ class CodexWorker:
                         "stepId": step.step_id,
                         "stepIndex": step.step_index,
                         "attempt": attempt.attempt,
-                        "error": result.error_message,
+                        "error": redacted_error_message,
                     },
                 )
                 return StepRunOutcome(result=result, artifacts=artifacts)
             if strategy is SelfHealStrategy.QUEUE_RETRY:
+                self._worker_metrics.record_self_heal_attempt(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                    failure_class=failure_class.value if failure_class else None,
+                    strategy=strategy.value,
+                    outcome="queue_retry",
+                )
+                self._worker_metrics.record_self_heal_exhausted(
+                    step_index=step.step_index,
+                    attempt=attempt.attempt,
+                    failure_class=failure_class.value if failure_class else None,
+                    strategy=strategy.value,
+                )
                 await self._emit_event(
                     job_id=job_id,
                     level="error",
@@ -3737,6 +3817,13 @@ class CodexWorker:
                     artifacts=artifacts,
                     queue_retry=True,
                 )
+            self._worker_metrics.record_self_heal_attempt(
+                step_index=step.step_index,
+                attempt=attempt.attempt,
+                failure_class=failure_class.value if failure_class else None,
+                strategy=strategy.value,
+                outcome="retrying",
+            )
             if strategy is SelfHealStrategy.HARD_RESET:
                 controller.consume_hard_reset()
                 await self._perform_hard_reset(
@@ -4770,8 +4857,6 @@ class CodexWorker:
             return SelfHealStrategy.HARD_RESET
         if attempt_snapshot.attempt < controller.config.step_max_attempts:
             return SelfHealStrategy.SOFT_RESET
-        if controller.can_hard_reset():
-            return SelfHealStrategy.HARD_RESET
         return SelfHealStrategy.QUEUE_RETRY
 
     async def _perform_hard_reset(

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 
 import pytest
 
+
 from moonmind.agents.codex_worker.self_heal import (
     AttemptBudgetExceeded,
+    HardResetWorkspaceBuilder,
     SelfHealConfig,
     SelfHealController,
     StepAttemptState,
@@ -116,3 +119,42 @@ def test_self_heal_controller_enforces_attempt_budget() -> None:
     controller.new_attempt()
     with pytest.raises(AttemptBudgetExceeded):
         controller.new_attempt()
+
+
+class _PreparedWorkspace:
+    def __init__(self, root: Path) -> None:
+        self.repo_dir = root / "repo"
+        self.job_root = root
+        self.execute_log_path = root / "execute.log"
+        self.starting_branch = "main"
+        self.new_branch: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_hard_reset_builder_clone_uses_option_separator(tmp_path: Path) -> None:
+    """git clone command must include `--` before clone_url to block option injection."""
+
+    commands: list[tuple[str, ...]] = []
+
+    async def _run_stage_command(command, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        commands.append(tuple(str(part) for part in command))
+        return object()
+
+    async def _ensure_working_branch(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+
+    prepared = _PreparedWorkspace(tmp_path)
+    builder = HardResetWorkspaceBuilder(run_stage_command=_run_stage_command)
+    await builder.rebuild(
+        repository="example/repo",
+        prepared=prepared,
+        resolve_clone_url=lambda _repository: "-uhoh",
+        ensure_working_branch=_ensure_working_branch,
+        patch_paths=(),
+        env=None,
+    )
+
+    assert commands
+    assert commands[0][:3] == ("git", "clone", "--")
+    assert commands[0][3] == "-uhoh"

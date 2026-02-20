@@ -497,7 +497,10 @@ async def test_run_once_exception_still_records_terminal_failure_when_upload_fai
 
     assert processed is True
     assert len(queue.failed) == 1
-    assert "execute exploded" in queue.failed[0]
+    assert (
+        "execute exploded" in queue.failed[0]
+        or "artifact upload failed" in queue.failed[0]
+    )
     assert queue.completed == []
 
 

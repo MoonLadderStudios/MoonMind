@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import TypeVar
+from typing import Protocol
 
 from moonmind.utils.logging import SecretRedactor
 
@@ -393,7 +393,14 @@ class IdleTimeoutWatcher:
             self._task = None
 
 
-TPreparedWorkspace = TypeVar("TPreparedWorkspace")
+class RebuildableWorkspace(Protocol):
+    """Defines the expected structure for a workspace that can be rebuilt."""
+
+    repo_dir: Path
+    job_root: Path
+    execute_log_path: Path
+    starting_branch: str
+    new_branch: str | None
 
 
 class HardResetWorkspaceBuilder:
@@ -410,7 +417,7 @@ class HardResetWorkspaceBuilder:
         self,
         *,
         repository: str,
-        prepared: TPreparedWorkspace,
+        prepared: RebuildableWorkspace,
         resolve_clone_url: Callable[[str], str],
         ensure_working_branch: Callable[..., Awaitable[None]],
         patch_paths: Sequence[Path],
@@ -429,7 +436,7 @@ class HardResetWorkspaceBuilder:
         clone_url = resolve_clone_url(repository)
         try:
             await self._run_stage_command(
-                ["git", "clone", clone_url, str(repo_dir)],
+                ["git", "clone", "--", clone_url, str(repo_dir)],
                 cwd=job_root,
                 log_path=execute_log_path,
                 env=env,
