@@ -24,6 +24,8 @@ from moonmind.agents.codex_worker.worker import (
     PreparedTaskWorkspace,
     ResolvedTaskStep,
 )
+from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.task_contract import _default_publish_mode
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -239,6 +241,15 @@ async def test_run_once_returns_false_when_no_job() -> None:
 
     assert processed is False
     assert queue.completed == []
+
+
+def test_worker_default_publish_mode_follows_settings(monkeypatch) -> None:
+    """Worker publish fallback should reflect configured default mode."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "none")
+    assert _default_publish_mode() == "none"
+    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+    assert _default_publish_mode() == "branch"
 
 
 async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:

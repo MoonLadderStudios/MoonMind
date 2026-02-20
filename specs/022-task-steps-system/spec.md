@@ -20,7 +20,7 @@
 | DOC-REQ-009 | `docs/TasksStepSystem.md` Section 8.2/8.4 | Publish stage executes once per task only after all steps succeed; publish behavior preserves existing none/branch/pr semantics. |
 | DOC-REQ-010 | `docs/TasksStepSystem.md` Section 8.3 | Cooperative cancellation semantics are preserved during step execution and step boundaries, including worker cancel acknowledgement flow. |
 | DOC-REQ-011 | `docs/TasksStepSystem.md` Section 9.1/9.2 | Step observability requires `task.steps.plan`, `task.step.started`, `task.step.finished`, `task.step.failed` events and per-step log artifacts. |
-| DOC-REQ-012 | `docs/TasksStepSystem.md` Section 10 | Queue new task UI must support creating/editing steps and submitting canonical payloads containing steps while keeping task defaults (including publish default `pr`). |
+| DOC-REQ-012 | `docs/TasksStepSystem.md` Section 10 | Queue new task UI must support creating/editing steps and submitting canonical payloads containing steps while keeping task defaults (including the publish default from `MOONMIND_DEFAULT_PUBLISH_MODE`, default `pr`). |
 | DOC-REQ-013 | `docs/TasksStepSystem.md` Section 11.2 | Capability derivation must include required capabilities from task-level skill and step-level skill requirements plus existing runtime/git/gh/docker derivation rules. |
 | DOC-REQ-014 | `docs/TasksStepSystem.md` Section 12.3 | First rollout must explicitly reject unsupported `task.steps` + container execution combinations (or equivalent explicit unsupported behavior). |
 | DOC-REQ-015 | `docs/TasksStepSystem.md` Section 14 | Implementation must include runtime code changes and validation tests across task contract, worker execution flow, and dashboard submission behavior. |
@@ -65,7 +65,7 @@ An operator can define, edit, and submit step arrays from `/tasks/queue/new` and
 
 **Why this priority**: UI authoring is required for routine adoption by users who do not craft raw JSON payloads.
 
-**Independent Test**: Create a queue task from UI with two steps and verify API payload includes `task.steps`, keeps publish default `pr`, and job runs through backend normalization.
+**Independent Test**: Create a queue task from UI with two steps and verify API payload includes `task.steps`, keeps the publish default configured via `MOONMIND_DEFAULT_PUBLISH_MODE` (default `pr`), and job runs through backend normalization.
 
 **Acceptance Scenarios**:
 
@@ -96,7 +96,7 @@ An operator can define, edit, and submit step arrays from `/tasks/queue/new` and
 - **FR-009**: On first step failure, execute stage MUST stop remaining steps and publish stage MUST NOT run. (`DOC-REQ-008`, `DOC-REQ-009`)
 - **FR-010**: Publish stage MUST execute at most once per task run after all steps succeed and preserve existing none/branch/pr semantics. (`DOC-REQ-009`)
 - **FR-011**: Worker cancellation flow MUST preserve cooperative cancellation semantics during step execution and acknowledge cancellation through queue cancel-ack endpoint behavior. (`DOC-REQ-010`)
-- **FR-012**: Queue submit UI MUST support step authoring/editing, emit canonical ordered `task.steps`, and keep publish default `pr`. (`DOC-REQ-012`)
+- **FR-012**: Queue submit UI MUST support step authoring/editing, emit canonical ordered `task.steps`, and keep the publish default dictated by `MOONMIND_DEFAULT_PUBLISH_MODE` (default `pr`). (`DOC-REQ-012`)
 - **FR-013**: Capability derivation MUST include runtime/git baseline, publish-derived `gh`, container-derived `docker`, task-level skill required capabilities, and step-level skill required capabilities. (`DOC-REQ-013`)
 - **FR-014**: Runtime MUST explicitly reject unsupported `task.steps` with container execution in first rollout via deterministic validation error. (`DOC-REQ-014`)
 - **FR-015**: Delivery MUST include runtime code updates and validation tests covering contract parsing, worker step execution, events/cancellation, and queue UI submission behavior. (`DOC-REQ-015`)

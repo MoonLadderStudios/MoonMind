@@ -17,6 +17,8 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.config.settings import settings
+
 from .job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
 
 DEFAULT_TASK_RUNTIME = "codex"
@@ -45,6 +47,12 @@ def _clean_optional_str(value: object) -> str | None:
     return cleaned or None
 
 
+def _default_publish_mode() -> str:
+    mode = getattr(settings.spec_workflow, "default_publish_mode", "pr") or "pr"
+    normalized = str(mode).strip().lower()
+    return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
+
+
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     candidate = _clean_optional_str(value)
     if candidate is None:
@@ -57,7 +65,7 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
 
 
 def _normalize_publish_mode(value: object) -> str:
-    candidate = (_clean_optional_str(value) or "pr").lower()
+    candidate = (_clean_optional_str(value) or _default_publish_mode()).lower()
     if candidate not in SUPPORTED_PUBLISH_MODES:
         supported = ", ".join(sorted(SUPPORTED_PUBLISH_MODES))
         raise TaskContractError(f"publish.mode must be one of: {supported}")
@@ -792,8 +800,18 @@ def build_canonical_task_view(
     required.append(target_runtime)
     required.append("git")
 
+    source_publish_mode = None
+    if normalized_type == CANONICAL_TASK_JOB_TYPE:
+        source_task = source.get("task")
+        if isinstance(source_task, Mapping):
+            source_publish = source_task.get("publish")
+            if isinstance(source_publish, Mapping):
+                source_publish_mode = source_publish.get("mode")
+
     publish_mode = _normalize_publish_mode(
-        (((canonical.get("task") or {}).get("publish") or {}).get("mode") or "pr")
+        source_publish_mode
+        if normalized_type == CANONICAL_TASK_JOB_TYPE
+        else ((canonical.get("task") or {}).get("publish") or {}).get("mode")
     )
     canonical["task"]["publish"]["mode"] = publish_mode
     if publish_mode == "pr":
@@ -864,7 +882,7 @@ def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     task = task_node if isinstance(task_node, Mapping) else {}
     publish_node = task.get("publish")
     publish = publish_node if isinstance(publish_node, Mapping) else {}
-    publish_mode = _normalize_publish_mode(publish.get("mode") or "pr")
+    publish_mode = _normalize_publish_mode(publish.get("mode"))
 
     stages = ["moonmind.task.prepare", "moonmind.task.execute"]
     if publish_mode != "none":
