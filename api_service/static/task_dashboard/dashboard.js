@@ -2220,8 +2220,8 @@
               <div class="grid-2">
                 <div class="queue-step-auto-id">
                   <div class="small">Step ID (auto)</div>
-                  <div class="inline-code">step-${index + 1}</div>
-                  <div class="small">Automatically assigned in order.</div>
+                  <div class="inline-code">Assigned on submit</div>
+                  <div class="small">Generated sequentially from non-empty steps.</div>
                 </div>
                 <label>Title (optional)
                   <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
@@ -3115,10 +3115,12 @@
       }
       const includePrimaryStepForObjectiveOverride =
         Boolean(instructions) && objectiveInstructions !== instructions;
+      const hasTemplateBoundStep = stepState.some((step) => Boolean(String(step?.id || "").trim()));
       const includeExplicitSteps =
         additionalSteps.length > 0 ||
         Boolean(primaryStepTitle) ||
-        includePrimaryStepForObjectiveOverride;
+        includePrimaryStepForObjectiveOverride ||
+        hasTemplateBoundStep;
       const normalizedStepEntries = includeExplicitSteps
         ? [
             {
@@ -3137,13 +3139,17 @@
         const sourceState = stepState[entry.sourceIndex] || {};
         const templateBindingId = String(sourceState.id || "").trim();
         if (templateBindingId) {
-          templateIdToSequential.set(templateBindingId, assignedId);
+          if (!templateIdToSequential.has(templateBindingId)) {
+            templateIdToSequential.set(templateBindingId, []);
+          }
+          templateIdToSequential.get(templateBindingId).push(assignedId);
         }
         return { ...entry.payload, id: assignedId };
       });
 
       const templateCapabilities = [];
       const appliedStepTemplates = [];
+      const templateIdCursor = new Map();
       for (const entry of appliedTemplateState) {
         if (!entry || typeof entry !== "object") {
           continue;
@@ -3154,13 +3160,28 @@
           continue;
         }
         const rawTemplateStepIds = Array.isArray(entry.stepIds) ? entry.stepIds : [];
+        const remappedStepIds = [];
+        for (const rawId of rawTemplateStepIds) {
+          const templateId = String(rawId || "").trim();
+          if (!templateId) {
+            continue;
+          }
+          const availableStepIds = templateIdToSequential.get(templateId) || [];
+          const nextIndex = templateIdCursor.get(templateId) || 0;
+          const remappedStepId = availableStepIds[nextIndex];
+          if (!remappedStepId) {
+            message.className = "notice error";
+            message.textContent = `Applied template references unknown step binding ID: ${templateId}. Please re-apply the template.`;
+            return;
+          }
+          remappedStepIds.push(remappedStepId);
+          templateIdCursor.set(templateId, nextIndex + 1);
+        }
         const templateEntry = {
           slug,
           version,
           inputs: entry.inputs && typeof entry.inputs === "object" ? entry.inputs : {},
-          stepIds: rawTemplateStepIds
-            .map((rawId) => templateIdToSequential.get(String(rawId || "").trim()))
-            .filter((value) => Boolean(value)),
+          stepIds: remappedStepIds,
           appliedAt: String(entry.appliedAt || "").trim() || new Date().toISOString(),
         };
         if (Array.isArray(entry.capabilities)) {
