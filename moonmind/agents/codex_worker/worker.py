@@ -1679,7 +1679,9 @@ class CodexWorker:
             "workdirMode": workdir_mode_override
             or self._safe_workdir_mode(source_payload),
             "publish": {
-                "mode": publish_mode_override or publish.get("mode") or default_publish_mode,
+                "mode": publish_mode_override
+                or publish.get("mode")
+                or default_publish_mode,
                 "baseBranch": (
                     publish_base_override
                     if publish_base_override is not None
@@ -3132,7 +3134,8 @@ class CodexWorker:
             args.setdefault("ref", selected_ref)
         args.setdefault("workdirMode", workdir_mode)
         args.setdefault(
-            "publishMode", publish_mode_override or publish.get("mode") or default_publish_mode
+            "publishMode",
+            publish_mode_override or publish.get("mode") or default_publish_mode,
         )
         publish_base = (
             publish_base_override
@@ -3148,7 +3151,9 @@ class CodexWorker:
             "repository": repository,
             "instruction": instructions,
             "workdirMode": workdir_mode,
-            "publishMode": publish_mode_override or publish.get("mode") or default_publish_mode,
+            "publishMode": publish_mode_override
+            or publish.get("mode")
+            or default_publish_mode,
             "publishBaseBranch": publish_base,
         }
         if include_ref and selected_ref:
