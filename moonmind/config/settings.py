@@ -1008,6 +1008,28 @@ class AppSettings(BaseSettings):
             "Compatibility passthrough for worker stage-command timeout env flags."
         ),
     )
+    worker_codex_model: Optional[str] = Field(
+        None,
+        env=("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
+        validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
+        exclude=True,
+        description="Compatibility passthrough for worker Codex model env flags.",
+    )
+    worker_codex_effort: Optional[str] = Field(
+        None,
+        env=(
+            "MOONMIND_CODEX_EFFORT",
+            "CODEX_MODEL_REASONING_EFFORT",
+            "MODEL_REASONING_EFFORT",
+        ),
+        validation_alias=AliasChoices(
+            "MOONMIND_CODEX_EFFORT",
+            "CODEX_MODEL_REASONING_EFFORT",
+            "MODEL_REASONING_EFFORT",
+        ),
+        exclude=True,
+        description="Compatibility passthrough for worker Codex effort env flags.",
+    )
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
@@ -1134,6 +1156,10 @@ class AppSettings(BaseSettings):
             self.spec_workflow.stage_command_timeout_seconds = (
                 self.worker_stage_command_timeout_seconds
             )
+        if self.worker_codex_model is not None:
+            self.spec_workflow.codex_model = self.worker_codex_model
+        if self.worker_codex_effort is not None:
+            self.spec_workflow.codex_effort = self.worker_codex_effort
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),

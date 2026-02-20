@@ -401,6 +401,22 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
         monkeypatch.delenv("SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
 
+    def test_app_settings_accepts_codex_worker_env(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Codex worker env flags should be parsed instead of treated as extra fields."""
+
+        monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
+        monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+
+        assert settings.spec_workflow.codex_model == "gpt-custom-codex"
+        assert settings.spec_workflow.codex_effort == "medium"
+
+        monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
+        monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
+
     def test_default_skill_is_added_to_allowlist(self):
         """Allowlist mode should include default skill in allowlist."""
 
