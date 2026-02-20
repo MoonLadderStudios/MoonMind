@@ -375,10 +375,13 @@ class SpecWorkflowSettings(BaseSettings):
         description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
-        ".agents/skills/skills",
+        ".agents/skills",
         env="SPEC_SKILLS_LEGACY_MIRROR_ROOT",
         validation_alias=AliasChoices("SPEC_SKILLS_LEGACY_MIRROR_ROOT"),
-        description="Legacy local mirror fallback for backward compatibility.",
+        description=(
+            "Secondary shared mirror root checked after local-only skills; "
+            "nested '<root>/skills' is auto-detected for compatibility."
+        ),
     )
     skills_verify_signatures: bool = Field(
         False,
@@ -439,6 +442,28 @@ class SpecWorkflowSettings(BaseSettings):
         description="Maximum concurrent live sessions each worker should provision.",
         ge=1,
         le=64,
+    )
+    enable_task_proposals: bool = Field(
+        False,
+        env=("MOONMIND_ENABLE_TASK_PROPOSALS", "ENABLE_TASK_PROPOSALS"),
+        validation_alias=AliasChoices(
+            "MOONMIND_ENABLE_TASK_PROPOSALS",
+            "ENABLE_TASK_PROPOSALS",
+        ),
+        description="Enable worker-side task proposal submission after successful runs.",
+    )
+    stage_command_timeout_seconds: int = Field(
+        3600,
+        env=(
+            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+        ),
+        validation_alias=AliasChoices(
+            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+        ),
+        description="Hard timeout for non-container worker stage commands.",
+        ge=1,
     )
 
     model_config = SettingsConfigDict(
@@ -955,6 +980,34 @@ class AppSettings(BaseSettings):
     spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
+    worker_enable_task_proposals: Optional[bool] = Field(
+        None,
+        env=("MOONMIND_ENABLE_TASK_PROPOSALS", "ENABLE_TASK_PROPOSALS"),
+        validation_alias=AliasChoices(
+            "MOONMIND_ENABLE_TASK_PROPOSALS",
+            "ENABLE_TASK_PROPOSALS",
+        ),
+        exclude=True,
+        description=(
+            "Compatibility passthrough for worker task-proposal bootstrap env flags."
+        ),
+    )
+    worker_stage_command_timeout_seconds: Optional[int] = Field(
+        None,
+        env=(
+            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+        ),
+        validation_alias=AliasChoices(
+            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+        ),
+        ge=1,
+        exclude=True,
+        description=(
+            "Compatibility passthrough for worker stage-command timeout env flags."
+        ),
+    )
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
@@ -1075,6 +1128,12 @@ class AppSettings(BaseSettings):
             self.spec_workflow.celery_result_backend = self.celery.result_backend
         if not self.spec_workflow.codex_queue:
             self.spec_workflow.codex_queue = self.celery.default_queue
+        if self.worker_enable_task_proposals is not None:
+            self.spec_workflow.enable_task_proposals = self.worker_enable_task_proposals
+        if self.worker_stage_command_timeout_seconds is not None:
+            self.spec_workflow.stage_command_timeout_seconds = (
+                self.worker_stage_command_timeout_seconds
+            )
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),

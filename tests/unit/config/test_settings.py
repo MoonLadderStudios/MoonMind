@@ -294,6 +294,8 @@ class TestSpecWorkflowSettings:
         assert settings.default_skill == "speckit"
         assert settings.skill_policy_mode == "permissive"
         assert settings.allowed_skills == ("speckit",)
+        assert settings.skills_local_mirror_root == ".agents/skills/local"
+        assert settings.skills_legacy_mirror_root == ".agents/skills"
         assert settings.live_session_enabled_default is True
         assert settings.live_session_provider == "tmate"
         assert settings.live_session_ttl_minutes == 60
@@ -375,6 +377,29 @@ class TestSpecWorkflowSettings:
             "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
             raising=False,
         )
+
+    def test_app_settings_accepts_task_proposals_env(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Task proposal env flags should be parsed instead of treated as extra fields."""
+
+        monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
+        monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+        assert settings.spec_workflow.enable_task_proposals is True
+        assert settings.spec_workflow.stage_command_timeout_seconds == 2400
+
+        monkeypatch.delenv("MOONMIND_ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv("ENABLE_TASK_PROPOSALS", "true")
+        monkeypatch.setenv("SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+        assert settings.spec_workflow.enable_task_proposals is True
+        assert settings.spec_workflow.stage_command_timeout_seconds == 1800
+
+        monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
 
     def test_default_skill_is_added_to_allowlist(self):
         """Allowlist mode should include default skill in allowlist."""

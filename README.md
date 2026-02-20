@@ -108,7 +108,7 @@ description: Private project-specific scan helper skill
 - For spec workflow/Celery/Gemini workers, set in `.env`:
 
   - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
-  - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills/skills` (optional compatibility fallback)
+  - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills` (shared mirror root; nested `.agents/skills/skills` is auto-detected for compatibility)
   - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
   - `SPEC_WORKFLOW_SKILL_POLICY_MODE=permissive` (default; auto-accept resolvable skills without allowlist maintenance)
   - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (only enforced when `SPEC_WORKFLOW_SKILL_POLICY_MODE=allowlist`)
@@ -122,7 +122,7 @@ description: Private project-specific scan helper skill
   - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit` (only enforced when `MOONMIND_SKILL_POLICY_MODE=allowlist`)
   - `MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT=/workspace` (resolve relative skill roots against mounted workspace)
   - `MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT=/workspace/.agents/skills/local`
-  - `MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT=/workspace/.agents/skills/skills`
+  - `MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT=/workspace/.agents/skills`
 
 3. Source private skills from external locations when needed.
 
@@ -179,7 +179,7 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `SPEC_WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
 - `SPEC_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`).
 - `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`).
-- `SPEC_SKILLS_LEGACY_MIRROR_ROOT` – Compatibility fallback mirror root checked after the local mirror (default `.agents/skills/skills`).
+- `SPEC_SKILLS_LEGACY_MIRROR_ROOT` – Shared mirror root checked after the local mirror (default `.agents/skills`; nested `.agents/skills/skills` is still auto-detected for compatibility).
 - `SPEC_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (default `false`).
 - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).

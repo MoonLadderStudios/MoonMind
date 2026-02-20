@@ -115,6 +115,7 @@ class CodexWorkerConfig:
     docker_binary: str = "docker"
     container_workspace_volume: str | None = None
     container_default_timeout_seconds: int = 3600
+    stage_command_timeout_seconds: int = 3600
     vault_address: str | None = None
     vault_token: str | None = None
     vault_token_file: Path | None = None
@@ -314,6 +315,23 @@ class CodexWorkerConfig:
         )
         if container_default_timeout_seconds < 1:
             raise ValueError("MOONMIND_CONTAINER_TIMEOUT_SECONDS must be >= 1")
+        stage_command_timeout_raw = str(
+            source.get(
+                "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+                source.get(
+                    "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+                    str(settings.spec_workflow.stage_command_timeout_seconds),
+                ),
+            )
+        ).strip()
+        try:
+            stage_command_timeout_seconds = int(stage_command_timeout_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer"
+            ) from exc
+        if stage_command_timeout_seconds < 1:
+            raise ValueError("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be >= 1")
 
         vault_address = str(source.get("MOONMIND_VAULT_ADDR", "")).strip() or None
         vault_token_file_raw = str(source.get("MOONMIND_VAULT_TOKEN_FILE", "")).strip()
@@ -479,7 +497,10 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_ENABLE_TASK_PROPOSALS",
-                    source.get("ENABLE_TASK_PROPOSALS", "false"),
+                    source.get(
+                        "ENABLE_TASK_PROPOSALS",
+                        str(settings.spec_workflow.enable_task_proposals),
+                    ),
                 )
             )
             .strip()
@@ -530,6 +551,7 @@ class CodexWorkerConfig:
             docker_binary=docker_binary,
             container_workspace_volume=container_workspace_volume,
             container_default_timeout_seconds=container_default_timeout_seconds,
+            stage_command_timeout_seconds=stage_command_timeout_seconds,
             vault_address=vault_address,
             vault_token=vault_token,
             vault_token_file=vault_token_file,
@@ -2631,6 +2653,7 @@ class CodexWorker:
         env: Mapping[str, str] | None = None,
         redaction_values: tuple[str, ...] = (),
         cancel_event: asyncio.Event | None = None,
+        timeout_seconds: float | None = None,
     ) -> CommandResult:
         effective_cancel_event = cancel_event or getattr(
             self, "_active_cancel_event", None
@@ -2659,18 +2682,38 @@ class CodexWorker:
                 stage=self._infer_stage_from_log_path(log_path),
                 step_index=self._step_index_from_log_path(log_path),
             )
+        effective_timeout_seconds = (
+            float(self._config.stage_command_timeout_seconds)
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
-            return await runner(
-                command,
-                cwd=cwd,
-                log_path=log_path,
-                check=check,
-                env=dict(env) if env is not None else None,
-                redaction_values=merged_redaction_values,
-                cancel_event=effective_cancel_event,
-                output_chunk_callback=live_log_callback,
-            )
+            try:
+                return await asyncio.wait_for(
+                    runner(
+                        command,
+                        cwd=cwd,
+                        log_path=log_path,
+                        check=check,
+                        env=dict(env) if env is not None else None,
+                        redaction_values=merged_redaction_values,
+                        cancel_event=effective_cancel_event,
+                        output_chunk_callback=live_log_callback,
+                    ),
+                    timeout=effective_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                redacted_command = self._redact_command_for_log(
+                    command, redaction_values=merged_redaction_values
+                )
+                timeout_display = f"{effective_timeout_seconds:g}"
+                timeout_msg = (
+                    "command timed out after "
+                    f"{timeout_display}s: {' '.join(redacted_command)}"
+                )
+                self._append_stage_log(log_path, timeout_msg)
+                raise asyncio.TimeoutError(timeout_msg) from exc
         redacted_command = self._redact_command_for_log(
             command, redaction_values=merged_redaction_values
         )
@@ -3667,18 +3710,14 @@ class CodexWorker:
             )
             run_command_env = dict(environ)
             run_command_env.update(run_env)
-            run_result = await asyncio.wait_for(
-                self._run_stage_command(
-                    run_command,
-                    cwd=prepared.repo_dir,
-                    log_path=prepared.execute_log_path,
-                    check=False,
-                    env=run_command_env,
-                    redaction_values=tuple(
-                        value for value in run_env.values() if value
-                    ),
-                ),
-                timeout=float(container_spec.timeout_seconds),
+            run_result = await self._run_stage_command(
+                run_command,
+                cwd=prepared.repo_dir,
+                log_path=prepared.execute_log_path,
+                check=False,
+                env=run_command_env,
+                redaction_values=tuple(value for value in run_env.values() if value),
+                timeout_seconds=float(container_spec.timeout_seconds),
             )
             if run_result.returncode != 0:
                 error_message = f"container command failed ({run_result.returncode})"
