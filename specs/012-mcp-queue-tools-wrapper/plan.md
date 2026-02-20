@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement Milestone 4 from `docs/CodexTaskQueue.md` by adding an HTTP MCP tools wrapper (`GET /mcp/tools`, `POST /mcp/tools/call`) backed by a queue tool registry that calls the same `AgentQueueService` methods as REST queue routes, plus tests and a concise Codex integration guide.
+Implement Milestone 4 from `docs/TaskQueueSystem.md` by adding an HTTP MCP tools wrapper (`GET /mcp/tools`, `POST /mcp/tools/call`) backed by a queue tool registry that calls the same `AgentQueueService` methods as REST queue routes, plus tests and a concise Codex integration guide.
 
 ## Technical Context
 

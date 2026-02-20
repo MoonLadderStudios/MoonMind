@@ -1,7 +1,7 @@
 # Requirements Traceability Matrix: Agent Queue Artifact Upload
 
 **Feature**: `010-agent-queue-artifacts`  
-**Source**: `docs/CodexTaskQueue.md`
+**Source**: `docs/TaskQueueSystem.md`
 
 | DOC-REQ ID | Mapped FR(s) | Planned Implementation Surface | Validation Strategy |
 |------------|--------------|--------------------------------|--------------------|

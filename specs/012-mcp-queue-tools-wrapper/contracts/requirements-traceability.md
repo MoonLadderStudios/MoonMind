@@ -1,7 +1,7 @@
 # Requirements Traceability Matrix: Agent Queue MCP Tools Wrapper
 
 **Feature**: `012-mcp-queue-tools-wrapper`  
-**Source**: `docs/CodexTaskQueue.md`
+**Source**: `docs/TaskQueueSystem.md`
 
 | DOC-REQ ID | Mapped FR(s) | Planned Implementation Surface | Validation Strategy |
 |------------|--------------|--------------------------------|--------------------|

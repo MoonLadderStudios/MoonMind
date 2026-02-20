@@ -216,6 +216,6 @@ Required artifacts:
 ## 10. References
 
 - `docs/TaskArchitecture.md`
-- `docs/CodexTaskQueue.md`
+- `docs/TaskQueueSystem.md`
 - `docs/WorkerGitAuth.md`
 - `docs/SecretStore.md`
