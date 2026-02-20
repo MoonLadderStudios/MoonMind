@@ -175,9 +175,7 @@ class TestFeatureFlagsSettings:
         assert settings.task_template_catalog is True
         assert settings.task_template_catalog_enabled is True
 
-    def test_task_template_catalog_can_be_disabled_with_prefixed_env(
-        self, monkeypatch
-    ):
+    def test_task_template_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
         monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
         monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
         monkeypatch.setenv("FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", "1")
