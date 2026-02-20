@@ -92,7 +92,7 @@
 ### Implementation for User Story 3
 
 - [X] T020 [US3] Add queue new form steps editor (add/remove/reorder) and canonical payload emission in `api_service/static/task_dashboard/dashboard.js` (DOC-REQ-012)
-- [X] T021 [US3] Keep queue new publish default as `pr` and derive required capabilities with step-skill requirements in `api_service/static/task_dashboard/dashboard.js` plus backend canonical normalization in `moonmind/workflows/agent_queue/task_contract.py` (DOC-REQ-012, DOC-REQ-013)
+- [X] T021 [US3] Keep queue new publish default aligned with `MOONMIND_DEFAULT_PUBLISH_MODE` (default `pr`) and derive required capabilities with step-skill requirements in `api_service/static/task_dashboard/dashboard.js` plus backend canonical normalization in `moonmind/workflows/agent_queue/task_contract.py` (DOC-REQ-012, DOC-REQ-013)
 
 **Checkpoint**: Queue UI supports practical step authoring with canonical payload behavior.
 

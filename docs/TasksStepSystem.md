@@ -24,7 +24,7 @@ Implemented today:
 
 - Canonical `type="task"` payload normalization is in place.
 - Wrapper stages exist and run in order: `moonmind.task.prepare` -> `moonmind.task.execute` -> `moonmind.task.publish`.
-- Queue task publish default is `pr` (contract + `/tasks/queue/new` UI default).
+- Queue task publish default follows `MOONMIND_DEFAULT_PUBLISH_MODE` (default `pr` for contract + `/tasks/queue/new` UI).
 - Cooperative cancellation is implemented for running jobs (`cancel` request + worker `cancel/ack`).
 - Container execution mode exists under `task.container` and currently runs as a single execute-stage flow.
 
@@ -286,7 +286,7 @@ Target changes:
 
 - Add a Steps section with add/remove and optional reorder controls.
 - Keep existing task-level fields unchanged.
-- Keep publish default as `pr` in UI.
+- Keep the publish default aligned with `MOONMIND_DEFAULT_PUBLISH_MODE` (default `pr`) in UI.
 
 ### 10.2 Defaults and Validation
 
@@ -390,7 +390,7 @@ First rollout recommendation:
 2. Update worker prepare to materialize union of referenced step skills.
 3. Implement execute-stage step loop and step events/artifacts.
 4. Integrate cancellation checks at step boundaries.
-5. Add queue submit UI steps editor (preserving publish default `pr`).
+5. Add queue submit UI steps editor (preserving the configured publish default via `MOONMIND_DEFAULT_PUBLISH_MODE`).
 6. Add tests for contract normalization, worker flow, cancellation, and UI payload emission.
 
 ---
