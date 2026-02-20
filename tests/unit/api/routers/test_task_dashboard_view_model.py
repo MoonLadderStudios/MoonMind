@@ -95,6 +95,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["system"]["defaultTaskEffort"]
     assert config["system"]["defaultTaskModelByRuntime"]["codex"]
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
+    assert config["system"]["defaultPublishMode"] == "pr"
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
@@ -116,6 +117,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
     monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
+    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
 
@@ -124,3 +126,4 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultTaskEffort"] == "medium"
     assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
+    assert config["system"]["defaultPublishMode"] == "branch"

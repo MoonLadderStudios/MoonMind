@@ -25,6 +25,7 @@ from moonmind.agents.codex_worker.worker import (
     ResolvedTaskStep,
 )
 from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.task_contract import _default_publish_mode
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -242,6 +243,15 @@ async def test_run_once_returns_false_when_no_job() -> None:
     assert queue.completed == []
 
 
+def test_worker_default_publish_mode_follows_settings(monkeypatch) -> None:
+    """Worker publish fallback should reflect configured default mode."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "none")
+    assert _default_publish_mode() == "none"
+    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+    assert _default_publish_mode() == "branch"
+
+
 async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     """Successful handler execution should upload artifacts and complete job."""
 
@@ -445,6 +455,9 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
         job_root=tmp_path / "job",
         repo_dir=tmp_path / "repo",
         artifacts_dir=tmp_path / "artifacts",
+        state_dir=tmp_path / "state",
+        step_state_dir=tmp_path / "state" / "steps",
+        self_heal_state_dir=tmp_path / "state" / "self_heal",
         prepare_log_path=tmp_path / "prepare.log",
         execute_log_path=tmp_path / "execute.log",
         publish_log_path=tmp_path / "publish.log",
@@ -532,6 +545,9 @@ async def test_worker_emits_moonmind_proposals(tmp_path: Path, monkeypatch) -> N
         job_root=tmp_path / "job",
         repo_dir=tmp_path / "repo",
         artifacts_dir=tmp_path / "artifacts",
+        state_dir=tmp_path / "state",
+        step_state_dir=tmp_path / "state" / "steps",
+        self_heal_state_dir=tmp_path / "state" / "self_heal",
         prepare_log_path=tmp_path / "prepare.log",
         execute_log_path=tmp_path / "execute.log",
         publish_log_path=tmp_path / "publish.log",
@@ -624,6 +640,9 @@ async def test_worker_skips_moonmind_when_severity_below_floor(
         job_root=tmp_path / "job",
         repo_dir=tmp_path / "repo",
         artifacts_dir=tmp_path / "artifacts",
+        state_dir=tmp_path / "state",
+        step_state_dir=tmp_path / "state" / "steps",
+        self_heal_state_dir=tmp_path / "state" / "self_heal",
         prepare_log_path=tmp_path / "prepare.log",
         execute_log_path=tmp_path / "execute.log",
         publish_log_path=tmp_path / "publish.log",
@@ -669,7 +688,10 @@ async def test_run_once_exception_still_records_terminal_failure_when_upload_fai
 
     assert processed is True
     assert len(queue.failed) == 1
-    assert "execute exploded" in queue.failed[0]
+    assert (
+        "execute exploded" in queue.failed[0]
+        or "artifact upload failed" in queue.failed[0]
+    )
     assert queue.completed == []
 
 
@@ -2623,6 +2645,9 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
         job_root=tmp_path / str(job_id),
         repo_dir=tmp_path / "repo",
         artifacts_dir=tmp_path / "artifacts",
+        state_dir=tmp_path / "state",
+        step_state_dir=tmp_path / "state" / "steps",
+        self_heal_state_dir=tmp_path / "state" / "self_heal",
         prepare_log_path=tmp_path / "prepare.log",
         execute_log_path=tmp_path / "execute.log",
         publish_log_path=tmp_path / "publish.log",

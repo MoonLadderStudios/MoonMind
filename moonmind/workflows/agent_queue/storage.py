@@ -87,3 +87,36 @@ class AgentQueueArtifactStorage:
         if not destination.is_relative_to(root_resolved):
             raise ValueError("storage_path resolves outside artifact root")
         return destination
+
+    def get_state_dir(self, job_id: Union[str, UUID]) -> Path:
+        """Return the root directory for job-scoped state artifacts."""
+
+        return self.get_job_path(job_id) / "state"
+
+    def get_step_state_dir(self, job_id: Union[str, UUID]) -> Path:
+        """Return the directory containing per-step state JSON files."""
+
+        return self.get_state_dir(job_id) / "steps"
+
+    def get_self_heal_state_dir(self, job_id: Union[str, UUID]) -> Path:
+        """Return the directory containing per-attempt self-heal JSON files."""
+
+        return self.get_state_dir(job_id) / "self_heal"
+
+    def get_step_state_path(self, job_id: Union[str, UUID], step_index: int) -> Path:
+        """Resolve the JSON file path for a specific step checkpoint."""
+
+        return self.resolve_artifact_path(
+            job_id,
+            f"state/steps/step-{step_index:04d}.json",
+        )
+
+    def get_self_heal_attempt_path(
+        self, job_id: Union[str, UUID], step_index: int, attempt: int
+    ) -> Path:
+        """Resolve the JSON file path for a specific self-heal attempt."""
+
+        return self.resolve_artifact_path(
+            job_id,
+            f"state/self_heal/attempt-{step_index:04d}-{attempt:04d}.json",
+        )
