@@ -89,7 +89,7 @@ Singleton row keyed by `id = 1`.
 | ---------------------- | ------------ | ---------------------------------------- |
 | `id`                   | int (pk)     | Always 1                                 |
 | `paused`               | bool         | If true, new claims are blocked          |
-| `mode`                 | enum         | `drain` | `quiesce`                      |
+| `mode`                 | enum         | `drain` \| `quiesce`. Nullable when `paused=false` |
 | `reason`               | text         | Operator-provided                        |
 | `requested_by_user_id` | uuid fk user | Nullable (local disabled auth)           |
 | `requested_at`         | timestamptz  | First time pause enabled                 |
@@ -103,7 +103,7 @@ Singleton row keyed by `id = 1`.
 | `id`            | uuid pk      |                        |
 | `control`       | text         | `"worker_pause"`       |
 | `action`        | text         | `"pause"` | `"resume"` |
-| `mode`          | text         | `drain` | `quiesce`    |
+| `mode`          | text         | `drain` \| `quiesce`. Nullable on `resume` |
 | `reason`        | text         |                        |
 | `actor_user_id` | uuid fk user | Nullable               |
 | `created_at`    | timestamptz  |                        |
@@ -116,11 +116,12 @@ Singleton row keyed by `id = 1`.
 
 * `GET /api/system/worker-pause`
 
-  * Returns current pause state + computed drain metrics:
+  * Returns current pause state (including `reason`) + computed drain metrics:
 
     * queued count
     * running count
-    * `isDrained = (running == 0)`
+    * `isDrained = (activeRunning == 0 && staleRunning == 0)`
+    * `staleRunning` = running jobs whose lease already expired (shown separately so operators can detect stuck workers while claims are paused)
 
 * `POST /api/system/worker-pause`
 
@@ -159,11 +160,15 @@ Singleton row keyed by `id = 1`.
 
 * `POST /api/queue/jobs/{jobId}/heartbeat`
 
-  * Extend similarly so running workers can react (Quiesce mode):
+  * Keep response backward-compatible with existing top-level `JobModel` fields.
+  * Add an optional top-level `system` object so running workers can react (Quiesce mode) without breaking current consumers:
 
     ```json
     {
-      "job": { ... },
+      "id": "...",
+      "status": "running",
+      "payload": { ... },
+      "cancelRequestedAt": null,
       "system": {
         "workersPaused": true,
         "mode": "quiesce",
@@ -175,7 +180,7 @@ Singleton row keyed by `id = 1`.
 
 ### 7.3 MCP tools (optional but recommended)
 
-Since MCP tools map to the same queue service methods , propagate the same `system` envelope for:
+Since MCP tools map to the same queue service methods , propagate pause metadata consistently while preserving existing response shapes for compatibility:
 
 * `queue.claim`
 * `queue.heartbeat`
@@ -230,6 +235,7 @@ This prevents paused workers from inadvertently mutating job state (especially l
 
 * In **Drain**: running jobs keep heartbeating, so leases should not expire.
 * If operators **stop workers anyway** while jobs are running, leases may expire and later be normalized into retries. That’s expected given the queue’s lease design —the system pause is not a time-freeze of execution.
+* Because paused claims skip `claim_job` (and therefore skip `_requeue_expired_jobs`), expired leases may remain visible as `staleRunning` until workers resume or an explicit maintenance normalization path is run.
 
 ---
 
