@@ -201,3 +201,10 @@ Rollout can be incremental because existing proposal creation and promotion sema
 4. CI/run-quality proposals are categorized and tagged consistently.
 5. Priority for CI proposals is automatically elevated when high-severity signals are present.
 6. Existing proposal promotion and dedup behavior remain intact.
+
+## 11. Release Notes
+
+- Added global `MOONMIND_PROPOSAL_TARGETS`/`MOONMIND_CI_REPOSITORY` knobs plus per-task `proposalPolicy` overrides so workers can route proposals deterministically.
+- Worker policy evaluation now enforces severity floors, per-target slot caps, `[run_quality]` titles with tag slugs, and origin metadata enrichment before any MoonMind submission.
+- API/service validation rejects malformed MoonMind payloads, derives priority with override provenance, and stores `priority_override_reason` for downstream dashboards.
+- Dashboard now exposes repository/category/tag filters, shows derived priority badges with override tooltips, and surfaces origin metadata and signal payloads inline for run-quality triage.

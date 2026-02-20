@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -19,6 +20,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from uuid import UUID
 
 import httpx
+from pydantic import ValidationError
 
 import moonmind.utils.logging as moonmind_logging
 from moonmind.agents.codex_worker.handlers import (
@@ -41,7 +43,9 @@ from moonmind.workflows.agent_queue.task_contract import (
     LEGACY_TASK_JOB_TYPES,
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
+    TaskProposalPolicy,
     build_canonical_task_view,
+    build_effective_proposal_policy,
     build_task_stage_plan,
 )
 from moonmind.workflows.skills.materializer import (
@@ -78,6 +82,17 @@ _SECRET_LIKE_METADATA_PATTERN = re.compile(
     """
 )
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
+_MOONMIND_SIGNAL_TAGS = frozenset(
+    {
+        "retry",
+        "duplicate_output",
+        "missing_ref",
+        "conflicting_instructions",
+        "flaky_test",
+        "loop_detected",
+        "artifact_gap",
+    }
+)
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -4322,41 +4337,217 @@ class CodexWorker:
             )
             return
         proposals = parsed if isinstance(parsed, list) else [parsed]
-        origin_metadata = {
-            "startingBranch": prepared.starting_branch,
-            "newBranch": prepared.new_branch,
-            "workingBranch": prepared.working_branch,
-        }
+        canonical_payload = job.payload if isinstance(job.payload, Mapping) else {}
+        project_repository = str(canonical_payload.get("repository") or "").strip()
+        if not project_repository:
+            logger.warning(
+                "Skipping task proposal submission for job %s: canonical repository missing",
+                job.id,
+            )
+            return
+
+        task_node = canonical_payload.get("task")
+        policy_node = (
+            task_node.get("proposalPolicy") if isinstance(task_node, Mapping) else None
+        )
+        task_policy: TaskProposalPolicy | None = None
+        if isinstance(policy_node, Mapping):
+            try:
+                task_policy = TaskProposalPolicy.model_validate(dict(policy_node))
+            except ValidationError as exc:
+                logger.warning(
+                    "Invalid proposalPolicy override for job %s; using defaults: %s",
+                    job.id,
+                    exc,
+                )
+
+        defaults = settings.spec_workflow
+        effective_policy = build_effective_proposal_policy(
+            policy=task_policy,
+            default_targets=defaults.proposal_targets_default,
+            default_max_items_project=defaults.proposal_max_items_project,
+            default_max_items_moonmind=defaults.proposal_max_items_moonmind,
+            default_moonmind_severity_floor=defaults.proposal_moonmind_severity_floor,
+            severity_vocabulary=settings.task_proposals.severity_vocabulary,
+        )
+        approved_ci_tags = _MOONMIND_SIGNAL_TAGS
+
+        def _normalize_tags(values: object) -> list[str]:
+            if not isinstance(values, (list, tuple)):
+                return []
+            normalized: list[str] = []
+            seen: set[str] = set()
+            for raw in values:
+                token = str(raw or "").strip().lower()
+                if not token or token in seen:
+                    continue
+                normalized.append(token)
+                seen.add(token)
+            return normalized
+
+        def _extract_signal(payload: Mapping[str, Any]) -> dict[str, Any]:
+            direct = payload.get("signal")
+            if isinstance(direct, Mapping):
+                return dict(direct)
+            origin = payload.get("origin")
+            if isinstance(origin, Mapping):
+                metadata = origin.get("metadata")
+                if isinstance(metadata, Mapping):
+                    signal = metadata.get("signal")
+                    if isinstance(signal, Mapping):
+                        return dict(signal)
+            return {}
+
+        def _ensure_task_request(
+            payload: dict[str, Any], *, repository: str
+        ) -> bool:
+            request_node = payload.get("taskCreateRequest")
+            if not isinstance(request_node, Mapping):
+                logger.warning(
+                    "Proposal entry in %s missing taskCreateRequest; skipping",
+                    proposals_path,
+                )
+                return False
+            request = copy.deepcopy(request_node)
+            payload["taskCreateRequest"] = request
+            request_payload = request.get("payload")
+            payload_node = (
+                dict(request_payload) if isinstance(request_payload, Mapping) else {}
+            )
+            payload_node["repository"] = repository
+            request["payload"] = payload_node
+            payload["repository"] = repository
+            return True
+
+        def _ensure_run_quality_title(title: str) -> str:
+            normalized = title.strip()
+            if not normalized.lower().startswith("[run_quality]"):
+                normalized = normalized or "Run quality proposal"
+                normalized = f"[run_quality] {normalized}"
+            return normalized.strip()
+
+        def _append_tag_slug(title: str, tags: Sequence[str]) -> str:
+            slug_items = sorted({tag for tag in tags if tag})
+            if not slug_items:
+                return title
+            slug_text = "+".join(slug_items)
+            marker = f"(tags: {slug_text})"
+            if marker in title:
+                return title
+            return f"{title} (tags: {slug_text})"
+
         submitted = 0
         for candidate in proposals:
             if not isinstance(candidate, dict):
                 continue
-            payload: dict[str, Any] = dict(candidate)
+            payload = copy.deepcopy(candidate)
             origin_node = payload.get("origin")
-            origin = origin_node if isinstance(origin_node, dict) else {}
+            origin = origin_node if isinstance(origin_node, Mapping) else {}
             if not origin.get("source"):
                 origin["source"] = "queue"
             if not origin.get("id"):
                 origin["id"] = str(job.id)
             metadata = origin.get("metadata")
-            metadata_dict = metadata if isinstance(metadata, dict) else {}
-            for key, value in origin_metadata.items():
-                metadata_dict.setdefault(key, value)
+            metadata_dict = metadata if isinstance(metadata, Mapping) else {}
+            metadata_dict.setdefault("triggerRepo", project_repository)
+            metadata_dict.setdefault("triggerJobId", str(job.id))
+            metadata_dict.setdefault("startingBranch", prepared.starting_branch)
+            metadata_dict.setdefault("workingBranch", prepared.working_branch)
+            if prepared.new_branch and "newBranch" not in metadata_dict:
+                metadata_dict["newBranch"] = prepared.new_branch
             origin["metadata"] = metadata_dict
             payload["origin"] = origin
-            if "taskCreateRequest" not in payload:
+
+            signal_payload = _extract_signal(payload)
+            if signal_payload:
+                metadata_dict["signal"] = signal_payload
+            severity_value = (
+                str(signal_payload.get("severity") or "").strip().lower()
+                if signal_payload
+                else None
+            )
+
+            normalized_tags = _normalize_tags(payload.get("tags"))
+            payload["tags"] = normalized_tags
+
+            title_text = str(payload.get("title") or "").strip()
+            if not title_text:
+                logger.warning(
+                    "Proposal entry in %s missing title; skipping", proposals_path
+                )
+                continue
+
+            if not isinstance(payload.get("taskCreateRequest"), Mapping):
                 logger.warning(
                     "Proposal entry in %s missing taskCreateRequest; skipping",
                     proposals_path,
                 )
                 continue
-            try:
-                await self._queue_client.create_task_proposal(proposal=payload)
-                submitted += 1
-            except Exception:
-                logger.exception(
-                    "Failed to submit task proposal derived from %s", proposals_path
+
+            if effective_policy.has_project_capacity():
+                project_payload = copy.deepcopy(payload)
+                if _ensure_task_request(
+                    project_payload, repository=project_repository
+                ):
+                    try:
+                        await self._queue_client.create_task_proposal(
+                            proposal=project_payload
+                        )
+                        effective_policy.consume_project_slot()
+                        submitted += 1
+                    except Exception:
+                        logger.exception(
+                            "Failed to submit project proposal derived from %s",
+                            proposals_path,
+                        )
+
+            if effective_policy.has_moonmind_capacity():
+                if not effective_policy.severity_meets_floor(severity_value):
+                    logger.info(
+                        "Skipping MoonMind CI proposal for job %s: severity '%s' below floor '%s'",
+                        job.id,
+                        severity_value or "-",
+                        effective_policy.min_severity_for_moonmind,
+                    )
+                    continue
+                moonmind_tags = [
+                    tag for tag in normalized_tags if tag in approved_ci_tags
+                ]
+                if not moonmind_tags:
+                    logger.info(
+                        "Skipping MoonMind CI proposal for job %s: missing approved tags",
+                        job.id,
+                    )
+                    continue
+                if not signal_payload:
+                    logger.info(
+                        "Skipping MoonMind CI proposal for job %s: signal metadata missing",
+                        job.id,
+                    )
+                    continue
+
+                moonmind_payload = copy.deepcopy(payload)
+                moonmind_payload["category"] = "run_quality"
+                moonmind_payload["tags"] = moonmind_tags
+                moonmind_payload["title"] = _append_tag_slug(
+                    _ensure_run_quality_title(title_text), moonmind_tags
                 )
+                if _ensure_task_request(
+                    moonmind_payload,
+                    repository=settings.task_proposals.moonmind_ci_repository,
+                ):
+                    try:
+                        await self._queue_client.create_task_proposal(
+                            proposal=moonmind_payload
+                        )
+                        effective_policy.consume_moonmind_slot()
+                        submitted += 1
+                    except Exception:
+                        logger.exception(
+                            "Failed to submit MoonMind proposal derived from %s",
+                            proposals_path,
+                        )
+
         if submitted:
             logger.info(
                 "Submitted %s task proposal(s) for job %s from %s",

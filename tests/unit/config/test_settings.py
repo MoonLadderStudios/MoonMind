@@ -502,3 +502,42 @@ class TestSpecWorkflowSettings:
 
         assert settings.celery.default_queue == "moonmind.jobs"
         assert settings.spec_workflow.codex_queue == "moonmind.jobs"
+
+
+def test_task_proposal_policy_settings_defaults(app_settings_defaults):
+    """Task proposal defaults should expose policy knobs on both settings."""
+
+    settings = AppSettings(_env_file=None, **app_settings_defaults)
+    assert settings.task_proposals.proposal_targets_default == "project"
+    assert settings.spec_workflow.proposal_targets_default == "project"
+    assert settings.task_proposals.max_items_project_default == 3
+    assert settings.spec_workflow.proposal_max_items_project == 3
+    assert settings.task_proposals.moonmind_severity_floor_default == "high"
+    assert settings.spec_workflow.proposal_moonmind_severity_floor == "high"
+
+
+def test_task_proposal_policy_env_overrides(
+    app_settings_defaults, monkeypatch
+) -> None:
+    """Environment variables should override policy defaults everywhere."""
+
+    monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
+    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", "5")
+    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
+    monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
+
+    settings = AppSettings(_env_file=None, **app_settings_defaults)
+
+    assert settings.task_proposals.proposal_targets_default == "both"
+    assert settings.spec_workflow.proposal_targets_default == "both"
+    assert settings.task_proposals.max_items_project_default == 5
+    assert settings.spec_workflow.proposal_max_items_project == 5
+    assert settings.task_proposals.max_items_moonmind_default == 4
+    assert settings.spec_workflow.proposal_max_items_moonmind == 4
+    assert settings.task_proposals.moonmind_severity_floor_default == "medium"
+    assert settings.spec_workflow.proposal_moonmind_severity_floor == "medium"
+
+    monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
+    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
+    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
+    monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)

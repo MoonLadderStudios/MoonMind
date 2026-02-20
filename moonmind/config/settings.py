@@ -6,6 +6,9 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+_ALLOWED_POLICY_TARGETS = ("project", "moonmind")
+_ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
+_ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 
 
 class DatabaseSettings(BaseSettings):
@@ -464,6 +467,36 @@ class SpecWorkflowSettings(BaseSettings):
         ),
         description="Enable worker-side task proposal submission after successful runs.",
     )
+    proposal_targets_default: str = Field(
+        "project",
+        env=("MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"),
+        description="Default proposal targets when tasks omit proposalPolicy (project|moonmind|both).",
+    )
+    proposal_max_items_project: int = Field(
+        3,
+        env=("TASK_PROPOSALS_MAX_ITEMS_PROJECT",),
+        description="Default per-run project proposal cap applied when task policy omits maxItems.project.",
+        ge=1,
+    )
+    proposal_max_items_moonmind: int = Field(
+        2,
+        env=("TASK_PROPOSALS_MAX_ITEMS_MOONMIND",),
+        description="Default per-run MoonMind proposal cap applied when task policy omits maxItems.moonmind.",
+        ge=1,
+    )
+    proposal_moonmind_severity_floor: str = Field(
+        "high",
+        env=(
+            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
+            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
+        ),
+        description="Lowest accepted severity for MoonMind CI proposals when policy omits a floor.",
+    )
+    moonmind_ci_repository: str = Field(
+        "MoonLadderStudios/MoonMind",
+        env=("MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"),
+        description="Repository used for MoonMind CI/run-quality proposals.",
+    )
     stage_command_timeout_seconds: int = Field(
         3600,
         env=(
@@ -508,6 +541,41 @@ class SpecWorkflowSettings(BaseSettings):
         if not tokens:
             return ()
         return tuple(dict.fromkeys(tokens))
+
+    @field_validator("proposal_targets_default", mode="before")
+    @classmethod
+    def _normalize_proposal_targets_default(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "project"
+        if text not in _ALLOWED_TARGET_DEFAULTS:
+            allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
+            raise ValueError(
+                f"spec_workflow.proposal_targets_default must be one of: {allowed}"
+            )
+        return text
+
+    @field_validator("proposal_moonmind_severity_floor", mode="before")
+    @classmethod
+    def _normalize_proposal_severity_floor(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "high"
+        if text not in _ALLOWED_PROPOSAL_SEVERITIES:
+            allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
+            raise ValueError(
+                "spec_workflow.proposal_moonmind_severity_floor must be one of: "
+                f"{allowed}"
+            )
+        return text
+
+    @field_validator("moonmind_ci_repository", mode="before")
+    @classmethod
+    def _normalize_moonmind_ci_repository(cls, value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "MoonLadderStudios/MoonMind"
+        return text
 
     @field_validator(
         "metrics_host",
@@ -941,6 +1009,41 @@ class FeatureFlagsSettings(BaseSettings):
 class TaskProposalSettings(BaseSettings):
     """Task proposal queue runtime knobs."""
 
+    proposal_targets_default: str = Field(
+        "project",
+        env=("MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"),
+        description="Default proposal targets when policy overrides are absent (project|moonmind|both).",
+    )
+    moonmind_ci_repository: str = Field(
+        "MoonLadderStudios/MoonMind",
+        env=("MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"),
+        description="MoonMind CI repository used whenever proposals target run-quality improvements.",
+    )
+    max_items_project_default: int = Field(
+        3,
+        env=("TASK_PROPOSALS_MAX_ITEMS_PROJECT",),
+        description="Default per-run cap for project-targeted proposals when unspecified.",
+        ge=1,
+    )
+    max_items_moonmind_default: int = Field(
+        2,
+        env=("TASK_PROPOSALS_MAX_ITEMS_MOONMIND",),
+        description="Default per-run cap for MoonMind-targeted proposals when unspecified.",
+        ge=1,
+    )
+    moonmind_severity_floor_default: str = Field(
+        "high",
+        env=(
+            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
+            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
+        ),
+        description="Minimum severity that must be met before MoonMind CI proposals are emitted when policy omits a floor.",
+    )
+    severity_vocabulary: tuple[str, ...] = Field(
+        _ALLOWED_PROPOSAL_SEVERITIES,
+        env=("TASK_PROPOSALS_SEVERITY_VOCABULARY",),
+        description="Allowed severity labels for proposal policy evaluation.",
+    )
     notifications_enabled: bool = Field(
         False,
         env="TASK_PROPOSALS_NOTIFICATIONS_ENABLED",
@@ -962,6 +1065,68 @@ class TaskProposalSettings(BaseSettings):
         description="Webhook timeout in seconds.",
         gt=0,
     )
+
+    @field_validator("proposal_targets_default", mode="before")
+    @classmethod
+    def _normalize_setting_targets_default(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "project"
+        if text not in _ALLOWED_TARGET_DEFAULTS:
+            allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
+            raise ValueError(
+                f"task_proposals.proposal_targets_default must be one of: {allowed}"
+            )
+        return text
+
+    @field_validator("moonmind_severity_floor_default", mode="before")
+    @classmethod
+    def _normalize_setting_severity_floor(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "high"
+        if text not in _ALLOWED_PROPOSAL_SEVERITIES:
+            allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
+            raise ValueError(
+                "task_proposals.moonmind_severity_floor_default must be one of: "
+                f"{allowed}"
+            )
+        return text
+
+    @field_validator("moonmind_ci_repository", mode="before")
+    @classmethod
+    def _normalize_setting_ci_repo(cls, value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "MoonLadderStudios/MoonMind"
+        return text
+
+    @field_validator("severity_vocabulary", mode="before")
+    @classmethod
+    def _normalize_setting_severity_vocab(
+        cls, value: object
+    ) -> tuple[str, ...]:
+        if value is None or value == "":
+            return _ALLOWED_PROPOSAL_SEVERITIES
+        if isinstance(value, str):
+            tokens = [token.strip().lower() for token in value.split(",")]
+        elif isinstance(value, Sequence):
+            tokens = [str(token).strip().lower() for token in value]
+        else:
+            tokens = [str(value).strip().lower()]
+        normalized = tuple(dict.fromkeys(token for token in tokens if token))
+        if not normalized:
+            return _ALLOWED_PROPOSAL_SEVERITIES
+        invalid = [
+            token for token in normalized if token not in _ALLOWED_PROPOSAL_SEVERITIES
+        ]
+        if invalid:
+            allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
+            raise ValueError(
+                "task_proposals.severity_vocabulary must be subset of: "
+                f"{allowed}"
+            )
+        return normalized
 
     model_config = SettingsConfigDict(
         env_prefix="",

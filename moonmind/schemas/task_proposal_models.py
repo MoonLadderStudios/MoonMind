@@ -57,6 +57,9 @@ class TaskProposalModel(BaseModel):
     review_priority: TaskProposalReviewPriority = Field(
         TaskProposalReviewPriority.NORMAL, alias="reviewPriority"
     )
+    priority_override_reason: Optional[str] = Field(
+        None, alias="priorityOverrideReason"
+    )
     proposed_by_worker_id: Optional[str] = Field(None, alias="proposedByWorkerId")
     proposed_by_user_id: Optional[UUID] = Field(None, alias="proposedByUserId")
     promoted_job_id: Optional[UUID] = Field(None, alias="promotedJobId")
@@ -103,6 +106,7 @@ class TaskProposalCreateRequest(BaseModel):
     tags: Optional[list[str]] = Field(None, alias="tags")
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: CreateJobRequest = Field(..., alias="taskCreateRequest")
+    review_priority: Optional[str] = Field(None, alias="reviewPriority")
 
 
 class TaskProposalListResponse(BaseModel):

@@ -23,6 +23,9 @@ from moonmind.config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+_cached_current_user_dependency = None
+
+
 async def get_default_user_from_db(
     session: AsyncSession = Depends(get_async_session),
 ) -> User:
@@ -56,45 +59,50 @@ def get_current_user():
     `Depends(get_current_user())` in the routers.
     """
 
+    global _cached_current_user_dependency
     if settings.oidc.AUTH_PROVIDER != "disabled":
         # Keycloak / default auth modes – just use the fastapi-users dependency
         return current_active_user
 
-    async def _current_user_fallback():  # pragma: no cover – simple helper
-        if (
-            settings.spec_workflow.test_mode
-            or os.getenv("PYTEST_CURRENT_TEST")
-            or os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1"
-        ):
-            from types import SimpleNamespace as _SimpleNamespace
+    if _cached_current_user_dependency is None:
 
-            return _SimpleNamespace(id=None, email="stub@example.com")
+        async def _current_user_fallback():  # pragma: no cover – simple helper
+            if (
+                settings.spec_workflow.test_mode
+                or os.getenv("PYTEST_CURRENT_TEST")
+                or os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1"
+            ):
+                from types import SimpleNamespace as _SimpleNamespace
 
-        async def _load_default_user() -> User | None:
-            from api_service.db.base import get_async_session_context
+                return _SimpleNamespace(id=None, email="stub@example.com")
 
-            user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-            user_uuid = uuid.UUID(user_id_str)
-            async with get_async_session_context() as session:
-                return await session.get(User, user_uuid)
+            async def _load_default_user() -> User | None:
+                from api_service.db.base import get_async_session_context
 
-        try:
-            user_obj = await asyncio.wait_for(_load_default_user(), timeout=1.0)
-            if user_obj is not None:
-                return user_obj
-        except (Exception, asyncio.TimeoutError):
-            # Preserve fallback behaviour while surfacing lookup failures.
-            logger.warning(
-                "Failed to load default user in disabled auth mode; falling back to stub user.",
-                exc_info=True,
-            )
+                user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+                user_uuid = uuid.UUID(user_id_str)
+                async with get_async_session_context() as session:
+                    return await session.get(User, user_uuid)
 
-        # Fallback: lightweight stub with the minimal attributes used in code
-        from types import SimpleNamespace
+            try:
+                user_obj = await asyncio.wait_for(_load_default_user(), timeout=1.0)
+                if user_obj is not None:
+                    return user_obj
+            except (Exception, asyncio.TimeoutError):
+                # Preserve fallback behaviour while surfacing lookup failures.
+                logger.warning(
+                    "Failed to load default user in disabled auth mode; falling back to stub user.",
+                    exc_info=True,
+                )
 
-        return SimpleNamespace(id=None, email="stub@example.com")
+            # Fallback: lightweight stub with the minimal attributes used in code
+            from types import SimpleNamespace
 
-    return _current_user_fallback
+            return SimpleNamespace(id=None, email="stub@example.com")
+
+        _cached_current_user_dependency = _current_user_fallback
+
+    return _cached_current_user_dependency
 
 
 current_active_user_optional = fastapi_users.current_user(active=True, optional=True)

@@ -175,6 +175,16 @@ Producer best practice:
 - auto-suggest `prTitle` from task intent and send it when available
 - rely on system defaults only when explicit overrides are omitted
 
+### 4.4 Proposal Policy and Target Routing
+
+Tasks may optionally embed a `task.proposalPolicy` object so workers can steer follow-up proposals without changing global settings. The object accepts:
+
+- `targets`: ordered subset of `["project", "moonmind"]`. Omitted or empty lists fall back to `MOONMIND_PROPOSAL_TARGETS` (default `project`).
+- `maxItems`: per-target caps (e.g., `{ "project": 3, "moonmind": 2 }`). Invalid, missing, or non-positive values revert to documented defaults.
+- `minSeverityForMoonMind`: severity floor (`low`, `medium`, `high`, `critical`) that must be met before emitting MoonMind CI proposals. Defaults to `high` when unspecified.
+
+Global defaults surface through `TaskProposalSettings`/`SpecWorkflowSettings` (see `api_service/config.template.toml`) so API validation, worker routing, and dashboards all share the same knobs.
+
 ## 5. Claim and Eligibility Rules
 
 Workers claim jobs only when:

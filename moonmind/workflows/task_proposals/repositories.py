@@ -38,6 +38,7 @@ class TaskProposalRepository:
         dedup_key: str,
         dedup_hash: str,
         review_priority: models.TaskProposalReviewPriority,
+        priority_override_reason: str | None,
     ) -> models.TaskProposal:
         entity = models.TaskProposal(
             title=title,
@@ -54,6 +55,7 @@ class TaskProposalRepository:
             dedup_key=dedup_key,
             dedup_hash=dedup_hash,
             review_priority=review_priority,
+            priority_override_reason=priority_override_reason,
         )
         self._session.add(entity)
         await self._session.flush()
@@ -171,6 +173,7 @@ class TaskProposalRepository:
         user_id: UUID,
     ) -> models.TaskProposal:
         proposal.review_priority = priority
+        proposal.priority_override_reason = None
         proposal.decided_by_user_id = user_id
         await self._session.flush()
         return proposal

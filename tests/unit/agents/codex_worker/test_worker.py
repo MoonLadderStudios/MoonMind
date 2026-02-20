@@ -24,6 +24,7 @@ from moonmind.agents.codex_worker.worker import (
     PreparedTaskWorkspace,
     ResolvedTaskStep,
 )
+from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -416,7 +417,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
-    job = ClaimedJob(id=uuid4(), type="task", payload={})
+    job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
     proposals_path = context_dir / "task_proposals.json"
@@ -466,6 +467,169 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     assert first["origin"]["id"] == str(job.id)
     assert first["origin"]["metadata"]["workingBranch"] == "feature/proposal-tests"
     assert not proposals_path.exists()
+
+
+async def test_worker_emits_moonmind_proposals(tmp_path: Path, monkeypatch) -> None:
+    """Workers should emit MoonMind proposals when policy allows."""
+
+    monkeypatch.setattr(settings.spec_workflow, "proposal_targets_default", "both")
+    monkeypatch.setattr(settings.spec_workflow, "proposal_moonmind_severity_floor", "low")
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_task_proposals=True,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={"repository": "moon/org", "task": {"proposalPolicy": {"targets": ["project", "moonmind"]}}},
+    )
+    context_dir = tmp_path / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    proposals_path = context_dir / "task_proposals.json"
+    proposals_path.write_text(
+        json.dumps(
+            [
+                {
+                    "title": "Loop detected",
+                    "summary": "Detected loop",
+                    "category": "run_quality",
+                    "tags": ["loop_detected", "misc"],
+                    "signal": {"severity": "medium"},
+                    "origin": {
+                        "metadata": {
+                            "triggerRepo": "moon/org",
+                            "triggerJobId": str(uuid4()),
+                        }
+                    },
+                    "taskCreateRequest": {
+                        "type": "task",
+                        "priority": 0,
+                        "maxAttempts": 3,
+                        "payload": {"repository": "moon/org"},
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=context_dir,
+        publish_result_path=tmp_path / "publish-result.log",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="feature/proposal-tests",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+    await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+
+    assert len(queue.submitted_proposals) == 2
+    moonmind_repo = settings.task_proposals.moonmind_ci_repository
+    moonmind_payload = next(
+        proposal for proposal in queue.submitted_proposals if proposal["repository"] == moonmind_repo
+    )
+    assert moonmind_payload["category"] == "run_quality"
+    assert moonmind_payload["tags"] == ["loop_detected"]
+    assert moonmind_payload["taskCreateRequest"]["payload"]["repository"] == moonmind_repo
+    assert moonmind_payload["title"].startswith("[run_quality]")
+    assert "(tags: loop_detected)" in moonmind_payload["title"]
+
+
+async def test_worker_skips_moonmind_when_severity_below_floor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """MoonMind proposals should honor severity floor."""
+
+    monkeypatch.setattr(settings.spec_workflow, "proposal_targets_default", "moonmind")
+    monkeypatch.setattr(settings.spec_workflow, "proposal_moonmind_severity_floor", "high")
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_task_proposals=True,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={"repository": "moon/org"},
+    )
+    context_dir = tmp_path / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    proposals_path = context_dir / "task_proposals.json"
+    proposals_path.write_text(
+        json.dumps(
+            {
+                "title": "Retry noise",
+                "summary": "single retry",
+                "category": "run_quality",
+                "tags": ["retry"],
+                "signal": {"severity": "medium", "retries": 1},
+                "origin": {
+                    "metadata": {
+                        "triggerRepo": "moon/org",
+                        "triggerJobId": str(uuid4()),
+                    }
+                },
+                "taskCreateRequest": {
+                    "type": "task",
+                    "priority": 0,
+                    "maxAttempts": 3,
+                    "payload": {"repository": "moon/org"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=context_dir,
+        publish_result_path=tmp_path / "publish-result.log",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="feature/proposal-tests",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+    await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+
+    assert queue.submitted_proposals == []
 
 
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
