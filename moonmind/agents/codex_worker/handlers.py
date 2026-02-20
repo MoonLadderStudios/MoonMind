@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -14,6 +15,10 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from moonmind.agents.codex_worker.utils import verify_cli_is_executable
+from moonmind.rag.context_pack import ContextPack
+from moonmind.rag.service import ContextRetrievalService
+from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.utils.env_bool import env_to_bool
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -56,6 +61,15 @@ class CommandResult:
 
 
 OutputChunkCallback = Callable[[str, str | None], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class PromptContextResolution:
+    """Resolved prompt context augmentation payload for a codex_exec instruction."""
+
+    instruction: str
+    items_count: int = 0
+    artifact: ArtifactUpload | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,8 +286,20 @@ class CodexExecHandler:
                 output_chunk_callback=output_chunk_callback,
             )
 
+            context_resolution = await self._resolve_prompt_context(
+                job_id=job_id,
+                payload=parsed,
+                artifacts_dir=artifacts_dir,
+                log_path=log_path,
+            )
+            if context_resolution.artifact is not None:
+                artifacts.append(context_resolution.artifact)
+
             await self._run_command(
-                self._build_codex_exec_command(parsed),
+                self._build_codex_exec_command(
+                    parsed,
+                    instruction_override=context_resolution.instruction,
+                ),
                 cwd=repo_dir,
                 log_path=log_path,
                 cancel_event=cancel_event,
@@ -314,6 +340,10 @@ class CodexExecHandler:
                 output_chunk_callback=output_chunk_callback,
             )
             summary = "codex_exec completed"
+            if context_resolution.items_count > 0:
+                summary = (
+                    f"{summary}; rag_context_items={context_resolution.items_count}"
+                )
             if publish_note:
                 summary = f"{summary}; {publish_note}"
 
@@ -464,6 +494,188 @@ class CodexExecHandler:
             )
 
         return repo_dir
+
+    async def _resolve_prompt_context(
+        self,
+        *,
+        job_id: UUID,
+        payload: CodexExecPayload,
+        artifacts_dir: Path,
+        log_path: Path,
+    ) -> PromptContextResolution:
+        if not self._rag_auto_context_enabled():
+            return PromptContextResolution(instruction=payload.instruction)
+
+        query = payload.instruction.strip()
+        if not query:
+            return PromptContextResolution(instruction=payload.instruction)
+
+        try:
+            pack = await asyncio.to_thread(
+                self._retrieve_context_pack,
+                job_id=job_id,
+                payload=payload,
+            )
+        except Exception as exc:
+            self._append_log(
+                log_path,
+                self._redact_text(f"[rag] retrieval skipped: {exc}"),
+            )
+            return PromptContextResolution(instruction=payload.instruction)
+
+        if pack is None:
+            return PromptContextResolution(instruction=payload.instruction)
+
+        artifact = self._persist_context_pack(
+            job_id=job_id,
+            payload=payload,
+            pack=pack,
+            artifacts_dir=artifacts_dir,
+        )
+        items_count = len(pack.items)
+        self._append_log(
+            log_path,
+            f"[rag] retrieval completed via {pack.transport}; items={items_count}",
+        )
+        if items_count < 1:
+            return PromptContextResolution(
+                instruction=payload.instruction,
+                artifact=artifact,
+            )
+        return PromptContextResolution(
+            instruction=self._compose_instruction_with_context(
+                context_text=pack.context_text,
+                instruction=payload.instruction,
+            ),
+            items_count=items_count,
+            artifact=artifact,
+        )
+
+    def _retrieve_context_pack(
+        self,
+        *,
+        job_id: UUID,
+        payload: CodexExecPayload,
+    ) -> ContextPack | None:
+        settings = RagRuntimeSettings.from_env(os.environ)
+        if not settings.rag_enabled:
+            return None
+        if not settings.job_id:
+            settings.job_id = str(job_id)
+        if not settings.run_id:
+            settings.run_id = str(job_id)
+
+        transport = settings.resolved_transport(None)
+        if transport == "direct" and not settings.qdrant_enabled:
+            return None
+
+        filters = settings.as_filter_metadata()
+        repo_filter = self._repository_filter_value(payload.repository)
+        if repo_filter:
+            filters.setdefault("repo", repo_filter)
+        filters.setdefault("repository", payload.repository)
+
+        service = ContextRetrievalService(settings=settings, env=os.environ)
+        return service.retrieve(
+            query=payload.instruction,
+            filters=filters,
+            top_k=settings.similarity_top_k,
+            overlay_policy=self._resolve_rag_overlay_policy(),
+            budgets=self._resolve_rag_budgets(),
+            transport=transport,
+        )
+
+    def _persist_context_pack(
+        self,
+        *,
+        job_id: UUID,
+        payload: CodexExecPayload,
+        pack: ContextPack,
+        artifacts_dir: Path,
+    ) -> ArtifactUpload:
+        context_dir = artifacts_dir / "context"
+        context_dir.mkdir(parents=True, exist_ok=True)
+        digest_input = f"{job_id}:{payload.repository}:{payload.instruction}".encode(
+            "utf-8", errors="ignore"
+        )
+        digest = hashlib.sha256(digest_input).hexdigest()[:12]
+        file_name = f"rag-context-{digest}.json"
+        path = context_dir / file_name
+        path.write_text(pack.to_json() + "\n", encoding="utf-8")
+        return ArtifactUpload(
+            path=path,
+            name=f"context/{file_name}",
+            content_type="application/json",
+            required=False,
+        )
+
+    @staticmethod
+    def _repository_filter_value(repository: str) -> str:
+        value = str(repository or "").strip()
+        if not value:
+            return ""
+        if value.startswith(("http://", "https://")):
+            parsed = urlsplit(value)
+            if parsed.path:
+                value = parsed.path.strip("/")
+        elif value.startswith("git@"):
+            _prefix, _sep, tail = value.partition(":")
+            if tail:
+                value = tail.strip()
+        if value.endswith(".git"):
+            value = value[:-4]
+        return value.strip("/")
+
+    @staticmethod
+    def _resolve_rag_overlay_policy() -> str:
+        policy = (
+            str(
+                os.environ.get(
+                    "MOONMIND_RAG_OVERLAY_POLICY",
+                    os.environ.get("RAG_OVERLAY_POLICY", "include"),
+                )
+            )
+            .strip()
+            .lower()
+        )
+        if policy in {"include", "skip"}:
+            return policy
+        return "include"
+
+    @staticmethod
+    def _resolve_rag_budgets() -> dict[str, int]:
+        budgets: dict[str, int] = {}
+        tokens_raw = str(os.environ.get("RAG_QUERY_TOKEN_BUDGET", "")).strip()
+        latency_raw = str(os.environ.get("RAG_LATENCY_BUDGET_MS", "")).strip()
+        if tokens_raw:
+            with suppress(ValueError):
+                budgets["tokens"] = int(tokens_raw)
+        if latency_raw:
+            with suppress(ValueError):
+                budgets["latency_ms"] = int(latency_raw)
+        return budgets
+
+    @staticmethod
+    def _compose_instruction_with_context(
+        *,
+        context_text: str,
+        instruction: str,
+    ) -> str:
+        return (
+            "RETRIEVED CONTEXT (MoonMind RAG):\n"
+            f"{context_text}\n\n"
+            "Use retrieved context when relevant. If retrieved text conflicts with "
+            "the current repository state, trust the current repository files.\n\n"
+            "TASK INSTRUCTION:\n"
+            f"{instruction}"
+        )
+
+    @staticmethod
+    def _rag_auto_context_enabled() -> bool:
+        return env_to_bool(
+            os.environ.get("MOONMIND_RAG_AUTO_CONTEXT", "true"),
+            default=True,
+        )
 
     async def _maybe_publish(
         self,
@@ -774,7 +986,12 @@ class CodexExecHandler:
             )
         return result
 
-    def _build_codex_exec_command(self, payload: CodexExecPayload) -> list[str]:
+    def _build_codex_exec_command(
+        self,
+        payload: CodexExecPayload,
+        *,
+        instruction_override: str | None = None,
+    ) -> list[str]:
         """Build codex execution command with task override -> worker defaults."""
 
         resolved_model = payload.codex_model or self._default_codex_model
@@ -796,7 +1013,7 @@ class CodexExecHandler:
                     f'model_reasoning_effort="{escaped_effort}"',
                 ]
             )
-        command.append(payload.instruction)
+        command.append(instruction_override or payload.instruction)
         return command
 
     @staticmethod

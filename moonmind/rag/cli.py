@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.overlay import upsert_overlay_files
 from moonmind.rag.overlay_cleanup import clean_overlay_run
 from moonmind.rag.service import ContextRetrievalService
@@ -57,7 +58,7 @@ def run_search(
     overlay_policy: str,
     transport: str | None,
     output_file: Path | None,
-) -> str:
+) -> ContextPack:
     if not query.strip():
         raise CliError("Query text cannot be empty")
     user_filters = parse_filters(filter_args)
@@ -78,7 +79,7 @@ def run_search(
     if output_file:
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(pack.to_json(), encoding="utf-8")
-    return pack.context_text
+    return pack
 
 
 def run_overlay_upsert(

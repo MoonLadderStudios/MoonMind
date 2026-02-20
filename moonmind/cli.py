@@ -49,9 +49,14 @@ def rag_search(
         "--output-file",
         help="Optional path to write structured context pack JSON.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print full ContextPack JSON to stdout instead of markdown context text.",
+    ),
 ) -> None:
     try:
-        context_text = rag_cli.run_search(
+        pack = rag_cli.run_search(
             query=query,
             filter_args=filter_args,
             budget_args=budget_args,
@@ -63,7 +68,7 @@ def rag_search(
     except rag_cli.CliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
-    typer.echo(context_text)
+    typer.echo(pack.to_json() if json_output else pack.context_text)
 
 
 @rag_app.command("overlay-upsert", help="Embed local files into a run-scoped overlay collection.")

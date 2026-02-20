@@ -64,9 +64,14 @@ This document captures how Codex CLI workers perform retrieval-augmented reasoni
   - `--filters repo=my-repo tenant=moonmind`
   - `--top-k 12`
   - `--overlay include` (see overlay section below)
-- Outputs `context_text` to stdout and writes structured JSON to `--output-file <path>` for downstream logging.
+- Outputs `context_text` to stdout, supports `--json` for full `ContextPack` output, and writes structured JSON to `--output-file <path>` for downstream logging.
 - Reserve stderr for errors/warnings so machine-readable output remains stable.
 - Errors include actionable hints (e.g., collection dimension mismatch, missing credential) so workers can fix setup fast.
+
+Worker automation hook:
+- `CodexExecHandler` now performs retrieval before `codex exec` and prepends `context_text` to the instruction when results are found.
+- Auto-injection defaults to enabled and can be toggled with `MOONMIND_RAG_AUTO_CONTEXT=true|false`.
+- Per-run context packs are saved as worker artifacts under `context/rag-context-*.json`.
 
 ## Making the Capability Obvious to Workers (Target State)
 

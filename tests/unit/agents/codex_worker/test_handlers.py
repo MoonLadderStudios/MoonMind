@@ -17,6 +17,7 @@ from moonmind.agents.codex_worker.handlers import (
     CommandCancelledError,
     CommandResult,
 )
+from moonmind.rag.context_pack import ContextItem, build_context_pack
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -33,6 +34,7 @@ def _clear_codex_runtime_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "MODEL_REASONING_EFFORT",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "0")
 
 
 async def test_codex_exec_payload_requires_repository_and_instruction() -> None:
@@ -513,6 +515,112 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     assert any(item.name == "logs/codex_exec.log" for item in result.artifacts)
     assert any(item.name == "patches/changes.patch" for item in result.artifacts)
 
+
+async def test_handler_injects_retrieved_context_when_available(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Retrieved context should be prepended to codex instructions."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    calls: list[list[str]] = []
+
+    async def fake_run_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        calls.append(list(command))
+        if command[:2] == ["git", "diff"]:
+            return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    pack = build_context_pack(
+        items=[ContextItem(score=0.8, source="src/rag.py", text="retrieved snippet")],
+        filters={"repo": "MoonLadderStudios/MoonMind"},
+        budgets={},
+        usage={"tokens": 128, "latency_ms": 13},
+        transport="direct",
+        telemetry_id="ctx-test",
+        max_chars=1200,
+    )
+
+    handler._run_command = fake_run_command  # type: ignore[method-assign]
+    monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "1")
+    monkeypatch.setattr(
+        handler,
+        "_retrieve_context_pack",
+        lambda *, job_id, payload: pack,
+    )
+
+    result = await handler.handle(
+        job_id=uuid4(),
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "publish": {"mode": "none"},
+        },
+    )
+
+    codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
+    assert "RETRIEVED CONTEXT (MoonMind RAG):" in codex_cmd[-1]
+    assert "Implement task" in codex_cmd[-1]
+    assert any(item.name.startswith("context/rag-context-") for item in result.artifacts)
+    assert "rag_context_items=1" in (result.summary or "")
+
+
+async def test_handler_falls_back_when_retrieval_raises(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Retrieval failures should not block codex execution."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    calls: list[list[str]] = []
+
+    async def fake_run_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        calls.append(list(command))
+        if command[:2] == ["git", "diff"]:
+            return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    def raise_context(*, job_id, payload):
+        _ = job_id, payload
+        raise RuntimeError("qdrant unavailable")
+
+    handler._run_command = fake_run_command  # type: ignore[method-assign]
+    monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "1")
+    monkeypatch.setattr(handler, "_retrieve_context_pack", raise_context)
+
+    result = await handler.handle(
+        job_id=uuid4(),
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "publish": {"mode": "none"},
+        },
+    )
+
+    codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
+    assert codex_cmd[-1] == "Implement task"
+    assert result.succeeded is True
+    assert "rag_context_items=" not in (result.summary or "")
 
 async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> None:
     """Task payload overrides should map to codex CLI model and effort flags."""

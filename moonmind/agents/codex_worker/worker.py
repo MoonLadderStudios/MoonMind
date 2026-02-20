@@ -35,6 +35,7 @@ from moonmind.agents.codex_worker.secret_refs import (
     load_vault_token,
 )
 from moonmind.config.settings import settings
+from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
@@ -1583,7 +1584,7 @@ class CodexWorker:
             selected_skill = "multiple"
             execution_path = "direct_fallback"
 
-        return {
+        metadata: dict[str, Any] = {
             "selectedSkill": selected_skill,
             "selectedSkills": selected_skills,
             "stepCount": len(resolved_steps),
@@ -1593,6 +1594,32 @@ class CodexWorker:
             "shadowModeRequested": False,
             "runtimeModel": selected_model,
             "runtimeEffort": selected_effort,
+        }
+        metadata.update(self._rag_capability_metadata())
+        return metadata
+
+    @staticmethod
+    def _rag_capability_metadata() -> dict[str, Any]:
+        """Describe worker retrieval capability for queue events and task context."""
+
+        try:
+            settings = RagRuntimeSettings.from_env()
+        except Exception:
+            return {
+                "ragAvailable": False,
+                "ragMode": "unavailable",
+            }
+        if not settings.rag_enabled:
+            return {
+                "ragAvailable": False,
+                "ragMode": "disabled",
+            }
+        transport = settings.resolved_transport(None)
+        mode = "direct-qdrant" if transport == "direct" else "retrieval-gateway"
+        return {
+            "ragAvailable": True,
+            "ragMode": mode,
+            "ragCommand": "moonmind rag search --query '<query>' --output-file <path>",
         }
 
     @staticmethod
@@ -1880,6 +1907,7 @@ class CodexWorker:
                     "skillsActive": str(skills_active_path),
                     "artifacts": str(artifacts_dir),
                 },
+                "rag": self._rag_capability_metadata(),
                 "timestamp": datetime.now(UTC).isoformat(),
             }
             if materialized_skill_payload is not None:

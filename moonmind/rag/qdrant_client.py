@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 from uuid import uuid4
 
@@ -120,7 +121,7 @@ class RagQdrantClient:
                 overlay_points = []
         merge = self._merge_results(overlay_points, canonical, trust_overrides)
         latency_ms = (time.perf_counter() - start) * 1000
-        return SearchResult(items=merge, latency_ms=latency_ms)
+        return SearchResult(items=merge[:top_k], latency_ms=latency_ms)
 
     def _merge_results(
         self,
@@ -165,9 +166,28 @@ class RagQdrantClient:
 
         ordered: List[ContextItem] = []
         seen: set[tuple[str, Optional[str]]] = set()
+        now_utc = datetime.now(timezone.utc)
+
+        def _is_expired(payload: MutableMapping[str, Any]) -> bool:
+            raw_expires = payload.get("expires_at")
+            if not isinstance(raw_expires, str) or not raw_expires.strip():
+                return False
+            normalized = raw_expires.strip()
+            if normalized.endswith("Z"):
+                normalized = normalized[:-1] + "+00:00"
+            try:
+                expires_at = datetime.fromisoformat(normalized)
+            except ValueError:
+                return False
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            return expires_at <= now_utc
 
         def append(points: Iterable[qmodels.ScoredPoint], trust: str) -> None:
             for point in points:
+                payload = point.payload or {}
+                if trust == "workspace_overlay" and _is_expired(payload):
+                    continue
                 item = to_item(point, trust)
                 key = (item.source, item.chunk_hash)
                 if key in seen:
