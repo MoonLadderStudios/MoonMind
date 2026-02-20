@@ -2,7 +2,6 @@
 
 from typing import Sequence, Union
 
-
 revision: str = "e1c2d0f1a9f7"
 down_revision: Union[str, Sequence[str], None] = (
     "202602200001",
@@ -18,4 +17,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """No-op merge rollback is not supported for this migration."""
-
