@@ -1356,11 +1356,12 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
         redaction_values=(),
         timeout_seconds=None,
     ):
-        _ = timeout_seconds
+        _ = (cwd, log_path, check, env, redaction_values)
         recorded_commands.append(tuple(str(item) for item in command))
         if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
-            await asyncio.sleep(1.2)
-            return CommandResult(tuple(command), 0, "", "")
+            raise asyncio.TimeoutError(
+                f"command timed out after {float(timeout_seconds or 0):g}s"
+            )
         return CommandResult(tuple(command), 0, "", "")
 
     monkeypatch.setattr(worker, "_run_stage_command", fake_run_stage_command)
@@ -1931,6 +1932,21 @@ async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) ->
         CodexWorkerConfig.from_env()
 
 
+async def test_config_from_env_rejects_non_integer_stage_command_timeout(
+    monkeypatch,
+) -> None:
+    """Stage command timeout env must be an integer for actionable startup errors."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "abc")
+
+    with pytest.raises(
+        ValueError,
+        match="MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer",
+    ):
+        CodexWorkerConfig.from_env()
+
+
 async def test_config_from_env_runtime_mode_controls_default_capabilities(
     monkeypatch,
 ) -> None:
@@ -2456,7 +2472,7 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(handler, "_run_command", _slow_run_command)
 
     log_path = tmp_path / "execute.log"
-    with pytest.raises(TimeoutError, match=r"command timed out after 0.01s"):
+    with pytest.raises(asyncio.TimeoutError, match=r"command timed out after 0.01s"):
         await worker._run_stage_command(
             ["git", "status"],
             cwd=tmp_path,
