@@ -1126,9 +1126,7 @@ class AppSettings(BaseSettings):
         if not self.spec_workflow.codex_queue:
             self.spec_workflow.codex_queue = self.celery.default_queue
         if self.worker_enable_task_proposals is not None:
-            self.spec_workflow.enable_task_proposals = (
-                self.worker_enable_task_proposals
-            )
+            self.spec_workflow.enable_task_proposals = self.worker_enable_task_proposals
         if self.worker_stage_command_timeout_seconds is not None:
             self.spec_workflow.stage_command_timeout_seconds = (
                 self.worker_stage_command_timeout_seconds

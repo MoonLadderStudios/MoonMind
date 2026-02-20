@@ -397,9 +397,7 @@ class TestSpecWorkflowSettings:
         assert settings.spec_workflow.stage_command_timeout_seconds == 1800
 
         monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
-        monkeypatch.delenv(
-            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False
-        )
+        monkeypatch.delenv("SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
 
     def test_default_skill_is_added_to_allowlist(self):
         """Allowlist mode should include default skill in allowlist."""
