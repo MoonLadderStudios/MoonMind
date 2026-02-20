@@ -13,8 +13,8 @@
 - Added seed presets under `api_service/data/task_step_templates/*.yaml`.
 
 ### Rollout Notes
-- Feature flag: `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` (legacy fallback: `TASK_TEMPLATE_CATALOG=1`).
-- Default remains disabled; enable only after applying migration `202602180002`.
+- Disable flag: `FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG=1` (legacy fallback: `DISABLE_TASK_TEMPLATE_CATALOG=1`).
+- Default is enabled; set the disable flag only when a rollback is required.
 
 ## 2026-02-18 – Queue Live Logs + SSE
 

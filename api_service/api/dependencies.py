@@ -78,7 +78,7 @@ def get_vector_index(request: Request) -> Optional[VectorStoreIndex]:
 def ensure_task_template_catalog_enabled() -> None:
     """Raise a 404 when the task template catalog is disabled."""
 
-    if settings.feature_flags.task_template_catalog:
+    if settings.feature_flags.task_template_catalog_enabled:
         return
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
