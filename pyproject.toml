@@ -54,6 +54,8 @@ datasets = "~=3.6.0"
 pillow = ">=12.1.1,<13.0.0"
 pytesseract = "~=0.3.13"
 requests = "~=2.32.4"
+# Temporary pin until a patched NLTK release is published for CVE/Zip Slip in downloader.
+nltk = { git = "https://github.com/nltk/nltk.git", rev = "1056b323af6462455571302e766b67cf300aea18" }
 PyYAML = ">=6.0.2"
 asyncpg = "~=0.31.0"
 SQLAlchemy = "~=2.0.46"
