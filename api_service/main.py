@@ -20,8 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
+from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
-    retrieval_gateway as retrieval_router,
     summarization as summarization_router,  # Added import for summarization router
 )
 from api_service.api.routers.agent_queue import router as agent_queue_router

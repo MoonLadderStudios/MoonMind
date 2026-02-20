@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Iterable, List, MutableMapping, Sequence
 
 from moonmind.rag.embedding import EmbeddingClient
-from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.rag.qdrant_client import RagQdrantClient
+from moonmind.rag.settings import RagRuntimeSettings
 
 
 @dataclass(slots=True)
@@ -36,7 +36,12 @@ def chunk_file(path: Path, *, chunk_chars: int, overlap: int) -> Iterable[Overla
     results: list[OverlayChunk] = []
     while cursor < end:
         chunk_end = min(end, cursor + chunk_chars)
-        chunk = OverlayChunk(path=path, offset_start=cursor, offset_end=chunk_end, text=text[cursor:chunk_end])
+        chunk = OverlayChunk(
+            path=path,
+            offset_start=cursor,
+            offset_end=chunk_end,
+            text=text[cursor:chunk_end],
+        )
         results.append(chunk)
         if chunk_end >= end:
             break
@@ -54,7 +59,9 @@ def upsert_overlay_files(
 ) -> int:
     collection_name = settings.overlay_collection_name(run_id)
     qdrant.ensure_overlay_collection(collection_name)
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=settings.overlay_ttl_hours)).isoformat()
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(hours=settings.overlay_ttl_hours)
+    ).isoformat()
     total_chunks = 0
     for file_path in files:
         chunks = list(

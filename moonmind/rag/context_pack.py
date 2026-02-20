@@ -63,7 +63,9 @@ def build_context_text(items: Iterable[ContextItem], *, max_chars: int) -> str:
     remaining = max_chars
     for idx, item in enumerate(items, start=1):
         snippet = _normalize_whitespace(item.text)
-        header = f"{idx}. {item.source} (score: {item.score:.3f}, trust: {item.trust_class})"
+        header = (
+            f"{idx}. {item.source} (score: {item.score:.3f}, trust: {item.trust_class})"
+        )
         chunk = f"{header}\n{textwrap.indent(snippet, prefix='    ')}"
         if len(chunk) > remaining and idx > 1:
             body.append("[Context truncated]")

@@ -13,7 +13,9 @@ from moonmind.utils.env_bool import env_to_bool
 _CANONICAL_BOOL_TRUE = {"1", "true", "yes", "on"}
 
 
-def _get_env(source: Mapping[str, str] | None, key: str, default: str | None = None) -> str | None:
+def _get_env(
+    source: Mapping[str, str] | None, key: str, default: str | None = None
+) -> str | None:
     if source and key in source:
         return str(source[key])
     return os.getenv(key, default)
@@ -53,11 +55,19 @@ class RagRuntimeSettings:
         qdrant_port = int(_get_env(env, "QDRANT_PORT", "6333") or 6333)
         qdrant_api_key = _get_env(env, "QDRANT_API_KEY") or None
         vector_collection = (
-            _get_env(env, "VECTOR_STORE_COLLECTION_NAME", app_settings.vector_store_collection_name)
+            _get_env(
+                env,
+                "VECTOR_STORE_COLLECTION_NAME",
+                app_settings.vector_store_collection_name,
+            )
             or app_settings.vector_store_collection_name
         )
         embedding_provider = (
-            _get_env(env, "DEFAULT_EMBEDDING_PROVIDER", app_settings.default_embedding_provider)
+            _get_env(
+                env,
+                "DEFAULT_EMBEDDING_PROVIDER",
+                app_settings.default_embedding_provider,
+            )
             or app_settings.default_embedding_provider
         ).lower()
         if embedding_provider == "google":
@@ -73,9 +83,11 @@ class RagRuntimeSettings:
         embedding_model = _get_env(env, model_key, default_model)
         embedding_dimensions_raw = _get_env(
             env,
-            "GOOGLE_EMBEDDING_DIMENSIONS"
-            if embedding_provider == "google"
-            else "OPENAI_EMBEDDING_DIMENSIONS",
+            (
+                "GOOGLE_EMBEDDING_DIMENSIONS"
+                if embedding_provider == "google"
+                else "OPENAI_EMBEDDING_DIMENSIONS"
+            ),
         )
         embedding_dimensions = None
         if embedding_dimensions_raw:
@@ -85,17 +97,29 @@ class RagRuntimeSettings:
                 embedding_dimensions = None
 
         similarity_top_k = int(
-            _get_env(env, "RAG_SIMILARITY_TOP_K", str(app_settings.rag.similarity_top_k))
+            _get_env(
+                env, "RAG_SIMILARITY_TOP_K", str(app_settings.rag.similarity_top_k)
+            )
             or app_settings.rag.similarity_top_k
         )
         max_context_chars = int(
-            _get_env(env, "RAG_MAX_CONTEXT_LENGTH_CHARS", str(app_settings.rag.max_context_length_chars))
+            _get_env(
+                env,
+                "RAG_MAX_CONTEXT_LENGTH_CHARS",
+                str(app_settings.rag.max_context_length_chars),
+            )
             or app_settings.rag.max_context_length_chars
         )
-        overlay_mode = (_get_env(env, "RAG_OVERLAY_MODE", "collection") or "collection").lower()
+        overlay_mode = (
+            _get_env(env, "RAG_OVERLAY_MODE", "collection") or "collection"
+        ).lower()
         overlay_ttl_hours = int(_get_env(env, "RAG_OVERLAY_TTL_HOURS", "24") or 24)
-        overlay_chunk_chars = int(_get_env(env, "RAG_OVERLAY_CHARS_PER_CHUNK", "1200") or 1200)
-        overlay_chunk_overlap = int(_get_env(env, "RAG_OVERLAY_CHUNK_OVERLAP", "120") or 120)
+        overlay_chunk_chars = int(
+            _get_env(env, "RAG_OVERLAY_CHARS_PER_CHUNK", "1200") or 1200
+        )
+        overlay_chunk_overlap = int(
+            _get_env(env, "RAG_OVERLAY_CHUNK_OVERLAP", "120") or 120
+        )
         retrieval_gateway_url = _get_env(env, "MOONMIND_RETRIEVAL_URL") or None
         statsd_host = _get_env(env, "STATSD_HOST") or None
         statsd_port_raw = _get_env(env, "STATSD_PORT")
@@ -103,7 +127,9 @@ class RagRuntimeSettings:
         job_id = _get_env(env, "JOB_ID") or _get_env(env, "MOONMIND_JOB_ID")
         run_id = _get_env(env, "RUN_ID") or _get_env(env, "MOONMIND_RUN_ID")
         rag_enabled = env_to_bool(_get_env(env, "RAG_ENABLED", "true"), default=True)
-        qdrant_enabled = env_to_bool(_get_env(env, "QDRANT_ENABLED", "true"), default=True)
+        qdrant_enabled = env_to_bool(
+            _get_env(env, "QDRANT_ENABLED", "true"), default=True
+        )
 
         return cls(
             qdrant_url=qdrant_url,

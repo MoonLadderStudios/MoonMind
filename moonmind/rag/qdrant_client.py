@@ -50,7 +50,9 @@ class RagQdrantClient:
         if url:
             self._client = QdrantClient(url=url, api_key=api_key, timeout=10)
         else:
-            self._client = QdrantClient(host=host, port=port, api_key=api_key, timeout=10)
+            self._client = QdrantClient(
+                host=host, port=port, api_key=api_key, timeout=10
+            )
 
     @property
     def client(self) -> QdrantClient:
@@ -63,7 +65,9 @@ class RagQdrantClient:
         try:
             info = self._client.get_collection(target)
         except UnexpectedResponse as exc:
-            raise RuntimeError(f"Qdrant collection '{target}' is not available: {exc}") from exc
+            raise RuntimeError(
+                f"Qdrant collection '{target}' is not available: {exc}"
+            ) from exc
         size = info.config.params.vectors.size
         if size != self._embedding_dimensions:
             raise RuntimeError(
@@ -212,8 +216,12 @@ class RagQdrantClient:
             return
         except UnexpectedResponse:
             if not self._embedding_dimensions:
-                raise RuntimeError("Cannot create overlay collection: unknown vector size")
-            self._create_collection(collection_name=collection_name, vector_size=self._embedding_dimensions)
+                raise RuntimeError(
+                    "Cannot create overlay collection: unknown vector size"
+                )
+            self._create_collection(
+                collection_name=collection_name, vector_size=self._embedding_dimensions
+            )
 
     def upsert_overlay_vectors(
         self,
@@ -244,7 +252,9 @@ class RagQdrantClient:
         try:
             info = self._client.get_collection(collection_name)
         except UnexpectedResponse:
-            self._create_collection(collection_name=collection_name, vector_size=expected_size)
+            self._create_collection(
+                collection_name=collection_name, vector_size=expected_size
+            )
             return "created"
 
         current_size = info.config.params.vectors.size
@@ -258,7 +268,9 @@ class RagQdrantClient:
             )
 
         self._client.delete_collection(collection_name=collection_name)
-        self._create_collection(collection_name=collection_name, vector_size=expected_size)
+        self._create_collection(
+            collection_name=collection_name, vector_size=expected_size
+        )
         return "recreated"
 
     def _create_collection(self, *, collection_name: str, vector_size: int) -> None:
@@ -266,4 +278,6 @@ class RagQdrantClient:
             size=vector_size,
             distance=qmodels.Distance.COSINE,
         )
-        self._client.create_collection(collection_name=collection_name, vectors_config=vectors)
+        self._client.create_collection(
+            collection_name=collection_name, vectors_config=vectors
+        )

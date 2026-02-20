@@ -20,7 +20,9 @@ def ensure_rag_ready(settings: RagRuntimeSettings) -> None:
         _verify_gateway(settings.retrieval_gateway_url)
         return
     if not settings.qdrant_enabled:
-        raise GuardrailError("Qdrant access disabled while no RetrievalGateway URL configured")
+        raise GuardrailError(
+            "Qdrant access disabled while no RetrievalGateway URL configured"
+        )
     client = RagQdrantClient(
         host=settings.qdrant_host,
         port=settings.qdrant_port,

@@ -121,7 +121,9 @@ def run_overlay_clean(*, run_id: str | None) -> None:
     )
 
 
-def _build_budget_config(cli_budgets: Mapping[str, int] | None = None) -> dict[str, int]:
+def _build_budget_config(
+    cli_budgets: Mapping[str, int] | None = None
+) -> dict[str, int]:
     budget: dict[str, int] = dict(cli_budgets or {})
     tokens_raw = os.getenv("RAG_QUERY_TOKEN_BUDGET")
     latency_raw = os.getenv("RAG_LATENCY_BUDGET_MS")
@@ -149,7 +151,10 @@ def run_sync_embedding(*, collection: str | None, force: bool) -> tuple[str, int
     target_collection = collection or settings.vector_collection
     service = ContextRetrievalService(settings=settings, env=os.environ)
     try:
-        target_dimension = settings.embedding_dimensions or service.embedding_client.embedding_dimension()
+        target_dimension = (
+            settings.embedding_dimensions
+            or service.embedding_client.embedding_dimension()
+        )
     except Exception as exc:  # pragma: no cover - propagates provider errors
         raise CliError(f"Failed to determine embedding dimension: {exc}") from exc
     if not target_dimension or target_dimension <= 0:

@@ -14,5 +14,7 @@ def test_runtime_settings_from_env_overrides_defaults():
     settings = RagRuntimeSettings.from_env(env)
     assert settings.qdrant_host == "localhost"
     assert settings.vector_collection == "repo-main"
-    assert settings.overlay_collection_name("run-123").startswith("repo-main__overlay__run-123")
+    assert settings.overlay_collection_name("run-123").startswith(
+        "repo-main__overlay__run-123"
+    )
     assert settings.resolved_transport(None) == "direct"

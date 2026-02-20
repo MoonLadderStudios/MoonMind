@@ -571,7 +571,9 @@ async def test_handler_injects_retrieved_context_when_available(
     codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
     assert "RETRIEVED CONTEXT (MoonMind RAG):" in codex_cmd[-1]
     assert "Implement task" in codex_cmd[-1]
-    assert any(item.name.startswith("context/rag-context-") for item in result.artifacts)
+    assert any(
+        item.name.startswith("context/rag-context-") for item in result.artifacts
+    )
     assert "rag_context_items=1" in (result.summary or "")
 
 
@@ -621,6 +623,7 @@ async def test_handler_falls_back_when_retrieval_raises(
     assert codex_cmd[-1] == "Implement task"
     assert result.succeeded is True
     assert "rag_context_items=" not in (result.summary or "")
+
 
 async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> None:
     """Task payload overrides should map to codex CLI model and effort flags."""

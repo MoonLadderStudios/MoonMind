@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from moonmind.workflows.orchestrator.metrics import get_metrics_client
 

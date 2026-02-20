@@ -18,7 +18,9 @@ app.add_typer(rag_app, name="rag")
 app.add_typer(worker_app, name="worker")
 
 
-@rag_app.command("search", help="Embed a query, query Qdrant, and print a context block.")
+@rag_app.command(
+    "search", help="Embed a query, query Qdrant, and print a context block."
+)
 def rag_search(
     query: str = typer.Option(..., "--query", help="Query text to embed and search."),
     filter_args: List[str] = typer.Option(
@@ -31,7 +33,9 @@ def rag_search(
         "--budget",
         help="Budget ceilings in key=value form (repeatable).",
     ),
-    top_k: Optional[int] = typer.Option(None, "--top-k", help="Override similarity top-k."),
+    top_k: Optional[int] = typer.Option(
+        None, "--top-k", help="Override similarity top-k."
+    ),
     overlay: str = typer.Option(
         "include",
         "--overlay",
@@ -71,7 +75,9 @@ def rag_search(
     typer.echo(pack.to_json() if json_output else pack.context_text)
 
 
-@rag_app.command("overlay-upsert", help="Embed local files into a run-scoped overlay collection.")
+@rag_app.command(
+    "overlay-upsert", help="Embed local files into a run-scoped overlay collection."
+)
 def overlay_upsert(
     paths: List[Path] = typer.Argument(..., exists=True, help="Files to embed."),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Override run ID."),

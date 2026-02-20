@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional
 
 import google.generativeai as genai
 from openai import OpenAI
@@ -68,13 +68,17 @@ class EmbeddingClient:
             return [float(value) for value in result]
         if self._provider == "openai":
             try:
-                result = self._openai.embeddings.create(model=self._config.model, input=text)
+                result = self._openai.embeddings.create(
+                    model=self._config.model, input=text
+                )
             except Exception as exc:  # pragma: no cover
                 raise EmbeddingError(f"OpenAI embedding failed: {exc}") from exc
             data = result.data[0].embedding
             return list(data)
         if self._provider == "ollama":
-            response = self._ollama.embeddings(model=self._config.ollama_model or self._config.model, prompt=text)
+            response = self._ollama.embeddings(
+                model=self._config.ollama_model or self._config.model, prompt=text
+            )
             return list(response["embedding"])
         raise EmbeddingError(f"Unsupported provider {self._provider}")
 

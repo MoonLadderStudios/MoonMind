@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any, Dict, Mapping, MutableMapping, Optional
+from typing import Any, Mapping
 
 import httpx
 
 from moonmind.rag.context_pack import ContextItem, ContextPack, build_context_pack
-from moonmind.rag.embedding import EmbeddingClient, EmbeddingConfig, EmbeddingError
+from moonmind.rag.embedding import EmbeddingClient, EmbeddingConfig
 from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.rag.telemetry import VectorTelemetry
@@ -30,7 +30,9 @@ class ContextRetrievalService:
     ) -> None:
         self._settings = settings
         self._env = env or os.environ
-        self._telemetry = VectorTelemetry(run_id=settings.run_id, job_id=settings.job_id)
+        self._telemetry = VectorTelemetry(
+            run_id=settings.run_id, job_id=settings.job_id
+        )
         self._embedding = embedding_client or EmbeddingClient(
             EmbeddingConfig(
                 provider=settings.embedding_provider,
@@ -76,13 +78,21 @@ class ContextRetrievalService:
         transport: str,
     ) -> ContextPack:
         if transport == "gateway":
-            return self._retrieve_via_gateway(query=query, filters=filters, top_k=top_k, overlay_policy=overlay_policy, budgets=budgets)
+            return self._retrieve_via_gateway(
+                query=query,
+                filters=filters,
+                top_k=top_k,
+                overlay_policy=overlay_policy,
+                budgets=budgets,
+            )
         self._qdrant.ensure_collection_ready()
         with self._telemetry.timer("embedding"):
             vector = self._embedding.embed(query)
         overlay_collection = None
         if overlay_policy == "include" and self._settings.run_id:
-            overlay_collection = self._settings.overlay_collection_name(self._settings.run_id)
+            overlay_collection = self._settings.overlay_collection_name(
+                self._settings.run_id
+            )
         with self._telemetry.timer("search"):
             result = self._qdrant.search(
                 query_vector=vector,
@@ -93,7 +103,8 @@ class ContextRetrievalService:
                 trust_overrides=None,
             )
         usage = {
-            "tokens": _estimate_tokens(query) + sum(_estimate_tokens(item.text) for item in result.items),
+            "tokens": _estimate_tokens(query)
+            + sum(_estimate_tokens(item.text) for item in result.items),
             "latency_ms": round(result.latency_ms, 2),
         }
         telemetry_id = uuid.uuid4().hex
