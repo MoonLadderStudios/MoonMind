@@ -2218,9 +2218,11 @@
                 </div>
               </div>
               <div class="grid-2">
-                <label>Step ID (optional)
-                  <input data-step-field="id" data-step-index="${index}" value="${escapeHtml(step.id)}" placeholder="step-${index + 1}" />
-                </label>
+                <div class="queue-step-auto-id">
+                  <div class="small">Step ID (auto)</div>
+                  <div class="inline-code">step-${index + 1}</div>
+                  <div class="small">Automatically assigned in order.</div>
+                </div>
                 <label>Title (optional)
                   <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
                 </label>
@@ -3058,20 +3060,17 @@
       const effort = String(formData.get("effort") || "").trim() || null;
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
-      const primaryStepId = String(primaryStep.id || "").trim();
       const primaryStepTitle = String(primaryStep.title || "").trim();
       const additionalSteps = [];
       const stepSkillRequiredCapabilities = [];
       for (let index = 1; index < stepState.length; index += 1) {
         const rawStep = stepState[index] || {};
-        const stepId = String(rawStep.id || "").trim();
         const stepTitle = String(rawStep.title || "").trim();
         const stepInstructions = String(rawStep.instructions || "").trim();
         const stepSkillId = String(rawStep.skillId || "").trim();
         const stepSkillArgsRaw = String(rawStep.skillArgs || "").trim();
         const stepSkillCaps = parseCapabilitiesCsv(rawStep.skillRequiredCapabilities || "");
         const hasStepContent =
-          Boolean(stepId) ||
           Boolean(stepTitle) ||
           Boolean(stepInstructions) ||
           Boolean(stepSkillId) ||
@@ -3095,9 +3094,6 @@
           }
         }
         const stepPayload = {};
-        if (stepId) {
-          stepPayload.id = stepId;
-        }
         if (stepTitle) {
           stepPayload.title = stepTitle;
         }
@@ -3115,25 +3111,36 @@
           }
           stepPayload.skill = skillPayload;
         }
-        additionalSteps.push(stepPayload);
+        additionalSteps.push({ sourceIndex: index, payload: stepPayload });
       }
       const includePrimaryStepForObjectiveOverride =
         Boolean(instructions) && objectiveInstructions !== instructions;
       const includeExplicitSteps =
         additionalSteps.length > 0 ||
-        Boolean(primaryStepId) ||
         Boolean(primaryStepTitle) ||
         includePrimaryStepForObjectiveOverride;
-      const normalizedSteps = includeExplicitSteps
+      const normalizedStepEntries = includeExplicitSteps
         ? [
             {
-              ...(primaryStepId ? { id: primaryStepId } : {}),
-              ...(primaryStepTitle ? { title: primaryStepTitle } : {}),
-              instructions,
+              sourceIndex: 0,
+              payload: {
+                ...(primaryStepTitle ? { title: primaryStepTitle } : {}),
+                instructions,
+              },
             },
             ...additionalSteps,
           ]
         : [];
+      const templateIdToSequential = new Map();
+      const normalizedSteps = normalizedStepEntries.map((entry, index) => {
+        const assignedId = `step-${index + 1}`;
+        const sourceState = stepState[entry.sourceIndex] || {};
+        const templateBindingId = String(sourceState.id || "").trim();
+        if (templateBindingId) {
+          templateIdToSequential.set(templateBindingId, assignedId);
+        }
+        return { ...entry.payload, id: assignedId };
+      });
 
       const templateCapabilities = [];
       const appliedStepTemplates = [];
@@ -3146,11 +3153,14 @@
         if (!slug || !version) {
           continue;
         }
+        const rawTemplateStepIds = Array.isArray(entry.stepIds) ? entry.stepIds : [];
         const templateEntry = {
           slug,
           version,
           inputs: entry.inputs && typeof entry.inputs === "object" ? entry.inputs : {},
-          stepIds: Array.isArray(entry.stepIds) ? entry.stepIds : [],
+          stepIds: rawTemplateStepIds
+            .map((rawId) => templateIdToSequential.get(String(rawId || "").trim()))
+            .filter((value) => Boolean(value)),
           appliedAt: String(entry.appliedAt || "").trim() || new Date().toISOString(),
         };
         if (Array.isArray(entry.capabilities)) {
