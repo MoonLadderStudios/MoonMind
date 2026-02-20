@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202602200001"
+revision: str = "202602200002"
 down_revision: Union[str, None] = "202602190004"
 
 WORKER_PAUSE_MODE = postgresql.ENUM(
