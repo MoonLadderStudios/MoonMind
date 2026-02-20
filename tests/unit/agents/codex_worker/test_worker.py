@@ -1354,7 +1354,9 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
         check=True,
         env=None,
         redaction_values=(),
+        timeout_seconds=None,
     ):
+        _ = timeout_seconds
         recorded_commands.append(tuple(str(item) for item in command))
         if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
             await asyncio.sleep(1.2)
@@ -1421,7 +1423,9 @@ async def test_run_once_task_container_precreates_artifact_subdir(
         check=True,
         env=None,
         redaction_values=(),
+        timeout_seconds=None,
     ):
+        _ = timeout_seconds
         if len(command) >= 2 and command[0] == "docker" and command[1] == "run":
             artifact_root = (
                 tmp_path / str(job.id) / "artifacts" / "container" / "custom"
@@ -1587,8 +1591,9 @@ async def test_ensure_live_session_started_skips_opt_in_without_request(
         env=None,
         redaction_values=(),
         cancel_event=None,
+        timeout_seconds=None,
     ):
-        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event, timeout_seconds)
         stage_commands.append(tuple(command))
         return CommandResult(tuple(command), 0, "", "")
 
@@ -1643,8 +1648,9 @@ async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmat
         env=None,
         redaction_values=(),
         cancel_event=None,
+        timeout_seconds=None,
     ):
-        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event, timeout_seconds)
         stage_commands.append(tuple(command))
         return CommandResult(tuple(command), 0, "", "")
 
@@ -1806,6 +1812,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_DOCKER_BINARY", "docker")
     monkeypatch.setenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", "agent_workspaces")
     monkeypatch.setenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
     monkeypatch.setenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "false")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
@@ -1826,6 +1833,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume == "agent_workspaces"
     assert config.container_default_timeout_seconds == 1800
+    assert config.stage_command_timeout_seconds == 2400
     assert config.artifact_upload_incremental is False
     assert config.git_user_name == "Nate Sticco"
     assert config.git_user_email == "nsticco@gmail.com"
@@ -1849,6 +1857,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_DOCKER_BINARY", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", raising=False)
     monkeypatch.delenv("MOONMIND_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
@@ -1872,6 +1881,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume is None
     assert config.container_default_timeout_seconds == 3600
+    assert config.stage_command_timeout_seconds == 3600
     assert config.artifact_upload_incremental is True
 
 
@@ -2396,6 +2406,66 @@ async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
     assert "token=top-secret" not in log_content
     assert "secret commit body" not in log_content
     assert "[REDACTED]" in log_content
+
+
+async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -> None:
+    """Stage command wrapper should fail fast when a command runner hangs."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            stage_command_timeout_seconds=2,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _slow_run_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        _ = (
+            command,
+            cwd,
+            log_path,
+            check,
+            env,
+            redaction_values,
+            cancel_event,
+            output_chunk_callback,
+        )
+        await asyncio.sleep(0.05)
+        return CommandResult(("git", "status"), 0, "", "")
+
+    monkeypatch.setattr(handler, "_run_command", _slow_run_command)
+
+    log_path = tmp_path / "execute.log"
+    with pytest.raises(TimeoutError, match=r"command timed out after 0.01s"):
+        await worker._run_stage_command(
+            ["git", "status"],
+            cwd=tmp_path,
+            log_path=log_path,
+            timeout_seconds=0.01,
+        )
+
+    log_content = log_path.read_text(encoding="utf-8")
+    assert "command timed out after 0.01s: git status" in log_content
 
 
 async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
