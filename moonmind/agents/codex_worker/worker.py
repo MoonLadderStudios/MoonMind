@@ -3653,7 +3653,9 @@ class CodexWorker:
                     step=step,
                     snapshot=attempt,
                 )
-                self._write_attempt_state_file(path=attempt_state_path, snapshot=attempt)
+                self._write_attempt_state_file(
+                    path=attempt_state_path, snapshot=attempt
+                )
                 normalized_artifacts = self._normalize_step_artifacts(
                     step=step,
                     result_artifacts=result.artifacts,
