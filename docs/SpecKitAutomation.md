@@ -51,7 +51,7 @@ Key responsibilities (unchanged in spirit):
 - Emits StatsD metrics when enabled.
 
 2.2 Job Container
-- Image from SPEC_AUTOMATION_JOB_IMAGE (default moonmind/spec-automation-job:latest).
+- Image from SPEC_AUTOMATION_JOB_IMAGE (default ghcr.io/moonladderstudios/moonmind:latest).
 - Starts sleep infinity; Celery drives it via docker exec.
 - Environment includes:
   - HOME=/work/runs/{run_id}/home (unchanged).
@@ -176,7 +176,7 @@ entries include a `message` that should match the Celery exception output.
 docker run --rm -it \
   -v codex_auth_0:/home/app/.codex \
   --entrypoint bash \
-  ${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest} -lc 'codex login --device-auth && codex login status'
+  ${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest} -lc 'codex login --device-auth && codex login status'
 # Repeat for codex_auth_1 and codex_auth_2
 ```
 
@@ -307,7 +307,7 @@ Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
 +            )
  
          container = self._client.containers.run(
-             image=os.getenv("SPEC_AUTOMATION_JOB_IMAGE", "moonmind/spec-automation-job:latest"),
+             image=os.getenv("SPEC_AUTOMATION_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
              command=["sleep", "infinity"],
              environment={
                  **environment,
@@ -331,7 +331,7 @@ def _assert_codex_logged_in():
         return  # no check if not configured
     image = os.getenv(
         "CODEX_LOGIN_CHECK_IMAGE",
-        os.getenv("SPEC_AUTOMATION_JOB_IMAGE", "moonmind/spec-automation-job:latest"),
+        os.getenv("SPEC_AUTOMATION_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
     )
     client = from_env()
     # Short-lived check container
@@ -366,7 +366,7 @@ services:
     environment:
       - CODEX_QUEUE=codex-0
       - CODEX_VOLUME_NAME=codex_auth_0
-      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest}
+      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - speckit_workspaces:/work
@@ -380,7 +380,7 @@ services:
     environment:
       - CODEX_QUEUE=codex-1
       - CODEX_VOLUME_NAME=codex_auth_1
-      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest}
+      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - speckit_workspaces:/work
@@ -394,7 +394,7 @@ services:
     environment:
       - CODEX_QUEUE=codex-2
       - CODEX_VOLUME_NAME=codex_auth_2
-      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest}
+      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - speckit_workspaces:/work

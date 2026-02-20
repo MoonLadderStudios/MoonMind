@@ -143,7 +143,7 @@ class SpecWorkflowSettings(BaseSettings):
         description="Comma-delimited list of base capability labels applied to manifest jobs.",
     )
     job_image: str = Field(
-        "moonmind/spec-automation-job:latest",
+        "ghcr.io/moonladderstudios/moonmind:latest",
         env="SPEC_AUTOMATION_JOB_IMAGE",
         description="Container image used for Spec Automation job executions.",
     )

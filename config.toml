@@ -20,7 +20,7 @@ google_drive_folder_id = ""
 google_application_credentials = "/path/to/your/service-account-file.json"
 
 [spec_workflow]
-job_image = "moonmind/spec-automation-job:latest"
+job_image = "ghcr.io/moonladderstudios/moonmind:latest"
 workspace_root = "/work"
 allow_manifest_path_source = false
 manifest_required_capabilities = ["manifest"]
