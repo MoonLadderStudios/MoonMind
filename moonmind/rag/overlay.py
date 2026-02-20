@@ -30,7 +30,6 @@ def chunk_file(path: Path, *, chunk_chars: int, overlap: int) -> Iterable[Overla
     text = path.read_text(encoding="utf-8", errors="ignore")
     if not text:
         return []
-    start = 0
     end = len(text)
     cursor = 0
     results: list[OverlayChunk] = []

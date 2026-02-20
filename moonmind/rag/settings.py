@@ -10,8 +10,6 @@ from typing import Mapping, MutableMapping, Optional
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.env_bool import env_to_bool
 
-_CANONICAL_BOOL_TRUE = {"1", "true", "yes", "on"}
-
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None

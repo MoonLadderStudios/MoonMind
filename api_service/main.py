@@ -54,6 +54,8 @@ from api_service.auth import (
 )
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
+from moonmind.rag.service import ContextRetrievalService
+from moonmind.rag.settings import RagRuntimeSettings
 
 # Removed unused import: build_indexers
 from moonmind.factories.service_context_factory import build_service_context
@@ -356,6 +358,15 @@ async def startup_event():
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
     _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
+    try:
+        app.state.retrieval_service = ContextRetrievalService(
+            settings=RagRuntimeSettings.from_env()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Retrieval service startup initialization skipped: %s",
+            exc,
+        )
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":

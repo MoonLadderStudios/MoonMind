@@ -169,7 +169,7 @@ class RagQdrantClient:
             )
 
         ordered: List[ContextItem] = []
-        seen: set[tuple[str, Optional[str]]] = set()
+        seen: set[tuple[str, str]] = set()
         now_utc = datetime.now(timezone.utc)
 
         def _is_expired(payload: MutableMapping[str, Any]) -> bool:
@@ -193,7 +193,12 @@ class RagQdrantClient:
                 if trust == "workspace_overlay" and _is_expired(payload):
                     continue
                 item = to_item(point, trust)
-                key = (item.source, item.chunk_hash)
+                discriminator = item.chunk_hash
+                if not discriminator:
+                    discriminator = (
+                        f"id:{point.id}|offset:{item.offset_start}:{item.offset_end}|score:{item.score:.8f}"
+                    )
+                key = (item.source, discriminator)
                 if key in seen:
                     continue
                 seen.add(key)
