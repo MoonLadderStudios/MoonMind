@@ -203,6 +203,22 @@ h1 {
   margin-bottom: 0.8rem;
 }
 
+.toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.toolbar-live-toggle {
+  margin: 0;
+}
+
+.toolbar-live-toggle input {
+  margin: 0;
+}
+
 .stack {
   display: grid;
   gap: 0.9rem;

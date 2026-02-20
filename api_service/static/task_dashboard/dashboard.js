@@ -115,6 +115,140 @@
   const pollers = [];
   const disposers = [];
   let cachedAvailableSkillIds = null;
+  const AUTO_REFRESH_STORAGE_KEY = "moonmind.tasks.autoRefresh";
+  const autoRefreshChangeListeners = new Set();
+
+  function errorNameForLog(error) {
+    if (!error || typeof error !== "object") {
+      return "unknown";
+    }
+    const name = error.name;
+    return name ? String(name) : "unknown";
+  }
+
+  function readStoredAutoRefreshPreference() {
+    try {
+      const raw = window.localStorage
+        ? window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY)
+        : null;
+      if (raw === "paused") {
+        return true;
+      }
+      if (raw && raw !== "active" && window.localStorage) {
+        window.localStorage.removeItem(AUTO_REFRESH_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn("auto refresh preference read failed", {
+        name: errorNameForLog(error),
+      });
+    }
+    return false;
+  }
+
+  function persistAutoRefreshPreference(paused) {
+    try {
+      if (!window.localStorage) {
+        return;
+      }
+      if (paused) {
+        window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, "paused");
+      } else {
+        window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, "active");
+      }
+    } catch (error) {
+      console.warn("auto refresh preference persist failed", {
+        name: errorNameForLog(error),
+      });
+    }
+  }
+
+  let autoRefreshPaused = readStoredAutoRefreshPreference();
+
+  function isAutoRefreshActive() {
+    return !autoRefreshPaused;
+  }
+
+  function notifyAutoRefreshListeners() {
+    const enabled = isAutoRefreshActive();
+    autoRefreshChangeListeners.forEach((listener) => {
+      try {
+        listener(enabled);
+      } catch (error) {
+        console.error("auto refresh listener failed", {
+          name: errorNameForLog(error),
+        });
+      }
+    });
+  }
+
+  function onAutoRefreshChange(listener) {
+    if (typeof listener !== "function") {
+      console.warn("onAutoRefreshChange requires a function listener");
+      return () => {};
+    }
+    autoRefreshChangeListeners.add(listener);
+    return () => {
+      autoRefreshChangeListeners.delete(listener);
+    };
+  }
+
+  function setAutoRefreshPaused(nextPaused) {
+    const normalized = Boolean(nextPaused);
+    if (normalized === autoRefreshPaused) {
+      return;
+    }
+    autoRefreshPaused = normalized;
+    persistAutoRefreshPreference(normalized);
+    syncAutoRefreshControls();
+    notifyAutoRefreshListeners();
+  }
+
+  function renderAutoRefreshControls() {
+    return `
+      <div class="toolbar-controls">
+        <label class="queue-inline-toggle toolbar-live-toggle">
+          <input type="checkbox" data-auto-refresh-toggle ${
+            isAutoRefreshActive() ? "checked" : ""
+          } aria-pressed="${isAutoRefreshActive() ? "true" : "false"}" />
+          Live updates
+        </label>
+        <span class="small" data-auto-refresh-status>${
+          isAutoRefreshActive() ? "" : "Updates paused to keep selections stable."
+        }</span>
+      </div>
+    `;
+  }
+
+  function syncAutoRefreshControls() {
+    const toggleNodes = root.querySelectorAll("[data-auto-refresh-toggle]");
+    toggleNodes.forEach((node) => {
+      if (node instanceof HTMLInputElement) {
+        node.checked = isAutoRefreshActive();
+        node.setAttribute(
+          "aria-label",
+          isAutoRefreshActive() ? "Disable live updates" : "Enable live updates",
+        );
+        node.setAttribute("aria-pressed", isAutoRefreshActive() ? "true" : "false");
+      }
+    });
+    const statusNodes = root.querySelectorAll("[data-auto-refresh-status]");
+    statusNodes.forEach((node) => {
+      node.textContent = isAutoRefreshActive()
+        ? ""
+        : "Updates paused to keep selections stable.";
+    });
+  }
+
+  function bindAutoRefreshControls() {
+    const toggleNodes = root.querySelectorAll("[data-auto-refresh-toggle]");
+    toggleNodes.forEach((node) => {
+      if (node instanceof HTMLInputElement) {
+        node.addEventListener("change", () => {
+          setAutoRefreshPaused(!node.checked);
+        });
+      }
+    });
+  }
 
   function stopPolling() {
     while (pollers.length > 0) {
@@ -132,19 +266,33 @@
     }
   }
 
-  function startPolling(task, intervalMs) {
-    const run = () => {
-      if (document.visibilityState === "hidden") {
-        return;
+  function startPolling(task, intervalMs, options = {}) {
+    const runImmediately = options.runImmediately !== false;
+    const run = (forced = false) => {
+      if (!forced) {
+        if (!isAutoRefreshActive()) {
+          return;
+        }
+        if (document.visibilityState === "hidden") {
+          return;
+        }
       }
       task().catch((error) => {
         console.error("polling task failed", error);
       });
     };
 
-    run();
-    const timer = window.setInterval(run, intervalMs);
+    if (runImmediately) {
+      run(true);
+    }
+    const timer = window.setInterval(() => run(false), intervalMs);
     pollers.push(timer);
+    const disposeAutoRefreshListener = onAutoRefreshChange((enabled) => {
+      if (enabled) {
+        run(true);
+      }
+    });
+    registerDisposer(() => disposeAutoRefreshListener());
   }
 
   function registerDisposer(disposer) {
@@ -715,9 +863,12 @@
           <h2 class="page-title">${escapeHtml(title)}</h2>
           <p class="page-meta">${escapeHtml(subtitle)}</p>
         </div>
+        ${renderAutoRefreshControls()}
       </div>
       ${body}
     `;
+    bindAutoRefreshControls();
+    syncAutoRefreshControls();
   }
 
   function renderRowsTable(rows) {
@@ -3561,18 +3712,43 @@
       }
     };
 
+    let eventSource = null;
+
+    const stopEventStream = () => {
+      if (!eventSource) {
+        return;
+      }
+      eventSource.onmessage = null;
+      eventSource.onerror = null;
+      eventSource.close();
+      eventSource = null;
+    };
+
+    registerDisposer(() => stopEventStream());
+
     const beginPollingEvents = () => {
       if (state.eventsPollingStarted) {
         return;
       }
       state.eventsPollingStarted = true;
       state.eventsTransport = "polling";
-      state.eventsTransportStatus = "active";
+      state.eventsTransportStatus = isAutoRefreshActive() ? "active" : "paused";
       renderTransportStatus();
-      startPolling(loadNewEvents, pollIntervals.events);
+      startPolling(loadNewEvents, pollIntervals.events, {
+        runImmediately: isAutoRefreshActive(),
+      });
     };
 
     const startEventStream = () => {
+      if (!isAutoRefreshActive()) {
+        state.eventsTransport = "sse";
+        state.eventsTransportStatus = "paused";
+        renderTransportStatus();
+        return;
+      }
+      if (eventSource || state.eventsPollingStarted) {
+        return;
+      }
       const streamTemplate =
         queueSourceConfig.eventsStream || "/api/queue/jobs/{id}/events/stream";
       if (typeof window.EventSource !== "function") {
@@ -3593,11 +3769,10 @@
       state.eventsTransportStatus = "connecting";
       renderTransportStatus();
 
-      const source = new window.EventSource(streamUrl);
-      registerDisposer(() => source.close());
+      eventSource = new window.EventSource(streamUrl);
 
       const handleMessage = (rawData) => {
-        if (!rawData) {
+        if (!rawData || !isAutoRefreshActive()) {
           return;
         }
         try {
@@ -3608,13 +3783,13 @@
         }
       };
 
-      source.addEventListener("open", () => {
+      eventSource.addEventListener("open", () => {
         state.eventsTransport = "sse";
         state.eventsTransportStatus = "active";
         renderTransportStatus();
       });
 
-      source.addEventListener("queue_event", (event) => {
+      eventSource.addEventListener("queue_event", (event) => {
         if (state.eventsTransportStatus !== "active") {
           state.eventsTransport = "sse";
           state.eventsTransportStatus = "active";
@@ -3623,7 +3798,7 @@
         handleMessage(event.data);
       });
 
-      source.onmessage = (event) => {
+      eventSource.onmessage = (event) => {
         if (state.eventsTransportStatus !== "active") {
           state.eventsTransport = "sse";
           state.eventsTransportStatus = "active";
@@ -3632,12 +3807,12 @@
         handleMessage(event.data);
       };
 
-      source.onerror = (error) => {
+      eventSource.onerror = (error) => {
         console.error("queue event stream failed; switching to polling", error);
         state.eventsTransport = "polling";
         state.eventsTransportStatus = "error";
         renderTransportStatus();
-        source.close();
+        stopEventStream();
         beginPollingEvents();
       };
     };
@@ -3890,6 +4065,26 @@
         }
       });
     }
+
+    registerDisposer(
+      onAutoRefreshChange((enabled) => {
+        if (!enabled) {
+          stopEventStream();
+          state.eventsTransportStatus = "paused";
+          renderTransportStatus();
+          return;
+        }
+        if (state.eventsPollingStarted) {
+          state.eventsTransport = "polling";
+          state.eventsTransportStatus = "active";
+          renderTransportStatus();
+        } else {
+          startEventStream();
+        }
+        loadDetail();
+        loadNewEvents();
+      }),
+    );
 
     renderTransportStatus();
     renderLoadOlderControls();
