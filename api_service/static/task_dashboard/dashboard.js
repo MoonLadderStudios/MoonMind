@@ -1,4 +1,45 @@
 (() => {
+  function describeWorkerPauseState(system = {}, metrics = {}) {
+    const workersPaused = Boolean(system.workersPaused);
+    const mode = (system.mode || "").toString().toLowerCase();
+    const state = workersPaused
+      ? mode === "quiesce"
+        ? "quiesce"
+        : "paused"
+      : "running";
+    const label = workersPaused
+      ? `Workers: Paused (${mode === "quiesce" ? "Quiesce" : "Drain"})`
+      : "Workers: Running";
+    let reasonText = "Workers are accepting new jobs.";
+    if (workersPaused) {
+      reasonText = system.reason || "Paused without operator reason.";
+    } else if (system.reason) {
+      reasonText = `Last action: ${system.reason}`;
+    }
+    return {
+      label,
+      reason: reasonText,
+      state,
+      drained: metrics.isDrained ? "Yes" : "No",
+    };
+  }
+
+  function requiresResumeConfirmation(snapshot) {
+    return Boolean(
+      snapshot &&
+        snapshot.metrics &&
+        Object.prototype.hasOwnProperty.call(snapshot.metrics, "isDrained") &&
+        !snapshot.metrics.isDrained,
+    );
+  }
+
+  if (typeof window !== "undefined") {
+    window.__workerPauseTest = {
+      describeWorkerPauseState,
+      requiresResumeConfirmation,
+    };
+  }
+
   const configNode = document.getElementById("task-dashboard-config");
   const root = document.getElementById("dashboard-content");
   if (!configNode || !root) {
@@ -94,6 +135,12 @@
       : {};
   const taskTemplateCatalogEnabled = Boolean(taskTemplateCatalogConfig.enabled);
   const taskTemplateSaveEnabled = Boolean(taskTemplateCatalogConfig.templateSaveEnabled);
+  const workerPauseConfig =
+    systemConfig.workerPause &&
+    typeof systemConfig.workerPause === "object" &&
+    !Array.isArray(systemConfig.workerPause)
+      ? systemConfig.workerPause
+      : null;
   const taskTemplateEndpoints = {
     list: String(queueSourceConfig.taskStepTemplates || "/api/task-step-templates"),
     detail: String(
@@ -116,6 +163,8 @@
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const pollers = [];
   const disposers = [];
+  const persistentPollers = [];
+  const persistentDisposers = [];
   let cachedAvailableSkillIds = null;
   const AUTO_REFRESH_STORAGE_KEY = "moonmind.tasks.autoRefresh";
   const autoRefreshChangeListeners = new Set();
@@ -268,11 +317,29 @@
     }
   }
 
+  function stopPersistentPolling() {
+    while (persistentPollers.length > 0) {
+      clearInterval(persistentPollers.pop());
+    }
+    while (persistentDisposers.length > 0) {
+      const dispose = persistentDisposers.pop();
+      if (typeof dispose === "function") {
+        try {
+          dispose();
+        } catch (error) {
+          console.error("persistent polling disposer failed", error);
+        }
+      }
+    }
+  }
+
   function startPolling(task, intervalMs, options = {}) {
     const runImmediately = options.runImmediately !== false;
+    const skipAutoRefresh = options.skipAutoRefresh === true;
+    const persistent = options.persistent === true;
     const run = (forced = false) => {
       if (!forced) {
-        if (!isAutoRefreshActive()) {
+        if (!skipAutoRefresh && !isAutoRefreshActive()) {
           return;
         }
         if (document.visibilityState === "hidden") {
@@ -288,19 +355,237 @@
       run(true);
     }
     const timer = window.setInterval(() => run(false), intervalMs);
-    pollers.push(timer);
-    const disposeAutoRefreshListener = onAutoRefreshChange((enabled) => {
-      if (enabled) {
-        run(true);
-      }
-    });
-    registerDisposer(() => disposeAutoRefreshListener());
+    (persistent ? persistentPollers : pollers).push(timer);
+    if (!skipAutoRefresh) {
+      const disposeAutoRefreshListener = onAutoRefreshChange((enabled) => {
+        if (enabled) {
+          run(true);
+        }
+      });
+      registerDisposer(() => disposeAutoRefreshListener(), { persistent });
+    }
   }
 
-  function registerDisposer(disposer) {
-    if (typeof disposer === "function") {
-      disposers.push(disposer);
+  function registerDisposer(disposer, options = {}) {
+    if (typeof disposer !== "function") {
+      return;
     }
+    if (options.persistent === true) {
+      persistentDisposers.push(disposer);
+      return;
+    }
+    disposers.push(disposer);
+  }
+
+  function initWorkerPauseBanner(workerPauseSettings) {
+    if (
+      !workerPauseSettings ||
+      typeof workerPauseSettings.get !== "string" ||
+      typeof workerPauseSettings.post !== "string"
+    ) {
+      return null;
+    }
+    const section = document.querySelector("[data-worker-pause]");
+    if (!section) {
+      return null;
+    }
+
+    const statusNode = section.querySelector("[data-worker-pause-status]");
+    const reasonNode = section.querySelector("[data-worker-pause-reason]");
+    const drainedNode = section.querySelector("[data-worker-pause-drained]");
+    const errorNode = section.querySelector("[data-worker-pause-error]");
+    const metricNodes = {
+      queued: section.querySelector("[data-worker-pause-metric='queued']"),
+      running: section.querySelector("[data-worker-pause-metric='running']"),
+      staleRunning: section.querySelector("[data-worker-pause-metric='staleRunning']"),
+    };
+    const pauseForm = section.querySelector('[data-worker-pause-form="pause"]');
+    const resumeForm = section.querySelector('[data-worker-pause-form="resume"]');
+    const pollInterval = Math.max(
+      1000,
+      Number(workerPauseSettings.pollIntervalMs) || 5000,
+    );
+    const numberFormatter = new Intl.NumberFormat();
+
+    let latestSnapshot = null;
+    let requestInFlight = false;
+
+    function setError(message) {
+      if (errorNode) {
+        errorNode.hidden = false;
+        errorNode.textContent = message;
+      }
+    }
+
+    function clearError() {
+      if (errorNode) {
+        errorNode.hidden = true;
+        errorNode.textContent = "";
+      }
+    }
+
+    function toggleForms(disabled) {
+      [pauseForm, resumeForm].forEach((form) => {
+        if (!form) {
+          return;
+        }
+        const inputs = form.querySelectorAll("input, select, textarea, button");
+        inputs.forEach((node) => {
+          if (disabled) {
+            node.setAttribute("disabled", "disabled");
+          } else {
+            node.removeAttribute("disabled");
+          }
+        });
+      });
+    }
+
+    function render(snapshot) {
+      section.hidden = false;
+      const system = snapshot.system || {};
+      const metrics = snapshot.metrics || {};
+      const description = describeWorkerPauseState(system, metrics);
+      section.dataset.state = description.state;
+      if (statusNode) {
+        statusNode.textContent = description.label;
+      }
+      if (reasonNode) {
+        reasonNode.textContent = description.reason;
+      }
+      Object.entries(metricNodes).forEach(([key, node]) => {
+        if (node) {
+          node.textContent = numberFormatter.format(
+            typeof metrics[key] === "number" ? metrics[key] : 0,
+          );
+        }
+      });
+      if (drainedNode) {
+        drainedNode.textContent = description.drained;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch(workerPauseSettings.get, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          throw new Error("Unable to load worker pause status.");
+        }
+        const snapshot = await response.json();
+        latestSnapshot = snapshot;
+        render(snapshot);
+        clearError();
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : errorNameForLog(error) || "Failed to load worker pause state.";
+        setError(message);
+      } finally {
+        toggleForms(false);
+      }
+    }
+
+    async function submitAction(payload) {
+      if (requestInFlight) {
+        return latestSnapshot;
+      }
+      requestInFlight = true;
+      toggleForms(true);
+      try {
+        const response = await fetch(workerPauseSettings.post, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          const detailMessage =
+            (data && data.detail && data.detail.message) ||
+            (data && data.detail) ||
+            response.statusText ||
+            "Failed to update worker pause state.";
+          throw new Error(detailMessage);
+        }
+        latestSnapshot = data;
+        render(latestSnapshot);
+        clearError();
+        return latestSnapshot;
+      } finally {
+        requestInFlight = false;
+        toggleForms(false);
+      }
+    }
+
+    pauseForm?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (requestInFlight) {
+        return;
+      }
+      const formData = new FormData(pauseForm);
+      const mode = String(formData.get("mode") || "").trim();
+      const reason = String(formData.get("reason") || "").trim();
+      if (!mode || !reason) {
+        setError("Pause mode and reason are required.");
+        return;
+      }
+      clearError();
+      submitAction({
+        action: "pause",
+        mode,
+        reason,
+      })
+        .then(() => pauseForm.reset())
+        .catch((error) => {
+          setError(error.message || "Failed to pause workers.");
+        });
+    });
+
+    resumeForm?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (requestInFlight) {
+        return;
+      }
+      const formData = new FormData(resumeForm);
+      const reason = String(formData.get("reason") || "").trim();
+      if (!reason) {
+        setError("Resume reason is required.");
+        return;
+      }
+      let forceResume = false;
+      if (requiresResumeConfirmation(latestSnapshot)) {
+        const confirmed = window.confirm(
+          "Workers are not drained yet. Resume anyway?",
+        );
+        if (!confirmed) {
+          return;
+        }
+        forceResume = true;
+      }
+      clearError();
+      submitAction({
+        action: "resume",
+        reason,
+        forceResume,
+      })
+        .then(() => resumeForm.reset())
+        .catch((error) => {
+          setError(error.message || "Failed to resume workers.");
+        });
+    });
+
+    toggleForms(true);
+
+    return {
+      pollInterval,
+      refresh,
+    };
   }
 
   function readStoredThemePreference() {
@@ -4943,9 +5228,19 @@
     renderNotFound();
   }
 
+  const workerPauseController = initWorkerPauseBanner(workerPauseConfig);
+  if (workerPauseController) {
+    startPolling(
+      () => workerPauseController.refresh(),
+      workerPauseController.pollInterval,
+      { runImmediately: true, skipAutoRefresh: true, persistent: true },
+    );
+  }
+
   const disposeTheme = initTheme();
   window.addEventListener("beforeunload", () => {
     stopPolling();
+    stopPersistentPolling();
     if (typeof disposeTheme === "function") {
       disposeTheme();
     }

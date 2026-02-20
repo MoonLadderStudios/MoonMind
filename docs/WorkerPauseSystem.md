@@ -1,8 +1,8 @@
 # Worker Pause System
 
-Status: **Proposed**
+Status: **Implemented**
 Owners: **MoonMind Engineering**
-Last Updated: **2026-02-19**
+Last Updated: **2026-02-20**
 
 ---
 
@@ -348,3 +348,11 @@ This prevents paused workers from inadvertently mutating job state (especially l
 * `docs/TaskQueueSystem.md` (queue lifecycle + stage plan )
 * `docs/LiveTaskHandoff.md` (existing pause-at-checkpoint operator model )
 * `moonmind/workflows/agent_queue/repositories.py` (claim normalization + lease-expiry requeue behavior  )
+
+## 16. Implementation Notes (2026-02-20)
+
+* FastAPI now exposes `GET`/`POST /api/system/worker-pause` responses that include system metadata, drain metrics, and the latest five audit events. Frontend JS polls this endpoint every 5 seconds regardless of the dashboard auto-refresh toggle.
+* A global banner on the Tasks dashboard surfaces worker status, queued/running/stale counts, an `isDrained` indicator, and Pause/Resume controls with reason/mode validation. Resuming while `isDrained=false` prompts the operator before setting `forceResume=true`.
+* Workers (Codex runtime) treat the new `system` envelope on claim/heartbeat responses as authoritative. A paused claim short-circuits before repository logic runs, logs once per version, and sleeps for `MOONMIND_PAUSE_POLL_INTERVAL_MS` (default 5000 ms, overridable via env). Heartbeats propagate quiesce instructions through the existing checkpoint pause event.
+* The queue API client and MCP tooling now return the `system` payload in both HTTP and CLI responses so IDE integrations honor pause state alongside workers.
+* Operators can script against the new API or use the dashboard banner; both paths emit audit rows in `system_control_events`, and the singleton `system_worker_pause_state` row increments `version` on every transition for worker diffing.

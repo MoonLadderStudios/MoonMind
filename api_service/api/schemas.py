@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +20,9 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunListResponse,
     OrchestratorRunSummaryModel,
 )
+
+if TYPE_CHECKING:
+    from moonmind.workflows.agent_queue.service import QueueSystemMetadata
 
 
 class UserProfileBaseSchema(BaseModel):
@@ -198,6 +201,88 @@ class ManifestRunResponse(BaseModel):
 
     job_id: uuid.UUID = Field(..., alias="jobId")
     queue: ManifestRunQueueMetadata = Field(..., alias="queue")
+
+
+class QueueSystemMetadataModel(BaseModel):
+    """Serialized worker pause metadata shared by claim + heartbeat responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workers_paused: bool = Field(..., alias="workersPaused")
+    mode: Optional[Literal["drain", "quiesce"]] = Field(None, alias="mode")
+    reason: Optional[str] = Field(None, alias="reason")
+    version: int = Field(..., alias="version", ge=1)
+    requested_by_user_id: Optional[uuid.UUID] = Field(None, alias="requestedByUserId")
+    requested_at: Optional[datetime] = Field(None, alias="requestedAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+    @staticmethod
+    def from_service_metadata(
+        metadata: "QueueSystemMetadata",
+    ) -> "QueueSystemMetadataModel":
+        mode_value: str | None
+        if metadata.mode is None:
+            mode_value = None
+        elif getattr(metadata.mode, "value", None) is not None:
+            mode_value = str(metadata.mode.value).strip() or None
+        else:
+            mode_value = str(metadata.mode).strip() or None
+
+        return QueueSystemMetadataModel(
+            workers_paused=metadata.workers_paused,
+            mode=mode_value,
+            reason=metadata.reason,
+            version=metadata.version,
+            requested_by_user_id=metadata.requested_by_user_id,
+            requested_at=metadata.requested_at,
+            updated_at=metadata.updated_at,
+        )
+
+
+class WorkerPauseMetricsModel(BaseModel):
+    """Queued/running counters returned by the worker pause API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    queued: int = Field(..., alias="queued", ge=0)
+    running: int = Field(..., alias="running", ge=0)
+    stale_running: int = Field(..., alias="staleRunning", ge=0)
+    is_drained: bool = Field(..., alias="isDrained")
+
+
+class WorkerPauseAuditEventModel(BaseModel):
+    """Append-only audit entry surfaced by the worker pause API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: uuid.UUID = Field(..., alias="id")
+    action: Literal["pause", "resume"] = Field(..., alias="action")
+    mode: Optional[Literal["drain", "quiesce"]] = Field(None, alias="mode")
+    reason: Optional[str] = Field(None, alias="reason")
+    actor_user_id: Optional[uuid.UUID] = Field(None, alias="actorUserId")
+    created_at: datetime = Field(..., alias="createdAt")
+
+
+class WorkerPauseAuditListModel(BaseModel):
+    """Audit wrapper returned by the worker pause API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    latest: list[WorkerPauseAuditEventModel] = Field(
+        default_factory=list, alias="latest"
+    )
+
+
+class WorkerPauseSnapshotResponse(BaseModel):
+    """Response envelope for GET/POST /api/system/worker-pause."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    system: QueueSystemMetadataModel = Field(..., alias="system")
+    metrics: WorkerPauseMetricsModel = Field(..., alias="metrics")
+    audit: WorkerPauseAuditListModel = Field(
+        default_factory=WorkerPauseAuditListModel, alias="audit"
+    )
 
 
 class TaskTemplateInputSchema(BaseModel):

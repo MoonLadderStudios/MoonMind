@@ -975,3 +975,137 @@ class AgentQueueRepository:
             return False
 
         return True
+
+    async def _seed_pause_state(self) -> models.SystemWorkerPauseState:
+        """Create and flush the singleton pause state row."""
+
+        state = models.SystemWorkerPauseState(id=1, paused=False, version=1)
+        self._session.add(state)
+        await self._session.flush()
+        return state
+
+    async def get_pause_state(self) -> models.SystemWorkerPauseState:
+        """Return the singleton worker pause state, creating it if missing."""
+
+        state = await self._session.get(models.SystemWorkerPauseState, 1)
+        if state is None:
+            return await self._seed_pause_state()
+        return state
+
+    async def get_pause_state_for_update(self) -> models.SystemWorkerPauseState:
+        """Return the singleton worker pause state row under FOR UPDATE lock."""
+
+        stmt: Select[tuple[models.SystemWorkerPauseState]] = (
+            select(models.SystemWorkerPauseState)
+            .where(models.SystemWorkerPauseState.id == 1)
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        state = result.scalars().first()
+        if state is None:
+            return await self._seed_pause_state()
+        return state
+
+    async def update_pause_state(
+        self,
+        *,
+        paused: bool,
+        mode: models.WorkerPauseMode | None,
+        reason: str | None,
+        requested_by_user_id: UUID | None,
+        requested_at: datetime | None,
+    ) -> models.SystemWorkerPauseState:
+        """Update the singleton pause state and bump its version."""
+
+        state = await self.get_pause_state_for_update()
+        state.paused = paused
+        state.mode = mode
+        state.reason = reason
+        state.requested_by_user_id = requested_by_user_id
+        state.requested_at = requested_at
+        state.updated_at = datetime.now(UTC)
+        state.version = int(state.version or 0) + 1
+        await self._session.flush()
+        return state
+
+    async def append_system_control_event(
+        self,
+        *,
+        action: str,
+        mode: models.WorkerPauseMode | None,
+        reason: str | None,
+        actor_user_id: UUID | None,
+    ) -> models.SystemControlEvent:
+        """Append one audit entry for worker pause controls."""
+
+        event = models.SystemControlEvent(
+            id=uuid4(),
+            control="worker_pause",
+            action=action,
+            mode=mode,
+            reason=reason,
+            actor_user_id=actor_user_id,
+        )
+        self._session.add(event)
+        await self._session.flush()
+        return event
+
+    async def list_system_control_events(
+        self,
+        *,
+        limit: int = 5,
+    ) -> list[models.SystemControlEvent]:
+        """Return recent system control audit entries."""
+
+        limit = max(1, min(limit, 50))
+        stmt: Select[tuple[models.SystemControlEvent]] = (
+            select(models.SystemControlEvent)
+            .where(models.SystemControlEvent.control == "worker_pause")
+            .order_by(
+                models.SystemControlEvent.created_at.desc(),
+                models.SystemControlEvent.id.desc(),
+            )
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def fetch_worker_pause_metrics(self) -> dict[str, int]:
+        """Return queued/running/stale-running metrics for worker pause banner."""
+
+        now = datetime.now(UTC)
+        queued_stmt = (
+            select(func.count())
+            .select_from(models.AgentJob)
+            .where(
+                models.AgentJob.status == models.AgentJobStatus.QUEUED,
+                or_(
+                    models.AgentJob.next_attempt_at.is_(None),
+                    models.AgentJob.next_attempt_at <= now,
+                ),
+            )
+        )
+        running_stmt = (
+            select(func.count())
+            .select_from(models.AgentJob)
+            .where(models.AgentJob.status == models.AgentJobStatus.RUNNING)
+        )
+        stale_stmt = (
+            select(func.count())
+            .select_from(models.AgentJob)
+            .where(
+                models.AgentJob.status == models.AgentJobStatus.RUNNING,
+                or_(
+                    models.AgentJob.lease_expires_at.is_(None),
+                    models.AgentJob.lease_expires_at < now,
+                ),
+            )
+        )
+        queued_result = await self._session.execute(queued_stmt)
+        running_result = await self._session.execute(running_stmt)
+        stale_result = await self._session.execute(stale_stmt)
+        return {
+            "queued": int(queued_result.scalar_one() or 0),
+            "running": int(running_result.scalar_one() or 0),
+            "stale_running": int(stale_result.scalar_one() or 0),
+        }

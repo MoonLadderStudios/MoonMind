@@ -186,6 +186,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                     settings.feature_flags.task_template_catalog_enabled
                 ),
             },
+            "workerPause": {
+                "get": "/api/system/worker-pause",
+                "post": "/api/system/worker-pause",
+                "pollIntervalMs": 5000,
+            },
         },
     }
 
