@@ -800,8 +800,18 @@ def build_canonical_task_view(
     required.append(target_runtime)
     required.append("git")
 
+    source_publish_mode = None
+    if normalized_type == CANONICAL_TASK_JOB_TYPE:
+        source_task = source.get("task")
+        if isinstance(source_task, Mapping):
+            source_publish = source_task.get("publish")
+            if isinstance(source_publish, Mapping):
+                source_publish_mode = source_publish.get("mode")
+
     publish_mode = _normalize_publish_mode(
-        ((canonical.get("task") or {}).get("publish") or {}).get("mode")
+        source_publish_mode
+        if normalized_type == CANONICAL_TASK_JOB_TYPE
+        else ((canonical.get("task") or {}).get("publish") or {}).get("mode")
     )
     canonical["task"]["publish"]["mode"] = publish_mode
     if publish_mode == "pr":

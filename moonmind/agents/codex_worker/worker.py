@@ -41,6 +41,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     LEGACY_TASK_JOB_TYPES,
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
+    _default_publish_mode,
     build_canonical_task_view,
     build_task_stage_plan,
 )
@@ -1641,12 +1642,6 @@ class CodexWorker:
             return candidate
         return "fresh_clone"
 
-    @staticmethod
-    def _default_publish_mode() -> str:
-        mode = getattr(settings.spec_workflow, "default_publish_mode", "pr") or "pr"
-        normalized = str(mode).strip().lower()
-        return normalized if normalized in {"none", "branch", "pr"} else "pr"
-
     def _build_exec_payload(
         self,
         *,
@@ -1667,7 +1662,7 @@ class CodexWorker:
         git = git_node if isinstance(git_node, Mapping) else {}
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
-        default_publish_mode = self._default_publish_mode()
+        default_publish_mode = _default_publish_mode()
 
         payload: dict[str, Any] = {
             "repository": canonical_payload.get("repository"),
@@ -1786,17 +1781,13 @@ class CodexWorker:
                     )
 
             workdir_mode = self._safe_workdir_mode(source_payload)
-            default_publish_mode = self._default_publish_mode()
             task_node = canonical_payload.get("task")
             task = task_node if isinstance(task_node, Mapping) else {}
             git_node = task.get("git")
             git = git_node if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
-            publish_mode = (
-                str(publish.get("mode") or default_publish_mode).strip().lower()
-                or default_publish_mode
-            )
+            publish_mode = str(publish.get("mode") or "").strip().lower()
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -2145,11 +2136,7 @@ class CodexWorker:
         task = task_node if isinstance(task_node, Mapping) else {}
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
-        default_publish_mode = self._default_publish_mode()
-        publish_mode = (
-            str(publish.get("mode") or default_publish_mode).strip().lower()
-            or default_publish_mode
-        )
+        publish_mode = str(publish.get("mode") or "").strip().lower()
         if publish_mode == "none":
             await self._emit_event(
                 job_id=job_id,
@@ -3107,7 +3094,7 @@ class CodexWorker:
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         skill_node = task.get("skill")
         skill = skill_node if isinstance(skill_node, Mapping) else {}
-        default_publish_mode = self._default_publish_mode()
+        default_publish_mode = _default_publish_mode()
         if isinstance(skill_args_override, Mapping):
             args = dict(skill_args_override)
         else:

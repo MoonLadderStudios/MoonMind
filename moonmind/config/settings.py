@@ -255,6 +255,10 @@ class SpecWorkflowSettings(BaseSettings):
             "MOONMIND_DEFAULT_PUBLISH_MODE",
             "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
+        validation_alias=AliasChoices(
+            "MOONMIND_DEFAULT_PUBLISH_MODE",
+            "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
+        ),
         description="Fallback publish mode applied when queue task payloads omit publish.mode.",
     )
     github_repository: Optional[str] = Field(
