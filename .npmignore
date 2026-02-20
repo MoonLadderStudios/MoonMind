@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+var/
+Saved/
+agent_jobs/
+tmp/

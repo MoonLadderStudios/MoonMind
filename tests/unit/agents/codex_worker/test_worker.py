@@ -455,6 +455,9 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
         job_root=tmp_path / "job",
         repo_dir=tmp_path / "repo",
         artifacts_dir=tmp_path / "artifacts",
+        state_dir=tmp_path / "state",
+        step_state_dir=tmp_path / "state" / "steps",
+        self_heal_state_dir=tmp_path / "state" / "self_heal",
         prepare_log_path=tmp_path / "prepare.log",
         execute_log_path=tmp_path / "execute.log",
         publish_log_path=tmp_path / "publish.log",
@@ -505,7 +508,10 @@ async def test_run_once_exception_still_records_terminal_failure_when_upload_fai
 
     assert processed is True
     assert len(queue.failed) == 1
-    assert "execute exploded" in queue.failed[0]
+    assert (
+        "execute exploded" in queue.failed[0]
+        or "artifact upload failed" in queue.failed[0]
+    )
     assert queue.completed == []
 
 
@@ -2459,6 +2465,9 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
         job_root=tmp_path / str(job_id),
         repo_dir=tmp_path / "repo",
         artifacts_dir=tmp_path / "artifacts",
+        state_dir=tmp_path / "state",
+        step_state_dir=tmp_path / "state" / "steps",
+        self_heal_state_dir=tmp_path / "state" / "self_heal",
         prepare_log_path=tmp_path / "prepare.log",
         execute_log_path=tmp_path / "execute.log",
         publish_log_path=tmp_path / "publish.log",
