@@ -419,9 +419,7 @@ async def test_workflow_endpoints_hide_non_owned_runs(monkeypatch):
         tasks_response = await client.get(f"/api/workflows/runs/{run.id}/tasks")
         assert tasks_response.status_code == 404
 
-        artifacts_response = await client.get(
-            f"/api/workflows/runs/{run.id}/artifacts"
-        )
+        artifacts_response = await client.get(f"/api/workflows/runs/{run.id}/artifacts")
         assert artifacts_response.status_code == 404
 
         preflight_response = await client.post(
