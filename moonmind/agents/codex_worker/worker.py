@@ -368,10 +368,13 @@ class CodexWorkerConfig:
         git_user_name = (
             str(
                 source.get(
-                    "MOONMIND_GIT_USER_NAME",
+                    "WORKFLOW_GIT_USER_NAME",
                     source.get(
-                        "WORKFLOW_GIT_USER_NAME",
-                        settings.spec_workflow.git_user_name or "",
+                        "SPEC_WORKFLOW_GIT_USER_NAME",
+                        source.get(
+                            "MOONMIND_GIT_USER_NAME",
+                            settings.spec_workflow.git_user_name or "",
+                        ),
                     ),
                 )
             ).strip()
@@ -380,10 +383,13 @@ class CodexWorkerConfig:
         git_user_email = (
             str(
                 source.get(
-                    "MOONMIND_GIT_USER_EMAIL",
+                    "WORKFLOW_GIT_USER_EMAIL",
                     source.get(
-                        "WORKFLOW_GIT_USER_EMAIL",
-                        settings.spec_workflow.git_user_email or "",
+                        "SPEC_WORKFLOW_GIT_USER_EMAIL",
+                        source.get(
+                            "MOONMIND_GIT_USER_EMAIL",
+                            settings.spec_workflow.git_user_email or "",
+                        ),
                     ),
                 )
             ).strip()
