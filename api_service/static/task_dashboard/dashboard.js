@@ -115,6 +115,125 @@
   const pollers = [];
   const disposers = [];
   let cachedAvailableSkillIds = null;
+  const AUTO_REFRESH_STORAGE_KEY = "moonmind.tasks.autoRefresh";
+  const autoRefreshChangeListeners = new Set();
+
+  function readStoredAutoRefreshPreference() {
+    try {
+      const raw = window.localStorage
+        ? window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY)
+        : null;
+      if (raw === "paused") {
+        return true;
+      }
+      if (raw && raw !== "active" && window.localStorage) {
+        window.localStorage.removeItem(AUTO_REFRESH_STORAGE_KEY);
+      }
+    } catch (_error) {
+      // Ignore storage read failures and fall back to default.
+    }
+    return false;
+  }
+
+  function persistAutoRefreshPreference(paused) {
+    try {
+      if (!window.localStorage) {
+        return;
+      }
+      if (paused) {
+        window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, "paused");
+      } else {
+        window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, "active");
+      }
+    } catch (_error) {
+      // Ignore persistence failures and rely on in-memory state.
+    }
+  }
+
+  let autoRefreshPaused = readStoredAutoRefreshPreference();
+
+  function isAutoRefreshActive() {
+    return !autoRefreshPaused;
+  }
+
+  function notifyAutoRefreshListeners() {
+    const enabled = isAutoRefreshActive();
+    autoRefreshChangeListeners.forEach((listener) => {
+      try {
+        listener(enabled);
+      } catch (error) {
+        console.error("auto refresh listener failed", error);
+      }
+    });
+  }
+
+  function onAutoRefreshChange(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    autoRefreshChangeListeners.add(listener);
+    return () => {
+      autoRefreshChangeListeners.delete(listener);
+    };
+  }
+
+  function setAutoRefreshPaused(nextPaused) {
+    const normalized = Boolean(nextPaused);
+    if (normalized === autoRefreshPaused) {
+      return;
+    }
+    autoRefreshPaused = normalized;
+    persistAutoRefreshPreference(normalized);
+    syncAutoRefreshControls();
+    notifyAutoRefreshListeners();
+  }
+
+  function renderAutoRefreshControls() {
+    return `
+      <div class="toolbar-controls">
+        <label class="queue-inline-toggle toolbar-live-toggle">
+          <input type="checkbox" data-auto-refresh-toggle ${
+            isAutoRefreshActive() ? "checked" : ""
+          } aria-pressed="${isAutoRefreshActive() ? "true" : "false"}" />
+          Live updates
+        </label>
+        <span class="small" data-auto-refresh-status>${
+          isAutoRefreshActive() ? "" : "Updates paused to keep selections stable."
+        }</span>
+      </div>
+    `;
+  }
+
+  function syncAutoRefreshControls() {
+    const toggleNodes = root.querySelectorAll("[data-auto-refresh-toggle]");
+    toggleNodes.forEach((node) => {
+      if (node instanceof HTMLInputElement) {
+        node.checked = isAutoRefreshActive();
+        node.setAttribute(
+          "aria-label",
+          isAutoRefreshActive() ? "Disable live updates" : "Enable live updates",
+        );
+        node.setAttribute("aria-pressed", isAutoRefreshActive() ? "true" : "false");
+      }
+    });
+    const statusNodes = root.querySelectorAll("[data-auto-refresh-status]");
+    statusNodes.forEach((node) => {
+      node.textContent = isAutoRefreshActive()
+        ? ""
+        : "Updates paused to keep selections stable.";
+    });
+  }
+
+  function bindAutoRefreshControls() {
+    const toggleNodes = root.querySelectorAll("[data-auto-refresh-toggle]");
+    toggleNodes.forEach((node) => {
+      if (node instanceof HTMLInputElement) {
+        node.addEventListener("change", () => {
+          setAutoRefreshPaused(!node.checked);
+        });
+      }
+    });
+  }
 
   function stopPolling() {
     while (pollers.length > 0) {
@@ -133,18 +252,29 @@
   }
 
   function startPolling(task, intervalMs) {
-    const run = () => {
-      if (document.visibilityState === "hidden") {
-        return;
+    const run = (forced = false) => {
+      if (!forced) {
+        if (!isAutoRefreshActive()) {
+          return;
+        }
+        if (document.visibilityState === "hidden") {
+          return;
+        }
       }
       task().catch((error) => {
         console.error("polling task failed", error);
       });
     };
 
-    run();
-    const timer = window.setInterval(run, intervalMs);
+    run(true);
+    const timer = window.setInterval(() => run(false), intervalMs);
     pollers.push(timer);
+    const disposeAutoRefreshListener = onAutoRefreshChange((enabled) => {
+      if (enabled) {
+        run(true);
+      }
+    });
+    registerDisposer(() => disposeAutoRefreshListener());
   }
 
   function registerDisposer(disposer) {
@@ -715,9 +845,12 @@
           <h2 class="page-title">${escapeHtml(title)}</h2>
           <p class="page-meta">${escapeHtml(subtitle)}</p>
         </div>
+        ${renderAutoRefreshControls()}
       </div>
       ${body}
     `;
+    bindAutoRefreshControls();
+    syncAutoRefreshControls();
   }
 
   function renderRowsTable(rows) {
@@ -3597,7 +3730,7 @@
       registerDisposer(() => source.close());
 
       const handleMessage = (rawData) => {
-        if (!rawData) {
+        if (!rawData || !isAutoRefreshActive()) {
           return;
         }
         try {
@@ -3890,6 +4023,15 @@
         }
       });
     }
+
+    registerDisposer(
+      onAutoRefreshChange((enabled) => {
+        if (enabled) {
+          loadDetail();
+          loadNewEvents();
+        }
+      }),
+    );
 
     renderTransportStatus();
     renderLoadOlderControls();
