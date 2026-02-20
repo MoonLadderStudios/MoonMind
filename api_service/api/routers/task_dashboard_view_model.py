@@ -177,9 +177,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
             "taskTemplateCatalog": {
-                "enabled": bool(settings.feature_flags.task_template_catalog),
+                "enabled": bool(settings.feature_flags.task_template_catalog_enabled),
                 "templateSaveEnabled": bool(
-                    settings.feature_flags.task_template_catalog
+                    settings.feature_flags.task_template_catalog_enabled
                 ),
             },
         },

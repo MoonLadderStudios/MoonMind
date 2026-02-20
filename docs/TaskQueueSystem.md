@@ -72,9 +72,9 @@ Task preset APIs provide reusable template expansion for queue submissions:
 - `POST /api/task-step-templates/{slug}:favorite`
 - `DELETE /api/task-step-templates/{slug}:favorite`
 
-Feature flag:
+Disable flag (optional):
 
-- `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1` to enable (legacy fallback: `TASK_TEMPLATE_CATALOG=1`)
+- `FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG=1` to disable (legacy fallback: `DISABLE_TASK_TEMPLATE_CATALOG=1`)
 
 CLI helper usage is available via `moonmind.agents.cli.task_templates.TaskTemplateClient`.
 Example:

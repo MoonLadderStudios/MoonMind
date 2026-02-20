@@ -138,27 +138,68 @@ class TestFeatureFlagsSettings:
     def test_task_template_catalog_reads_prefixed_env(self, monkeypatch):
         monkeypatch.setenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", "1")
         monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+        )
+        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.task_template_catalog is True
+        assert settings.task_template_catalog_enabled is True
 
         monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
 
     def test_task_template_catalog_keeps_legacy_env_fallback(self, monkeypatch):
         monkeypatch.setenv("TASK_TEMPLATE_CATALOG", "1")
         monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+        )
+        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.task_template_catalog is True
+        assert settings.task_template_catalog_enabled is True
 
         monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
 
-    def test_task_template_catalog_defaults_disabled_without_env(self, monkeypatch):
+    def test_task_template_catalog_defaults_enabled_without_env(self, monkeypatch):
         monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
         monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+        )
+        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.task_template_catalog is False
+        assert settings.task_template_catalog is True
+        assert settings.task_template_catalog_enabled is True
+
+    def test_task_template_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", "1")
+        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog_enabled is False
+
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+        )
+
+    def test_task_template_catalog_can_be_disabled_with_legacy_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+        )
+        monkeypatch.setenv("DISABLE_TASK_TEMPLATE_CATALOG", "1")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.task_template_catalog_enabled is False
+
+        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
 
 
 class TestSpecWorkflowSettings:

@@ -866,13 +866,32 @@ class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
 
     task_template_catalog: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__TASK_TEMPLATE_CATALOG",
             "TASK_TEMPLATE_CATALOG",
         ),
-        description="Enable task preset catalog endpoints + UI wiring.",
+        description=(
+            "Legacy enable toggle for task preset catalog endpoints + UI wiring. "
+            "Defaults on."
+        ),
     )
+    disable_task_template_catalog: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG",
+            "DISABLE_TASK_TEMPLATE_CATALOG",
+        ),
+        description="Disable task preset catalog endpoints + UI wiring.",
+    )
+
+    @property
+    def task_template_catalog_enabled(self) -> bool:
+        """Return whether task presets should be exposed for this runtime."""
+
+        return bool(
+            self.task_template_catalog and not self.disable_task_template_catalog
+        )
 
     model_config = SettingsConfigDict(
         env_prefix="FEATURE_FLAGS__",

@@ -93,7 +93,6 @@
 ## Phase 7: Polish & Cross-Cutting Concerns
 
 - [ ] T034 Add monitoring metrics + alerts (StatsD counters, Prometheus) for template creation/expansion/save failures in `api_service/services/task_templates/catalog.py` and Grafana dashboards.
-- [ ] T035 [P] Backfill changelog + release notes in `docs/release-notes.md` summarizing template catalog launch + rollout phases.
 - [ ] T036 [P] Write migration/backfill script in `scripts/backfill_template_recents.py` to populate recents for last 30 days of task history (optional but recommended for analytics).
 - [ ] T037 [P] Update `docs/TaskPresetsSystem.md` with screenshots + final UX copy once UI changes merge.
 - [ ] T038 Run `./tools/test_unit.sh` and targeted browser tests before handoff, capturing results in PR description.

@@ -49,6 +49,7 @@ def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app.dependency_overrides[_get_save_service] = lambda: saver
     _override_user_dependencies(app)
     settings.feature_flags.task_template_catalog = True
+    settings.feature_flags.disable_task_template_catalog = False
     return TestClient(app), catalog, saver
 
 
@@ -157,3 +158,16 @@ def test_save_from_task_success() -> None:
 
     assert response.status_code == 201
     assert response.json()["slug"] == "saved-template"
+
+
+def test_list_templates_returns_404_when_catalog_disabled() -> None:
+    client, _, _ = _build_app()
+    settings.feature_flags.disable_task_template_catalog = True
+
+    try:
+        response = client.get("/api/task-step-templates", params={"scope": "global"})
+    finally:
+        settings.feature_flags.disable_task_template_catalog = False
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "task_template_catalog_disabled"
