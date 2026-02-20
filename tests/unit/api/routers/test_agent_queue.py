@@ -31,6 +31,8 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueJobAuthorizationError,
     AgentQueueValidationError,
+    QueueSystemMetadata,
+    QueueSystemResponse,
 )
 
 
@@ -119,6 +121,19 @@ def _build_manifest_job():
         },
     }
     return job
+
+
+def _build_system_metadata(*, paused: bool = False, version: int = 1):
+    now = datetime.now(UTC)
+    return QueueSystemMetadata(
+        workers_paused=paused,
+        mode=None,
+        reason=None,
+        version=version,
+        requested_by_user_id=None,
+        requested_at=None,
+        updated_at=now,
+    )
 
 
 def _build_live_session(
@@ -303,7 +318,10 @@ def test_claim_job_empty_queue_returns_null(
     """Claim should return null job when queue has no eligible entries."""
 
     test_client, service = client
-    service.claim_job.return_value = None
+    service.claim_job.return_value = QueueSystemResponse(
+        job=None,
+        system=_build_system_metadata(paused=True),
+    )
 
     response = test_client.post(
         "/api/queue/jobs/claim",
@@ -311,7 +329,10 @@ def test_claim_job_empty_queue_returns_null(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"job": None}
+    body = response.json()
+    assert body["job"] is None
+    assert body["system"]["workersPaused"] is True
+    assert body["system"]["version"] == 1
     service.claim_job.assert_awaited_once()
 
 
@@ -355,6 +376,36 @@ async def test_require_worker_auth_rejects_missing_credentials_when_oidc_enabled
             service=AsyncMock(),
             user=None,
         )
+
+
+def test_heartbeat_job_includes_system_metadata(
+    client: tuple[TestClient, AsyncMock]
+) -> None:
+    """Heartbeat responses should surface system metadata to workers."""
+
+    test_client, service = client
+    job = _build_job(status=models.AgentJobStatus.RUNNING)
+    system = QueueSystemMetadata(
+        workers_paused=True,
+        mode="quiesce",
+        reason="Short maintenance",
+        version=4,
+        requested_by_user_id=None,
+        requested_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    service.heartbeat.return_value = QueueSystemResponse(job=job, system=system)
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/heartbeat",
+        json={"workerId": "worker-1", "leaseSeconds": 60},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    payload = response.json()
+    assert payload["system"]["workersPaused"] is True
+    assert payload["system"]["mode"] == "quiesce"
+    service.heartbeat.assert_awaited_once()
 
 
 def test_claim_job_worker_mismatch_maps_403(

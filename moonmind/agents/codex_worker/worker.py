@@ -106,6 +106,7 @@ class CodexWorkerConfig:
     workdir: Path
     allowed_types: tuple[str, ...] = ("task", "codex_exec", "codex_skill")
     legacy_job_types_enabled: bool = True
+    pause_poll_interval_ms: int = 5000
     worker_runtime: str = "codex"
     default_skill: str = "speckit"
     skill_policy_mode: str = "permissive"
@@ -159,11 +160,15 @@ class CodexWorkerConfig:
         poll_interval_ms = int(
             str(source.get("MOONMIND_POLL_INTERVAL_MS", "1500")).strip()
         )
+        pause_poll_interval_ms = int(
+            str(source.get("MOONMIND_PAUSE_POLL_INTERVAL_MS", "5000")).strip()
+        )
         lease_seconds = int(str(source.get("MOONMIND_LEASE_SECONDS", "120")).strip())
         if poll_interval_ms < 1:
             raise ValueError("MOONMIND_POLL_INTERVAL_MS must be >= 1")
         if lease_seconds < 1:
             raise ValueError("MOONMIND_LEASE_SECONDS must be >= 1")
+        pause_poll_interval_ms = max(1000, pause_poll_interval_ms)
 
         workdir_raw = (
             str(source.get("MOONMIND_WORKDIR", "var/worker")).strip() or "var/worker"
@@ -544,6 +549,7 @@ class CodexWorkerConfig:
             worker_id=worker_id,
             worker_token=worker_token,
             poll_interval_ms=poll_interval_ms,
+            pause_poll_interval_ms=pause_poll_interval_ms,
             lease_seconds=lease_seconds,
             workdir=Path(workdir_raw),
             allowed_types=allowed_types,
@@ -595,6 +601,34 @@ class ClaimedJob:
     id: UUID
     type: str
     payload: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class QueueSystemStatus:
+    """Global pause metadata returned alongside queue responses."""
+
+    workers_paused: bool
+    mode: str | None
+    reason: str | None
+    version: int
+    requested_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class QueueClaimResult:
+    """Structured claim response including optional job and system metadata."""
+
+    job: ClaimedJob | None
+    system: QueueSystemStatus
+
+
+@dataclass(frozen=True, slots=True)
+class QueueHeartbeatResult:
+    """Structured heartbeat response with job payload and pause metadata."""
+
+    job: dict[str, Any]
+    system: QueueSystemStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -713,7 +747,7 @@ class QueueApiClient:
         lease_seconds: int,
         allowed_types: Sequence[str] | None = None,
         worker_capabilities: Sequence[str] | None = None,
-    ) -> ClaimedJob | None:
+    ) -> QueueClaimResult:
         payload: dict[str, Any] = {
             "workerId": worker_id,
             "leaseSeconds": lease_seconds,
@@ -724,13 +758,15 @@ class QueueApiClient:
             payload["workerCapabilities"] = list(worker_capabilities)
         data = await self._post_json("/api/queue/jobs/claim", json=payload)
         job_data = data.get("job")
-        if not job_data:
-            return None
-        return ClaimedJob(
-            id=UUID(str(job_data["id"])),
-            type=str(job_data["type"]),
-            payload=dict(job_data.get("payload") or {}),
-        )
+        job = None
+        if job_data:
+            job = ClaimedJob(
+                id=UUID(str(job_data["id"])),
+                type=str(job_data["type"]),
+                payload=dict(job_data.get("payload") or {}),
+            )
+        system = self._parse_system_metadata(data.get("system"))
+        return QueueClaimResult(job=job, system=system)
 
     async def heartbeat(
         self,
@@ -738,11 +774,13 @@ class QueueApiClient:
         job_id: UUID,
         worker_id: str,
         lease_seconds: int,
-    ) -> dict[str, Any]:
-        return await self._post_json(
+    ) -> QueueHeartbeatResult:
+        data = await self._post_json(
             f"/api/queue/jobs/{job_id}/heartbeat",
             json={"workerId": worker_id, "leaseSeconds": lease_seconds},
         )
+        system = self._parse_system_metadata(data.get("system"))
+        return QueueHeartbeatResult(job=data, system=system)
 
     async def ack_cancel(
         self,
@@ -867,6 +905,31 @@ class QueueApiClient:
             json={"workerId": worker_id},
         )
 
+    @staticmethod
+    def _parse_system_metadata(node: Any) -> QueueSystemStatus:
+        metadata = node if isinstance(node, Mapping) else {}
+        return QueueSystemStatus(
+            workers_paused=bool(metadata.get("workersPaused")),
+            mode=str(metadata.get("mode") or "").strip() or None,
+            reason=str(metadata.get("reason") or "").strip() or None,
+            version=int(metadata.get("version") or 1),
+            requested_at=QueueApiClient._parse_iso_datetime(
+                metadata.get("requestedAt")
+            ),
+            updated_at=QueueApiClient._parse_iso_datetime(metadata.get("updatedAt")),
+        )
+
+    @staticmethod
+    def _parse_iso_datetime(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = text.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+
     async def get_live_session(self, *, job_id: UUID) -> dict[str, Any] | None:
         """Fetch current live-session payload; return ``None`` when no session exists."""
 
@@ -953,6 +1016,12 @@ class CodexWorker:
         self._config = config
         self._queue_client = queue_client
         self._codex_exec_handler = codex_exec_handler
+        self._pause_poll_interval_seconds = max(
+            1.0, self._config.pause_poll_interval_ms / 1000.0
+        )
+        self._last_pause_version_logged: int | None = None
+        self._latest_system_metadata: QueueSystemStatus | None = None
+        self._last_run_outcome: str = "idle"
         self._secret_redactor = moonmind_logging.SecretRedactor.from_environ(
             placeholder="[REDACTED]"
         )
@@ -985,7 +1054,10 @@ class CodexWorker:
                     continue
                 if claimed_work:
                     continue
-                await asyncio.sleep(self._config.poll_interval_ms / 1000.0)
+                if self._last_run_outcome == "paused":
+                    await asyncio.sleep(self._pause_poll_interval_seconds)
+                else:
+                    await asyncio.sleep(self._config.poll_interval_ms / 1000.0)
         finally:
             if self._vault_secret_resolver is not None:
                 with suppress(Exception):
@@ -994,9 +1066,21 @@ class CodexWorker:
     async def run_once(self) -> bool:
         """Claim and process one job if available."""
 
-        job = await self._claim_next_job()
+        outcome = await self._run_once_internal()
+        self._last_run_outcome = outcome
+        return outcome == "claimed"
+
+    async def _run_once_internal(self) -> str:
+        """Internal implementation that returns a descriptive outcome."""
+
+        claim_result = await self._claim_next_job()
+        metadata = claim_result.system
+        self._handle_system_metadata(metadata)
+        job = claim_result.job
         if job is None:
-            return False
+            if metadata.workers_paused:
+                return "paused"
+            return "idle"
 
         supported_types = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
         if job.type not in supported_types:
@@ -1012,7 +1096,7 @@ class CodexWorker:
                 error_message=f"unsupported job type: {job.type}",
                 retryable=False,
             )
-            return True
+            return "claimed"
         if (
             not self._config.legacy_job_types_enabled
             and job.type in LEGACY_TASK_JOB_TYPES
@@ -1029,7 +1113,7 @@ class CodexWorker:
                 error_message=f"legacy job type disabled: {job.type}",
                 retryable=False,
             )
-            return True
+            return "claimed"
 
         try:
             canonical_payload = build_canonical_task_view(
@@ -1049,7 +1133,7 @@ class CodexWorker:
                 error_message=f"invalid job payload: {exc}",
                 retryable=False,
             )
-            return True
+            return "claimed"
 
         runtime_mode = (
             str(canonical_payload.get("targetRuntime") or "codex").strip().lower()
@@ -1070,7 +1154,7 @@ class CodexWorker:
                 error_message=f"unsupported task runtime: {runtime_mode}",
                 retryable=False,
             )
-            return True
+            return "claimed"
         if not self._runtime_can_execute(runtime_mode):
             await self._emit_event(
                 job_id=job.id,
@@ -1091,7 +1175,7 @@ class CodexWorker:
                 ),
                 retryable=False,
             )
-            return True
+            return "claimed"
 
         policy_error = self._validate_required_job_policy(canonical_payload)
         if policy_error is not None:
@@ -1111,7 +1195,7 @@ class CodexWorker:
                 error_message=policy_error,
                 retryable=False,
             )
-            return True
+            return "claimed"
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
@@ -1154,7 +1238,7 @@ class CodexWorker:
                     error_message=f"skill not allowlisted: {', '.join(disallowed)}",
                     retryable=False,
                 )
-                return True
+                return "claimed"
 
         heartbeat_stop = asyncio.Event()
         cancel_requested_event = asyncio.Event()
@@ -1321,7 +1405,7 @@ class CodexWorker:
                     job_id=job.id,
                     message="cancellation requested",
                 )
-                return True
+                return "claimed"
             if result.succeeded:
                 await self._queue_client.complete_job(
                     job_id=job.id,
@@ -1380,7 +1464,7 @@ class CodexWorker:
                     job_id=job.id,
                     message=self._redact_text(str(exc) or "cancellation requested"),
                 )
-                return True
+                return "claimed"
             terminal_error = self._redact_text(str(exc))
             await self._queue_client.fail_job(
                 job_id=job.id,
@@ -1403,19 +1487,35 @@ class CodexWorker:
                 await heartbeat_task
             await self._teardown_live_session(job_id=job.id)
 
-        return True
+        return "claimed"
 
-    async def _claim_next_job(self) -> ClaimedJob | None:
+    async def _claim_next_job(self) -> QueueClaimResult:
         """Claim next eligible job using policy-safe claim parameters."""
 
-        # Repository allowlist enforcement stays server-side; worker only forwards
-        # allowed job types and capabilities from its local runtime config.
         return await self._queue_client.claim_job(
             worker_id=self._config.worker_id,
             lease_seconds=self._config.lease_seconds,
             allowed_types=self._config.allowed_types,
             worker_capabilities=self._config.worker_capabilities,
         )
+
+    def _handle_system_metadata(self, metadata: QueueSystemStatus) -> None:
+        """Log pause status changes once per version."""
+
+        self._latest_system_metadata = metadata
+        if metadata.workers_paused:
+            if self._last_pause_version_logged != metadata.version:
+                pause_mode = (metadata.mode or "drain").lower()
+                reason = metadata.reason or "operator request"
+                logger.warning(
+                    "Worker pause active (%s mode): %s",
+                    pause_mode,
+                    reason,
+                )
+                self._last_pause_version_logged = metadata.version
+        elif self._last_pause_version_logged is not None:
+            logger.info("Worker pause cleared (version=%s)", metadata.version)
+            self._last_pause_version_logged = None
 
     @staticmethod
     async def _raise_if_cancel_requested(*, cancel_event: asyncio.Event) -> None:
@@ -4169,11 +4269,13 @@ class CodexWorker:
             if stop_event.is_set():
                 return
             try:
-                payload = await self._queue_client.heartbeat(
+                heartbeat = await self._queue_client.heartbeat(
                     job_id=job_id,
                     worker_id=self._config.worker_id,
                     lease_seconds=self._config.lease_seconds,
                 )
+                self._handle_system_metadata(heartbeat.system)
+                payload = heartbeat.job
                 cancel_requested_at = str(
                     payload.get("cancelRequestedAt") or ""
                 ).strip()
@@ -4187,7 +4289,11 @@ class CodexWorker:
                 live_control = (
                     live_control_node if isinstance(live_control_node, Mapping) else {}
                 )
-                paused = bool(live_control.get("paused"))
+                global_quiesce = (
+                    heartbeat.system.workers_paused
+                    and heartbeat.system.mode == "quiesce"
+                )
+                paused = bool(live_control.get("paused")) or global_quiesce
                 if paused:
                     effective_pause_event.set()
                 else:
@@ -4218,7 +4324,7 @@ class CodexWorker:
         """Return whether this run should start a live session for current config/state."""
 
         if self._config.live_session_enabled_default:
-            return True
+            return "claimed"
         payload = await self._queue_client.get_live_session(job_id=job_id)
         if not isinstance(payload, Mapping):
             return False

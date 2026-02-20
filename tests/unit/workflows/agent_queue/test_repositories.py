@@ -200,6 +200,85 @@ async def test_fail_retryable_requeues_until_attempt_limit(tmp_path):
     assert failed.status is models.AgentJobStatus.DEAD_LETTER
 
 
+async def test_pause_state_seed_and_update(tmp_path):
+    """Pause state helper should seed singleton row and increment version."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            state = await repo.get_pause_state()
+            assert state.id == 1
+            assert state.paused is False
+            initial_version = state.version
+
+            updated = await repo.update_pause_state(
+                paused=True,
+                mode=models.WorkerPauseMode.DRAIN,
+                reason="maintenance",
+                requested_by_user_id=None,
+                requested_at=datetime.now(UTC),
+            )
+            await repo.commit()
+
+    assert updated.paused is True
+    assert updated.mode is models.WorkerPauseMode.DRAIN
+    assert updated.version == initial_version + 1
+
+
+async def test_append_system_control_event_and_list(tmp_path):
+    """Audit helper should append events and return latest first."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            first = await repo.append_system_control_event(
+                action="pause",
+                mode=models.WorkerPauseMode.DRAIN,
+                reason="upgrade",
+                actor_user_id=None,
+            )
+            second = await repo.append_system_control_event(
+                action="resume",
+                mode=None,
+                reason="done",
+                actor_user_id=None,
+            )
+            await repo.commit()
+
+            events = await repo.list_system_control_events(limit=1)
+
+    assert len(events) == 1
+    assert events[0].id == second.id
+    assert events[0].action == "resume"
+
+
+async def test_fetch_worker_pause_metrics_counts_jobs(tmp_path):
+    """Metrics helper should count queued, running, and stale running jobs."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            ready_queue = await _create_job(repo)
+            future_queue = await _create_job(repo)
+            future_queue.next_attempt_at = datetime.now(UTC) + timedelta(hours=1)
+
+            running_job = await _create_job(repo)
+            running_job.status = models.AgentJobStatus.RUNNING
+            running_job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+
+            stale_job = await _create_job(repo)
+            stale_job.status = models.AgentJobStatus.RUNNING
+            stale_job.lease_expires_at = datetime.now(UTC) - timedelta(minutes=5)
+
+            await repo.commit()
+
+            counts = await repo.fetch_worker_pause_metrics()
+
+    assert counts["queued"] == 1  # only ready_queue qualifies
+    assert counts["running"] == 2
+    assert counts["stale_running"] == 1
+
+
 async def test_manifest_claim_requires_capabilities(tmp_path):
     """Manifest jobs should only be claimed by workers advertising every capability."""
 

@@ -102,6 +102,10 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
     assert "templateSaveEnabled" in config["system"]["taskTemplateCatalog"]
+    worker_pause = config["system"]["workerPause"]
+    assert worker_pause["get"] == "/api/system/worker-pause"
+    assert worker_pause["post"] == "/api/system/worker-pause"
+    assert worker_pause["pollIntervalMs"] == 5000
 
 
 def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:

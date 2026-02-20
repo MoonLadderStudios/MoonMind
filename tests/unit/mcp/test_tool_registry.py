@@ -17,7 +17,11 @@ from moonmind.mcp.tool_registry import (
     ToolNotFoundError,
 )
 from moonmind.workflows.agent_queue import models
-from moonmind.workflows.agent_queue.service import AgentQueueValidationError
+from moonmind.workflows.agent_queue.service import (
+    AgentQueueValidationError,
+    QueueSystemMetadata,
+    QueueSystemResponse,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -150,7 +154,10 @@ async def test_queue_claim_forwards_worker_capabilities() -> None:
 
     registry = QueueToolRegistry()
     service = _build_service()
-    service.claim_job.return_value = None
+    service.claim_job.return_value = QueueSystemResponse(
+        job=None,
+        system=_build_system_metadata(paused=True),
+    )
 
     result = await registry.call_tool(
         tool="queue.claim",
@@ -162,9 +169,35 @@ async def test_queue_claim_forwards_worker_capabilities() -> None:
         context=_build_context(service),
     )
 
-    assert result == {"job": None}
+    assert result["job"] is None
+    assert result["system"]["workersPaused"] is True
     called = service.claim_job.await_args.kwargs
     assert called["worker_capabilities"] == ["codex", "git"]
+
+
+async def test_queue_heartbeat_returns_system_metadata() -> None:
+    """queue.heartbeat should surface system metadata to clients."""
+
+    registry = QueueToolRegistry()
+    service = _build_service()
+    job = _build_job(status=models.AgentJobStatus.RUNNING)
+    service.heartbeat.return_value = QueueSystemResponse(
+        job=job,
+        system=_build_system_metadata(paused=True),
+    )
+
+    result = await registry.call_tool(
+        tool="queue.heartbeat",
+        arguments={
+            "jobId": str(job.id),
+            "workerId": "executor-01",
+            "leaseSeconds": 60,
+        },
+        context=_build_context(service),
+    )
+
+    assert result["system"]["workersPaused"] is True
+    service.heartbeat.assert_awaited_once()
 
 
 async def test_queue_upload_artifact_rejects_invalid_base64() -> None:
@@ -221,6 +254,19 @@ async def test_queue_cancel_dispatches_to_service() -> None:
         tool="queue.cancel",
         arguments={"jobId": str(job.id), "reason": "operator request"},
         context=_build_context(service),
+    )
+
+
+def _build_system_metadata(paused: bool = False) -> QueueSystemMetadata:
+    now = datetime.now(UTC)
+    return QueueSystemMetadata(
+        workers_paused=paused,
+        mode=None,
+        reason=None,
+        version=1,
+        requested_by_user_id=None,
+        requested_at=None,
+        updated_at=now,
     )
 
     assert result["id"] == str(job.id)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,9 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     PreparedTaskWorkspace,
+    QueueClaimResult,
+    QueueHeartbeatResult,
+    QueueSystemStatus,
     ResolvedTaskStep,
 )
 
@@ -31,7 +35,11 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 class FakeQueueClient:
     """In-memory queue client stub for worker tests."""
 
-    def __init__(self, jobs: list[ClaimedJob | None] | None = None) -> None:
+    def __init__(
+        self,
+        jobs: list[ClaimedJob | None] | None = None,
+        system_status: QueueSystemStatus | None = None,
+    ) -> None:
         self.jobs = list(jobs or [])
         self.claim_calls: list[dict[str, object]] = []
         self.heartbeats: list[str] = []
@@ -46,6 +54,15 @@ class FakeQueueClient:
         self.events: list[dict[str, object]] = []
         self.cancel_requested_at: str | None = None
         self.submitted_proposals: list[dict[str, object]] = []
+        now = datetime.now(UTC)
+        self.system_status = system_status or QueueSystemStatus(
+            workers_paused=False,
+            mode=None,
+            reason=None,
+            version=1,
+            requested_at=None,
+            updated_at=now,
+        )
 
     async def claim_job(
         self,
@@ -63,9 +80,8 @@ class FakeQueueClient:
                 "worker_capabilities": tuple(worker_capabilities or ()),
             }
         )
-        if not self.jobs:
-            return None
-        return self.jobs.pop(0)
+        job = self.jobs.pop(0) if self.jobs else None
+        return QueueClaimResult(job=job, system=self.system_status)
 
     async def heartbeat(self, *, job_id, worker_id, lease_seconds):
         self.heartbeats.append(str(job_id))
@@ -73,7 +89,7 @@ class FakeQueueClient:
         if self.cancel_requested_at:
             payload["cancelRequestedAt"] = self.cancel_requested_at
         self.heartbeat_payloads.append(payload)
-        return payload
+        return QueueHeartbeatResult(job=payload, system=self.system_status)
 
     async def ack_cancel(self, *, job_id, worker_id, message=None):
         self.cancel_acks.append((str(job_id), message))
@@ -239,6 +255,90 @@ async def test_run_once_returns_false_when_no_job() -> None:
 
     assert processed is False
     assert queue.completed == []
+
+
+async def test_run_once_returns_false_when_system_paused(tmp_path: Path) -> None:
+    """Paused system responses should short-circuit claims without work."""
+
+    now = datetime.now(UTC)
+    paused_metadata = QueueSystemStatus(
+        workers_paused=True,
+        mode="drain",
+        reason="Upgrading images",
+        version=2,
+        requested_at=now,
+        updated_at=now,
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[], system_status=paused_metadata)
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is False
+    assert worker._last_run_outcome == "paused"
+    assert queue.completed == []
+
+
+async def test_system_metadata_logging_occurs_once_per_version(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Pause/resume logs should only emit once per system version."""
+
+    caplog.set_level(logging.INFO)
+    now = datetime.now(UTC)
+    metadata = QueueSystemStatus(
+        workers_paused=True,
+        mode="quiesce",
+        reason="short maintenance",
+        version=5,
+        requested_at=now,
+        updated_at=now,
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    worker._handle_system_metadata(metadata)
+    worker._handle_system_metadata(metadata)
+    resumed = QueueSystemStatus(
+        workers_paused=False,
+        mode=None,
+        reason=None,
+        version=6,
+        requested_at=None,
+        updated_at=datetime.now(UTC),
+    )
+    worker._handle_system_metadata(resumed)
+
+    pause_logs = [
+        record.message for record in caplog.records if "Worker pause active" in record.message
+    ]
+    resume_logs = [
+        record.message for record in caplog.records if "Worker pause cleared" in record.message
+    ]
+    assert len(pause_logs) == 1
+    assert len(resume_logs) == 1
 
 
 async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
@@ -1660,6 +1760,52 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
         await task
 
     assert len(queue.heartbeats) >= 2
+
+
+async def test_heartbeat_loop_sets_pause_event_for_quiesce(tmp_path: Path) -> None:
+    """Quiesce mode should trigger the worker pause event during heartbeats."""
+
+    now = datetime.now(UTC)
+    quiesce_status = QueueSystemStatus(
+        workers_paused=True,
+        mode="quiesce",
+        reason="short maintenance",
+        version=9,
+        requested_at=now,
+        updated_at=now,
+    )
+    queue = FakeQueueClient(jobs=[], system_status=quiesce_status)
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=3,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    stop_event = asyncio.Event()
+    cancel_event = asyncio.Event()
+    pause_event = asyncio.Event()
+    task = asyncio.create_task(
+        worker._heartbeat_loop(
+            job_id=uuid4(),
+            stop_event=stop_event,
+            cancel_event=cancel_event,
+            pause_event=pause_event,
+        )
+    )
+    await asyncio.sleep(1.2)
+    stop_event.set()
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert pause_event.is_set()
 
 
 async def test_ensure_live_session_started_skips_opt_in_without_request(

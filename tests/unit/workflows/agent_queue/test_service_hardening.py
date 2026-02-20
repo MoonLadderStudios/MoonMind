@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from unittest.mock import AsyncMock
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -80,6 +81,32 @@ async def test_resolve_worker_token_rejects_inactive_token(tmp_path: Path) -> No
 
             with pytest.raises(AgentQueueAuthenticationError):
                 await service.resolve_worker_token(issued.raw_token)
+
+
+async def test_claim_job_short_circuits_when_paused() -> None:
+    """Paused system responses should skip repository claims."""
+
+    repo = AsyncMock()
+    paused_state = models.SystemWorkerPauseState(
+        id=1,
+        paused=True,
+        mode=models.WorkerPauseMode.DRAIN,
+        reason="maintenance",
+        requested_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        version=3,
+    )
+    repo.get_pause_state.return_value = paused_state
+    service = AgentQueueService(repo)
+
+    result = await service.claim_job(
+        worker_id="executor-01",
+        lease_seconds=60,
+    )
+
+    assert result.job is None
+    assert result.system.workers_paused is True
+    repo.claim_job.assert_not_awaited()
 
 
 async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.schemas import QueueSystemMetadataModel
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
@@ -81,6 +82,7 @@ from moonmind.workflows.agent_queue.service import (
     LiveSessionNotFoundError,
     LiveSessionStateError,
     QueueMigrationTelemetry,
+    QueueSystemMetadata,
     WorkerAuthPolicy,
 )
 
@@ -111,8 +113,28 @@ async def _get_service(
     return AgentQueueService(repository)
 
 
-def _serialize_job(job: models.AgentJob) -> JobModel:
-    return JobModel.model_validate(job)
+def _serialize_job(
+    job: models.AgentJob,
+    system: QueueSystemMetadata | None = None,
+) -> JobModel:
+    serialized = JobModel.model_validate(job)
+    if system is not None:
+        serialized.system = _serialize_system_metadata(system)
+    return serialized
+
+
+def _serialize_system_metadata(
+    metadata: QueueSystemMetadata,
+) -> QueueSystemMetadataModel:
+    return QueueSystemMetadataModel(
+        workers_paused=metadata.workers_paused,
+        mode=metadata.mode.value if metadata.mode else None,
+        reason=metadata.reason,
+        version=metadata.version,
+        requested_by_user_id=metadata.requested_by_user_id,
+        requested_at=metadata.requested_at,
+        updated_at=metadata.updated_at,
+    )
 
 
 def _serialize_artifact(artifact: models.AgentJobArtifact) -> ArtifactModel:
@@ -445,7 +467,7 @@ async def claim_job(
             if worker_auth.capabilities
             else payload.worker_capabilities
         )
-        job = await service.claim_job(
+        result = await service.claim_job(
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
             allowed_types=merged_types,
@@ -458,7 +480,11 @@ async def claim_job(
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return ClaimJobResponse(job=_serialize_job(job) if job else None)
+    serialized_job = (
+        _serialize_job(result.job) if result.job is not None else None
+    )
+    system_model = _serialize_system_metadata(result.system)
+    return ClaimJobResponse(job=serialized_job, system=system_model)
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=JobModel)
@@ -472,14 +498,14 @@ async def heartbeat_job(
 
     try:
         _ensure_worker_identity(payload.worker_id, worker_auth)
-        job = await service.heartbeat(
+        result = await service.heartbeat(
             job_id=job_id,
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return _serialize_job(job)
+    return _serialize_job(result.job, result.system)
 
 
 @router.post("/jobs/{job_id}/complete", response_model=JobModel)

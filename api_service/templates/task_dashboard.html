@@ -38,6 +38,61 @@
         </div>
       </header>
 
+      <section class="worker-pause" data-worker-pause hidden aria-live="polite">
+        <div class="worker-pause-status">
+          <p class="worker-pause-label" data-worker-pause-status>Workers: Running</p>
+          <p class="worker-pause-reason" data-worker-pause-reason></p>
+        </div>
+        <div class="worker-pause-metrics">
+          <div class="metric">
+            <span class="metric-label">Queued</span>
+            <span class="metric-value" data-worker-pause-metric="queued">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Running</span>
+            <span class="metric-value" data-worker-pause-metric="running">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Stale</span>
+            <span class="metric-value" data-worker-pause-metric="staleRunning">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Drained</span>
+            <span class="metric-value" data-worker-pause-drained>No</span>
+          </div>
+        </div>
+        <div class="worker-pause-controls">
+          <form data-worker-pause-form="pause">
+            <fieldset>
+              <legend>Pause Workers</legend>
+              <label>
+                Mode
+                <select name="mode" required>
+                  <option value="drain" selected>Drain (default)</option>
+                  <option value="quiesce">Quiesce</option>
+                </select>
+              </label>
+              <label>
+                Reason
+                <input type="text" name="reason" maxlength="160" required />
+              </label>
+              <button type="submit">Pause Workers</button>
+            </fieldset>
+          </form>
+          <form data-worker-pause-form="resume">
+            <fieldset>
+              <legend>Resume Workers</legend>
+              <label>
+                Reason
+                <input type="text" name="reason" maxlength="160" required />
+              </label>
+              <button type="submit">Resume Workers</button>
+            </fieldset>
+          </form>
+        </div>
+        <p class="worker-pause-error" data-worker-pause-error hidden></p>
+      </section>
+
       <nav class="route-nav" aria-label="Task dashboard navigation">
         <a href="/tasks" data-nav>Active</a>
         <a href="/tasks/queue" data-nav>Queue</a>

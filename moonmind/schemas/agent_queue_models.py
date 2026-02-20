@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from api_service.api.schemas import QueueSystemMetadataModel
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
@@ -206,6 +207,7 @@ class JobModel(BaseModel):
     finished_at: Optional[datetime] = Field(None, alias="finishedAt")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
+    system: Optional[QueueSystemMetadataModel] = Field(None, alias="system")
 
     @model_validator(mode="after")
     def _sanitize_manifest_payload(self) -> "JobModel":
@@ -220,6 +222,7 @@ class ClaimJobResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     job: Optional[JobModel] = Field(None, alias="job")
+    system: Optional[QueueSystemMetadataModel] = Field(None, alias="system")
 
 
 class JobListResponse(BaseModel):
