@@ -79,6 +79,12 @@ _SECRET_LIKE_METADATA_PATTERN = re.compile(
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 
 
+def _normalize_instruction_text_for_comparison(value: str | None) -> str:
+    """Normalize instruction text for objective/step deduplication checks."""
+
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
 
@@ -3826,11 +3832,26 @@ class CodexWorker:
         task = task_node if isinstance(task_node, Mapping) else {}
         objective = str(task.get("instructions") or "").strip()
         step_title = f" {step.title}" if step.title else ""
-        step_instruction = (
-            step.instructions
-            if step.instructions
-            else "(no step-specific instructions; continue based on objective)"
+        normalized_objective = _normalize_instruction_text_for_comparison(objective)
+        step_instruction_value = (
+            str(step.instructions).strip() if step.instructions is not None else ""
         )
+        normalized_step_instruction = _normalize_instruction_text_for_comparison(
+            step_instruction_value
+        )
+        if (
+            step_instruction_value
+            and normalized_objective
+            and normalized_step_instruction == normalized_objective
+        ):
+            step_instruction = (
+                "(same as task objective; no additional step-specific instructions)"
+            )
+        else:
+            step_instruction = (
+                step_instruction_value
+                or "(no step-specific instructions; continue based on objective)"
+            )
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"
             f"{objective}\n\n"

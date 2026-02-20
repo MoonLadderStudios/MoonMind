@@ -22,6 +22,7 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     PreparedTaskWorkspace,
+    ResolvedTaskStep,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
@@ -807,6 +808,105 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert len(finished) == 2
     assert started[0]["payload"]["stepId"] == "inspect"
     assert started[1]["payload"]["stepId"] == "patch"
+
+
+async def test_compose_step_instruction_dedupes_objective_text(
+    tmp_path: Path,
+) -> None:
+    """Duplicate step/objective text should collapse to a single objective copy."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Implement direct worker to Qdrant retrieval path."
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title="Intake",
+            instructions="  Implement   direct worker to Qdrant retrieval path.\n",
+            effective_skill_id="auto",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    assert (
+        "MOONMIND TASK OBJECTIVE:\nImplement direct worker to Qdrant retrieval path."
+        in instruction
+    )
+    assert (
+        "STEP 1/1 step-1 Intake:\n(same as task objective; no additional step-specific instructions)"
+        in instruction
+    )
+    assert instruction.count("Implement direct worker to Qdrant retrieval path.") == 1
+
+
+async def test_compose_step_instruction_keeps_distinct_step_text(
+    tmp_path: Path,
+) -> None:
+    """Distinct step instructions should remain visible after objective rendering."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    step_text = "Run speckit-specify and preserve user constraints."
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Implement direct worker to Qdrant retrieval path."
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title=None,
+            instructions=step_text,
+            effective_skill_id="auto",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    assert (
+        "MOONMIND TASK OBJECTIVE:\nImplement direct worker to Qdrant retrieval path."
+        in instruction
+    )
+    assert f"STEP 1/1 step-1:\n{step_text}" in instruction
+    assert (
+        "(same as task objective; no additional step-specific instructions)"
+        not in instruction
+    )
 
 
 async def test_run_once_task_steps_fail_fast_on_first_failed_step(

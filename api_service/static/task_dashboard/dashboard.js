@@ -2096,6 +2096,51 @@
       templateFeatureRequest instanceof HTMLTextAreaElement
         ? String(templateFeatureRequest.value || "").trim()
         : "";
+    const normalizeTemplateInputKey = (key) =>
+      String(key || "")
+        .trim()
+        .toLowerCase()
+        .replaceAll(/[^a-z0-9]/g, "");
+    const valueForFeatureRequestInput = (rawInputs) => {
+      if (!rawInputs || typeof rawInputs !== "object" || Array.isArray(rawInputs)) {
+        return "";
+      }
+      let fallback = "";
+      let preferred = "";
+      for (const [rawKey, rawValue] of Object.entries(rawInputs)) {
+        if (normalizeTemplateInputKey(rawKey) !== "featurerequest") {
+          continue;
+        }
+        const candidate = String(rawValue || "").trim();
+        if (!candidate) {
+          continue;
+        }
+        if (String(rawKey || "").trim().toLowerCase() === "feature_request") {
+          preferred = candidate;
+          break;
+        }
+        if (!fallback) {
+          fallback = candidate;
+        }
+      }
+      return preferred || fallback;
+    };
+    const resolveObjectiveInstructions = (primaryInstructions) => {
+      const explicitFeatureRequest = currentTemplateFeatureRequest();
+      if (explicitFeatureRequest) {
+        return explicitFeatureRequest;
+      }
+      if (primaryInstructions) {
+        return primaryInstructions;
+      }
+      for (let index = appliedTemplateState.length - 1; index >= 0; index -= 1) {
+        const candidate = valueForFeatureRequestInput(appliedTemplateState[index]?.inputs);
+        if (candidate) {
+          return candidate;
+        }
+      }
+      return primaryInstructions;
+    };
     const templateVersionForItem = (item) =>
       String(item?.latestVersion || item?.version || "1.0.0").trim();
     const preferredTemplateFrom = (items) => {
@@ -2640,6 +2685,7 @@
         message.textContent = "Primary step instructions are required.";
         return;
       }
+      const objectiveInstructions = resolveObjectiveInstructions(instructions);
 
       const repositoryInput = String(formData.get("repository") || "").trim();
       const repository = repositoryInput || defaultRepository;
@@ -2774,8 +2820,13 @@
         }
         additionalSteps.push(stepPayload);
       }
+      const includePrimaryStepForObjectiveOverride =
+        Boolean(instructions) && objectiveInstructions !== instructions;
       const includeExplicitSteps =
-        additionalSteps.length > 0 || Boolean(primaryStepId) || Boolean(primaryStepTitle);
+        additionalSteps.length > 0 ||
+        Boolean(primaryStepId) ||
+        Boolean(primaryStepTitle) ||
+        includePrimaryStepForObjectiveOverride;
       const normalizedSteps = includeExplicitSteps
         ? [
             {
@@ -2827,7 +2878,7 @@
         requiredCapabilities: mergedCapabilities,
         targetRuntime: runtimeMode,
         task: {
-          instructions,
+          instructions: objectiveInstructions,
           skill: {
             id: skillId,
             args: skillArgs,
