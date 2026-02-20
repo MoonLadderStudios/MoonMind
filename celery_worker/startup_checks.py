@@ -127,6 +127,28 @@ def validate_shared_skills_mirror(
             candidate = (base_path / candidate).resolve()
         resolved_roots.append(candidate.resolve())
 
+    def _discover_skill_dirs(mirror_path: Path) -> tuple[list[Path], Path]:
+        skill_dirs = [
+            child
+            for child in mirror_path.iterdir()
+            if child.is_dir() and (child / "SKILL.md").is_file()
+        ]
+        if skill_dirs:
+            return skill_dirs, mirror_path
+
+        nested = mirror_path / "skills"
+        if not nested.is_dir():
+            return [], mirror_path
+
+        nested_skill_dirs = [
+            child
+            for child in nested.iterdir()
+            if child.is_dir() and (child / "SKILL.md").is_file()
+        ]
+        if nested_skill_dirs:
+            return nested_skill_dirs, nested
+        return [], mirror_path
+
     errors: list[str] = []
     for index, mirror_path in enumerate(resolved_roots):
         if not mirror_path.exists():
@@ -136,30 +158,29 @@ def validate_shared_skills_mirror(
             errors.append(f"is not a directory: {mirror_path}")
             continue
 
-        skill_dirs = [
-            child
-            for child in mirror_path.iterdir()
-            if child.is_dir() and (child / "SKILL.md").is_file()
-        ]
+        skill_dirs, effective_root = _discover_skill_dirs(mirror_path)
         if not skill_dirs:
-            errors.append(f"contains no valid skills: {mirror_path}")
+            errors.append(
+                f"contains no valid skills (including optional nested '/skills'): {mirror_path}"
+            )
             continue
 
         fallback_used = index > 0
         logger.info(
             "Shared skills mirror validated for %s worker: %s (%d skills)",
             worker_name,
-            mirror_path,
+            effective_root,
             len(skill_dirs),
             extra={
                 "worker_name": worker_name,
-                "skills_mirror_root": str(mirror_path),
+                "skills_mirror_root": str(effective_root),
+                "skills_mirror_configured_root": str(mirror_path),
                 "skills_mirror_count": len(skill_dirs),
                 "skills_mirror_fallback_used": fallback_used,
                 "skills_mirror_checked_roots": [str(path) for path in resolved_roots],
             },
         )
-        return mirror_path
+        return effective_root
 
     if len(resolved_roots) == 1:
         message = errors[0] if errors else f"invalid mirror root: {resolved_roots[0]}"

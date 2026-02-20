@@ -294,6 +294,8 @@ class TestSpecWorkflowSettings:
         assert settings.default_skill == "speckit"
         assert settings.skill_policy_mode == "permissive"
         assert settings.allowed_skills == ("speckit",)
+        assert settings.skills_local_mirror_root == ".agents/skills/local"
+        assert settings.skills_legacy_mirror_root == ".agents/skills"
         assert settings.live_session_enabled_default is True
         assert settings.live_session_provider == "tmate"
         assert settings.live_session_ttl_minutes == 60

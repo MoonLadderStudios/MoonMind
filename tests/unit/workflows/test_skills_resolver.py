@@ -249,15 +249,16 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
 ):
     repo_root = tmp_path / "repo"
     local_root = repo_root / ".agents" / "skills" / "local"
-    legacy_root = repo_root / ".agents" / "skills" / "skills"
+    legacy_root = repo_root / ".agents" / "skills"
+    legacy_nested_root = legacy_root / "skills"
     local_root.mkdir(parents=True)
-    legacy_root.mkdir(parents=True)
+    legacy_nested_root.mkdir(parents=True)
 
     local_skill = local_root / "local-tool"
     local_skill.mkdir()
     (local_skill / "SKILL.md").write_text("name: local-tool\n", encoding="utf-8")
 
-    legacy_skill = legacy_root / "speckit-orchestrate"
+    legacy_skill = legacy_nested_root / "speckit-orchestrate"
     legacy_skill.mkdir()
     (legacy_skill / "SKILL.md").write_text(
         "name: speckit-orchestrate\n", encoding="utf-8"
@@ -279,7 +280,7 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
-        ".agents/skills/skills",
+        ".agents/skills",
         raising=False,
     )
     monkeypatch.setattr(
@@ -332,7 +333,7 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
-        ".agents/skills/skills",
+        ".agents/skills",
         raising=False,
     )
     monkeypatch.setattr(

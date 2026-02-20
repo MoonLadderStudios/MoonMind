@@ -114,7 +114,7 @@ def test_validate_shared_skills_mirror_strict_allows_legacy_fallback(caplog, tmp
     resolved = validate_shared_skills_mirror(
         worker_name="gemini",
         mirror_root=".agents/skills/local",
-        legacy_mirror_root=".agents/skills/skills",
+        legacy_mirror_root=".agents/skills",
         repo_root=str(repo_root),
         strict=True,
         logger=logger,

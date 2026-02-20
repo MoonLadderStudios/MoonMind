@@ -181,18 +181,29 @@ def _resolve_mirror_root(raw_root: str | Path) -> Path:
     return repo_relative
 
 
+def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:
+    """Yield effective skill roots, including nested legacy layout fallback."""
+
+    base = _resolve_mirror_root(raw_root)
+    nested = base / "skills"
+    ordered: list[Path] = [base]
+    if nested not in ordered:
+        ordered.append(nested)
+    return tuple(ordered)
+
+
 def _resolve_local_source(skill_name: str) -> str | None:
     cfg = settings.spec_workflow
 
-    roots = [
+    configured_roots = (
         Path(cfg.skills_local_mirror_root),
         Path(cfg.skills_legacy_mirror_root),
-    ]
-    for root in roots:
-        base = _resolve_mirror_root(root)
-        candidate = base / skill_name
-        if candidate.is_dir():
-            return _file_uri(candidate)
+    )
+    for configured_root in configured_roots:
+        for root in _iter_skill_mirror_roots(configured_root):
+            candidate = root / skill_name
+            if candidate.is_dir():
+                return _file_uri(candidate)
     return None
 
 
@@ -200,34 +211,34 @@ def _discover_local_skill_names() -> tuple[str, ...]:
     """Discover skill names from configured local and legacy mirrors."""
 
     cfg = settings.spec_workflow
-    roots = (
+    configured_roots = (
         Path(cfg.skills_local_mirror_root),
         Path(cfg.skills_legacy_mirror_root),
     )
     discovered: list[str] = []
     seen: set[str] = set()
 
-    for root in roots:
-        base = _resolve_mirror_root(root)
-        if not base.is_dir():
-            continue
-        try:
-            entries = sorted(base.iterdir(), key=lambda entry: entry.name)
-        except OSError:
-            continue
-        for entry in entries:
-            if not entry.is_dir():
-                continue
-            if not (entry / "SKILL.md").is_file():
+    for configured_root in configured_roots:
+        for root in _iter_skill_mirror_roots(configured_root):
+            if not root.is_dir():
                 continue
             try:
-                skill_name = validate_skill_name(entry.name)
-            except SkillResolutionError:
+                entries = sorted(root.iterdir(), key=lambda entry: entry.name)
+            except OSError:
                 continue
-            if skill_name in seen:
-                continue
-            seen.add(skill_name)
-            discovered.append(skill_name)
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                if not (entry / "SKILL.md").is_file():
+                    continue
+                try:
+                    skill_name = validate_skill_name(entry.name)
+                except SkillResolutionError:
+                    continue
+                if skill_name in seen:
+                    continue
+                seen.add(skill_name)
+                discovered.append(skill_name)
 
     return tuple(discovered)
 

@@ -375,10 +375,13 @@ class SpecWorkflowSettings(BaseSettings):
         description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
-        ".agents/skills/skills",
+        ".agents/skills",
         env="SPEC_SKILLS_LEGACY_MIRROR_ROOT",
         validation_alias=AliasChoices("SPEC_SKILLS_LEGACY_MIRROR_ROOT"),
-        description="Legacy local mirror fallback for backward compatibility.",
+        description=(
+            "Secondary shared mirror root checked after local-only skills; "
+            "nested '<root>/skills' is auto-detected for compatibility."
+        ),
     )
     skills_verify_signatures: bool = Field(
         False,
