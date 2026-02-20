@@ -480,9 +480,7 @@ async def claim_job(
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    serialized_job = (
-        _serialize_job(result.job) if result.job is not None else None
-    )
+    serialized_job = _serialize_job(result.job) if result.job is not None else None
     system_model = _serialize_system_metadata(result.system)
     return ClaimJobResponse(job=serialized_job, system=system_model)
 

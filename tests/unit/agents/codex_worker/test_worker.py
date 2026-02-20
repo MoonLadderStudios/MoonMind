@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import suppress
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -332,10 +332,14 @@ async def test_system_metadata_logging_occurs_once_per_version(
     worker._handle_system_metadata(resumed)
 
     pause_logs = [
-        record.message for record in caplog.records if "Worker pause active" in record.message
+        record.message
+        for record in caplog.records
+        if "Worker pause active" in record.message
     ]
     resume_logs = [
-        record.message for record in caplog.records if "Worker pause cleared" in record.message
+        record.message
+        for record in caplog.records
+        if "Worker pause cleared" in record.message
     ]
     assert len(pause_logs) == 1
     assert len(resume_logs) == 1

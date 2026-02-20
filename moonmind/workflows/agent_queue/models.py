@@ -490,7 +490,9 @@ class SystemControlEvent(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    control: Mapped[str] = mapped_column(String(64), nullable=False, default="worker_pause")
+    control: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="worker_pause"
+    )
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     mode: Mapped[Optional[WorkerPauseMode]] = mapped_column(
         Enum(

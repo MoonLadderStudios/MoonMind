@@ -5,15 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.system_worker_pause import (
-    _get_service,
-    router,
-)
+from api_service.api.routers.system_worker_pause import _get_service, router
 from api_service.auth_providers import get_current_user
 from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
@@ -22,7 +20,6 @@ from moonmind.workflows.agent_queue.service import (
     WorkerPauseMetrics,
     WorkerPauseSnapshot,
 )
-from uuid import uuid4
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 

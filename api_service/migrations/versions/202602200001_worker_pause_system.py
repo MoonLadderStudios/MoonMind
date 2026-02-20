@@ -8,7 +8,6 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-
 revision: str = "202602200001"
 down_revision: Union[str, None] = "202602190004"
 
@@ -28,7 +27,9 @@ def upgrade() -> None:
     op.create_table(
         "system_worker_pause_state",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("paused", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column(
+            "paused", sa.Boolean(), nullable=False, server_default=sa.text("false")
+        ),
         sa.Column(
             "mode",
             postgresql.ENUM(name="workerpausemode", create_type=False),
@@ -73,7 +74,12 @@ def upgrade() -> None:
     op.create_table(
         "system_control_events",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("control", sa.String(length=64), nullable=False, server_default=sa.text("'worker_pause'::text")),
+        sa.Column(
+            "control",
+            sa.String(length=64),
+            nullable=False,
+            server_default=sa.text("'worker_pause'::text"),
+        ),
         sa.Column("action", sa.String(length=32), nullable=False),
         sa.Column(
             "mode",

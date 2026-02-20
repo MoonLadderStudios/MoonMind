@@ -1070,22 +1070,32 @@ class AgentQueueRepository:
         """Return queued/running/stale-running metrics for worker pause banner."""
 
         now = datetime.now(UTC)
-        queued_stmt = select(func.count()).select_from(models.AgentJob).where(
-            models.AgentJob.status == models.AgentJobStatus.QUEUED,
-            or_(
-                models.AgentJob.next_attempt_at.is_(None),
-                models.AgentJob.next_attempt_at <= now,
-            ),
+        queued_stmt = (
+            select(func.count())
+            .select_from(models.AgentJob)
+            .where(
+                models.AgentJob.status == models.AgentJobStatus.QUEUED,
+                or_(
+                    models.AgentJob.next_attempt_at.is_(None),
+                    models.AgentJob.next_attempt_at <= now,
+                ),
+            )
         )
-        running_stmt = select(func.count()).select_from(models.AgentJob).where(
-            models.AgentJob.status == models.AgentJobStatus.RUNNING
+        running_stmt = (
+            select(func.count())
+            .select_from(models.AgentJob)
+            .where(models.AgentJob.status == models.AgentJobStatus.RUNNING)
         )
-        stale_stmt = select(func.count()).select_from(models.AgentJob).where(
-            models.AgentJob.status == models.AgentJobStatus.RUNNING,
-            or_(
-                models.AgentJob.lease_expires_at.is_(None),
-                models.AgentJob.lease_expires_at < now,
-            ),
+        stale_stmt = (
+            select(func.count())
+            .select_from(models.AgentJob)
+            .where(
+                models.AgentJob.status == models.AgentJobStatus.RUNNING,
+                or_(
+                    models.AgentJob.lease_expires_at.is_(None),
+                    models.AgentJob.lease_expires_at < now,
+                ),
+            )
         )
         queued_result = await self._session.execute(queued_stmt)
         running_result = await self._session.execute(running_stmt)
