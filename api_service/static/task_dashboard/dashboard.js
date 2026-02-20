@@ -124,6 +124,8 @@
     defaultTaskRuntime,
   );
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
+  const defaultPublishMode =
+    normalizePublishModeInput(systemConfig.defaultPublishMode) || "pr";
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const taskTemplateCatalogConfig =
     systemConfig.taskTemplateCatalog &&
@@ -951,6 +953,14 @@
     return supportedTaskRuntimes.includes(normalized) ? normalized : "";
   }
 
+  function normalizePublishModeInput(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) {
+      return "";
+    }
+    return ["none", "branch", "pr"].includes(normalized) ? normalized : "";
+  }
+
   function isValidRepositoryInput(value) {
     const candidate = String(value || "").trim();
     if (!candidate) {
@@ -1352,12 +1362,12 @@
     taskNode.instructions = updatedInstructions;
     const publishMode = window.prompt(
       "Publish mode (branch/pr/none)",
-      publishNode.mode || "branch",
+      publishNode.mode || defaultPublishMode,
     );
     if (publishMode === null) {
       return null;
     }
-    publishNode.mode = publishMode || publishNode.mode || "branch";
+    publishNode.mode = publishMode || publishNode.mode || defaultPublishMode;
     const startingBranch = window.prompt(
       "Starting branch (leave blank to keep current)",
       gitNode.startingBranch || "",
@@ -1537,7 +1547,7 @@
 
         if (filterState.publishMode) {
           const publishMode =
-            extractPublishModeFromPayload(row.payload || {}) || "branch";
+            extractPublishModeFromPayload(row.payload || {}) || defaultPublishMode;
           if (publishMode !== filterState.publishMode) {
             return false;
           }
@@ -2048,11 +2058,13 @@
         </div>
         <label>Publish Mode
           <select name="publishMode">
-            <option value="pr" selected>pr</option>
-            <option value="branch">branch</option>
-            <option value="none">none</option>
+            <option value="pr" ${defaultPublishMode === "pr" ? "selected" : ""}>pr</option>
+            <option value="branch" ${defaultPublishMode === "branch" ? "selected" : ""}>branch</option>
+            <option value="none" ${defaultPublishMode === "none" ? "selected" : ""}>none</option>
           </select>
-          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">pr</span>.</span>
+          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">${escapeHtml(
+            defaultPublishMode,
+          )}</span>.</span>
         </label>
         <div class="grid-2">
           <label>Priority
@@ -2998,7 +3010,7 @@
         return;
       }
 
-      const publishMode = String(formData.get("publishMode") || "pr")
+      const publishMode = String(formData.get("publishMode") || defaultPublishMode)
         .trim()
         .toLowerCase();
       if (!["none", "branch", "pr"].includes(publishMode)) {

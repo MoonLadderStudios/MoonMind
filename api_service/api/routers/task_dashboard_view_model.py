@@ -107,6 +107,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         str(settings.spec_workflow.github_repository or "").strip()
         or _DEFAULT_REPOSITORY
     )
+    default_publish_mode = (
+        str(settings.spec_workflow.default_publish_mode or "").strip().lower() or "pr"
+    )
 
     return {
         "initialPath": initial_path,
@@ -172,6 +175,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultTaskEffort": default_task_effort,
             "defaultTaskModelByRuntime": default_task_model_by_runtime,
             "defaultTaskEffortByRuntime": default_task_effort_by_runtime,
+            "defaultPublishMode": default_publish_mode,
             "queueEnv": "MOONMIND_QUEUE",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),

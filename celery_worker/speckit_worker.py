@@ -25,6 +25,14 @@ from moonmind.workflows.speckit_celery.utils import (
 
 logger = logging.getLogger(__name__)
 
+_SELF_HEAL_ENV_DEFAULTS: dict[str, str] = {
+    "STEP_MAX_ATTEMPTS": "3",
+    "STEP_TIMEOUT_SECONDS": "900",
+    "STEP_IDLE_TIMEOUT_SECONDS": "300",
+    "STEP_NO_PROGRESS_LIMIT": "2",
+    "JOB_SELF_HEAL_MAX_RESETS": "1",
+}
+
 # Register Gemini tasks so all shared-queue workers recognize task names.
 try:
     import_module("celery_worker.gemini_tasks")
@@ -187,6 +195,22 @@ def _log_speckit_cli_version() -> None:
     )
 
 
+def _configure_self_heal_env_defaults() -> None:
+    """Ensure self-heal budget env vars have documented defaults."""
+
+    applied: dict[str, str] = {}
+    for key, value in _SELF_HEAL_ENV_DEFAULTS.items():
+        if key not in os.environ or not os.environ[key].strip():
+            os.environ[key] = value
+            applied[key] = value
+
+    if applied:
+        logger.info(
+            "Applied worker self-heal budget defaults",
+            extra={"self_heal_defaults": applied},
+        )
+
+
 def _log_cli_version(cli_name: str, *, label: str, failure_message: str) -> None:
     """Emit a startup log confirming the bundled CLI version."""
 
@@ -333,6 +357,7 @@ celery_app = speckit_celery_app
 app = celery_app
 
 _runtime_mode = _configure_worker_runtime()
+_configure_self_heal_env_defaults()
 if _runtime_mode in {"codex", "universal"}:
     _enforce_codex_approval_policy()
 else:

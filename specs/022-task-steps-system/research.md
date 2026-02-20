@@ -45,7 +45,7 @@
   - Best-effort sequential container execution: rejected due to ambiguous command composition and publish semantics.
 
 ## Decision 8: Add queue submit UI steps editor with canonical payload emission
-- Decision: Extend `/tasks/queue/new` form to add/remove/reorder optional steps and include `task.steps` in submitted canonical payload while keeping publish default `pr`.
+- Decision: Extend `/tasks/queue/new` form to add/remove/reorder optional steps and include `task.steps` in submitted canonical payload while keeping the publish default driven by `MOONMIND_DEFAULT_PUBLISH_MODE` (default `pr`).
 - Rationale: Enables routine usage without raw JSON edits and aligns with document target UX.
 - Alternatives considered:
   - Keep UI unchanged and require API/manual payload crafting: rejected for adoption friction.

@@ -7,6 +7,19 @@ from moonmind.agents.codex_worker.handlers import (
     CodexWorkerHandlerError,
     WorkerExecutionResult,
 )
+from moonmind.agents.codex_worker.metrics import WorkerMetrics
+from moonmind.agents.codex_worker.self_heal import (
+    FailureClass,
+    HardResetWorkspaceBuilder,
+    IdleTimeoutWatcher,
+    SelfHealConfig,
+    SelfHealController,
+    SelfHealStrategy,
+    StepIdleTimeoutExceeded,
+    StepTimeoutExceeded,
+    WorkspaceReplayError,
+    is_failure_retryable,
+)
 from moonmind.agents.codex_worker.utils import CliVerificationError
 from moonmind.agents.codex_worker.worker import (
     ClaimedJob,
@@ -28,4 +41,15 @@ __all__ = [
     "QueueApiClient",
     "QueueClientError",
     "WorkerExecutionResult",
+    "FailureClass",
+    "HardResetWorkspaceBuilder",
+    "IdleTimeoutWatcher",
+    "SelfHealConfig",
+    "SelfHealController",
+    "SelfHealStrategy",
+    "StepIdleTimeoutExceeded",
+    "StepTimeoutExceeded",
+    "WorkspaceReplayError",
+    "is_failure_retryable",
+    "WorkerMetrics",
 ]
