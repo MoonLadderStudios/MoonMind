@@ -101,6 +101,86 @@ def _normalize_instruction_text_for_comparison(value: str | None) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
 
+def _normalize_proposal_tags(values: object) -> list[str]:
+    """Normalize proposal tags into a stable lowercase unique list."""
+
+    if not isinstance(values, (list, tuple)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        token = str(raw or "").strip().lower()
+        if not token or token in seen:
+            continue
+        normalized.append(token)
+        seen.add(token)
+    return normalized
+
+
+def _extract_proposal_signal(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract signal metadata from proposal payload or origin metadata."""
+
+    direct = payload.get("signal")
+    if isinstance(direct, Mapping):
+        return dict(direct)
+    origin = payload.get("origin")
+    if isinstance(origin, Mapping):
+        metadata = origin.get("metadata")
+        if isinstance(metadata, Mapping):
+            signal = metadata.get("signal")
+            if isinstance(signal, Mapping):
+                return dict(signal)
+    return {}
+
+
+def _ensure_task_request_repository(
+    payload: dict[str, Any],
+    *,
+    repository: str,
+    proposals_path: Path,
+) -> bool:
+    """Ensure taskCreateRequest exists and points to the repository."""
+
+    request_node = payload.get("taskCreateRequest")
+    if not isinstance(request_node, Mapping):
+        logger.warning(
+            "Proposal entry in %s missing taskCreateRequest; skipping",
+            proposals_path,
+        )
+        return False
+    request = copy.deepcopy(request_node)
+    payload["taskCreateRequest"] = request
+    request_payload = request.get("payload")
+    payload_node = dict(request_payload) if isinstance(request_payload, Mapping) else {}
+    payload_node["repository"] = repository
+    request["payload"] = payload_node
+    payload["repository"] = repository
+    return True
+
+
+def _ensure_run_quality_title(title: str) -> str:
+    """Normalize the run_quality title prefix."""
+
+    normalized = title.strip()
+    if not normalized.lower().startswith("[run_quality]"):
+        normalized = normalized or "Run quality proposal"
+        normalized = f"[run_quality] {normalized}"
+    return normalized.strip()
+
+
+def _append_tag_slug(title: str, tags: Sequence[str]) -> str:
+    """Append a sorted tag slug marker used for deduping run_quality proposals."""
+
+    slug_items = sorted({tag for tag in tags if tag})
+    if not slug_items:
+        return title
+    slug_text = "+".join(slug_items)
+    marker = f"(tags: {slug_text})"
+    if marker in title:
+        return title
+    return f"{title} (tags: {slug_text})"
+
+
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
 
@@ -4371,68 +4451,6 @@ class CodexWorker:
         )
         approved_ci_tags = _MOONMIND_SIGNAL_TAGS
 
-        def _normalize_tags(values: object) -> list[str]:
-            if not isinstance(values, (list, tuple)):
-                return []
-            normalized: list[str] = []
-            seen: set[str] = set()
-            for raw in values:
-                token = str(raw or "").strip().lower()
-                if not token or token in seen:
-                    continue
-                normalized.append(token)
-                seen.add(token)
-            return normalized
-
-        def _extract_signal(payload: Mapping[str, Any]) -> dict[str, Any]:
-            direct = payload.get("signal")
-            if isinstance(direct, Mapping):
-                return dict(direct)
-            origin = payload.get("origin")
-            if isinstance(origin, Mapping):
-                metadata = origin.get("metadata")
-                if isinstance(metadata, Mapping):
-                    signal = metadata.get("signal")
-                    if isinstance(signal, Mapping):
-                        return dict(signal)
-            return {}
-
-        def _ensure_task_request(payload: dict[str, Any], *, repository: str) -> bool:
-            request_node = payload.get("taskCreateRequest")
-            if not isinstance(request_node, Mapping):
-                logger.warning(
-                    "Proposal entry in %s missing taskCreateRequest; skipping",
-                    proposals_path,
-                )
-                return False
-            request = copy.deepcopy(request_node)
-            payload["taskCreateRequest"] = request
-            request_payload = request.get("payload")
-            payload_node = (
-                dict(request_payload) if isinstance(request_payload, Mapping) else {}
-            )
-            payload_node["repository"] = repository
-            request["payload"] = payload_node
-            payload["repository"] = repository
-            return True
-
-        def _ensure_run_quality_title(title: str) -> str:
-            normalized = title.strip()
-            if not normalized.lower().startswith("[run_quality]"):
-                normalized = normalized or "Run quality proposal"
-                normalized = f"[run_quality] {normalized}"
-            return normalized.strip()
-
-        def _append_tag_slug(title: str, tags: Sequence[str]) -> str:
-            slug_items = sorted({tag for tag in tags if tag})
-            if not slug_items:
-                return title
-            slug_text = "+".join(slug_items)
-            marker = f"(tags: {slug_text})"
-            if marker in title:
-                return title
-            return f"{title} (tags: {slug_text})"
-
         submitted = 0
         for candidate in proposals:
             if not isinstance(candidate, dict):
@@ -4455,7 +4473,7 @@ class CodexWorker:
             origin["metadata"] = metadata_dict
             payload["origin"] = origin
 
-            signal_payload = _extract_signal(payload)
+            signal_payload = _extract_proposal_signal(payload)
             if signal_payload:
                 metadata_dict["signal"] = signal_payload
             severity_value = (
@@ -4464,7 +4482,7 @@ class CodexWorker:
                 else None
             )
 
-            normalized_tags = _normalize_tags(payload.get("tags"))
+            normalized_tags = _normalize_proposal_tags(payload.get("tags"))
             payload["tags"] = normalized_tags
 
             title_text = str(payload.get("title") or "").strip()
@@ -4483,7 +4501,11 @@ class CodexWorker:
 
             if effective_policy.has_project_capacity():
                 project_payload = copy.deepcopy(payload)
-                if _ensure_task_request(project_payload, repository=project_repository):
+                if _ensure_task_request_repository(
+                    project_payload,
+                    repository=project_repository,
+                    proposals_path=proposals_path,
+                ):
                     try:
                         await self._queue_client.create_task_proposal(
                             proposal=project_payload
@@ -4527,9 +4549,10 @@ class CodexWorker:
                 moonmind_payload["title"] = _append_tag_slug(
                     _ensure_run_quality_title(title_text), moonmind_tags
                 )
-                if _ensure_task_request(
+                if _ensure_task_request_repository(
                     moonmind_payload,
                     repository=settings.task_proposals.moonmind_ci_repository,
+                    proposals_path=proposals_path,
                 ):
                     try:
                         await self._queue_client.create_task_proposal(
