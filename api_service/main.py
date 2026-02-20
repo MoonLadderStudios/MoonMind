@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
+from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
 )
@@ -58,6 +59,8 @@ from moonmind.factories.embed_model_factory import build_embed_model
 from moonmind.factories.service_context_factory import build_service_context
 from moonmind.factories.storage_context_factory import build_storage_context
 from moonmind.factories.vector_store_factory import build_vector_store
+from moonmind.rag.service import ContextRetrievalService
+from moonmind.rag.settings import RagRuntimeSettings
 
 logger.info("Starting FastAPI...")
 
@@ -260,6 +263,7 @@ app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
 app.include_router(
     context_protocol_router, tags=["Context Protocol"]
 )  # Removed prefix="/context"
+app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
 app.include_router(manifests_router)
 app.include_router(
@@ -354,6 +358,15 @@ async def startup_event():
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
     _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
+    try:
+        app.state.retrieval_service = ContextRetrievalService(
+            settings=RagRuntimeSettings.from_env()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Retrieval service startup initialization skipped: %s",
+            exc,
+        )
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":

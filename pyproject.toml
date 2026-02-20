@@ -72,11 +72,13 @@ structlog = "~=25.5.0"
 pytest = { version = "~=8.4.2", optional = true }
 pytest-mock = { version = "~=3.14.1", optional = true }
 pytest-asyncio = { version = "^0.23.7", optional = true }
+typer = "~=0.12.3"
 
 [tool.poetry.extras]
 tests = ["pytest", "pytest-mock", "pytest-asyncio"]
 
 [tool.poetry.scripts]
+moonmind = "moonmind.cli:main"
 moonmind-codex-worker = "moonmind.agents.codex_worker.cli:main"
 
 [tool.black]

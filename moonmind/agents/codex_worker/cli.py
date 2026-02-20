@@ -19,6 +19,8 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorkerConfig,
     QueueApiClient,
 )
+from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
+from moonmind.rag.settings import RagRuntimeSettings
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -221,6 +223,10 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         raise RuntimeError(str(exc)) from exc
 
     _validate_embedding_profile(source)
+    try:
+        ensure_rag_ready(RagRuntimeSettings.from_env(source))
+    except GuardrailError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()

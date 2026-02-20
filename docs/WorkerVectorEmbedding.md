@@ -104,5 +104,5 @@ This default is now aligned in:
 - `GOOGLE_API_KEY` set for embedding calls.
 - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
 - `QDRANT_HOST` / `QDRANT_PORT` (or `QDRANT_URL`) set to reachable Qdrant endpoint.
+- `MOONMIND_RAG_AUTO_CONTEXT=true` to auto-inject retrieved context into worker prompts (`false` disables prompt injection while keeping CLI retrieval available).
 - Existing `MOONMIND_URL` + worker token for queue control-plane calls.
-
