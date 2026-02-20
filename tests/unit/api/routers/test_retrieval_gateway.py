@@ -33,7 +33,7 @@ class StubService:
 def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_retrieval_service] = lambda: StubService()
+    app.dependency_overrides[get_retrieval_service] = StubService
     return app
 
 
