@@ -59,6 +59,8 @@ body {
     radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%),
     radial-gradient(circle at 50% 112%, rgb(var(--mm-warn) / 0.18), transparent 56%),
     rgb(var(--mm-bg));
+  background-attachment: fixed;
+  background-repeat: no-repeat;
 }
 
 .dashboard-root {
