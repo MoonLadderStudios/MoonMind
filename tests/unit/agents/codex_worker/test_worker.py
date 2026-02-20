@@ -198,6 +198,24 @@ class FakeHandler:
         self.skill_payloads.append(dict(payload))
         return self._next_result()
 
+    async def _run_command(
+        self,
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        del cwd, check, env, redaction_values, cancel_event, output_chunk_callback
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"$ {' '.join(command)}\n")
+        return CommandResult(tuple(command), 0, "", "")
+
 
 async def test_run_once_returns_false_when_no_job() -> None:
     """No claim should produce a no-work cycle."""
@@ -2110,6 +2128,35 @@ async def test_derive_default_pr_title_sanitizes_uuidv7_tokens(
     assert full_uuid_v7 not in title
 
 
+async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """UUIDs adjacent to word characters should still be redacted from titles."""
+
+    worker, _, _ = codex_worker_components
+    full_uuid = "123e4567-e89b-12d3-a456-426614174000"
+    payload = {
+        "task": {
+            "instructions": " ",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": f"Publish task_{full_uuid} for queue telemetry",
+                }
+            ],
+        }
+    }
+
+    title = worker._derive_default_pr_title(
+        job_id=uuid4(),
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+    )
+
+    assert title == "Publish task_job for queue telemetry"
+    assert full_uuid not in title
+
+
 async def test_derive_default_pr_title_uses_short_correlation_fallback(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
@@ -2162,7 +2209,7 @@ async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
         job_id=job_id,
         runtime_mode="gemini\nMoonMind Job: forged",
         base_branch="main\nHead: forged",
-        head_branch="feature/ghp_supersecrettokenvalue1234567890",
+        head_branch="feature/token=supersecret",
     )
 
     assert f"MoonMind Job: {job_id}" in body
@@ -2320,26 +2367,29 @@ async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
         queue_client=queue,
         codex_exec_handler=handler,
     )  # type: ignore[arg-type]
+    worker._codex_exec_handler = object()  # type: ignore[assignment]
 
     log_path = tmp_path / "publish.log"
-    await worker._run_stage_command(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--title",
-            "very sensitive title",
-            "--body",
-            "token=top-secret",
-        ],
-        cwd=tmp_path,
-        log_path=log_path,
-    )
-    await worker._run_stage_command(
-        ["git", "commit", "-m", "secret commit body"],
-        cwd=tmp_path,
-        log_path=log_path,
-    )
+    with pytest.raises(RuntimeError, match="missing command runner"):
+        await worker._run_stage_command(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                "very sensitive title",
+                "--body",
+                "token=top-secret",
+            ],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+    with pytest.raises(RuntimeError, match="missing command runner"):
+        await worker._run_stage_command(
+            ["git", "commit", "-m", "secret commit body"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
 
     log_content = log_path.read_text(encoding="utf-8")
     assert "very sensitive title" not in log_content

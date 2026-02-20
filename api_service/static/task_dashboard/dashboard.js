@@ -1182,12 +1182,14 @@
       }
       const volumes = pick(snapshot, "jobVolumeByType") || {};
       const publish = pick(snapshot, "publishOutcomes") || {};
+      const legacyCount = Number(pick(snapshot, "legacyJobSubmissions") || 0);
       const totalJobs = Number(pick(snapshot, "totalJobs") || 0);
       const publishedRate = Number(pick(publish, "publishedRate") || 0);
       const failedRate = Number(pick(publish, "failedRate") || 0);
       return `
         <div class="grid-2">
           <div class="card"><strong>Total Jobs (Window):</strong> ${escapeHtml(totalJobs)}</div>
+          <div class="card"><strong>Legacy Submissions:</strong> ${escapeHtml(legacyCount)}</div>
           <div class="card"><strong>Task Jobs:</strong> ${escapeHtml(Number(volumes.task || 0))}</div>
           <div class="card"><strong>Publish Success Rate:</strong> ${escapeHtml(
             (publishedRate * 100).toFixed(1),

@@ -62,13 +62,19 @@ logger = logging.getLogger(__name__)
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
-_FULL_UUID_PATTERN = re.compile(
-    r"\b[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\b"
-)
+_FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
-    r"(?i)(?:gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{10,}|"
-    r"AIza[0-9A-Za-z_-]{10,}|ATATT[A-Za-z0-9_-]{6,}|AKIA[0-9A-Z]{8,}|"
-    r"-----BEGIN [A-Z ]+PRIVATE KEY-----|(?:token|password|secret)\s*[:=])"
+    r"""(?ix)
+    (?:
+        gh[pousr]_[A-Za-z0-9]{8,}
+        | github_pat_[A-Za-z0-9_]{10,}
+        | AIza[0-9A-Za-z_-]{10,}
+        | ATATT[A-Za-z0-9_-]{6,}
+        | AKIA[0-9A-Z]{8,}
+        | -----BEGIN [A-Z ]+PRIVATE KEY-----
+        | (?:token|password|secret)\s*[:=]
+    )
+    """
 )
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 
@@ -2669,7 +2675,7 @@ class CodexWorker:
             command, redaction_values=merged_redaction_values
         )
         self._append_stage_log(log_path, f"$ {' '.join(redacted_command)}")
-        return CommandResult(tuple(command), 0, "", "")
+        raise RuntimeError("Codex execution handler is missing command runner")
 
     @staticmethod
     def _mask_sensitive_command_args(command: Sequence[str]) -> list[str]:
