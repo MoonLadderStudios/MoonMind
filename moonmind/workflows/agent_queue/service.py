@@ -122,6 +122,61 @@ class QueueMigrationTelemetry:
     events_truncated: bool
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerPauseMetrics:
+    """Queued/running counters surfaced to operators while paused."""
+
+    queued: int
+    running: int
+    stale_running: int
+
+    @property
+    def is_drained(self) -> bool:
+        return self.running == 0 and self.stale_running == 0
+
+
+@dataclass(frozen=True, slots=True)
+class QueueSystemMetadata:
+    """Versioned pause metadata attached to claim/heartbeat responses."""
+
+    workers_paused: bool
+    mode: models.WorkerPauseMode | None
+    reason: str | None
+    version: int
+    requested_by_user_id: UUID | None
+    requested_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerPauseAuditEvent:
+    """Recent system control event surfaced via the worker pause API."""
+
+    id: UUID
+    action: str
+    mode: models.WorkerPauseMode | None
+    reason: str | None
+    actor_user_id: UUID | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerPauseSnapshot:
+    """Aggregated worker pause state returned by GET/POST endpoints."""
+
+    system: QueueSystemMetadata
+    metrics: WorkerPauseMetrics
+    audit_events: tuple[WorkerPauseAuditEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class QueueSystemResponse:
+    """Envelope returned by claim/heartbeat paths that includes system metadata."""
+
+    job: models.AgentJob | None
+    system: QueueSystemMetadata
+
+
 class AgentQueueService:
     """Application service exposing validated queue operations."""
 
@@ -359,8 +414,8 @@ class AgentQueueService:
         allowed_types: Optional[list[str]] = None,
         allowed_repositories: Optional[list[str]] = None,
         worker_capabilities: Optional[list[str]] = None,
-    ) -> Optional[models.AgentJob]:
-        """Claim a queued job for a worker."""
+    ) -> QueueSystemResponse:
+        """Claim a queued job for a worker and include pause metadata."""
 
         worker = worker_id.strip()
         if not worker:
@@ -371,6 +426,10 @@ class AgentQueueService:
         normalized_types = self._normalize_str_list(allowed_types)
         normalized_repositories = self._normalize_str_list(allowed_repositories)
         normalized_capabilities = self._normalize_str_list(worker_capabilities)
+
+        metadata = await self._load_system_metadata()
+        if metadata.workers_paused:
+            return QueueSystemResponse(job=None, system=metadata)
 
         job = await self._repository.claim_job(
             worker_id=worker,
@@ -392,7 +451,7 @@ class AgentQueueService:
                 payload={"workerId": worker},
             )
         await self._repository.commit()
-        return job
+        return QueueSystemResponse(job=job, system=metadata)
 
     async def heartbeat(
         self,
@@ -400,8 +459,8 @@ class AgentQueueService:
         job_id: UUID,
         worker_id: str,
         lease_seconds: int,
-    ) -> models.AgentJob:
-        """Extend the lease for a running job."""
+    ) -> QueueSystemResponse:
+        """Extend the lease for a running job and include pause metadata."""
 
         worker = worker_id.strip()
         if not worker:
@@ -421,7 +480,118 @@ class AgentQueueService:
             payload={"workerId": worker, "leaseSeconds": lease_seconds},
         )
         await self._repository.commit()
-        return job
+        metadata = await self._load_system_metadata()
+        return QueueSystemResponse(job=job, system=metadata)
+
+    async def get_worker_pause_snapshot(
+        self,
+        *,
+        audit_limit: int = 5,
+    ) -> WorkerPauseSnapshot:
+        """Return current worker pause metadata, metrics, and audit history."""
+
+        return await self._build_worker_pause_snapshot(audit_limit=audit_limit)
+
+    async def apply_worker_pause_action(
+        self,
+        *,
+        action: Literal["pause", "resume"],
+        mode: Optional[str],
+        reason: str,
+        actor_user_id: UUID,
+        force_resume: bool = False,
+        audit_limit: int = 5,
+    ) -> WorkerPauseSnapshot:
+        """Toggle worker pause state with validation and audit logging."""
+
+        action_key = (action or "").strip().lower()
+        if action_key not in {"pause", "resume"}:
+            raise AgentQueueValidationError("action must be one of: pause, resume")
+
+        normalized_reason = self._clean_optional_str(reason)
+        if not normalized_reason:
+            raise AgentQueueValidationError("reason must be a non-empty string")
+        if actor_user_id is None:
+            raise AgentQueueValidationError("actor_user_id is required")
+
+        state = await self._repository.get_pause_state()
+        now = datetime.now(UTC)
+
+        if action_key == "pause":
+            mode_value = (mode or "").strip().lower()
+            if not mode_value:
+                raise AgentQueueValidationError("mode is required when pausing workers")
+            try:
+                pause_mode = models.WorkerPauseMode(mode_value)
+            except ValueError as exc:  # pragma: no cover - defensive conversion
+                raise AgentQueueValidationError(
+                    "mode must be one of: drain, quiesce"
+                ) from exc
+
+            if (
+                state.paused
+                and state.mode == pause_mode
+                and (state.reason or "").strip() == normalized_reason
+            ):
+                raise AgentQueueValidationError(
+                    "workers are already paused in the requested mode"
+                )
+
+            requested_at = state.requested_at if state.paused else now
+            await self._repository.update_pause_state(
+                paused=True,
+                mode=pause_mode,
+                reason=normalized_reason,
+                requested_by_user_id=actor_user_id,
+                requested_at=requested_at,
+            )
+            await self._repository.append_system_control_event(
+                action="pause",
+                mode=pause_mode,
+                reason=normalized_reason,
+                actor_user_id=actor_user_id,
+            )
+            logger.info(
+                "worker pause enabled",
+                extra={
+                    "mode": pause_mode.value,
+                    "operator": str(actor_user_id),
+                },
+            )
+        else:
+            if not state.paused:
+                raise AgentQueueValidationError("workers are not currently paused")
+            metrics = await self._build_worker_pause_metrics()
+            if not metrics.is_drained and not force_resume:
+                raise AgentQueueValidationError(
+                    "workers are not drained; set forceResume=true to override"
+                )
+
+            await self._repository.update_pause_state(
+                paused=False,
+                mode=None,
+                reason=normalized_reason,
+                requested_by_user_id=actor_user_id,
+                requested_at=None,
+            )
+            await self._repository.append_system_control_event(
+                action="resume",
+                mode=None,
+                reason=normalized_reason,
+                actor_user_id=actor_user_id,
+            )
+            logger.info(
+                "worker pause disabled",
+                extra={
+                    "forceResume": force_resume,
+                    "operator": str(actor_user_id),
+                    "runningBeforeResume": metrics.running,
+                    "staleRunningBeforeResume": metrics.stale_running,
+                },
+            )
+
+        await self._repository.commit()
+        return await self._build_worker_pause_snapshot(audit_limit=audit_limit)
 
     async def complete_job(
         self,
@@ -1303,6 +1473,69 @@ class AgentQueueService:
             if item:
                 normalized.append(item)
         return tuple(dict.fromkeys(normalized))
+
+    async def _load_system_metadata(self) -> QueueSystemMetadata:
+        """Load the latest worker pause metadata snapshot."""
+
+        state = await self._repository.get_pause_state()
+        return self._to_queue_system_metadata(state)
+
+    async def _build_worker_pause_metrics(self) -> WorkerPauseMetrics:
+        """Compute queued/running/stale counters for worker pause UX."""
+
+        counts = await self._repository.fetch_worker_pause_metrics()
+        return WorkerPauseMetrics(
+            queued=counts.get("queued", 0),
+            running=counts.get("running", 0),
+            stale_running=counts.get("stale_running", 0),
+        )
+
+    async def _build_worker_pause_snapshot(
+        self,
+        *,
+        audit_limit: int = 5,
+    ) -> WorkerPauseSnapshot:
+        """Return aggregated worker pause metadata/metrics/audit entries."""
+
+        metadata = await self._load_system_metadata()
+        metrics = await self._build_worker_pause_metrics()
+        events = await self._repository.list_system_control_events(limit=audit_limit)
+        audit = tuple(self._serialize_control_event(event) for event in events)
+        return WorkerPauseSnapshot(system=metadata, metrics=metrics, audit_events=audit)
+
+    @staticmethod
+    def _to_queue_system_metadata(
+        state: models.SystemWorkerPauseState,
+    ) -> QueueSystemMetadata:
+        """Convert ORM state into transport metadata structure."""
+
+        updated_at = state.updated_at or datetime.now(UTC)
+        version = int(state.version or 1)
+        return QueueSystemMetadata(
+            workers_paused=bool(state.paused),
+            mode=state.mode,
+            reason=state.reason,
+            version=version,
+            requested_by_user_id=state.requested_by_user_id,
+            requested_at=state.requested_at,
+            updated_at=updated_at,
+        )
+
+    @staticmethod
+    def _serialize_control_event(
+        event: models.SystemControlEvent,
+    ) -> WorkerPauseAuditEvent:
+        """Convert ORM audit event into immutable dataclass."""
+
+        created_at = event.created_at or datetime.now(UTC)
+        return WorkerPauseAuditEvent(
+            id=event.id,
+            action=str(event.action or "").strip(),
+            mode=event.mode,
+            reason=event.reason,
+            actor_user_id=event.actor_user_id,
+            created_at=created_at,
+        )
 
     @staticmethod
     def _hash_token(raw_token: str) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from typing import Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
@@ -431,3 +431,94 @@ class TaskRunControlEvent(Base):
     )
 
     job: Mapped[AgentJob] = relationship("AgentJob", back_populates="control_events")
+
+
+class WorkerPauseMode(str, enum.Enum):
+    """Supported worker pause modes."""
+
+    DRAIN = "drain"
+    QUIESCE = "quiesce"
+
+
+class SystemWorkerPauseState(Base):
+    """Singleton pause state record that guards queue claims."""
+
+    __tablename__ = "system_worker_pause_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mode: Mapped[Optional[WorkerPauseMode]] = mapped_column(
+        Enum(
+            WorkerPauseMode,
+            name="workerpausemode",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+        default=None,
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requested_by_user_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+
+
+class SystemControlEvent(Base):
+    """Append-only audit log for system-level controls such as worker pause."""
+
+    __tablename__ = "system_control_events"
+    __table_args__ = (
+        Index(
+            "ix_system_control_events_control_created_at",
+            "control",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    control: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="worker_pause"
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[Optional[WorkerPauseMode]] = mapped_column(
+        Enum(
+            WorkerPauseMode,
+            name="workerpausemode",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+        default=None,
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actor_user_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

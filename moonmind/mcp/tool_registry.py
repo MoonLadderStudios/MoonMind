@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from api_service.api.schemas import QueueSystemMetadataModel
 from moonmind.schemas.agent_queue_models import (
     ArtifactModel,
     ClaimJobRequest,
@@ -22,6 +23,7 @@ from moonmind.workflows.agent_queue.repositories import AgentJobNotFoundError
 from moonmind.workflows.agent_queue.service import (
     AgentQueueService,
     AgentQueueValidationError,
+    QueueSystemMetadata,
 )
 
 
@@ -286,6 +288,14 @@ class QueueToolRegistry:
             handler=handler,
         )
 
+    @staticmethod
+    def _build_system_metadata_model(
+        metadata: QueueSystemMetadata | None,
+    ) -> QueueSystemMetadataModel | None:
+        if metadata is None:
+            return None
+        return QueueSystemMetadataModel.from_service_metadata(metadata)
+
     async def _handle_enqueue(
         self,
         args: BaseModel,
@@ -319,15 +329,17 @@ class QueueToolRegistry:
                 detail="Invalid payload type",
             )
         payload = args
-        job = await context.service.claim_job(
+        result = await context.service.claim_job(
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
             allowed_types=payload.allowed_types,
             worker_capabilities=payload.worker_capabilities,
         )
-        response = ClaimJobResponse(
-            job=JobModel.model_validate(job) if job is not None else None
+        job_model = (
+            JobModel.model_validate(result.job) if result.job is not None else None
         )
+        system_model = self._build_system_metadata_model(result.system)
+        response = ClaimJobResponse(job=job_model, system=system_model)
         return response.model_dump(by_alias=True, mode="json")
 
     async def _handle_heartbeat(
@@ -341,12 +353,14 @@ class QueueToolRegistry:
                 detail="Invalid payload type",
             )
         payload = args
-        job = await context.service.heartbeat(
+        result = await context.service.heartbeat(
             job_id=payload.job_id,
             worker_id=payload.worker_id,
             lease_seconds=payload.lease_seconds,
         )
-        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
+        job_model = JobModel.model_validate(result.job)
+        job_model.system = self._build_system_metadata_model(result.system)
+        return job_model.model_dump(by_alias=True, mode="json")
 
     async def _handle_complete(
         self,
