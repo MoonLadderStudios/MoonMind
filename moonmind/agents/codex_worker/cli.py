@@ -21,6 +21,7 @@ from moonmind.agents.codex_worker.worker import (
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.workflows.skills.registry import get_stage_adapter
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -32,6 +33,83 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
         supported = ", ".join(sorted(allowed))
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
     return runtime
+
+
+def _env_flag(value: str | None, *, default: bool) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "on"}
+
+
+def _first_non_empty(
+    source: Mapping[str, str], keys: Sequence[str], *, default: str = ""
+) -> str:
+    for key in keys:
+        value = str(source.get(key, "")).strip()
+        if value:
+            return value
+    return default
+
+
+def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
+    default_skill = _first_non_empty(
+        source,
+        (
+            "WORKFLOW_DEFAULT_SKILL",
+            "SPEC_WORKFLOW_DEFAULT_SKILL",
+            "MOONMIND_DEFAULT_SKILL",
+        ),
+        default="speckit",
+    )
+    discover_skill = _first_non_empty(
+        source,
+        (
+            "WORKFLOW_DISCOVER_SKILL",
+            "SPEC_WORKFLOW_DISCOVER_SKILL",
+            "MOONMIND_DISCOVER_SKILL",
+        ),
+        default=default_skill,
+    )
+    submit_skill = _first_non_empty(
+        source,
+        (
+            "WORKFLOW_SUBMIT_SKILL",
+            "SPEC_WORKFLOW_SUBMIT_SKILL",
+            "MOONMIND_SUBMIT_SKILL",
+        ),
+        default=default_skill,
+    )
+    publish_skill = _first_non_empty(
+        source,
+        (
+            "WORKFLOW_PUBLISH_SKILL",
+            "SPEC_WORKFLOW_PUBLISH_SKILL",
+            "MOONMIND_PUBLISH_SKILL",
+        ),
+        default=default_skill,
+    )
+    values = [
+        default_skill.strip(),
+        discover_skill.strip(),
+        submit_skill.strip(),
+        publish_skill.strip(),
+    ]
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _configured_skills_require_speckit(source: Mapping[str, str]) -> bool:
+    """Return whether current worker config requires Speckit executable checks."""
+
+    if not _env_flag(
+        _first_non_empty(source, ("WORKFLOW_USE_SKILLS", "SPEC_WORKFLOW_USE_SKILLS")),
+        default=True,
+    ):
+        return False
+    return any(
+        get_stage_adapter(skill_name) == "speckit"
+        for skill_name in _configured_stage_skills(source)
+    )
 
 
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
@@ -217,10 +295,12 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
-    try:
-        speckit_path = verify_cli_is_executable("speckit")
-    except CliVerificationError as exc:
-        raise RuntimeError(str(exc)) from exc
+    speckit_path: str | None = None
+    if _configured_skills_require_speckit(source):
+        try:
+            speckit_path = verify_cli_is_executable("speckit")
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     _validate_embedding_profile(source)
     try:
@@ -231,10 +311,11 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
-    _verify_speckit_cli(
-        speckit_path,
-        redaction_values=redaction_values,
-    )
+    if speckit_path is not None:
+        _verify_speckit_cli(
+            speckit_path,
+            redaction_values=redaction_values,
+        )
     if codex_path is not None:
         _run_checked_command(
             [codex_path, "login", "status"],

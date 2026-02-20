@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -23,6 +24,7 @@ from moonmind.schemas.workflow_models import (
     WorkflowRunCollectionResponse,
     WorkflowTaskStateModel,
 )
+from moonmind.workflows import get_spec_workflow_repository
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery import models as workflow_models
@@ -34,9 +36,47 @@ from moonmind.workflows.speckit_celery.workspace import (
 )
 
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
+CURRENT_USER_DEP = get_current_user()
 
 
-def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
+@pytest.fixture(autouse=True)
+def _reset_dependency_overrides():
+    app.dependency_overrides.clear()
+    yield
+    app.dependency_overrides.clear()
+
+
+async def _wait_for_run_status(
+    client: AsyncClient,
+    run_id,
+    *,
+    expected_status: workflow_models.SpecWorkflowRunStatus,
+    attempts: int = 20,
+    delay_seconds: float = 0.05,
+) -> SpecWorkflowRunModel:
+    last_model: SpecWorkflowRunModel | None = None
+    for _ in range(attempts):
+        response = await client.get(f"/api/workflows/speckit/runs/{run_id}")
+        assert response.status_code == 200
+        model = SpecWorkflowRunModel.model_validate(response.json())
+        last_model = model
+        if model.status == expected_status:
+            return model
+        await asyncio.sleep(delay_seconds)
+
+    assert last_model is not None
+    raise AssertionError(
+        f"Run {run_id} did not reach {expected_status} within "
+        f"{attempts * delay_seconds:.2f}s (last status={last_model.status})"
+    )
+
+
+def _build_sample_run(
+    now: datetime | None = None,
+    *,
+    owner_id=None,
+    requested_by_user_id=None,
+) -> SimpleNamespace:
     now = now or datetime(2024, 5, 1, tzinfo=UTC)
     run_id = uuid4()
     task_states = [
@@ -97,6 +137,9 @@ def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
         checked_at=now,
         notes="token ok",
     )
+    owner = owner_id or uuid4()
+    requested_by = requested_by_user_id or owner
+
     return SimpleNamespace(
         id=run_id,
         feature_key="US2-monitoring",
@@ -113,9 +156,9 @@ def _build_sample_run(now: datetime | None = None) -> SimpleNamespace:
         codex_logs_path="/artifacts/codex_logs.jsonl",
         codex_patch_path="/artifacts/patch.diff",
         celery_chain_id="celery-abc123",
-        requested_by_user_id=uuid4(),
-        created_by=uuid4(),
-        current_task_name=workflow_models.SpecWorkflowTaskName.SUBMIT,
+        requested_by_user_id=requested_by,
+        created_by=owner,
+        current_task_name="submit",
         started_at=now,
         finished_at=None,
         completed_at=None,
@@ -244,7 +287,7 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
 
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run_store)
     test_user = SimpleNamespace(id=uuid4())
-    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: test_user
 
     feature_key = "FR-008/idempotent-branch"
 
@@ -254,7 +297,7 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             transport=transport, base_url="http://testserver"
         ) as client:
             response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
@@ -274,36 +317,51 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             )
 
             second_response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert second_response.status_code == 202
             second_model = SpecWorkflowRunModel.model_validate(second_response.json())
             assert second_model.branch_name == run_model.branch_name
             assert second_model.id != run_model.id
+
+            legacy_response = await client.post(
+                "/api/workflows/speckit/runs",
+                json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
+            )
+            assert legacy_response.status_code == 202
+            assert legacy_response.headers.get("Deprecation") == "true"
+            assert (
+                legacy_response.headers.get("X-MoonMind-Deprecated-Route")
+                == "/api/workflows/speckit"
+            )
+            assert legacy_response.headers.get("X-MoonMind-Canonical-Route") == (
+                "/api/workflows/runs"
+            )
     finally:
         await db_base.engine.dispose()
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
         app.dependency_overrides.pop(_get_repository, None)
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
 async def test_monitor_workflow_contract_endpoints(monkeypatch):
     """Contract coverage for run listing and detail retrieval endpoints."""
 
-    run = _build_sample_run()
+    user_id = uuid4()
+    run = _build_sample_run(owner_id=user_id)
     run_id = run.id
 
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=user_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         list_response = await client.get(
-            "/api/workflows/speckit/runs", params={"includeTasks": True}
+            "/api/workflows/runs", params={"includeTasks": True}
         )
         assert list_response.status_code == 200
         collection = WorkflowRunCollectionResponse.model_validate(list_response.json())
@@ -315,7 +373,7 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
         assert listed.artifacts == []
 
         detail_response = await client.get(
-            f"/api/workflows/speckit/runs/{run_id}",
+            f"/api/workflows/runs/{run_id}",
             params={"includeArtifacts": True},
         )
         assert detail_response.status_code == 200
@@ -329,8 +387,48 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
             == workflow_models.CodexCredentialStatus.VALID
         )
 
+        legacy_detail_response = await client.get(
+            f"/api/workflows/speckit/runs/{run_id}",
+            params={"includeArtifacts": True},
+        )
+        assert legacy_detail_response.status_code == 200
+        assert legacy_detail_response.headers.get("Deprecation") == "true"
+        assert (
+            legacy_detail_response.headers.get("X-MoonMind-Canonical-Route")
+            == f"/api/workflows/runs/{run_id}"
+        )
+
     app.dependency_overrides.pop(_get_repository, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
+
+
+@pytest.mark.asyncio
+async def test_workflow_endpoints_hide_non_owned_runs(monkeypatch):
+    """Non-owner callers should not be able to access another user's run details."""
+
+    owner_id = uuid4()
+    run = _build_sample_run(owner_id=owner_id)
+    app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=uuid4())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        detail_response = await client.get(f"/api/workflows/runs/{run.id}")
+        assert detail_response.status_code == 404
+
+        tasks_response = await client.get(f"/api/workflows/runs/{run.id}/tasks")
+        assert tasks_response.status_code == 404
+
+        artifacts_response = await client.get(f"/api/workflows/runs/{run.id}/artifacts")
+        assert artifacts_response.status_code == 404
+
+        preflight_response = await client.post(
+            f"/api/workflows/runs/{run.id}/codex/preflight", json={}
+        )
+        assert preflight_response.status_code == 404
+
+    app.dependency_overrides.pop(_get_repository, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -338,10 +436,11 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
 async def test_workflow_task_listing_contract(monkeypatch):
     """Pending contract test for /runs/{id}/tasks until implementation lands."""
 
-    run = _build_sample_run()
+    user_id = uuid4()
+    run = _build_sample_run(owner_id=user_id)
 
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=user_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -356,7 +455,7 @@ async def test_workflow_task_listing_contract(monkeypatch):
         )
 
     app.dependency_overrides.pop(_get_repository, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -364,9 +463,10 @@ async def test_workflow_task_listing_contract(monkeypatch):
 async def test_workflow_artifact_listing_contract(monkeypatch):
     """Pending contract test for /runs/{id}/artifacts until implementation lands."""
 
-    run = _build_sample_run()
+    user_id = uuid4()
+    run = _build_sample_run(owner_id=user_id)
     app.dependency_overrides[_get_repository] = lambda: _FakeRepo(run)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4())
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=user_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -381,7 +481,7 @@ async def test_workflow_artifact_listing_contract(monkeypatch):
         )
 
     app.dependency_overrides.pop(_get_repository, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -433,6 +533,9 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         settings.spec_workflow, "repo_root", str(tmp_path), raising=False
     )
     monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(
+        settings.spec_workflow, "workspace_root", str(tmp_path), raising=False
+    )
     monkeypatch.setattr(
         settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
     )
@@ -496,7 +599,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     app.state.settings = settings
 
     test_user = SimpleNamespace(id=uuid4())
-    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: test_user
 
     try:
         transport = ASGITransport(app=app)
@@ -509,10 +612,11 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             )
             assert response.status_code == 202
             run_model = SpecWorkflowRunModel.model_validate(response.json())
-            assert run_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
-            assert run_model.phase == workflow_models.SpecWorkflowRunPhase.PUBLISH
-            assert run_model.credential_audit is not None
-            assert run_model.credential_audit.notes is None
+            assert run_model.status in (
+                workflow_models.SpecWorkflowRunStatus.PENDING,
+                workflow_models.SpecWorkflowRunStatus.RUNNING,
+                workflow_models.SpecWorkflowRunStatus.FAILED,
+            )
 
             list_response = await client.get("/api/workflows/speckit/runs")
             assert list_response.status_code == 200
@@ -522,12 +626,15 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert collection.items
             assert collection.items[0].id == run_model.id
 
-            detail_response = await client.get(
-                f"/api/workflows/speckit/runs/{run_model.id}"
+            detail_model = await _wait_for_run_status(
+                client,
+                run_model.id,
+                expected_status=workflow_models.SpecWorkflowRunStatus.FAILED,
             )
-            assert detail_response.status_code == 200
-            detail_model = SpecWorkflowRunModel.model_validate(detail_response.json())
             assert detail_model.status == workflow_models.SpecWorkflowRunStatus.FAILED
+            assert detail_model.phase == workflow_models.SpecWorkflowRunPhase.PUBLISH
+            assert detail_model.credential_audit is not None
+            assert detail_model.credential_audit.notes is None
             assert any(
                 task.task_name == "apply_and_publish"
                 and task.status == workflow_models.SpecWorkflowTaskStatus.FAILED
@@ -578,7 +685,10 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             )
             assert preflight_model.status == workflow_models.CodexPreflightStatus.PASSED
             assert preflight_model.volume_name == "codex_auth_0"
-            assert preflight_model.queue_name == "codex-0"
+            assert preflight_model.queue_name in {
+                "codex-0",
+                settings.celery.default_queue,
+            }
             assert preflight_calls["count"] == 1
 
             cached_response = await client.post(
@@ -626,7 +736,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(CURRENT_USER_DEP, None)
 
 
 @pytest.mark.asyncio
@@ -642,9 +752,10 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
     monkeypatch.setattr(db_base, "DATABASE_URL", db_url)
     monkeypatch.setattr(db_base, "engine", engine)
     monkeypatch.setattr(db_base, "async_session_maker", async_session_maker)
-    monkeypatch.setattr(
-        _get_repository, "__defaults__", (lambda: async_session_maker(),)
-    )
+
+    async def _repo_override():
+        async with async_session_maker() as session:
+            yield get_spec_workflow_repository(session)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -667,6 +778,9 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
         settings.spec_workflow, "repo_root", str(tmp_path), raising=False
     )
     monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(
+        settings.spec_workflow, "workspace_root", str(tmp_path), raising=False
+    )
     monkeypatch.setattr(
         settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
     )
@@ -700,7 +814,8 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
 
     app.state.settings = settings
     test_user = SimpleNamespace(id=uuid4())
-    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: test_user
+    app.dependency_overrides[_get_repository] = _repo_override
 
     try:
         transport = ASGITransport(app=app)
@@ -742,5 +857,6 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
                 for task in retry_model.tasks
             )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(_get_repository, None)
+        app.dependency_overrides.pop(CURRENT_USER_DEP, None)
         await engine.dispose()

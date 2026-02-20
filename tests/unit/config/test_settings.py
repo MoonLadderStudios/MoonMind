@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from moonmind.config.settings import (
     AppSettings,
     AtlassianSettings,
+    CelerySettings,
     FeatureFlagsSettings,
     GoogleSettings,
     OIDCSettings,
@@ -397,6 +398,37 @@ class TestSpecWorkflowSettings:
         assert settings.repo_root == "/tmp/workspace-root"
         monkeypatch.delenv("SPEC_WORKFLOW_REPO_ROOT", raising=False)
 
+    def test_repo_root_workflow_alias_env_override(self, monkeypatch):
+        """Spec workflow repo root should honor WORKFLOW_REPO_ROOT alias."""
+
+        monkeypatch.setenv("WORKFLOW_REPO_ROOT", "/tmp/workflow-root")
+        monkeypatch.delenv("SPEC_WORKFLOW_REPO_ROOT", raising=False)
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.repo_root == "/tmp/workflow-root"
+        monkeypatch.delenv("WORKFLOW_REPO_ROOT", raising=False)
+
+    def test_skill_policy_mode_workflow_aliases(self, monkeypatch):
+        """WORKFLOW_* aliases should configure skill policy and allowlist."""
+
+        monkeypatch.setenv("WORKFLOW_SKILL_POLICY_MODE", "allowlist")
+        monkeypatch.setenv("WORKFLOW_ALLOWED_SKILLS", "custom,speckit")
+        monkeypatch.setenv("WORKFLOW_DEFAULT_SKILL", "custom")
+        monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_ALLOWED_SKILLS", raising=False)
+        monkeypatch.delenv("SPEC_WORKFLOW_DEFAULT_SKILL", raising=False)
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.skill_policy_mode == "allowlist"
+        assert settings.allowed_skills == ("custom", "speckit")
+        assert settings.default_skill == "custom"
+
+        monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
+        monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
+        monkeypatch.delenv("WORKFLOW_DEFAULT_SKILL", raising=False)
+
     def test_live_session_env_overrides(self, monkeypatch):
         """Live session settings should honor MOONMIND_LIVE_SESSION_* overrides."""
 
@@ -553,3 +585,24 @@ def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) 
     monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
     monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
+
+
+def test_celery_settings_accept_workflow_queue_aliases(monkeypatch) -> None:
+    """WORKFLOW_DEFAULT_* aliases should configure Celery queue defaults."""
+
+    monkeypatch.setenv("WORKFLOW_DEFAULT_QUEUE", "workflow.jobs")
+    monkeypatch.setenv("WORKFLOW_DEFAULT_EXCHANGE", "workflow.jobs")
+    monkeypatch.setenv("WORKFLOW_DEFAULT_ROUTING_KEY", "workflow.jobs")
+    monkeypatch.delenv("CELERY_DEFAULT_QUEUE", raising=False)
+    monkeypatch.delenv("CELERY_DEFAULT_EXCHANGE", raising=False)
+    monkeypatch.delenv("CELERY_DEFAULT_ROUTING_KEY", raising=False)
+
+    settings = CelerySettings(_env_file=None)
+
+    assert settings.default_queue == "workflow.jobs"
+    assert settings.default_exchange == "workflow.jobs"
+    assert settings.default_routing_key == "workflow.jobs"
+
+    monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
+    monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)
+    monkeypatch.delenv("WORKFLOW_DEFAULT_ROUTING_KEY", raising=False)

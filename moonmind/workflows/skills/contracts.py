@@ -12,6 +12,7 @@ class StageExecutionDecision:
 
     stage_name: str
     selected_skill: str
+    adapter_id: str | None
     use_skills: bool
     execution_path: str
     fallback_enabled: bool
@@ -24,6 +25,7 @@ class StageExecutionOutcome:
 
     stage_name: str
     selected_skill: str
+    adapter_id: str | None
     execution_path: str
     used_fallback: bool
     used_skills: bool
@@ -35,6 +37,7 @@ class StageExecutionOutcome:
 
         return {
             "selectedSkill": self.selected_skill,
+            "adapterId": self.adapter_id,
             "executionPath": self.execution_path,
             "usedSkills": self.used_skills,
             "usedFallback": self.used_fallback,

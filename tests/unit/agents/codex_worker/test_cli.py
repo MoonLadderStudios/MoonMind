@@ -142,6 +142,103 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
     ]
 
 
+def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -> None:
+    """Non-speckit stage skill configuration should not require Speckit preflight."""
+
+    verifications: list[str] = []
+    calls: list[list[str]] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "SPEC_WORKFLOW_DEFAULT_SKILL": "custom-skill",
+            "SPEC_WORKFLOW_DISCOVER_SKILL": "custom-skill",
+            "SPEC_WORKFLOW_SUBMIT_SKILL": "custom-skill",
+            "SPEC_WORKFLOW_PUBLISH_SKILL": "custom-skill",
+        }
+    )
+
+    assert verifications == ["codex"]
+    assert calls == [["/usr/bin/codex", "login", "status"]]
+
+
+def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
+    """Canonical WORKFLOW_* aliases should drive speckit dependency checks."""
+
+    verifications: list[str] = []
+    calls: list[list[str]] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "WORKFLOW_DEFAULT_SKILL": "custom-skill",
+            "WORKFLOW_DISCOVER_SKILL": "custom-skill",
+            "WORKFLOW_SUBMIT_SKILL": "custom-skill",
+            "WORKFLOW_PUBLISH_SKILL": "custom-skill",
+        }
+    )
+
+    assert verifications == ["codex"]
+    assert calls == [["/usr/bin/codex", "login", "status"]]
+
+
+def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
+    """WORKFLOW_USE_SKILLS=false should skip Speckit checks."""
+
+    verifications: list[str] = []
+    calls: list[list[str]] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "WORKFLOW_USE_SKILLS": "false",
+            "SPEC_WORKFLOW_DEFAULT_SKILL": "speckit",
+        }
+    )
+
+    assert verifications == ["codex"]
+    assert calls == [["/usr/bin/codex", "login", "status"]]
+
+
 def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None:
     """Token-present startup should fail fast when gh is unavailable."""
 

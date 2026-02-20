@@ -9,6 +9,11 @@ from moonmind.config.settings import settings
 
 from .contracts import StageExecutionDecision
 
+_SPECKIT_ADAPTER_ID = "speckit"
+_SKILL_ADAPTERS: dict[str, str] = {
+    "speckit": _SPECKIT_ADAPTER_ID,
+}
+
 
 def _stable_percent(run_id: str, stage_name: str) -> int:
     seed = f"{run_id}:{stage_name}".encode("utf-8")
@@ -57,6 +62,7 @@ def resolve_stage_execution(
     selected_skill = _select_stage_skill(stage_name, context)
     if not _skill_allowed(selected_skill):
         selected_skill = cfg.default_skill
+    adapter_id = get_stage_adapter(selected_skill)
 
     canary_bucket = _stable_percent(run_id, stage_name)
     canary_enabled = canary_bucket < cfg.skills_canary_percent
@@ -66,6 +72,7 @@ def resolve_stage_execution(
     return StageExecutionDecision(
         stage_name=stage_name,
         selected_skill=selected_skill,
+        adapter_id=adapter_id,
         use_skills=use_skills,
         execution_path=execution_path,
         fallback_enabled=bool(cfg.skills_fallback_enabled),
@@ -74,12 +81,39 @@ def resolve_stage_execution(
 
 
 def get_stage_adapter(skill_name: str) -> Optional[str]:
-    """Return the adapter id for a skill.
+    """Return the adapter id for a configured skill name."""
 
-    This keeps the registry extensible while preserving current Speckit-backed
-    execution as the default path.
-    """
+    normalized = str(skill_name or "").strip()
+    if not normalized:
+        return None
+    return _SKILL_ADAPTERS.get(normalized)
 
-    if skill_name == "speckit":
-        return "speckit"
-    return None
+
+def skill_requires_speckit(skill_name: str) -> bool:
+    """Return whether the provided skill uses the Speckit adapter."""
+
+    return get_stage_adapter(skill_name) == _SPECKIT_ADAPTER_ID
+
+
+def configured_stage_skills() -> tuple[str, ...]:
+    """Return the configured stage skills in deterministic order."""
+
+    cfg = settings.spec_workflow
+    raw_values = (
+        cfg.default_skill,
+        cfg.discover_skill,
+        cfg.submit_skill,
+        cfg.publish_skill,
+    )
+    values = [str(value).strip() for value in raw_values if str(value or "").strip()]
+    if not values:
+        return ()
+    return tuple(dict.fromkeys(values))
+
+
+def configured_stage_skills_require_speckit() -> bool:
+    """Return whether current stage configuration requires Speckit CLI checks."""
+
+    return any(
+        skill_requires_speckit(skill_name) for skill_name in configured_stage_skills()
+    )

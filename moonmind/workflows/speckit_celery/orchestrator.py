@@ -123,6 +123,9 @@ async def _create_workflow_run(
         if codex_volume:
             run.codex_volume = codex_volume
         await session.commit()
+        # Ensure server-populated fields (for example timestamps) are loaded so
+        # callers can safely serialize this run even after session scope ends.
+        await session.refresh(run)
         return run
 
 

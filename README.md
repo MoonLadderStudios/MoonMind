@@ -110,10 +110,10 @@ description: Private project-specific scan helper skill
   - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
   - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills` (shared mirror root; nested `.agents/skills/skills` is auto-detected for compatibility)
   - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
-  - `SPEC_WORKFLOW_SKILL_POLICY_MODE=permissive` (default; auto-accept resolvable skills without allowlist maintenance)
-  - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (only enforced when `SPEC_WORKFLOW_SKILL_POLICY_MODE=allowlist`)
-  - `SPEC_WORKFLOW_DEFAULT_SKILL=my-private-scan` (optional)
-  - `SPEC_WORKFLOW_DISCOVER_SKILL=my-private-scan` / `SPEC_WORKFLOW_SUBMIT_SKILL=my-private-scan` / `SPEC_WORKFLOW_PUBLISH_SKILL=my-private-scan` (optional per-stage selection)
+  - `SPEC_WORKFLOW_SKILL_POLICY_MODE=permissive` (or `WORKFLOW_SKILL_POLICY_MODE`; default auto-accepts resolvable skills without allowlist maintenance)
+  - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (or `WORKFLOW_ALLOWED_SKILLS`; only enforced when policy mode is `allowlist`)
+  - `SPEC_WORKFLOW_DEFAULT_SKILL=my-private-scan` (or `WORKFLOW_DEFAULT_SKILL`; optional)
+  - `SPEC_WORKFLOW_DISCOVER_SKILL=my-private-scan` / `SPEC_WORKFLOW_SUBMIT_SKILL=my-private-scan` / `SPEC_WORKFLOW_PUBLISH_SKILL=my-private-scan` (or `WORKFLOW_DISCOVER_SKILL` / `WORKFLOW_SUBMIT_SKILL` / `WORKFLOW_PUBLISH_SKILL`)
 
 - For standalone `moonmind-codex-worker`, also use:
 
@@ -168,9 +168,9 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 
 - `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://moonmind:password@rabbitmq:5672//`).
 - `CELERY_RESULT_BACKEND` – SQLAlchemy URL for the PostgreSQL result backend (e.g., `db+postgresql://postgres:password@api-db:5432/moonmind`).
-- `CELERY_DEFAULT_QUEUE` – Default queue name for Spec Kit tasks (`speckit`).
-- `CELERY_DEFAULT_EXCHANGE` – Exchange used for the Spec Kit queue (`speckit`).
-- `CELERY_DEFAULT_ROUTING_KEY` – Routing key for Spec Kit tasks (`speckit`).
+- `CELERY_DEFAULT_QUEUE` – Default queue name for workflow tasks (`moonmind.jobs`).
+- `CELERY_DEFAULT_EXCHANGE` – Exchange used for the workflow queue (`moonmind.jobs`).
+- `CELERY_DEFAULT_ROUTING_KEY` – Routing key for workflow tasks (`moonmind.jobs`).
 - `SPEC_WORKFLOW_CODEX_QUEUE` – Codex queue name (default `codex`).
 - `SPEC_WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`).
 - `SPEC_WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`).

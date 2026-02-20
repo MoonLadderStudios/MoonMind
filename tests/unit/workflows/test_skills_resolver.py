@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from moonmind.workflows.skills import resolver as resolver_module
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,
@@ -360,3 +361,55 @@ def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     monkeypatch.setattr(resolver_module, "__file__", "/x.py", raising=False)
 
     assert resolver_module._project_root() == Path("/")
+
+
+def test_builtin_speckit_fallback_logs_once(monkeypatch, tmp_path, caplog):
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        str(empty_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        str(empty_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "permissive",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
+        "speckit",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        (),
+        raising=False,
+    )
+
+    resolver_module._BUILTIN_FALLBACK_WARNED.clear()
+    try:
+        with caplog.at_level("WARNING"):
+            first = resolve_run_skill_selection(run_id="warn-1", context={})
+            second = resolve_run_skill_selection(run_id="warn-2", context={})
+
+        assert first.skills[0].source_uri == "builtin://speckit"
+        assert second.skills[0].source_uri == "builtin://speckit"
+        assert (
+            len(
+                [
+                    rec
+                    for rec in caplog.records
+                    if "deprecated builtin source fallback" in rec.message
+                ]
+            )
+            == 1
+        )
+    finally:
+        resolver_module._BUILTIN_FALLBACK_WARNED.clear()

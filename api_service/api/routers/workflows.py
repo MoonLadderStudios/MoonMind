@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -47,10 +48,75 @@ from moonmind.workflows.speckit_celery.serializers import (
 )
 from moonmind.workflows.speckit_celery.tasks import run_codex_preflight_check
 
-router = APIRouter(prefix="/api/workflows/speckit", tags=["speckit-workflows"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+canonical_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+legacy_router = APIRouter(
+    prefix="/api/workflows/speckit",
+    tags=["speckit-workflows"],
+)
 
 
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _is_workflow_admin(user: User | None) -> bool:
+    return bool(user and getattr(user, "is_superuser", False))
+
+
+def _run_owned_by_user(run: object, user: User | None) -> bool:
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return False
+    created_by = getattr(run, "created_by", None)
+    requested_by_user_id = getattr(run, "requested_by_user_id", None)
+    return created_by == user_id or requested_by_user_id == user_id
+
+
+def _raise_workflow_not_found(run_id: UUID) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "workflow_not_found",
+            "message": f"Workflow run {run_id} was not found",
+        },
+    )
+
+
+def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> object:
+    if run is None:
+        _raise_workflow_not_found(run_id)
+    if _is_workflow_admin(user) or _run_owned_by_user(run, user):
+        return run
+    _raise_workflow_not_found(run_id)
+
+
+def _canonicalize_legacy_path(path: str) -> str:
+    if path.startswith("/api/workflows/speckit"):
+        suffix = path[len("/api/workflows/speckit") :]
+        return f"/api/workflows{suffix}"
+    return path
+
+
+async def _mark_legacy_route_usage(request: Request, response: Response) -> None:
+    path = request.url.path
+    if not path.startswith("/api/workflows/speckit"):
+        return
+
+    canonical_path = _canonicalize_legacy_path(path)
+    response.headers["Deprecation"] = "true"
+    response.headers["X-MoonMind-Deprecated-Route"] = "/api/workflows/speckit"
+    response.headers["X-MoonMind-Canonical-Route"] = canonical_path
+
+    logger.info(
+        "Legacy workflow API route used",
+        extra={
+            "legacy_path": path,
+            "canonical_path": canonical_path,
+            "run_id": request.path_params.get("run_id"),
+        },
+    )
 
 
 def _ensure_utc_timestamp(timestamp: datetime | None) -> datetime:
@@ -110,7 +176,13 @@ def _serialize_run_model(
     return SpecWorkflowRunModel.model_validate(serialized)
 
 
-@router.get("/codex/shards", response_model=CodexShardListResponse)
+@canonical_router.get("/codex/shards", response_model=CodexShardListResponse)
+@legacy_router.get(
+    "/codex/shards",
+    response_model=CodexShardListResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_codex_shards(
     repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
@@ -140,9 +212,15 @@ async def list_codex_shards(
     return CodexShardListResponse(shards=shards)
 
 
-@router.post(
+@canonical_router.post(
     "/runs/{run_id}/codex/preflight",
     response_model=CodexPreflightResultModel,
+)
+@legacy_router.post(
+    "/runs/{run_id}/codex/preflight",
+    response_model=CodexPreflightResultModel,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def trigger_codex_preflight(
     run_id: UUID,
@@ -152,15 +230,11 @@ async def trigger_codex_preflight(
 ) -> CodexPreflightResultModel:
     """Run the Codex login status check for the specified workflow run."""
 
-    run = await repo.get_run(run_id, with_relations=True)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": f"Workflow run {run_id} was not found",
-            },
-        )
+    run = _assert_run_access(
+        await repo.get_run(run_id, with_relations=True),
+        run_id,
+        _user,
+    )
 
     router = get_codex_shard_router()
     queue_name = run.codex_queue
@@ -264,10 +338,17 @@ async def trigger_codex_preflight(
     )
 
 
-@router.post(
+@canonical_router.post(
     "/runs",
     response_model=SpecWorkflowRunModel,
     status_code=status.HTTP_202_ACCEPTED,
+)
+@legacy_router.post(
+    "/runs",
+    response_model=SpecWorkflowRunModel,
+    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def create_workflow_run(
     payload: CreateWorkflowRunRequest,
@@ -306,7 +387,13 @@ async def create_workflow_run(
     return _serialize_run_model(run)
 
 
-@router.get("/runs", response_model=WorkflowRunCollectionResponse)
+@canonical_router.get("/runs", response_model=WorkflowRunCollectionResponse)
+@legacy_router.get(
+    "/runs",
+    response_model=WorkflowRunCollectionResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_workflow_runs(
     *,
     status: Optional[str] = Query(None, alias="status"),
@@ -330,11 +417,24 @@ async def list_workflow_runs(
                 detail={"code": "invalid_status", "message": str(exc)},
             ) from exc
 
+    if _is_workflow_admin(_user):
+        effective_created_by = created_by
+    else:
+        if created_by is not None and created_by != _user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "workflow_forbidden",
+                    "message": "Cannot list workflow runs for another user.",
+                },
+            )
+        effective_created_by = _user.id
+
     try:
         paginated_runs = await repo.list_runs(
             status=status_enum,
             feature_key=feature_key,
-            created_by=created_by,
+            created_by=effective_created_by,
             cursor=cursor,
             limit=limit,
             with_relations=False,
@@ -372,7 +472,13 @@ async def list_workflow_runs(
     )
 
 
-@router.get("/runs/{run_id}", response_model=SpecWorkflowRunModel)
+@canonical_router.get("/runs/{run_id}", response_model=SpecWorkflowRunModel)
+@legacy_router.get(
+    "/runs/{run_id}",
+    response_model=SpecWorkflowRunModel,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def get_workflow_run(
     run_id: UUID,
     include_tasks: bool = Query(True, alias="includeTasks"),
@@ -383,15 +489,11 @@ async def get_workflow_run(
 ) -> SpecWorkflowRunModel:
     """Retrieve a single workflow run with related metadata."""
 
-    run = await repo.get_run(run_id, with_relations=True)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": f"Workflow run {run_id} was not found",
-            },
-        )
+    run = _assert_run_access(
+        await repo.get_run(run_id, with_relations=True),
+        run_id,
+        _user,
+    )
 
     return _serialize_run_model(
         run,
@@ -401,13 +503,23 @@ async def get_workflow_run(
     )
 
 
-@router.get("/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse)
+@canonical_router.get(
+    "/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse
+)
+@legacy_router.get(
+    "/runs/{run_id}/tasks",
+    response_model=WorkflowTaskStateListResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_workflow_run_tasks(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
 ) -> WorkflowTaskStateListResponse:
     """Return ordered task states for the specified workflow run."""
+
+    _assert_run_access(await repo.get_run(run_id, with_relations=False), run_id, _user)
 
     try:
         states = await repo.list_task_states(run_id, require_run=True)
@@ -424,7 +536,15 @@ async def list_workflow_run_tasks(
     return WorkflowTaskStateListResponse.model_validate(payload)
 
 
-@router.get("/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse)
+@canonical_router.get(
+    "/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse
+)
+@legacy_router.get(
+    "/runs/{run_id}/artifacts",
+    response_model=WorkflowArtifactListResponse,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
+)
 async def list_workflow_run_artifacts(
     run_id: UUID,
     repo: SpecWorkflowRepository = Depends(_get_repository),
@@ -432,25 +552,24 @@ async def list_workflow_run_artifacts(
 ) -> WorkflowArtifactListResponse:
     """Return artifact metadata for the specified workflow run."""
 
-    run = await repo.get_run(run_id)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": f"Workflow run {run_id} was not found",
-            },
-        )
+    _assert_run_access(await repo.get_run(run_id), run_id, _user)
 
     artifacts = await repo.list_artifacts(run_id)
     payload = serialize_artifact_collection(run_id, artifacts)
     return WorkflowArtifactListResponse.model_validate(payload)
 
 
-@router.post(
+@canonical_router.post(
     "/runs/{run_id}/retry",
     response_model=SpecWorkflowRunModel,
     status_code=status.HTTP_202_ACCEPTED,
+)
+@legacy_router.post(
+    "/runs/{run_id}/retry",
+    response_model=SpecWorkflowRunModel,
+    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def retry_workflow_run(
     run_id: UUID,
@@ -463,6 +582,8 @@ async def retry_workflow_run(
     request = payload or RetryWorkflowRunRequest()
     notes = request.notes
     mode = request.mode or RetryWorkflowMode.RESUME_FAILED_TASK
+
+    _assert_run_access(await repo.get_run(run_id, with_relations=False), run_id, _user)
 
     try:
         triggered = await retry_spec_workflow_run(run_id, notes=notes, mode=mode)
@@ -484,6 +605,10 @@ async def retry_workflow_run(
     refreshed = await repo.get_run(triggered.run_id, with_relations=True)
     run = refreshed or triggered.run
     return _serialize_run_model(run)
+
+
+router.include_router(canonical_router)
+router.include_router(legacy_router)
 
 
 __all__ = ["router"]
