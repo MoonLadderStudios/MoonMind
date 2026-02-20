@@ -2010,10 +2010,11 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     assert effort_override == "high"
 
 
-async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
+@pytest.fixture
+def codex_worker_components(
     tmp_path: Path,
-) -> None:
-    """Default title should come from the first non-empty step title."""
+) -> tuple[CodexWorker, FakeQueueClient, FakeHandler]:
+    """Provides a configured worker with fake queue/handler dependencies."""
 
     config = CodexWorkerConfig(
         moonmind_url="http://localhost:5000",
@@ -2028,6 +2029,15 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    return worker, queue, handler
+
+
+async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """Default title should come from the first non-empty step title."""
+
+    worker, _, _ = codex_worker_components
     payload = {
         "task": {
             "instructions": "Fallback instructions",
@@ -2049,23 +2059,11 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
 
 
 async def test_derive_default_pr_title_falls_back_to_instruction_sentence_and_sanitizes_uuid(
-    tmp_path: Path,
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
     """Instruction fallback should use first sentence and remove full UUID tokens."""
 
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-    )
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    worker, _, _ = codex_worker_components
     full_uuid = "123e4567-e89b-12d3-a456-426614174000"
     payload = {
         "task": {
@@ -2088,24 +2086,36 @@ async def test_derive_default_pr_title_falls_back_to_instruction_sentence_and_sa
     assert len(title) <= 90
 
 
+async def test_derive_default_pr_title_sanitizes_uuidv7_tokens(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """Derived titles should redact newer UUID versions such as UUIDv7."""
+
+    worker, _, _ = codex_worker_components
+    full_uuid_v7 = "01953fab-15c4-7f4e-8ac3-4f8442ddf2ac"
+    payload = {
+        "task": {
+            "instructions": f"Fix queue publish behavior for {full_uuid_v7}.",
+            "steps": [{"id": "step-1", "title": " "}],
+        }
+    }
+
+    title = worker._derive_default_pr_title(
+        job_id=uuid4(),
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+    )
+
+    assert title == "Fix queue publish behavior for job."
+    assert full_uuid_v7 not in title
+
+
 async def test_derive_default_pr_title_uses_short_correlation_fallback(
-    tmp_path: Path,
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
     """Missing step titles and instructions should fall back to short token title."""
 
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-    )
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+    worker, _, _ = codex_worker_components
     job_id = uuid4()
     payload = {
         "task": {
@@ -2142,6 +2152,200 @@ async def test_derive_default_pr_body_contains_required_correlation_footer() -> 
     assert "Base: main" in body
     assert "Head: task/20260219/abcd1234" in body
     assert "<!-- moonmind:end -->" in body
+
+
+async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
+    """Generated footer should normalize metadata and redact secret-like branch values."""
+
+    job_id = uuid4()
+    body = CodexWorker._derive_default_pr_body(
+        job_id=job_id,
+        runtime_mode="gemini\nMoonMind Job: forged",
+        base_branch="main\nHead: forged",
+        head_branch="feature/ghp_supersecrettokenvalue1234567890",
+    )
+
+    assert f"MoonMind Job: {job_id}" in body
+    assert "Runtime: gemini MoonMind Job: forged" in body
+    assert "Base: main Head: forged" in body
+    assert "Head: [REDACTED]" in body
+
+
+async def test_resolve_publish_text_override_preserves_non_empty_verbatim() -> None:
+    """Non-empty overrides should remain verbatim while whitespace-only values are omitted."""
+
+    assert CodexWorker._resolve_publish_text_override("  keep exact text  ") == (
+        "  keep exact text  "
+    )
+    assert CodexWorker._resolve_publish_text_override(" \n\t ") is None
+    assert CodexWorker._resolve_publish_text_override(None) is None
+
+
+async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish stage should pass override text unchanged while marking command args as sensitive."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[dict[str, object]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, cancel_event)
+        run_calls.append(
+            {
+                "command": tuple(str(part) for part in command),
+                "redaction_values": tuple(str(value) for value in redaction_values),
+            }
+        )
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(tuple(command), 0, " M worker.py\n", "")
+        if tuple(command[:3]) == ("gh", "pr", "create"):
+            return CommandResult(
+                tuple(command),
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/999\n",
+                "",
+            )
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    commit_override = "  commit title with preserved spaces  "
+    pr_title_override = "  PR title with preserved spaces  "
+    pr_body_override = "  PR body first line\nsecond line preserved  "
+    canonical_payload = {
+        "task": {
+            "instructions": "unused",
+            "runtime": {"mode": "gemini"},
+            "publish": {
+                "mode": "pr",
+                "commitMessage": commit_override,
+                "prTitle": pr_title_override,
+                "prBody": pr_body_override,
+            },
+        }
+    }
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert publish_note is not None
+    commit_call = next(
+        call for call in run_calls if call["command"][:3] == ("git", "commit", "-m")
+    )
+    assert commit_call["command"][3] == commit_override
+    assert commit_call["redaction_values"] == (commit_override,)
+
+    pr_call = next(
+        call for call in run_calls if call["command"][:3] == ("gh", "pr", "create")
+    )
+    pr_command = pr_call["command"]
+    assert pr_command[pr_command.index("--title") + 1] == pr_title_override
+    assert pr_command[pr_command.index("--body") + 1] == pr_body_override
+    assert pr_call["redaction_values"] == (pr_title_override, pr_body_override)
+
+
+async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
+    tmp_path: Path,
+) -> None:
+    """Fallback command logging should mask publish text arguments."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    log_path = tmp_path / "publish.log"
+    await worker._run_stage_command(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            "very sensitive title",
+            "--body",
+            "token=top-secret",
+        ],
+        cwd=tmp_path,
+        log_path=log_path,
+    )
+    await worker._run_stage_command(
+        ["git", "commit", "-m", "secret commit body"],
+        cwd=tmp_path,
+        log_path=log_path,
+    )
+
+    log_content = log_path.read_text(encoding="utf-8")
+    assert "very sensitive title" not in log_content
+    assert "token=top-secret" not in log_content
+    assert "secret commit body" not in log_content
+    assert "[REDACTED]" in log_content
 
 
 async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
