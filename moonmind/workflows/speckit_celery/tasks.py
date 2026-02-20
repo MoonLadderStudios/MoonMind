@@ -35,7 +35,10 @@ from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
     materialize_run_skill_workspace,
 )
-from moonmind.workflows.skills.registry import get_stage_adapter, resolve_stage_execution
+from moonmind.workflows.skills.registry import (
+    get_stage_adapter,
+    resolve_stage_execution,
+)
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     resolve_run_skill_selection,

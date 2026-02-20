@@ -114,4 +114,6 @@ def configured_stage_skills() -> tuple[str, ...]:
 def configured_stage_skills_require_speckit() -> bool:
     """Return whether current stage configuration requires Speckit CLI checks."""
 
-    return any(skill_requires_speckit(skill_name) for skill_name in configured_stage_skills())
+    return any(
+        skill_requires_speckit(skill_name) for skill_name in configured_stage_skills()
+    )

@@ -401,12 +401,15 @@ def test_builtin_speckit_fallback_logs_once(monkeypatch, tmp_path, caplog):
 
         assert first.skills[0].source_uri == "builtin://speckit"
         assert second.skills[0].source_uri == "builtin://speckit"
-        assert len(
-            [
-                rec
-                for rec in caplog.records
-                if "deprecated builtin source fallback" in rec.message
-            ]
-        ) == 1
+        assert (
+            len(
+                [
+                    rec
+                    for rec in caplog.records
+                    if "deprecated builtin source fallback" in rec.message
+                ]
+            )
+            == 1
+        )
     finally:
         resolver_module._BUILTIN_FALLBACK_WARNED.clear()

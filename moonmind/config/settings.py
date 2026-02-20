@@ -121,7 +121,9 @@ class SpecWorkflowSettings(BaseSettings):
     )
     tasks_root: str = Field(
         "specs",
-        validation_alias=AliasChoices("WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"
+        ),
     )
     artifacts_root: str = Field(
         "var/artifacts/spec_workflows",
