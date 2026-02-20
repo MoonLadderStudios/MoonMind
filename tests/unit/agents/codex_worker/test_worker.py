@@ -848,14 +848,15 @@ async def test_compose_step_instruction_dedupes_objective_text(
         total_steps=1,
     )
 
-    assert "MOONMIND TASK OBJECTIVE:\nImplement direct worker to Qdrant retrieval path." in instruction
+    assert (
+        "MOONMIND TASK OBJECTIVE:\nImplement direct worker to Qdrant retrieval path."
+        in instruction
+    )
     assert (
         "STEP 1/1 step-1 Intake:\n(same as task objective; no additional step-specific instructions)"
         in instruction
     )
-    assert (
-        instruction.count("Implement direct worker to Qdrant retrieval path.") == 1
-    )
+    assert instruction.count("Implement direct worker to Qdrant retrieval path.") == 1
 
 
 async def test_compose_step_instruction_keeps_distinct_step_text(
@@ -897,9 +898,15 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
         total_steps=1,
     )
 
-    assert "MOONMIND TASK OBJECTIVE:\nImplement direct worker to Qdrant retrieval path." in instruction
+    assert (
+        "MOONMIND TASK OBJECTIVE:\nImplement direct worker to Qdrant retrieval path."
+        in instruction
+    )
     assert f"STEP 1/1 step-1:\n{step_text}" in instruction
-    assert "(same as task objective; no additional step-specific instructions)" not in instruction
+    assert (
+        "(same as task objective; no additional step-specific instructions)"
+        not in instruction
+    )
 
 
 async def test_run_once_task_steps_fail_fast_on_first_failed_step(
