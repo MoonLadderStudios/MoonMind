@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 
 from api_service.api.routers import (
+    retrieval_gateway as retrieval_router,
     summarization as summarization_router,  # Added import for summarization router
 )
 from api_service.api.routers.agent_queue import router as agent_queue_router
@@ -260,6 +261,7 @@ app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
 app.include_router(
     context_protocol_router, tags=["Context Protocol"]
 )  # Removed prefix="/context"
+app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
 app.include_router(manifests_router)
 app.include_router(
