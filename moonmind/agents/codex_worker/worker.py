@@ -2162,9 +2162,10 @@ class CodexWorker:
                 env=prepared.publish_command_env,
             )
 
-            commit_message = self._resolve_publish_text_override(
-                publish.get("commitMessage")
-            ) or f"MoonMind task result for job {job_id}"
+            commit_message = (
+                self._resolve_publish_text_override(publish.get("commitMessage"))
+                or f"MoonMind task result for job {job_id}"
+            )
             await self._run_stage_command(
                 ["git", "commit", "-m", commit_message],
                 cwd=prepared.repo_dir,
