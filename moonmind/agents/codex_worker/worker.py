@@ -4354,11 +4354,10 @@ class CodexWorker:
         if isinstance(policy_node, Mapping):
             try:
                 task_policy = TaskProposalPolicy.model_validate(dict(policy_node))
-            except ValidationError as exc:
+            except ValidationError:
                 logger.warning(
-                    "Invalid proposalPolicy override for job %s; using defaults: %s",
+                    "Invalid proposalPolicy override for job %s; using defaults",
                     job.id,
-                    exc,
                 )
 
         defaults = settings.spec_workflow

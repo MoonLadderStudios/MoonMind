@@ -32,7 +32,7 @@
 
 **Goal**: Workers honor policy defaults/overrides and emit project + MoonMind proposals with severity-aware gating.
 
-**Independent Test**: Run `pytest tests/unit/agents/codex_worker/test_worker.py` to confirm `proposalPolicy` merging, severity gating, and `maxItems` enforcement without touching API/service pieces.
+**Independent Test**: Run `./tools/test_unit.sh` (scoped to worker tests as needed) to confirm `proposalPolicy` merging, severity gating, and `maxItems` enforcement without touching API/service pieces.
 
 ### Implementation for User Story 1
 
@@ -54,7 +54,7 @@
 
 **Goal**: API/service/dashboard enforce normalized metadata so CI reviewers can filter and prioritize proposals quickly.
 
-**Independent Test**: Run FastAPI + JS unit smoke tests (pytest modules + manual dashboard check) to ensure MoonMind submissions fail without metadata and dashboard filters surface new attributes.
+**Independent Test**: Run FastAPI + JS unit smoke tests via `./tools/test_unit.sh` plus a manual dashboard check to ensure MoonMind submissions fail without metadata and dashboard filters surface new attributes.
 
 ### Implementation for User Story 2
 
@@ -115,7 +115,7 @@
 
 - Setup + Foundational tasks labeled without dependencies can be split among different contributors (e.g., one developer handles config template updates while another wires Pydantic schemas).
 - After Phase 2, one engineer can focus on worker logic (US1) while another tackles API/dashboard changes (US2); a third can start documentation/tests for platform guidance (US3).
-- Validation tasks (pytest suites, npm dashboard build) can run in parallel once their respective code changes exist because they touch separate tools.
+- Validation tasks (`./tools/test_unit.sh` suites, npm dashboard build) can run in parallel once their respective code changes exist because they touch separate tools.
 
 ## Implementation Strategy
 

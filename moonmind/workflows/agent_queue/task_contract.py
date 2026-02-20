@@ -969,7 +969,9 @@ def build_effective_proposal_policy(
     ]
     if not filtered_vocab:
         filtered_vocab = list(_PROPOSAL_SEVERITIES)
-    severity_rank = {token: index for index, token in enumerate(filtered_vocab)}
+
+    # Preserve canonical severity progression regardless of operator-provided order.
+    severity_rank = {token: index for index, token in enumerate(_PROPOSAL_SEVERITIES)}
 
     default_targets_normalized = str(default_targets or "").strip().lower()
     if default_targets_normalized == "both":

@@ -6,7 +6,6 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
-_ALLOWED_POLICY_TARGETS = ("project", "moonmind")
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 
@@ -470,23 +469,32 @@ class SpecWorkflowSettings(BaseSettings):
     proposal_targets_default: str = Field(
         "project",
         env=("MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"),
+        validation_alias=AliasChoices(
+            "MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"
+        ),
         description="Default proposal targets when tasks omit proposalPolicy (project|moonmind|both).",
     )
     proposal_max_items_project: int = Field(
         3,
         env=("TASK_PROPOSALS_MAX_ITEMS_PROJECT",),
+        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_PROJECT"),
         description="Default per-run project proposal cap applied when task policy omits maxItems.project.",
         ge=1,
     )
     proposal_max_items_moonmind: int = Field(
         2,
         env=("TASK_PROPOSALS_MAX_ITEMS_MOONMIND",),
+        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_MOONMIND"),
         description="Default per-run MoonMind proposal cap applied when task policy omits maxItems.moonmind.",
         ge=1,
     )
     proposal_moonmind_severity_floor: str = Field(
         "high",
         env=(
+            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
+            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
+        ),
+        validation_alias=AliasChoices(
             "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
             "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
         ),
@@ -1012,6 +1020,9 @@ class TaskProposalSettings(BaseSettings):
     proposal_targets_default: str = Field(
         "project",
         env=("MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"),
+        validation_alias=AliasChoices(
+            "MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"
+        ),
         description="Default proposal targets when policy overrides are absent (project|moonmind|both).",
     )
     moonmind_ci_repository: str = Field(
@@ -1022,18 +1033,24 @@ class TaskProposalSettings(BaseSettings):
     max_items_project_default: int = Field(
         3,
         env=("TASK_PROPOSALS_MAX_ITEMS_PROJECT",),
+        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_PROJECT"),
         description="Default per-run cap for project-targeted proposals when unspecified.",
         ge=1,
     )
     max_items_moonmind_default: int = Field(
         2,
         env=("TASK_PROPOSALS_MAX_ITEMS_MOONMIND",),
+        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_MOONMIND"),
         description="Default per-run cap for MoonMind-targeted proposals when unspecified.",
         ge=1,
     )
     moonmind_severity_floor_default: str = Field(
         "high",
         env=(
+            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
+            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
+        ),
+        validation_alias=AliasChoices(
             "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
             "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
         ),
@@ -1123,7 +1140,10 @@ class TaskProposalSettings(BaseSettings):
             raise ValueError(
                 "task_proposals.severity_vocabulary must be subset of: " f"{allowed}"
             )
-        return normalized
+        ordered = tuple(
+            token for token in _ALLOWED_PROPOSAL_SEVERITIES if token in normalized
+        )
+        return ordered or _ALLOWED_PROPOSAL_SEVERITIES
 
     model_config = SettingsConfigDict(
         env_prefix="",

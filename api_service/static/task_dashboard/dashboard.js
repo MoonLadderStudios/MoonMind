@@ -4579,6 +4579,12 @@
       const dedupHash = pick(row, "dedupHash") || "-";
       const snoozedUntil = pick(row, "snoozedUntil");
       const snoozeNote = pick(row, "snoozeNote") || "";
+      const triggerRepo = pick(metadata, "triggerRepo") || "-";
+      const triggerJobId = pick(metadata, "triggerJobId") || "-";
+      const signalMetadata = pick(metadata, "signal");
+      const signalMarkup = signalMetadata
+        ? `<pre>${escapeHtml(JSON.stringify(signalMetadata, null, 2))}</pre>`
+        : "<p class='small'>No signal metadata supplied.</p>";
       const snoozedDisplay = snoozedUntil ? formatTimestamp(snoozedUntil) : "-";
       const similar = pick(row, "similar") || [];
       const similarMarkup = similar.length
@@ -4941,9 +4947,3 @@
     );
   });
 })();
-      const triggerRepo = pick(metadata, "triggerRepo") || "-";
-      const triggerJobId = pick(metadata, "triggerJobId") || "-";
-      const signalMetadata = pick(metadata, "signal");
-      const signalMarkup = signalMetadata
-        ? `<pre>${escapeHtml(JSON.stringify(signalMetadata, null, 2))}</pre>`
-        : "<p class='small'>No signal metadata supplied.</p>";
