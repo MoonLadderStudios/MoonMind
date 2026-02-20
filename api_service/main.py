@@ -54,13 +54,13 @@ from api_service.auth import (
 )
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
-from moonmind.rag.service import ContextRetrievalService
-from moonmind.rag.settings import RagRuntimeSettings
 
 # Removed unused import: build_indexers
 from moonmind.factories.service_context_factory import build_service_context
 from moonmind.factories.storage_context_factory import build_storage_context
 from moonmind.factories.vector_store_factory import build_vector_store
+from moonmind.rag.service import ContextRetrievalService
+from moonmind.rag.settings import RagRuntimeSettings
 
 logger.info("Starting FastAPI...")
 

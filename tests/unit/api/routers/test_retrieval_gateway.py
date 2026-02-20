@@ -48,10 +48,12 @@ def test_context_requires_authentication() -> None:
 
 def test_context_rejects_out_of_scope_repo() -> None:
     app = _build_app()
-    app.dependency_overrides[authorize_retrieval_request] = lambda: RetrievalAuthContext(
-        auth_source="worker_token",
-        allowed_repositories=("allowed/repo",),
-        capabilities=("rag",),
+    app.dependency_overrides[authorize_retrieval_request] = (
+        lambda: RetrievalAuthContext(
+            auth_source="worker_token",
+            allowed_repositories=("allowed/repo",),
+            capabilities=("rag",),
+        )
     )
 
     with TestClient(app) as client:
@@ -65,10 +67,12 @@ def test_context_rejects_out_of_scope_repo() -> None:
 
 def test_context_returns_gateway_transport_for_authorized_request() -> None:
     app = _build_app()
-    app.dependency_overrides[authorize_retrieval_request] = lambda: RetrievalAuthContext(
-        auth_source="worker_token",
-        allowed_repositories=("moonmind",),
-        capabilities=("rag",),
+    app.dependency_overrides[authorize_retrieval_request] = (
+        lambda: RetrievalAuthContext(
+            auth_source="worker_token",
+            allowed_repositories=("moonmind",),
+            capabilities=("rag",),
+        )
     )
 
     with TestClient(app) as client:

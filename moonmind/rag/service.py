@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-import uuid
 import time
+import uuid
 from typing import Any, Mapping
 
 import httpx
@@ -39,7 +39,9 @@ class ContextRetrievalService:
     ) -> None:
         self._settings = settings
         self._env = env or os.environ
-        self._worker_token = str(self._env.get("MOONMIND_WORKER_TOKEN", "")).strip() or None
+        self._worker_token = (
+            str(self._env.get("MOONMIND_WORKER_TOKEN", "")).strip() or None
+        )
         self._telemetry = VectorTelemetry(
             run_id=settings.run_id, job_id=settings.job_id
         )
@@ -124,7 +126,9 @@ class ContextRetrievalService:
             + sum(_estimate_tokens(item.text) for item in result.items),
             "latency_ms": round(result.latency_ms, 2),
         }
-        self._enforce_latency_budget(started=started, budgets=normalized_budgets, usage=usage)
+        self._enforce_latency_budget(
+            started=started, budgets=normalized_budgets, usage=usage
+        )
         telemetry_id = uuid.uuid4().hex
         return build_context_pack(
             items=result.items,
@@ -163,7 +167,9 @@ class ContextRetrievalService:
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code if exc.response is not None else "unknown"
+            status_code = (
+                exc.response.status_code if exc.response is not None else "unknown"
+            )
             raise RuntimeError(
                 f"RetrievalGateway request failed with status {status_code}. Verify MOONMIND_RETRIEVAL_URL and worker token permissions."
             ) from exc
@@ -226,8 +232,7 @@ class ContextRetrievalService:
         )
         if estimated > token_budget:
             raise RetrievalBudgetExceededError(
-                f"Token budget exceeded before retrieval ({estimated}>{token_budget}). Reduce top_k or increase budgets.tokens."
-                ,
+                f"Token budget exceeded before retrieval ({estimated}>{token_budget}). Reduce top_k or increase budgets.tokens.",
                 budget_type="tokens",
             )
 
@@ -245,7 +250,6 @@ class ContextRetrievalService:
         if elapsed_ms > latency_budget:
             actual = usage.get("latency_ms", round(elapsed_ms, 2))
             raise RetrievalBudgetExceededError(
-                f"Latency budget exceeded ({actual}ms>{latency_budget}ms)."
-                ,
+                f"Latency budget exceeded ({actual}ms>{latency_budget}ms).",
                 budget_type="latency_ms",
             )

@@ -121,14 +121,24 @@ def test_merge_results_keeps_multiple_chunks_when_hash_missing():
         id="pt-1",
         version=1,
         score=0.7,
-        payload={"path": "src/file.py", "text": "one", "offset_start": 0, "offset_end": 10},
+        payload={
+            "path": "src/file.py",
+            "text": "one",
+            "offset_start": 0,
+            "offset_end": 10,
+        },
         vector=None,
     )
     second = qmodels.ScoredPoint(
         id="pt-2",
         version=1,
         score=0.8,
-        payload={"path": "src/file.py", "text": "two", "offset_start": 11, "offset_end": 20},
+        payload={
+            "path": "src/file.py",
+            "text": "two",
+            "offset_start": 11,
+            "offset_end": 20,
+        },
         vector=None,
     )
 

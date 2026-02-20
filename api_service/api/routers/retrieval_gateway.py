@@ -80,7 +80,9 @@ async def authorize_retrieval_request(
         try:
             policy = await queue_service.resolve_worker_token(token)
         except AgentQueueAuthenticationError as exc:
-            raise HTTPException(status_code=401, detail="Invalid worker token.") from exc
+            raise HTTPException(
+                status_code=401, detail="Invalid worker token."
+            ) from exc
         capabilities = set(policy.capabilities)
         if not capabilities.intersection(
             {"rag", "gateway", "direct-qdrant", "rag:gateway", "rag:direct-qdrant"}

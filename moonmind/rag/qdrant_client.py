@@ -195,9 +195,7 @@ class RagQdrantClient:
                 item = to_item(point, trust)
                 discriminator = item.chunk_hash
                 if not discriminator:
-                    discriminator = (
-                        f"id:{point.id}|offset:{item.offset_start}:{item.offset_end}|score:{item.score:.8f}"
-                    )
+                    discriminator = f"id:{point.id}|offset:{item.offset_start}:{item.offset_end}|score:{item.score:.8f}"
                 key = (item.source, discriminator)
                 if key in seen:
                     continue
