@@ -1,14 +1,14 @@
-# Task Queue Contract and Execution Model
+# Task Queue System
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-18
+Last Updated: 2026-02-19
 
 ## 1. Purpose
 
-Define how MoonMind queue jobs are submitted and executed for task automation, with Codex/Gemini/Claude compatibility and deterministic Git behavior.
+Define how MoonMind queue jobs are submitted and executed for task automation in runtime-neutral terms.
 
-This document aligns queue APIs, worker behavior, and MCP tools to the canonical Task contract in `docs/TaskArchitecture.md`.
+This document covers the canonical Task queue contract used across Codex, Gemini, and Claude worker runtimes, including shared API surface, stage behavior, and publish semantics.
 
 ## 2. Queue Model
 
@@ -19,9 +19,18 @@ Task submissions use:
 - `type = "task"`
 - `payload = CanonicalTaskPayload`
 
-Legacy job types (`codex_exec`, `codex_skill`) remain supported during migration but are compatibility shims.
+Legacy job types (currently `codex_exec`, `codex_skill`) remain supported during migration but are compatibility shims.
 
-### 2.2 Statuses
+### 2.2 Runtime-Neutral Contract
+
+The queue model is shared across runtimes:
+
+- one canonical payload shape
+- one claim lifecycle (`queued -> running -> terminal`)
+- one wrapper stage plan (`prepare -> execute -> publish`)
+- runtime-specific behavior isolated to the `execute` adapter path
+
+### 2.3 Statuses
 
 Queue status model:
 
@@ -84,7 +93,7 @@ expanded = client.expand_template(
 steps = merge_expanded_steps(existing_steps=[], expanded_steps=expanded["steps"], mode="append")
 ```
 
-### 3.2 MCP Tools
+### 3.3 MCP Tools
 
 - `queue.enqueue`
 - `queue.claim`
@@ -104,8 +113,8 @@ Top-level policy fields plus nested task execution fields:
 ```json
 {
   "repository": "owner/repo",
-  "requiredCapabilities": ["git", "codex"],
-  "targetRuntime": "codex",
+  "requiredCapabilities": ["git", "claude"],
+  "targetRuntime": "claude",
   "auth": {
     "repoAuthRef": null,
     "publishAuthRef": null
@@ -117,7 +126,7 @@ Top-level policy fields plus nested task execution fields:
       "args": {}
     },
     "runtime": {
-      "mode": "codex",
+      "mode": "claude",
       "model": null,
       "effort": null
     },
@@ -136,6 +145,8 @@ Top-level policy fields plus nested task execution fields:
 }
 ```
 
+`targetRuntime` and `task.runtime.mode` select runtime adapter intent (`codex`, `gemini`, `claude`).
+
 ### 4.1 Required UI Input
 
 Only `task.instructions` is required at submit time. Other fields can be omitted and resolved safely at execution time.
@@ -149,12 +160,27 @@ MoonMind derives `requiredCapabilities` from payload:
 - `gh` when `publish.mode = pr`
 - skill-specific capability extensions when configured
 
+### 4.3 Publish Overrides and Producer Guidance
+
+`task.publish` fields are explicit producer-controlled overrides:
+
+- `commitMessage`
+- `prTitle`
+- `prBody`
+
+Producer best practice:
+
+- keep `task.instructions` required
+- make `prTitle` and `prBody` optional but user-editable in typed submit flows
+- auto-suggest `prTitle` from task intent and send it when available
+- rely on system defaults only when explicit overrides are omitted
+
 ## 5. Claim and Eligibility Rules
 
 Workers claim jobs only when:
 
-- job type is allowed by token policy
-- repository is allowed by token policy
+- job type is allowed by worker policy
+- repository is allowed by worker policy
 - all required capabilities are satisfied by worker capability set
 
 Claim ordering remains:
@@ -163,7 +189,7 @@ Claim ordering remains:
 - created time ascending
 - lease-based ownership and heartbeat extension
 
-## 6. Execution Stages
+## 6. Execution Stage Model
 
 Each `type="task"` job executes as wrapper stages:
 
@@ -189,7 +215,7 @@ Prepare stage responsibilities:
 
 Execute stage responsibilities:
 
-- run runtime adapter based on task runtime mode
+- run runtime adapter based on task runtime mode (`codex`, `gemini`, or `claude`)
 - pass instructions, workspace, skill links, and selected skill id
 - collect runtime logs
 - emit patch artifact (`patches/changes.patch`) when changes exist
@@ -205,6 +231,45 @@ Publish stage responsibilities:
   - head = effective working branch
 
 Publish stage owns final git operations and default commit/PR text generation.
+
+### 6.4 PR Text Generation and Correlation Best Practices
+
+When `publish.mode = pr`, apply the following behavior:
+
+1. Commit message:
+   - if `publish.commitMessage` is set, use it verbatim
+   - otherwise generate a deterministic default
+2. PR title:
+   - if `publish.prTitle` is set, use it verbatim
+   - otherwise derive a descriptive title from task intent:
+     - first non-empty step title (when steps exist)
+     - else first sentence/line of `task.instructions`
+     - else fallback default
+   - keep title concise for list readability (target ~70-90 chars)
+   - optional: append short correlation token (`[mm:<jobId8>]`)
+   - avoid full UUIDs in title text
+3. PR body:
+   - if `publish.prBody` is set, use it verbatim
+   - otherwise generate a default body with a summary plus metadata footer
+   - include full job UUID in the body metadata as source-of-truth correlation
+
+Recommended metadata footer template:
+
+```md
+---
+<!-- moonmind:begin -->
+MoonMind Job: <job-uuid>
+Runtime: <codex|gemini|claude>
+Base: <base-branch>
+Head: <head-branch>
+<!-- moonmind:end -->
+```
+
+Metadata footer requirements:
+
+- machine-parseable, stable keys
+- no secrets or token-like values
+- include enough context to reconcile queue job records with PR records
 
 ## 7. Branch Semantics
 
@@ -252,7 +317,7 @@ Required artifacts:
 
 - No raw secrets in queue payloads, events, or artifacts.
 - Worker auth uses worker token or OIDC worker identity.
-- GitHub token should come from worker environment (`GITHUB_TOKEN`) or secret reference resolution path.
+- Publish credentials should come from worker environment or secret-reference resolution paths (GitHub integration currently uses `GITHUB_TOKEN`).
 - Token-like strings must be redacted in logs/artifacts.
 
 ## 10. Producer and Worker Examples
@@ -266,13 +331,13 @@ Required artifacts:
   "maxAttempts": 3,
   "payload": {
     "repository": "MoonLadderStudios/MoonMind",
-    "requiredCapabilities": ["git", "codex"],
-    "targetRuntime": "codex",
+    "requiredCapabilities": ["git", "gh", "gemini"],
+    "targetRuntime": "gemini",
     "auth": { "repoAuthRef": null, "publishAuthRef": null },
     "task": {
       "instructions": "Run unit tests and fix regressions",
       "skill": { "id": "auto", "args": {} },
-      "runtime": { "mode": "codex", "model": "gpt-5-codex", "effort": "high" },
+      "runtime": { "mode": "gemini", "model": "gemini-2.5-pro", "effort": "high" },
       "git": { "startingBranch": null, "newBranch": null },
       "publish": { "mode": "branch", "prBaseBranch": null, "commitMessage": null, "prTitle": null, "prBody": null }
     }
@@ -280,14 +345,27 @@ Required artifacts:
 }
 ```
 
-### 10.2 Claim request example
+### 10.2 Claim request examples
+
+Runtime-specific worker:
 
 ```json
 {
-  "workerId": "executor-01",
+  "workerId": "executor-gemini-01",
   "leaseSeconds": 120,
   "allowedTypes": ["task", "codex_exec", "codex_skill"],
-  "workerCapabilities": ["codex", "git", "gh"]
+  "workerCapabilities": ["gemini", "git", "gh"]
+}
+```
+
+Universal worker:
+
+```json
+{
+  "workerId": "executor-universal-01",
+  "leaseSeconds": 120,
+  "allowedTypes": ["task", "codex_exec", "codex_skill"],
+  "workerCapabilities": ["codex", "gemini", "claude", "git", "gh"]
 }
 ```
 
@@ -308,7 +386,7 @@ Legacy handlers should map into the same internal stage plan (`prepare -> execut
 Steady state after migration:
 
 - UI submits only typed `type="task"` jobs.
-- `codex_exec` and `codex_skill` remain internal compatibility shims and can be removed when producers are cut over.
+- Legacy compatibility shims can be removed when producers are fully cut over.
 
 ## 12. Related
 

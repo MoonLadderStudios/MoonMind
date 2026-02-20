@@ -3,7 +3,7 @@
 **Feature Branch**: `010-agent-queue-artifacts`  
 **Created**: 2026-02-13  
 **Status**: Draft  
-**Input**: User description: "Implement Milestone 2 of docs/CodexTaskQueue.md"
+**Input**: User description: "Implement Milestone 2 of docs/TaskQueueSystem.md"
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -62,14 +62,14 @@ As a platform owner, I need upload paths and file sizes validated so workers can
 
 ### Source Document Requirements
 
-- **DOC-REQ-001** (Source: `docs/CodexTaskQueue.md:463`, `docs/CodexTaskQueue.md:465`): Milestone 2 MUST add an artifact storage root and upload endpoint.
-- **DOC-REQ-002** (Source: `docs/CodexTaskQueue.md:201`, `docs/CodexTaskQueue.md:203`): Upload endpoint MUST be `POST /api/queue/jobs/{jobId}/artifacts/upload` and accept multipart form data.
-- **DOC-REQ-003** (Source: `docs/CodexTaskQueue.md:205`, `docs/CodexTaskQueue.md:208`): Multipart upload MUST support `file`, `name`, and optional `contentType`/`digest`.
-- **DOC-REQ-004** (Source: `docs/CodexTaskQueue.md:209`, `docs/CodexTaskQueue.md:211`): Server MUST store files under `${ARTIFACT_ROOT}/agent_jobs/<jobId>/<name>`.
-- **DOC-REQ-005** (Source: `docs/CodexTaskQueue.md:466`, `docs/CodexTaskQueue.md:212`): System MUST persist artifact metadata in an `agent_job_artifacts` table or equivalent metadata structure.
-- **DOC-REQ-006** (Source: `docs/CodexTaskQueue.md:214`, `docs/CodexTaskQueue.md:217`, `docs/CodexTaskQueue.md:467`): API MUST expose list and download endpoints for job artifacts.
-- **DOC-REQ-007** (Source: `docs/CodexTaskQueue.md:219`, `docs/CodexTaskQueue.md:223`, `docs/CodexTaskQueue.md:468`): Artifact storage MUST enforce per-job roots, path traversal protections, and upload size limits.
-- **DOC-REQ-008** (Source: `docs/CodexTaskQueue.md:224`, `docs/CodexTaskQueue.md:228`): Configuration MUST include dedicated artifact root setting `AGENT_JOB_ARTIFACT_ROOT` defaulting to `var/artifacts/agent_jobs`.
+- **DOC-REQ-001** (Source: `docs/TaskQueueSystem.md:463`, `docs/TaskQueueSystem.md:465`): Milestone 2 MUST add an artifact storage root and upload endpoint.
+- **DOC-REQ-002** (Source: `docs/TaskQueueSystem.md:201`, `docs/TaskQueueSystem.md:203`): Upload endpoint MUST be `POST /api/queue/jobs/{jobId}/artifacts/upload` and accept multipart form data.
+- **DOC-REQ-003** (Source: `docs/TaskQueueSystem.md:205`, `docs/TaskQueueSystem.md:208`): Multipart upload MUST support `file`, `name`, and optional `contentType`/`digest`.
+- **DOC-REQ-004** (Source: `docs/TaskQueueSystem.md:209`, `docs/TaskQueueSystem.md:211`): Server MUST store files under `${ARTIFACT_ROOT}/agent_jobs/<jobId>/<name>`.
+- **DOC-REQ-005** (Source: `docs/TaskQueueSystem.md:466`, `docs/TaskQueueSystem.md:212`): System MUST persist artifact metadata in an `agent_job_artifacts` table or equivalent metadata structure.
+- **DOC-REQ-006** (Source: `docs/TaskQueueSystem.md:214`, `docs/TaskQueueSystem.md:217`, `docs/TaskQueueSystem.md:467`): API MUST expose list and download endpoints for job artifacts.
+- **DOC-REQ-007** (Source: `docs/TaskQueueSystem.md:219`, `docs/TaskQueueSystem.md:223`, `docs/TaskQueueSystem.md:468`): Artifact storage MUST enforce per-job roots, path traversal protections, and upload size limits.
+- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md:224`, `docs/TaskQueueSystem.md:228`): Configuration MUST include dedicated artifact root setting `AGENT_JOB_ARTIFACT_ROOT` defaulting to `var/artifacts/agent_jobs`.
 
 ### Functional Requirements
 

@@ -3,7 +3,7 @@
 **Feature Branch**: `013-queue-hardening-quality`  
 **Created**: 2026-02-14  
 **Status**: Draft  
-**Input**: User description: "Implement Milestone 5 of docs/CodexTaskQueue.md"
+**Input**: User description: "Implement Milestone 5 of docs/TaskQueueSystem.md"
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -65,16 +65,16 @@ As a producer/operator, I need append-only job events and pollable log updates s
 
 ### Source Document Requirements
 
-- **DOC-REQ-001** (Source: `docs/CodexTaskQueue.md:489`, `docs/CodexTaskQueue.md:491`): Milestone 5 MUST enforce worker authentication via worker tokens and/or OIDC/JWT-protected worker identity.
-- **DOC-REQ-002** (Source: `docs/CodexTaskQueue.md:410`, `docs/CodexTaskQueue.md:415`): Dedicated worker token validation MUST map inbound token credentials to worker identity and permissions.
-- **DOC-REQ-003** (Source: `docs/CodexTaskQueue.md:419`, `docs/CodexTaskQueue.md:420`): Server MUST enforce repository and job-type allowlists per worker credential.
-- **DOC-REQ-004** (Source: `docs/CodexTaskQueue.md:97`, `docs/CodexTaskQueue.md:493`): Claiming logic MUST support job capability matching between queued jobs and worker capabilities.
-- **DOC-REQ-005** (Source: `docs/CodexTaskQueue.md:63`, `docs/CodexTaskQueue.md:72`): System MUST persist append-only job events with level/message/payload fields.
-- **DOC-REQ-006** (Source: `docs/CodexTaskQueue.md:494`): Queue API MUST provide a streaming-ish logs/events surface for incremental progress visibility.
-- **DOC-REQ-007** (Source: `docs/CodexTaskQueue.md:495`): Queue lifecycle MUST support retries with backoff before jobs become claimable again.
-- **DOC-REQ-008** (Source: `docs/CodexTaskQueue.md:495`): Queue lifecycle MUST support dead-letter behavior for retry-exhausted jobs.
-- **DOC-REQ-009** (Source: `docs/CodexTaskQueue.md:93`, `docs/CodexTaskQueue.md:100`): Expired lease requeue/failure handling MUST remain atomic with claim selection semantics.
-- **DOC-REQ-010** (Source: `docs/CodexTaskQueue.md:421`): Worker-authenticated artifact upload paths MUST continue enforcing artifact size/content validation constraints.
+- **DOC-REQ-001** (Source: `docs/TaskQueueSystem.md:489`, `docs/TaskQueueSystem.md:491`): Milestone 5 MUST enforce worker authentication via worker tokens and/or OIDC/JWT-protected worker identity.
+- **DOC-REQ-002** (Source: `docs/TaskQueueSystem.md:410`, `docs/TaskQueueSystem.md:415`): Dedicated worker token validation MUST map inbound token credentials to worker identity and permissions.
+- **DOC-REQ-003** (Source: `docs/TaskQueueSystem.md:419`, `docs/TaskQueueSystem.md:420`): Server MUST enforce repository and job-type allowlists per worker credential.
+- **DOC-REQ-004** (Source: `docs/TaskQueueSystem.md:97`, `docs/TaskQueueSystem.md:493`): Claiming logic MUST support job capability matching between queued jobs and worker capabilities.
+- **DOC-REQ-005** (Source: `docs/TaskQueueSystem.md:63`, `docs/TaskQueueSystem.md:72`): System MUST persist append-only job events with level/message/payload fields.
+- **DOC-REQ-006** (Source: `docs/TaskQueueSystem.md:494`): Queue API MUST provide a streaming-ish logs/events surface for incremental progress visibility.
+- **DOC-REQ-007** (Source: `docs/TaskQueueSystem.md:495`): Queue lifecycle MUST support retries with backoff before jobs become claimable again.
+- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md:495`): Queue lifecycle MUST support dead-letter behavior for retry-exhausted jobs.
+- **DOC-REQ-009** (Source: `docs/TaskQueueSystem.md:93`, `docs/TaskQueueSystem.md:100`): Expired lease requeue/failure handling MUST remain atomic with claim selection semantics.
+- **DOC-REQ-010** (Source: `docs/TaskQueueSystem.md:421`): Worker-authenticated artifact upload paths MUST continue enforcing artifact size/content validation constraints.
 
 ### Functional Requirements
 

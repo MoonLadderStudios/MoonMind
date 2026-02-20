@@ -3,7 +3,7 @@
 **Feature Branch**: `012-mcp-queue-tools-wrapper`  
 **Created**: 2026-02-13  
 **Status**: Draft  
-**Input**: User description: "Implement Milestone 4 of docs/CodexTaskQueue.md"
+**Input**: User description: "Implement Milestone 4 of docs/TaskQueueSystem.md"
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -63,16 +63,16 @@ As an operator, I can follow a concise setup guide so Codex CLI can invoke MoonM
 
 ### Source Document Requirements
 
-- **DOC-REQ-001** (Source: `docs/CodexTaskQueue.md:483`, `docs/CodexTaskQueue.md:485`): Milestone 4 MUST add an MCP tool router and tool registry.
-- **DOC-REQ-002** (Source: `docs/CodexTaskQueue.md:238`, `docs/CodexTaskQueue.md:246`): MCP tool surface MUST expose queue operations (`enqueue`, `claim`, `heartbeat`, `complete`, `fail`, `get`, `list`).
-- **DOC-REQ-003** (Source: `docs/CodexTaskQueue.md:251`, `docs/CodexTaskQueue.md:254`): MCP and REST adapters MUST call the same queue service methods to keep behavior identical.
-- **DOC-REQ-004** (Source: `docs/CodexTaskQueue.md:262`, `docs/CodexTaskQueue.md:267`): MVP MCP server shape MUST provide `GET /mcp/tools` and `POST /mcp/tools/call` HTTP endpoints.
-- **DOC-REQ-005** (Source: `docs/CodexTaskQueue.md:266`): Tool discovery endpoint MUST return tool definitions with name, description, and JSON schema.
-- **DOC-REQ-006** (Source: `docs/CodexTaskQueue.md:267`): Tool call endpoint MUST accept `{tool, arguments}` and return `{result}`.
-- **DOC-REQ-007** (Source: `docs/CodexTaskQueue.md:287`, `docs/CodexTaskQueue.md:288`): Implementation MUST add `api_service/api/routers/mcp_tools.py` and `moonmind/mcp/tool_registry.py`.
-- **DOC-REQ-008** (Source: `docs/CodexTaskQueue.md:292`, `docs/CodexTaskQueue.md:294`): Queue schemas MUST remain shared between REST and MCP surfaces.
-- **DOC-REQ-009** (Source: `docs/CodexTaskQueue.md:531`): MCP adapter responses for queue operations MUST align with REST `JobModel`-equivalent structures.
-- **DOC-REQ-010** (Source: `docs/CodexTaskQueue.md:487`): Deliverables MUST include a concise document describing how Codex can call MoonMind tools.
+- **DOC-REQ-001** (Source: `docs/TaskQueueSystem.md:483`, `docs/TaskQueueSystem.md:485`): Milestone 4 MUST add an MCP tool router and tool registry.
+- **DOC-REQ-002** (Source: `docs/TaskQueueSystem.md:238`, `docs/TaskQueueSystem.md:246`): MCP tool surface MUST expose queue operations (`enqueue`, `claim`, `heartbeat`, `complete`, `fail`, `get`, `list`).
+- **DOC-REQ-003** (Source: `docs/TaskQueueSystem.md:251`, `docs/TaskQueueSystem.md:254`): MCP and REST adapters MUST call the same queue service methods to keep behavior identical.
+- **DOC-REQ-004** (Source: `docs/TaskQueueSystem.md:262`, `docs/TaskQueueSystem.md:267`): MVP MCP server shape MUST provide `GET /mcp/tools` and `POST /mcp/tools/call` HTTP endpoints.
+- **DOC-REQ-005** (Source: `docs/TaskQueueSystem.md:266`): Tool discovery endpoint MUST return tool definitions with name, description, and JSON schema.
+- **DOC-REQ-006** (Source: `docs/TaskQueueSystem.md:267`): Tool call endpoint MUST accept `{tool, arguments}` and return `{result}`.
+- **DOC-REQ-007** (Source: `docs/TaskQueueSystem.md:287`, `docs/TaskQueueSystem.md:288`): Implementation MUST add `api_service/api/routers/mcp_tools.py` and `moonmind/mcp/tool_registry.py`.
+- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md:292`, `docs/TaskQueueSystem.md:294`): Queue schemas MUST remain shared between REST and MCP surfaces.
+- **DOC-REQ-009** (Source: `docs/TaskQueueSystem.md:531`): MCP adapter responses for queue operations MUST align with REST `JobModel`-equivalent structures.
+- **DOC-REQ-010** (Source: `docs/TaskQueueSystem.md:487`): Deliverables MUST include a concise document describing how Codex can call MoonMind tools.
 
 ### Functional Requirements
 

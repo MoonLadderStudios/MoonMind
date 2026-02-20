@@ -99,7 +99,7 @@
 - [X] T029 [P] Remove SpecKit dashboard source/status config from `api_service/api/routers/task_dashboard_view_model.py`.
 - [X] T030 Update consolidated/list/route rendering to queue + orchestrator and add queue skill column/filter in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T031 Add optional queue submit `skillArgs` JSON handling and validation in `api_service/static/task_dashboard/dashboard.js`.
-- [X] T032 Update documentation/spec artifacts to remove legacy SpecKit category route references and document queue skill launch path in `docs/TaskUiArchitecture.md`, `docs/TaskUiStrategy1ThinDashboard.md`, and `specs/017-thin-dashboard-ui/*`.
+- [X] T032 Update documentation/spec artifacts to remove legacy SpecKit category route references and document queue skill launch path in `docs/TaskUiArchitecture.md`, `docs/TaskArchitecture.md`, and `specs/017-thin-dashboard-ui/*`.
 
 ---
 
@@ -107,7 +107,7 @@
 
 **Purpose**: Finalize docs/testing and validate implementation scope.
 
-- [X] T025 [P] Update dashboard implementation references in `docs/TaskUiStrategy1ThinDashboard.md` and `docs/TaskUiArchitecture.md` with implemented route details.
+- [X] T025 [P] Update dashboard implementation references in `docs/TaskUiArchitecture.md` and `docs/TailwindStyleSystem.md` with implemented route/style details.
 - [X] T026 Run unit validation via `./tools/test_unit.sh`.
 - [X] T027 Run manual implementation scope validation against tasks and git diff (repository does not include `.specify/scripts/bash/validate-implementation-scope.sh`).
 

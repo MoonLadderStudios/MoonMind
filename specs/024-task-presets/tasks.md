@@ -85,7 +85,7 @@
 ### Implementation
 
 - [ ] T031 [US4] Publish CLI helper inside `moonmind/agents/cli/task_templates.py` (or existing CLI module) that wraps list/expand endpoints and merges steps client-side.
-- [ ] T032 [US4] Add documentation + examples to `docs/CodexTaskQueue.md` describing CLI usage and API tokens for template catalog.
+- [ ] T032 [US4] Add documentation + examples to `docs/TaskQueueSystem.md` describing CLI usage and API tokens for template catalog.
 - [ ] T033 [US4] Create automated tests (could reuse CLI smoke tests) verifying CLI fallback to raw API and error propagation for validation failures.
 
 ---
