@@ -25,6 +25,20 @@ GEMINI_QUEUE = resolve_worker_queue(
 )
 
 
+def _resolve_gemini_cli_auth_mode() -> str:
+    """Resolve Gemini CLI auth mode for subprocess execution."""
+
+    raw = str(os.environ.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip()
+    mode = raw.lower() or "api_key"
+    if mode not in {"api_key", "oauth"}:
+        logger.warning(
+            "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE '%s'; defaulting to api_key.",
+            raw or mode,
+        )
+        return "api_key"
+    return mode
+
+
 @celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)
 def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
     """Invoke Gemini CLI to generate content."""
@@ -46,12 +60,18 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
 
     # Prepare environment with auth and config
     env = os.environ.copy()
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key and settings.google.google_api_key:
-        api_key = settings.google.google_api_key
-
-    if api_key:
-        env["GEMINI_API_KEY"] = api_key
+    auth_mode = _resolve_gemini_cli_auth_mode()
+    if auth_mode == "oauth":
+        env.pop("GEMINI_API_KEY", None)
+        env.pop("GOOGLE_API_KEY", None)
+    else:
+        api_key = (
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or settings.google.google_api_key
+        )
+        if api_key:
+            env["GEMINI_API_KEY"] = api_key
 
     gemini_home = os.environ.get("GEMINI_HOME")
     if gemini_home:

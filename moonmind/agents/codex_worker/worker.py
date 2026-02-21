@@ -213,6 +213,7 @@ class CodexWorkerConfig:
     default_claude_model: str | None = None
     default_claude_effort: str | None = None
     gemini_binary: str = "gemini"
+    gemini_cli_auth_mode: str = "api_key"
     claude_binary: str = "claude"
     worker_capabilities: tuple[str, ...] = ("codex", "git", "gh")
     docker_binary: str = "docker"
@@ -394,6 +395,16 @@ class CodexWorkerConfig:
         gemini_binary = (
             str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
         )
+        gemini_cli_auth_mode = (
+            str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key"))
+            .strip()
+            .lower()
+            or "api_key"
+        )
+        if gemini_cli_auth_mode not in {"api_key", "oauth"}:
+            raise ValueError(
+                "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
+            )
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
         )
@@ -660,6 +671,7 @@ class CodexWorkerConfig:
             default_claude_model=default_claude_model,
             default_claude_effort=default_claude_effort,
             gemini_binary=gemini_binary,
+            gemini_cli_auth_mode=gemini_cli_auth_mode,
             claude_binary=claude_binary,
             worker_capabilities=worker_capabilities,
             docker_binary=docker_binary,
@@ -3514,10 +3526,14 @@ class CodexWorker:
                         model=runtime_model,
                         effort=runtime_effort,
                     )
+                    runtime_env = self._build_non_codex_runtime_env(
+                        runtime_mode=runtime_mode
+                    )
                     await self._run_stage_command(
                         command,
                         cwd=prepared.repo_dir,
                         log_path=step_log_path,
+                        env=runtime_env,
                     )
                     patch_result = await self._run_stage_command(
                         ["git", "diff"],
@@ -4130,6 +4146,20 @@ class CodexWorker:
         if effort:
             command.extend(["--effort", effort])
         return command
+
+    def _build_non_codex_runtime_env(
+        self,
+        *,
+        runtime_mode: str,
+    ) -> Mapping[str, str] | None:
+        if runtime_mode != "gemini":
+            return None
+        if self._config.gemini_cli_auth_mode != "oauth":
+            return None
+        env = dict(environ)
+        env.pop("GEMINI_API_KEY", None)
+        env.pop("GOOGLE_API_KEY", None)
+        return env
 
     def _resolve_runtime_overrides(
         self,

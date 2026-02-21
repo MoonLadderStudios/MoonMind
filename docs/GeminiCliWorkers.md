@@ -85,6 +85,27 @@ Within a **single Gemini worker group**, we share a **named Docker volume**:
 - The Celery worker container mounts the volume at `GEMINI_HOME`.
 - This ensures that if the CLI requires a one-time "login" or setup command, it only needs to run once for the entire group.
 
+### 4.3 Authentication Mode Design
+
+MoonMind supports two explicit Gemini CLI auth modes for workers:
+
+- `MOONMIND_GEMINI_CLI_AUTH_MODE=api_key` (default):
+  - Startup preflight requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
+  - Gemini subprocesses inherit API-key auth.
+- `MOONMIND_GEMINI_CLI_AUTH_MODE=oauth`:
+  - Startup preflight requires `GEMINI_HOME` to exist.
+  - Gemini subprocesses explicitly ignore `GEMINI_API_KEY` and `GOOGLE_API_KEY` so cached account auth in `GEMINI_HOME` is used.
+
+This design lets operators keep API keys available for non-CLI workflows (for example embedding services) while forcing the Gemini CLI runtime to use OAuth account auth.
+
+One-time OAuth bootstrap:
+
+```bash
+./tools/auth-gemini-volume.sh
+```
+
+The script runs Gemini in the `celery_gemini_worker` container with API-key variables unset and writes credentials to `gemini_auth_volume`.
+
 ---
 
 ## 5. Container Image and Dependencies

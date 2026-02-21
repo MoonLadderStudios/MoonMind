@@ -7,7 +7,10 @@ MoonMind background jobs run using the default user account.
 
 Keys for model providers (e.g. Google and OpenAI) are read from this user's profile whenever jobs execute. In `disabled` auth mode, the values from `.env` seed this profile on startup. Remove them from the environment to verify jobs fail until a key is stored on this user.
 
-**Gemini CLI authentication**: Set `GOOGLE_API_KEY` in the deployment environment so the orchestrator and Celery worker can authenticate when calling the Gemini CLI. In `disabled` auth mode this value is copied from `.env` into the default user profile on startup; otherwise, ensure the default user has a stored Google API key before launching automation workloads.
+**Gemini CLI authentication**: Configure `MOONMIND_GEMINI_CLI_AUTH_MODE` for worker subprocesses.
+- `api_key` (default): requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
+- `oauth`: uses cached account login in `GEMINI_HOME` (`gemini_auth_volume`) and ignores API-key env vars for Gemini CLI calls.
+Use `./tools/auth-gemini-volume.sh` once per environment to bootstrap OAuth credentials into the shared Gemini auth volume.
 
 ## Spec Workflow Celery Chain Operations
 

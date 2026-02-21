@@ -38,8 +38,9 @@ MoonMind exposes all of this through:
     ```bash
     ./tools/auth-codex-volume.sh
     ./tools/auth-claude-volume.sh
+    ./tools/auth-gemini-volume.sh
     ```
-    This persists Codex auth in `codex_auth_volume` and Claude auth in `claude_auth_volume` so runtime pre-flight checks pass.
+    This persists Codex auth in `codex_auth_volume`, Claude auth in `claude_auth_volume`, and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
     By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If required runtime auth is missing, the worker stays idle and retries until runtime-specific preflight checks pass.
 3.  **Start the services** using the following command:
     ```bash
@@ -202,6 +203,15 @@ The Gemini worker listens on the `gemini` queue and uses the `celery_worker.gemi
 
 - `GEMINI_CELERY_QUEUE` - Queue name for Gemini tasks (default: `gemini`).
 - `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration (default: `/var/lib/gemini-auth`).
+- `MOONMIND_GEMINI_CLI_AUTH_MODE` - Gemini CLI auth mode for worker subprocesses:
+  - `api_key` (default): use `GEMINI_API_KEY` / `GOOGLE_API_KEY`.
+  - `oauth`: use cached login in `GEMINI_HOME`; worker subprocesses ignore API key env vars.
+
+To bootstrap Gemini OAuth into the shared volume:
+
+```bash
+./tools/auth-gemini-volume.sh
+```
 
 See [docs/GeminiCliWorkers.md](docs/GeminiCliWorkers.md) for detailed architecture and configuration.
 
