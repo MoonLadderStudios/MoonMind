@@ -165,17 +165,21 @@ def _summarize_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
     summary_payload: dict[str, Any] = {}
     summary_task: dict[str, Any] = {}
 
-    direct_runtime = payload.get("targetRuntime")
-    if direct_runtime is None:
-        direct_runtime = payload.get("target_runtime")
-    if direct_runtime is None:
-        direct_runtime = payload.get("runtime")
+    direct_runtime = None
+    for key in ("targetRuntime", "target_runtime", "runtime"):
+        if (value := payload.get(key)) is not None:
+            direct_runtime = value
+            break
     direct_runtime_value = _coerce_summary_text(direct_runtime)
     if direct_runtime_value:
         summary_payload["runtime"] = direct_runtime_value
 
-    direct_publish_mode = payload.get("publishMode")
-    direct_publish_mode_value = _coerce_summary_text(direct_publish_mode)
+    direct_publish_payload = payload.get("publish")
+    direct_publish_mode_value = None
+    if isinstance(direct_publish_payload, dict):
+        direct_publish_mode_value = _coerce_summary_text(direct_publish_payload.get("mode"))
+    if direct_publish_mode_value is None:
+        direct_publish_mode_value = _coerce_summary_text(payload.get("publishMode"))
     if direct_publish_mode_value:
         summary_payload["publish"] = {"mode": direct_publish_mode_value}
 
@@ -186,11 +190,10 @@ def _summarize_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(runtime_payload, dict):
             runtime_value = _coerce_summary_text(runtime_payload.get("mode"))
         if runtime_value is None:
-            runtime_value = _coerce_summary_text(task_payload.get("targetRuntime"))
-        if runtime_value is None:
-            runtime_value = _coerce_summary_text(task_payload.get("target_runtime"))
-        if runtime_value is None:
-            runtime_value = _coerce_summary_text(task_payload.get("runtime"))
+            for key in ("targetRuntime", "target_runtime", "runtime"):
+                if value := _coerce_summary_text(task_payload.get(key)):
+                    runtime_value = value
+                    break
         if runtime_value is not None:
             summary_task["runtime"] = {"mode": runtime_value}
 

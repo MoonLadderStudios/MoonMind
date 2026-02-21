@@ -667,6 +667,27 @@ def test_list_jobs_with_summary_returns_compact_payload(
     assert "unrelated" not in payload
 
 
+
+
+def test_list_jobs_with_summary_preserves_legacy_publish_mode(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Summary list mode should retain top-level legacy publish mode fields."""
+
+    test_client, service = client
+    job = _build_job()
+    job.payload = {
+        "publish": {"mode": "pr"},
+        "instruction": "legacy payload",
+    }
+    service.list_jobs.return_value = [job]
+
+    response = test_client.get("/api/queue/jobs?summary=true&limit=50")
+
+    assert response.status_code == 200
+    payload = response.json()["items"][0]["payload"]
+    assert payload["publish"]["mode"] == "pr"
+
 def test_list_jobs_returns_manifest_metadata(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
