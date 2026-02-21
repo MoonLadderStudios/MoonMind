@@ -195,7 +195,10 @@ def test_gemini_worker_preflight_missing_api_key():
                 with patch("moonmind.config.settings.settings") as mock_settings:
                     mock_settings.google.google_api_key = None
 
-                    with pytest.raises(RuntimeError, match="GEMINI_API_KEY is not set"):
+                    with pytest.raises(
+                        RuntimeError,
+                        match="requires GEMINI_API_KEY or GOOGLE_API_KEY",
+                    ):
                         import celery_worker.gemini_worker  # noqa: F401
 
     # Cleanup
@@ -224,6 +227,34 @@ def test_gemini_worker_preflight_invalid_gemini_home():
                     RuntimeError, match="GEMINI_HOME directory does not exist"
                 ):
                     import celery_worker.gemini_worker  # noqa: F401
+
+    if "celery_worker.gemini_worker" in sys.modules:
+        del sys.modules["celery_worker.gemini_worker"]
+
+
+def test_gemini_worker_preflight_oauth_requires_writable_gemini_home():
+    """Verify oauth mode fails when GEMINI_HOME is not writable."""
+    if "celery_worker.gemini_worker" in sys.modules:
+        del sys.modules["celery_worker.gemini_worker"]
+
+    with patch.dict(
+        os.environ,
+        {
+            "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
+            "GEMINI_HOME": "/tmp/gemini-auth",
+        },
+        clear=True,
+    ):
+        with patch(
+            "moonmind.workflows.speckit_celery.utils.verify_cli_is_executable"
+        ) as mock_verify:
+            mock_verify.return_value = "/bin/gemini"
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value.stdout = "gemini version 1.0.0"
+                with patch("os.path.isdir", return_value=True):
+                    with patch("os.access", return_value=False):
+                        with pytest.raises(RuntimeError, match="must be writable"):
+                            import celery_worker.gemini_worker  # noqa: F401
 
     if "celery_worker.gemini_worker" in sys.modules:
         del sys.modules["celery_worker.gemini_worker"]

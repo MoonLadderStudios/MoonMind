@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 
 import pytest
@@ -618,6 +619,71 @@ def test_run_preflight_universal_checks_codex_and_claude_auth(monkeypatch) -> No
         ["/usr/bin/claude", "--version"],
         ["/usr/bin/claude", "auth", "status"],
     ]
+
+
+def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
+    """Gemini oauth mode should fail fast when GEMINI_HOME is unset."""
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, *args, **kwargs: subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="GEMINI_HOME is required"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "gemini",
+                "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+
+def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -> None:
+    """Gemini oauth mode should enforce writable GEMINI_HOME directories."""
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, *args, **kwargs: subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="",
+            stderr="",
+        ),
+    )
+    monkeypatch.setattr(os.path, "isdir", lambda path: path == "/tmp/gemini-auth")
+    monkeypatch.setattr(
+        os,
+        "access",
+        lambda _path, _mode: False,
+    )
+
+    with pytest.raises(RuntimeError, match="GEMINI_HOME must be writable"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "gemini",
+                "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
+                "GEMINI_HOME": "/tmp/gemini-auth",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
 
 
 def test_main_returns_error_when_run_fails(monkeypatch) -> None:

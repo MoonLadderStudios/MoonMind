@@ -8,7 +8,11 @@ import re
 import subprocess
 from importlib import import_module
 
-from celery_worker.runtime_mode import resolve_worker_queue, resolve_worker_runtime
+from celery_worker.runtime_mode import (
+    resolve_gemini_cli_auth_mode,
+    resolve_worker_queue,
+    resolve_worker_runtime,
+)
 from celery_worker.startup_checks import (
     validate_embedding_runtime_profile,
     validate_shared_skills_mirror,
@@ -164,15 +168,13 @@ def _validate_embedding_profile() -> None:
 def _resolve_gemini_cli_auth_mode() -> str:
     """Resolve Gemini CLI auth mode for worker subprocess execution."""
 
-    raw = str(os.environ.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip()
-    mode = raw.lower() or "api_key"
-    if mode not in {"api_key", "oauth"}:
+    mode, raw = resolve_gemini_cli_auth_mode()
+    if mode != (raw.lower() or "api_key"):
         logger.warning(
             "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE '%s'; defaulting to 'api_key'.",
             raw or mode,
             extra={"gemini_cli_auth_mode_raw": raw or mode},
         )
-        mode = "api_key"
     logger.info(
         "Gemini CLI auth mode resolved: %s",
         mode,
@@ -191,6 +193,14 @@ def _run_gemini_preflight_check(*, auth_mode: str) -> None:
                 "GEMINI_HOME is set to '%s' but it is not a directory.", gemini_home
             )
             raise RuntimeError(f"GEMINI_HOME directory does not exist: {gemini_home}")
+        if not os.access(gemini_home, os.W_OK | os.X_OK):
+            logger.critical(
+                "GEMINI_HOME '%s' is not writable by the worker process.", gemini_home
+            )
+            raise RuntimeError(
+                "GEMINI_HOME must be writable for OAuth Gemini CLI authentication. "
+                "Mount the auth volume read-write and ensure UID/GID permissions match the worker user."
+            )
         logger.info("Gemini pre-flight check: GEMINI_HOME=%s", gemini_home)
     elif auth_mode == "oauth":
         logger.critical(
