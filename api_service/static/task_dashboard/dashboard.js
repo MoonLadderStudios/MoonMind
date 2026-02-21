@@ -1964,7 +1964,7 @@
       "Submit Queue Task",
       `Create a typed Task job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
       `
-      <form id="queue-submit-form">
+      <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
           <strong>Steps</strong>
           <span class="small">At least one step is required to submit. You can remove all steps while editing, but submit stays disabled by validation until a step is added back.</span>
@@ -2021,11 +2021,12 @@
           <input name="affinityKey" placeholder="optional affinity key" />
         </label>
         <p class="small">Submission emits canonical <span class="inline-code">type="task"</span> payloads; server validation rejects malformed contracts.</p>
-        <div class="actions">
-          <button type="submit">Create Queue Task</button>
-          <a href="/tasks/queue"><button class="secondary" type="button">Cancel</button></a>
+        <div class="queue-submit-actions" role="group" aria-label="Queue submission actions">
+          <p class="small queue-submit-message" id="queue-submit-message"></p>
+          <div class="actions queue-submit-actions-row">
+            <button type="submit">Submit</button>
+          </div>
         </div>
-        <p class="small" id="queue-submit-message"></p>
       </form>
       `,
     );
@@ -2897,19 +2898,19 @@
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      message.className = "small";
+      message.className = "small queue-submit-message";
       message.textContent = "Submitting...";
 
       const formData = new FormData(form);
       const primaryStep = stepState[0] || null;
       if (!primaryStep) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent = "Add at least one step before submitting.";
         return;
       }
       const instructions = String(primaryStep.instructions || "").trim();
       if (!instructions) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent = "Primary step instructions are required.";
         return;
       }
@@ -2918,13 +2919,13 @@
       const repositoryInput = String(formData.get("repository") || "").trim();
       const repository = repositoryInput || defaultRepository;
       if (!repository) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent =
           "Repository is required because no system default repository is configured.";
         return;
       }
       if (!isValidRepositoryInput(repository)) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent =
           "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).";
         return;
@@ -2935,7 +2936,7 @@
       const runtimeCandidate = rawRuntime || defaultTaskRuntime;
       const runtimeMode = normalizeTaskRuntimeInput(runtimeCandidate);
       if (!runtimeMode) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent =
           "Runtime must be one of: " + supportedTaskRuntimes.join(", ") + ".";
         return;
@@ -2945,7 +2946,7 @@
         .trim()
         .toLowerCase();
       if (!["none", "branch", "pr"].includes(publishMode)) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent =
           "Publish mode must be one of: none, branch, pr.";
         return;
@@ -2953,14 +2954,14 @@
 
       const priority = Number(formData.get("priority") || 0);
       if (!Number.isInteger(priority)) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent = "Priority must be an integer.";
         return;
       }
 
       const maxAttempts = Number(formData.get("maxAttempts") || 3);
       if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent = "Max Attempts must be an integer >= 1.";
         return;
       }
@@ -2979,7 +2980,7 @@
           }
           skillArgs = parsed;
         } catch (error) {
-          message.className = "notice error";
+          message.className = "notice error queue-submit-message";
           message.textContent =
             "Primary step Skill Args must be valid JSON object text (for example: {\"featureKey\":\"...\"}).";
           return;
@@ -3014,7 +3015,7 @@
             }
             stepSkillArgs = parsed;
           } catch (_error) {
-            message.className = "notice error";
+            message.className = "notice error queue-submit-message";
             message.textContent = `Step ${index + 1} Skill Args must be valid JSON object text.`;
             return;
           }
@@ -3091,7 +3092,7 @@
           const nextIndex = templateIdCursor.get(templateId) || 0;
           const remappedStepId = availableStepIds[nextIndex];
           if (!remappedStepId) {
-            message.className = "notice error";
+            message.className = "notice error queue-submit-message";
             message.textContent = `Applied template references unknown step binding ID: ${templateId}. Please re-apply the template.`;
             return;
           }
@@ -3169,7 +3170,7 @@
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);
-        message.className = "notice error";
+        message.className = "notice error queue-submit-message";
         message.textContent =
           "Failed to create queue task: " +
           String(error?.message || "request failed");
