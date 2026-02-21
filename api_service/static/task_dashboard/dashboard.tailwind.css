@@ -369,6 +369,10 @@ form {
   max-width: 760px;
 }
 
+.queue-submit-form {
+  padding-bottom: 7rem;
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;
@@ -554,6 +558,47 @@ button.secondary:hover {
   flex-wrap: wrap;
 }
 
+.queue-submit-actions {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.85rem);
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(760px, calc(100vw - 1.5rem));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.65rem 0.72rem;
+  border: 1px solid rgb(var(--mm-border) / 0.88);
+  border-radius: 0.9rem;
+  background: rgb(var(--mm-panel) / 0.92);
+  box-shadow: 0 16px 34px -24px rgb(var(--mm-ink) / 0.75), 0 0 0 1px rgb(var(--mm-accent) / 0.14);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .queue-submit-actions {
+    background: rgb(var(--mm-panel) / 0.98);
+  }
+}
+
+.queue-submit-actions-row {
+  margin-left: auto;
+}
+
+.queue-submit-message {
+  margin: 0;
+  min-height: 1.25rem;
+}
+
+.queue-submit-message.notice {
+  margin: 0;
+  padding: 0.4rem 0.56rem;
+  box-shadow: none;
+}
+
 .inline-code {
   font-family: "IBM Plex Mono", "Consolas", monospace;
   background: rgb(var(--mm-panel) / 0.72);
@@ -617,6 +662,22 @@ button.secondary:hover {
 
   .grid-2 {
     grid-template-columns: 1fr;
+  }
+
+  .queue-submit-form {
+    padding-bottom: 9.5rem;
+  }
+
+  .queue-submit-actions {
+    width: calc(100vw - 1rem);
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .queue-submit-actions-row {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
   }
 
   th,
