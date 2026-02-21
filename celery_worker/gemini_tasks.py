@@ -42,6 +42,8 @@ def _resolve_gemini_cli_auth_mode() -> str:
         )
     return mode
 
+_GEMINI_CLI_AUTH_MODE = _resolve_gemini_cli_auth_mode()
+
 
 @celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)
 def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
@@ -64,7 +66,7 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
 
     # Prepare environment with auth and config
     env = os.environ.copy()
-    auth_mode = _resolve_gemini_cli_auth_mode()
+    auth_mode = _GEMINI_CLI_AUTH_MODE
     if auth_mode == "oauth":
         env.pop("GEMINI_API_KEY", None)
         env.pop("GOOGLE_API_KEY", None)
