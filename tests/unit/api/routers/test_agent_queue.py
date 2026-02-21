@@ -631,6 +631,62 @@ def test_list_jobs_rejects_invalid_status_filter(
     service.list_jobs.assert_not_awaited()
 
 
+def test_list_jobs_with_summary_returns_compact_payload(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Summary list mode should return compact payloads and still expose task metadata."""
+
+    test_client, service = client
+    job = _build_job()
+    job.payload = {
+        "targetRuntime": "codex",
+        "instruction": "This is a long instruction that should be trimmed for list responses.",
+        "task": {
+            "runtime": {"mode": "codex"},
+            "skill": {"id": "speckit-run"},
+            "publish": {"mode": "pr"},
+            "instructions": "Task instructions for list rendering.",
+        },
+        "unrelated": {"data": "should_not_be_returned"},
+    }
+    service.list_jobs.return_value = [job]
+
+    response = test_client.get("/api/queue/jobs?summary=true&limit=50")
+
+    assert response.status_code == 200
+    payload = response.json()["items"][0]["payload"]
+    assert payload["runtime"] == "codex"
+    assert payload["task"]["runtime"]["mode"] == "codex"
+    assert payload["task"]["skill"]["id"] == "speckit-run"
+    assert payload["task"]["publish"]["mode"] == "pr"
+    assert payload["task"]["instructions"] == "Task instructions for list rendering."
+    assert (
+        payload["instruction"]
+        == "This is a long instruction that should be trimmed for list responses."
+    )
+    assert "unrelated" not in payload
+
+
+def test_list_jobs_with_summary_preserves_legacy_publish_mode(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Summary list mode should retain top-level legacy publish mode fields."""
+
+    test_client, service = client
+    job = _build_job()
+    job.payload = {
+        "publish": {"mode": "pr"},
+        "instruction": "legacy payload",
+    }
+    service.list_jobs.return_value = [job]
+
+    response = test_client.get("/api/queue/jobs?summary=true&limit=50")
+
+    assert response.status_code == 200
+    payload = response.json()["items"][0]["payload"]
+    assert payload["publish"]["mode"] == "pr"
+
+
 def test_list_jobs_returns_manifest_metadata(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
