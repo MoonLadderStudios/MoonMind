@@ -370,7 +370,8 @@ form {
 }
 
 .queue-submit-form {
-  padding-bottom: 7rem;
+  margin: 0 auto;
+  padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
 }
 
 label {
@@ -665,7 +666,7 @@ button.secondary:hover {
   }
 
   .queue-submit-form {
-    padding-bottom: 9.5rem;
+    padding-bottom: calc(9.5rem + env(safe-area-inset-bottom, 0px));
   }
 
   .queue-submit-actions {
