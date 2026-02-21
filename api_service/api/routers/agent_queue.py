@@ -177,7 +177,9 @@ def _summarize_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
     direct_publish_payload = payload.get("publish")
     direct_publish_mode_value = None
     if isinstance(direct_publish_payload, dict):
-        direct_publish_mode_value = _coerce_summary_text(direct_publish_payload.get("mode"))
+        direct_publish_mode_value = _coerce_summary_text(
+            direct_publish_payload.get("mode")
+        )
     if direct_publish_mode_value is None:
         direct_publish_mode_value = _coerce_summary_text(payload.get("publishMode"))
     if direct_publish_mode_value:

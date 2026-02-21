@@ -667,8 +667,6 @@ def test_list_jobs_with_summary_returns_compact_payload(
     assert "unrelated" not in payload
 
 
-
-
 def test_list_jobs_with_summary_preserves_legacy_publish_mode(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -687,6 +685,7 @@ def test_list_jobs_with_summary_preserves_legacy_publish_mode(
     assert response.status_code == 200
     payload = response.json()["items"][0]["payload"]
     assert payload["publish"]["mode"] == "pr"
+
 
 def test_list_jobs_returns_manifest_metadata(
     client: tuple[TestClient, AsyncMock],
