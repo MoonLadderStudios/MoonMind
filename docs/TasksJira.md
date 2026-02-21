@@ -25,7 +25,7 @@ This design targets Jira Cloud only:
 
 1. Issue API endpoint: `/rest/api/3/issue/{ISSUE_KEY}`.
 2. Description payload format: Atlassian Document Format (ADF), with optional rendered HTML expansion.
-3. Authentication by bearer token or email + API token.
+3. Authentication via MoonMind Atlassian settings (`ATLASSIAN_URL`, `ATLASSIAN_USERNAME`, `ATLASSIAN_API_KEY`).
 
 Out of scope:
 
@@ -84,12 +84,12 @@ Guarantee:
 
 ## 4. Artifact Contract (Required Handoff)
 
-For issue `ABC-123`, `jira-fetch` MUST write:
+For issue `ABC-123`, `jira-fetch` MUST write artifacts under the configured workflow artifact root (for example `settings.spec_workflow.artifacts_root`) using a Jira namespace:
 
-1. `var/artifacts/jira/ABC-123/issue.raw.json`
-2. `var/artifacts/jira/ABC-123/issue.normalized.json`
-3. `var/artifacts/jira/ABC-123/issue.md`
-4. `var/artifacts/jira/ABC-123/context.json`
+1. `<artifacts_root>/jira/ABC-123/issue.raw.json`
+2. `<artifacts_root>/jira/ABC-123/issue.normalized.json`
+3. `<artifacts_root>/jira/ABC-123/issue.md`
+4. `<artifacts_root>/jira/ABC-123/context.json`
 
 `context.json` required fields:
 
@@ -105,7 +105,7 @@ For issue `ABC-123`, `jira-fetch` MUST write:
   "slug": "fix-null-pointer-on-login",
   "branchName": "bugfix/ABC-123-fix-null-pointer-on-login",
   "prTitle": "ABC-123: Fix null pointer on login",
-  "prBody": "Jira: ...\n\n## Summary\n..."
+  "prBody": "Resolves [ABC-123](https://<tenant>.atlassian.net/browse/ABC-123).\n\n## Summary\n\nDetailed summary of changes, often derived from the Jira issue description."
 }
 ```
 
@@ -149,7 +149,7 @@ Example:
 Inputs:
 
 1. Issue key (`ABC-123`).
-2. Env config: `JIRA_BASE_URL` and auth env (`JIRA_BEARER_TOKEN` or `JIRA_EMAIL` + `JIRA_API_TOKEN`).
+2. Env config: `ATLASSIAN_URL`, `ATLASSIAN_USERNAME`, and `ATLASSIAN_API_KEY`.
 
 Outputs:
 
@@ -204,7 +204,7 @@ Example MoonMind job payloads:
 
 ```json
 {
-  "type": "codex_skill",
+  "type": "task",
   "payload": {
     "skillId": "jira-fetch",
     "inputs": {
@@ -216,7 +216,7 @@ Example MoonMind job payloads:
 
 ```json
 {
-  "type": "codex_skill",
+  "type": "task",
   "payload": {
     "skillId": "jira-pr",
     "inputs": {
