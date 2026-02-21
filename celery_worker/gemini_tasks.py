@@ -9,7 +9,10 @@ from typing import Any
 
 from celery.utils.log import get_task_logger
 
-from celery_worker.runtime_mode import resolve_gemini_cli_auth_mode, resolve_worker_queue
+from celery_worker.runtime_mode import (
+    resolve_gemini_cli_auth_mode,
+    resolve_worker_queue,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery.utils import (

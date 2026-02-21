@@ -4163,7 +4163,9 @@ class CodexWorker:
                 extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
             )
             return None
-        if not Path(gemini_home).is_dir() or not os.access(gemini_home, os.W_OK | os.X_OK):
+        if not Path(gemini_home).is_dir() or not os.access(
+            gemini_home, os.W_OK | os.X_OK
+        ):
             logger.warning(
                 "GEMINI_HOME=%s is not a writable directory; retaining API key variables "
                 "for Gemini runtime command auth.",
