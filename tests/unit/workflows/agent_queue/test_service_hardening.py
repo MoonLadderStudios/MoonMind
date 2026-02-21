@@ -651,10 +651,10 @@ async def test_create_legacy_job_records_warning_event(tmp_path: Path) -> None:
     assert warning is not None
 
 
-async def test_migration_telemetry_reports_volume_and_legacy_counts(
+async def test_migration_telemetry_reports_volume_by_type(
     tmp_path: Path,
 ) -> None:
-    """Migration telemetry should report job-type volumes and legacy submission totals."""
+    """Migration telemetry should report job-type volumes and publish stats."""
 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -689,7 +689,6 @@ async def test_migration_telemetry_reports_volume_and_legacy_counts(
     assert telemetry.total_jobs >= 2
     assert telemetry.job_volume_by_type.get("task", 0) >= 1
     assert telemetry.job_volume_by_type.get("codex_exec", 0) >= 1
-    assert telemetry.legacy_job_submissions >= 1
     assert telemetry.events_truncated is False
     assert "publishedRate" in telemetry.publish_outcomes
 

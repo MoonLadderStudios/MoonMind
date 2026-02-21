@@ -558,7 +558,6 @@ def test_migration_telemetry_returns_summary(
         generated_at=datetime.now(UTC),
         window_hours=168,
         total_jobs=12,
-        legacy_job_submissions=3,
         events_truncated=False,
         job_volume_by_type={"task": 9, "codex_exec": 3},
         failure_counts_by_runtime_stage=[
@@ -581,7 +580,6 @@ def test_migration_telemetry_returns_summary(
     assert response.status_code == 200
     payload = response.json()
     assert payload["totalJobs"] == 12
-    assert payload["legacyJobSubmissions"] == 3
     assert payload["eventsTruncated"] is False
     assert payload["jobVolumeByType"]["task"] == 9
     assert payload["publishOutcomes"]["publishedRate"] == 0.6

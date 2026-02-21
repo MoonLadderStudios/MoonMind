@@ -118,7 +118,6 @@ class QueueMigrationTelemetry:
     job_volume_by_type: dict[str, int]
     failure_counts_by_runtime_stage: list[dict[str, Any]]
     publish_outcomes: dict[str, Any]
-    legacy_job_submissions: int
     events_truncated: bool
 
 
@@ -1375,11 +1374,8 @@ class AgentQueueService:
         jobs = await self._repository.list_jobs_for_telemetry(since=since, limit=limit)
 
         job_volume_by_type: dict[str, int] = {}
-        legacy_job_submissions = 0
         for job in jobs:
             job_volume_by_type[job.type] = job_volume_by_type.get(job.type, 0) + 1
-            if job.type in LEGACY_TASK_JOB_TYPES:
-                legacy_job_submissions += 1
 
         events_by_job, events_truncated = await self._load_events_by_job(
             jobs=jobs,
@@ -1444,7 +1440,6 @@ class AgentQueueService:
             job_volume_by_type=job_volume_by_type,
             failure_counts_by_runtime_stage=failure_counts_by_runtime_stage,
             publish_outcomes=publish_outcomes,
-            legacy_job_submissions=legacy_job_submissions,
             events_truncated=events_truncated,
         )
 

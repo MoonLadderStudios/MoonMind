@@ -1628,14 +1628,12 @@
       }
       const volumes = pick(snapshot, "jobVolumeByType") || {};
       const publish = pick(snapshot, "publishOutcomes") || {};
-      const legacyCount = Number(pick(snapshot, "legacyJobSubmissions") || 0);
       const totalJobs = Number(pick(snapshot, "totalJobs") || 0);
       const publishedRate = Number(pick(publish, "publishedRate") || 0);
       const failedRate = Number(pick(publish, "failedRate") || 0);
       return `
         <div class="grid-2">
           <div class="card"><strong>Total Jobs (Window):</strong> ${escapeHtml(totalJobs)}</div>
-          <div class="card"><strong>Legacy Submissions:</strong> ${escapeHtml(legacyCount)}</div>
           <div class="card"><strong>Task Jobs:</strong> ${escapeHtml(Number(volumes.task || 0))}</div>
           <div class="card"><strong>Publish Success Rate:</strong> ${escapeHtml(
             (publishedRate * 100).toFixed(1),
@@ -2217,16 +2215,9 @@
                   </button>
                 </div>
               </div>
-              <div class="grid-2">
-                <div class="queue-step-auto-id">
-                  <div class="small">Step ID (auto)</div>
-                  <div class="inline-code">Assigned on submit</div>
-                  <div class="small">Generated sequentially from non-empty steps.</div>
-                </div>
-                <label>Title (optional)
-                  <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
-                </label>
-              </div>
+              <label>Title (optional)
+                <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
+              </label>
               <label>${instructionsLabel}
                 <textarea class="queue-step-instructions" data-step-field="instructions" data-step-index="${index}" placeholder="${escapeHtml(
                   instructionsPlaceholder,
