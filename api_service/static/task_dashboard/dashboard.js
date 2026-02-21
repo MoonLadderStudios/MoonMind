@@ -2027,7 +2027,6 @@
           <p class="small queue-submit-message" id="queue-submit-message"></p>
           <div class="actions queue-submit-actions-row">
             <button type="submit">Submit</button>
-            <a href="/tasks/queue"><button class="secondary" type="button">Cancel</button></a>
           </div>
         </div>
       </form>
