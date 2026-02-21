@@ -56,15 +56,13 @@ persist_token_policy_marker() {
 
 if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
   should_load_cached_token=true
-  refresh_policy_marker=false
   if [[ "$BOOTSTRAP" == "true" ]]; then
     if [[ ! -f "$TOKEN_POLICY_PATH" ]]; then
       if [[ "$ENFORCE_TOKEN_POLICY" == "true" ]]; then
         should_load_cached_token=false
         log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; rotating token because MOONMIND_WORKER_ENFORCE_TOKEN_POLICY=true."
       else
-        refresh_policy_marker=true
-        log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; loading cached token for backward compatibility."
+        log "Cached worker token policy marker missing at $TOKEN_POLICY_PATH; loading cached token for backward compatibility and leaving marker unchanged."
       fi
     else
       cached_token_policy="$(tr -d '\r\n' <"$TOKEN_POLICY_PATH")"
@@ -73,8 +71,7 @@ if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
           should_load_cached_token=false
           log "Cached worker token policy does not match configured allowed types/capabilities; rotating token because MOONMIND_WORKER_ENFORCE_TOKEN_POLICY=true."
         else
-          refresh_policy_marker=true
-          log "Cached worker token policy does not match configured allowed types/capabilities; loading cached token to avoid startup disruption."
+          log "Cached worker token policy does not match configured allowed types/capabilities; loading cached token to avoid startup disruption and leaving marker unchanged."
         fi
       fi
     fi
@@ -85,11 +82,6 @@ if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
     if [[ -n "$token_file_value" ]]; then
       export MOONMIND_WORKER_TOKEN="$token_file_value"
       log "Loaded worker token from $TOKEN_PATH"
-      if [[ "$refresh_policy_marker" == "true" ]]; then
-        if persist_token_policy_marker; then
-          log "Refreshed worker token policy marker at $TOKEN_POLICY_PATH"
-        fi
-      fi
     fi
   fi
 fi
