@@ -269,6 +269,14 @@ services:
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=${MOONMIND_QUEUE:-moonmind.jobs}
 
+  agent-workspaces-init:
+    image: alpine:3.20
+    command: >-
+      sh -lc "mkdir -p /work/agent_jobs && chown -R 1000:1000 /work/agent_jobs && chmod 0775 /work/agent_jobs"
+    volumes:
+      - agent_workspaces:/work/agent_jobs
+    restart: "no"
+
   codex-worker:
     build:
       context: .
@@ -332,6 +340,8 @@ services:
         condition: service_started
       docker-proxy:
         condition: service_started
+      agent-workspaces-init:
+        condition: service_completed_successfully
     networks:
       - local-network
     restart: unless-stopped

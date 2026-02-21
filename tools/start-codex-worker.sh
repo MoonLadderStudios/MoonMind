@@ -22,6 +22,33 @@ export CLAUDE_HOME="${CLAUDE_HOME:-$CLAUDE_VOLUME_BASE}"
 export SPEC_WORKFLOW_REPO_ROOT="${SPEC_WORKFLOW_REPO_ROOT:-${MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT:-$WORKSPACE_ROOT_DEFAULT}}"
 export SPEC_SKILLS_LOCAL_MIRROR_ROOT="${SPEC_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT:-$SPEC_WORKFLOW_REPO_ROOT/.agents/skills/local}}"
 export SPEC_SKILLS_LEGACY_MIRROR_ROOT="${SPEC_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT:-$SPEC_WORKFLOW_REPO_ROOT/.agents/skills}}"
+WORKDIR_PATH="${MOONMIND_WORKDIR:-/work/agent_jobs}"
+
+ensure_writable_workdir() {
+  local workdir="$1"
+  if [[ "$workdir" != /* ]]; then
+    log "MOONMIND_WORKDIR must be an absolute path. Received: $workdir"
+    exit 1
+  fi
+  if ! mkdir -p "$workdir"; then
+    log "Cannot create MOONMIND_WORKDIR at $workdir. Check volume mount and permissions."
+    exit 1
+  fi
+
+  local probe_path="${workdir}/.moonmind-write-check.$$"
+  if ! : >"$probe_path" 2>/dev/null; then
+    local owner="unknown"
+    local perms="unknown"
+    owner="$(stat -c '%U:%G (%u:%g)' "$workdir" 2>/dev/null || printf 'unknown')"
+    perms="$(stat -c '%a' "$workdir" 2>/dev/null || printf 'unknown')"
+    log "MOONMIND_WORKDIR is not writable: $workdir (owner=$owner perms=$perms uid=$(id -u) gid=$(id -g))."
+    log "Fix workspace volume ownership and restart the worker."
+    exit 1
+  fi
+  rm -f "$probe_path"
+}
+
+ensure_writable_workdir "$WORKDIR_PATH"
 
 TOKEN_PATH_DEFAULT="${CODEX_HOME}/moonmind_worker_token"
 TOKEN_PATH="${MOONMIND_WORKER_TOKEN_FILE:-$TOKEN_PATH_DEFAULT}"
