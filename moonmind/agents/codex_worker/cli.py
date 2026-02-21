@@ -328,7 +328,9 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
             redaction_values=redaction_values,
         )
     if gemini_path is not None:
-        gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(env=source)
+        gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(
+            env=source
+        )
         if is_invalid_gemini_cli_auth_mode(gemini_auth_mode_raw):
             raise RuntimeError(
                 format_invalid_gemini_cli_auth_mode_error(gemini_auth_mode_raw)
