@@ -1965,19 +1965,17 @@
       `Create a typed Task job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
       `
       <form id="queue-submit-form" class="queue-submit-form">
+        <section class="queue-steps-section stack">
+          <strong>Steps</strong>
+          <span class="small">At least one step is required to submit. You can remove all steps while editing, but submit stays disabled by validation until a step is added back.</span>
+          <div id="queue-steps-list" class="stack"></div>
+        </section>
+        ${templateControlsHtml}
         <label>Runtime
           <select name="runtime">
             ${runtimeOptions}
           </select>
         </label>
-        <div class="card">
-          <div class="actions">
-            <strong>Steps</strong>
-          </div>
-          <span class="small">At least one step is required to submit. You can remove all steps while editing, but submit stays disabled by validation until a step is added back.</span>
-          <div id="queue-steps-list"></div>
-        </div>
-        ${templateControlsHtml}
         <datalist id="queue-skill-options">
           <option value="auto"></option>
         </datalist>
@@ -2078,7 +2076,6 @@
     }
     const createStepStateEntry = (overrides = {}) => ({
       id: "",
-      title: "",
       instructions: "",
       skillId: "",
       skillArgs: "",
@@ -2115,7 +2112,7 @@
             ? "Primary step skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
             : "Leave skill blank to inherit primary step defaults.";
           return `
-            <div class="card" data-step-index="${index}">
+            <section class="queue-step-section stack" data-step-index="${index}">
               <div class="queue-step-header">
                 <strong>Step ${index + 1}${stepLabel}</strong>
                 <div class="queue-step-controls" role="group" aria-label="Step ${index + 1} controls">
@@ -2163,9 +2160,6 @@
                   </button>
                 </div>
               </div>
-              <label>Title (optional)
-                <input data-step-field="title" data-step-index="${index}" value="${escapeHtml(step.title)}" placeholder="Short label" />
-              </label>
               <label>${instructionsLabel}
                 <textarea class="queue-step-instructions" data-step-field="instructions" data-step-index="${index}" placeholder="${escapeHtml(
                   instructionsPlaceholder,
@@ -2192,7 +2186,7 @@
                   step.skillArgs,
                 )}</textarea>
               </label>
-            </div>
+            </section>
           `;
         })
         .join("");
@@ -2618,7 +2612,6 @@
       const instructions = String(step?.instructions || "").trim();
       return createStepStateEntry({
         id: stepId,
-        title: String(step?.title || "").trim(),
         instructions,
         skillId: String(skill?.id || "").trim(),
         skillArgs: args,
@@ -2630,7 +2623,6 @@
 
     const isEmptyStepStateEntry = (step) =>
       !String(step?.id || "").trim() &&
-      !String(step?.title || "").trim() &&
       !String(step?.instructions || "").trim() &&
       !String(step?.skillId || "").trim() &&
       !String(step?.skillArgs || "").trim() &&
@@ -2783,7 +2775,6 @@
             return null;
           }
           const blueprint = {
-            ...(String(step.title || "").trim() ? { title: String(step.title).trim() } : {}),
             instructions,
           };
           const skillId = String(step.skillId || "").trim();
@@ -2999,18 +2990,15 @@
       const effort = String(formData.get("effort") || "").trim() || null;
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
-      const primaryStepTitle = String(primaryStep.title || "").trim();
       const additionalSteps = [];
       const stepSkillRequiredCapabilities = [];
       for (let index = 1; index < stepState.length; index += 1) {
         const rawStep = stepState[index] || {};
-        const stepTitle = String(rawStep.title || "").trim();
         const stepInstructions = String(rawStep.instructions || "").trim();
         const stepSkillId = String(rawStep.skillId || "").trim();
         const stepSkillArgsRaw = String(rawStep.skillArgs || "").trim();
         const stepSkillCaps = parseCapabilitiesCsv(rawStep.skillRequiredCapabilities || "");
         const hasStepContent =
-          Boolean(stepTitle) ||
           Boolean(stepInstructions) ||
           Boolean(stepSkillId) ||
           Boolean(stepSkillArgsRaw) ||
@@ -3033,9 +3021,6 @@
           }
         }
         const stepPayload = {};
-        if (stepTitle) {
-          stepPayload.title = stepTitle;
-        }
         if (stepInstructions) {
           stepPayload.instructions = stepInstructions;
         }
@@ -3057,7 +3042,6 @@
       const hasTemplateBoundStep = stepState.some((step) => Boolean(String(step?.id || "").trim()));
       const includeExplicitSteps =
         additionalSteps.length > 0 ||
-        Boolean(primaryStepTitle) ||
         includePrimaryStepForObjectiveOverride ||
         hasTemplateBoundStep;
       const normalizedStepEntries = includeExplicitSteps
@@ -3065,7 +3049,6 @@
             {
               sourceIndex: 0,
               payload: {
-                ...(primaryStepTitle ? { title: primaryStepTitle } : {}),
                 instructions,
               },
             },
