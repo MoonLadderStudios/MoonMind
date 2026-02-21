@@ -8,7 +8,14 @@ import re
 import subprocess
 from importlib import import_module
 
-from celery_worker.runtime_mode import resolve_worker_queue, resolve_worker_runtime
+from celery_worker.runtime_mode import (
+    inspect_gemini_home_for_auth_mode,
+    is_invalid_gemini_cli_auth_mode,
+    resolve_gemini_cli_auth_mode,
+    resolve_worker_queue,
+    resolve_worker_runtime,
+    summarize_untrusted_auth_mode_value,
+)
 from celery_worker.startup_checks import (
     validate_embedding_runtime_profile,
     validate_shared_skills_mirror,
@@ -161,29 +168,79 @@ def _validate_embedding_profile() -> None:
     )
 
 
-def _run_gemini_preflight_check() -> None:
+def _resolve_gemini_cli_auth_mode() -> str:
+    """Resolve Gemini CLI auth mode for worker subprocess execution."""
+
+    mode, raw = resolve_gemini_cli_auth_mode()
+    if is_invalid_gemini_cli_auth_mode(raw):
+        logger.warning(
+            "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE value (%s); defaulting to 'api_key'.",
+            summarize_untrusted_auth_mode_value(raw),
+            extra={"gemini_cli_auth_mode_invalid": True},
+        )
+    logger.info(
+        "Gemini CLI auth mode resolved: %s",
+        mode,
+        extra={"gemini_cli_auth_mode": mode},
+    )
+    return mode
+
+
+def _run_gemini_preflight_check(*, auth_mode: str) -> None:
     """Validate Gemini authentication before accepting Celery tasks."""
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        if settings.google.google_api_key:
-            api_key = settings.google.google_api_key
-
-    if not api_key:
-        logger.critical("GEMINI_API_KEY is not set.")
-        raise RuntimeError("GEMINI_API_KEY is not set.")
-
-    gemini_home = os.environ.get("GEMINI_HOME")
+    gemini_home, validation_issue = inspect_gemini_home_for_auth_mode(
+        auth_mode=auth_mode,
+        gemini_home=os.environ.get("GEMINI_HOME"),
+    )
+    if validation_issue == "not_directory":
+        logger.critical(
+            "GEMINI_HOME is set to '%s' but it is not a directory.", gemini_home
+        )
+        raise RuntimeError(f"GEMINI_HOME directory does not exist: {gemini_home}")
+    if validation_issue == "not_writable_for_oauth":
+        logger.critical(
+            "GEMINI_HOME '%s' is not writable by the worker process.", gemini_home
+        )
+        raise RuntimeError(
+            "GEMINI_HOME must be writable for OAuth Gemini CLI authentication. "
+            "Mount the auth volume read-write and ensure UID/GID permissions match the worker user."
+        )
     if gemini_home:
-        if not os.path.isdir(gemini_home):
-            logger.critical(
-                "GEMINI_HOME is set to '%s' but it is not a directory.", gemini_home
-            )
-            raise RuntimeError(f"GEMINI_HOME directory does not exist: {gemini_home}")
         logger.info("Gemini pre-flight check: GEMINI_HOME=%s", gemini_home)
+    elif validation_issue == "missing_for_oauth":
+        logger.critical(
+            "GEMINI_HOME must be set to a writable directory when "
+            "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth."
+        )
+        raise RuntimeError(
+            "GEMINI_HOME is required for OAuth Gemini CLI authentication."
+        )
     else:
         logger.warning("GEMINI_HOME is not set; persistent config may not be active.")
 
+    if auth_mode == "oauth":
+        if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+            logger.info(
+                "OAuth auth mode selected; Gemini CLI task subprocesses will ignore "
+                "GOOGLE_API_KEY/GEMINI_API_KEY to force cached-account auth.",
+                extra={"gemini_cli_auth_mode": auth_mode},
+            )
+        logger.info("Gemini pre-flight check completed.")
+        return
+
+    api_key = (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or settings.google.google_api_key
+    )
+    if not api_key:
+        logger.critical(
+            "Gemini API key auth mode is active but no API key is configured."
+        )
+        raise RuntimeError(
+            "Gemini API-key auth mode requires GEMINI_API_KEY or GOOGLE_API_KEY."
+        )
     logger.info("Gemini pre-flight check completed.")
 
 
@@ -207,6 +264,7 @@ celery_app = speckit_celery_app
 app = celery_app
 
 _runtime_mode = _configure_worker_runtime()
+_gemini_auth_mode = _resolve_gemini_cli_auth_mode()
 _log_codex_cli_version()
 _log_gemini_cli_version()
 _log_claude_cli_version()
@@ -221,7 +279,7 @@ _log_queue_configuration()
 _validate_embedding_profile()
 _validate_shared_skills_profile()
 if _runtime_mode in {"gemini", "universal"}:
-    _run_gemini_preflight_check()
+    _run_gemini_preflight_check(auth_mode=_gemini_auth_mode)
 else:
     logger.info(
         "Skipping Gemini pre-flight check for runtime mode '%s'",

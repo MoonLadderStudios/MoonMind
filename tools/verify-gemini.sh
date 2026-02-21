@@ -15,15 +15,23 @@ Environment variables:
   GOOGLE_API_KEY or GEMINI_API_KEY   Required for the live prompt check unless --skip-prompt is provided.
   GEMINI_MODEL                       Optional model override; same as --model.
   VERIFY_GEMINI_SKIP_PROMPT          If set to a truthy value, skips the live prompt check.
+  MOONMIND_GEMINI_CLI_AUTH_MODE      Auth mode for prompt check: api_key (default) or oauth.
 USAGE
 }
 
 PROMPT="Gemini CLI connectivity check. Respond with a brief acknowledgment."
 MODEL="${GEMINI_MODEL:-gemini-1.5-flash}"
 SKIP_PROMPT=false
+AUTH_MODE="${MOONMIND_GEMINI_CLI_AUTH_MODE:-api_key}"
 
 if [[ -n "${VERIFY_GEMINI_SKIP_PROMPT:-}" ]]; then
   SKIP_PROMPT=true
+fi
+
+AUTH_MODE="$(printf '%s' "$AUTH_MODE" | tr '[:upper:]' '[:lower:]')"
+if [[ "$AUTH_MODE" != "api_key" && "$AUTH_MODE" != "oauth" ]]; then
+  echo "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE='$AUTH_MODE'; defaulting to api_key." >&2
+  AUTH_MODE="api_key"
 fi
 
 while [[ $# -gt 0 ]]; do
@@ -86,8 +94,15 @@ if [[ "$SKIP_PROMPT" == true ]]; then
   exit 0
 fi
 
+if [[ "$AUTH_MODE" == "oauth" ]]; then
+  echo "Running live prompt in OAuth mode (API keys are ignored for this check)..."
+  unset GOOGLE_API_KEY GEMINI_API_KEY || true
+  gemini "${MODEL_FLAG[@]}" "$PROMPT"
+  exit 0
+fi
+
 if [[ -z "${GOOGLE_API_KEY:-${GEMINI_API_KEY:-}}" ]]; then
-  echo "GOOGLE_API_KEY or GEMINI_API_KEY must be set for the prompt check. Use --skip-prompt to bypass." >&2
+  echo "GOOGLE_API_KEY or GEMINI_API_KEY must be set for api_key mode. Use --skip-prompt or set MOONMIND_GEMINI_CLI_AUTH_MODE=oauth." >&2
   exit 1
 fi
 
