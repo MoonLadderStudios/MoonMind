@@ -9,7 +9,7 @@ from typing import Any
 
 from celery.utils.log import get_task_logger
 
-from celery_worker.runtime_mode import resolve_worker_queue
+from celery_worker.runtime_mode import resolve_gemini_cli_auth_mode, resolve_worker_queue
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app
 from moonmind.workflows.speckit_celery.utils import (
@@ -28,15 +28,16 @@ GEMINI_QUEUE = resolve_worker_queue(
 def _resolve_gemini_cli_auth_mode() -> str:
     """Resolve Gemini CLI auth mode for subprocess execution."""
 
-    raw = str(os.environ.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip()
-    mode = raw.lower() or "api_key"
-    if mode not in {"api_key", "oauth"}:
+    mode, raw = resolve_gemini_cli_auth_mode()
+    if mode != (raw.lower() or "api_key"):
         logger.warning(
             "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE '%s'; defaulting to api_key.",
-            raw or mode,
+            raw,
         )
-        return "api_key"
     return mode
+
+
+_GEMINI_CLI_AUTH_MODE = _resolve_gemini_cli_auth_mode()
 
 
 @celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)
@@ -60,7 +61,7 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
 
     # Prepare environment with auth and config
     env = os.environ.copy()
-    auth_mode = _resolve_gemini_cli_auth_mode()
+    auth_mode = _GEMINI_CLI_AUTH_MODE
     if auth_mode == "oauth":
         env.pop("GEMINI_API_KEY", None)
         env.pop("GOOGLE_API_KEY", None)

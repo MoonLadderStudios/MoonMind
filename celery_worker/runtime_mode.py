@@ -6,6 +6,7 @@ import os
 from typing import Mapping
 
 ALLOWED_WORKER_RUNTIMES = frozenset({"codex", "gemini", "claude", "universal"})
+ALLOWED_GEMINI_CLI_AUTH_MODES = frozenset({"api_key", "oauth"})
 
 
 def resolve_worker_runtime(
@@ -51,3 +52,18 @@ def resolve_worker_queue(
         return celery_default
 
     return default_queue.strip() or "moonmind.jobs"
+
+
+def resolve_gemini_cli_auth_mode(
+    *,
+    env: Mapping[str, str] | None = None,
+    default_mode: str = "api_key",
+) -> tuple[str, str]:
+    """Resolve Gemini CLI auth mode and return (mode, raw_value)."""
+
+    env_map = env or os.environ
+    raw = str(env_map.get("MOONMIND_GEMINI_CLI_AUTH_MODE", default_mode)).strip()
+    mode = raw.lower() or default_mode
+    if mode not in ALLOWED_GEMINI_CLI_AUTH_MODES:
+        return default_mode, raw or mode
+    return mode, raw

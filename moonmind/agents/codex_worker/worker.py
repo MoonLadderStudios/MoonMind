@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import socket
@@ -4153,6 +4154,22 @@ class CodexWorker:
         if runtime_mode != "gemini":
             return None
         if self._config.gemini_cli_auth_mode != "oauth":
+            return None
+        gemini_home = str(environ.get("GEMINI_HOME", "")).strip()
+        if not gemini_home:
+            logger.warning(
+                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth is set but GEMINI_HOME is missing; "
+                "retaining API key variables for Gemini runtime command auth.",
+                extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
+            )
+            return None
+        if not Path(gemini_home).is_dir() or not os.access(gemini_home, os.W_OK | os.X_OK):
+            logger.warning(
+                "GEMINI_HOME=%s is not a writable directory; retaining API key variables "
+                "for Gemini runtime command auth.",
+                gemini_home,
+                extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
+            )
             return None
         env = dict(environ)
         env.pop("GEMINI_API_KEY", None)

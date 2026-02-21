@@ -322,6 +322,30 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
             redaction_values=redaction_values,
         )
     if gemini_path is not None:
+        gemini_auth_mode = (
+            str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip().lower()
+            or "api_key"
+        )
+        if gemini_auth_mode not in {"api_key", "oauth"}:
+            raise RuntimeError(
+                "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
+            )
+        if gemini_auth_mode == "oauth":
+            gemini_home = str(source.get("GEMINI_HOME", "")).strip()
+            if not gemini_home:
+                raise RuntimeError(
+                    "GEMINI_HOME is required when MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
+                )
+            if not os.path.isdir(gemini_home):
+                raise RuntimeError(
+                    "GEMINI_HOME must point to an existing directory when "
+                    "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
+                )
+            if not os.access(gemini_home, os.W_OK | os.X_OK):
+                raise RuntimeError(
+                    "GEMINI_HOME must be writable when "
+                    "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
+                )
         _run_checked_command(
             [gemini_path, "--version"],
             redaction_values=redaction_values,

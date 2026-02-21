@@ -12,7 +12,7 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   docker network create "$NETWORK_NAME" >/dev/null
 fi
 
-docker compose run --rm --user app \
+docker compose run --rm -it --user app \
   -e MOONMIND_GEMINI_CLI_AUTH_MODE=oauth \
   -e GOOGLE_API_KEY= \
   -e GEMINI_API_KEY= \
