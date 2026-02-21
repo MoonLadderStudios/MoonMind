@@ -677,6 +677,8 @@ def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> No
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
+
+
 def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -> None:
     """Gemini oauth mode should enforce writable GEMINI_HOME directories."""
 

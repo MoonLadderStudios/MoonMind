@@ -42,6 +42,7 @@ def _resolve_gemini_cli_auth_mode() -> str:
         )
     return mode
 
+
 _GEMINI_CLI_AUTH_MODE = _resolve_gemini_cli_auth_mode()
 
 
