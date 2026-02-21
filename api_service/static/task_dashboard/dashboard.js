@@ -5207,7 +5207,6 @@
     }
 
     function renderView() {
-      const hasSnapshot = Boolean(state.snapshot);
       const noticeHtml = state.notice
         ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
         : "";
