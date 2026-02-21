@@ -39,6 +39,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("orchestrator/run-1")
     assert _is_allowed_path("manifests")
     assert _is_allowed_path("manifests/new")
+    assert _is_allowed_path("settings")
 
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
@@ -70,6 +71,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/orchestrator/new",
         "/tasks/manifests",
         "/tasks/manifests/new",
+        "/tasks/settings",
     ):
         response = client.get(path)
         assert response.status_code == 200

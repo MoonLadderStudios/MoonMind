@@ -31,6 +31,7 @@ _STATIC_PATHS = {
     "proposals",
     "manifests",
     "manifests/new",
+    "settings",
 }
 
 

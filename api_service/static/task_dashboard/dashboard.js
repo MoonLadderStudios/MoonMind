@@ -33,6 +33,62 @@
     );
   }
 
+  function createWorkerPauseTransport(workerPauseSettings) {
+    if (
+      !workerPauseSettings ||
+      typeof workerPauseSettings.get !== "string" ||
+      typeof workerPauseSettings.post !== "string"
+    ) {
+      return null;
+    }
+
+    const pollInterval = Math.max(
+      1000,
+      Number(workerPauseSettings.pollIntervalMs) || 5000,
+    );
+    const getEndpoint = workerPauseSettings.get;
+    const postEndpoint = workerPauseSettings.post;
+
+    async function fetchState() {
+      const response = await fetch(getEndpoint, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error("Unable to load worker pause status.");
+      }
+      return response.json();
+    }
+
+    async function submitAction(payload) {
+      const response = await fetch(postEndpoint, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detailMessage =
+          (data && data.detail && data.detail.message) ||
+          (data && data.detail) ||
+          response.statusText ||
+          "Failed to update worker pause state.";
+        throw new Error(detailMessage);
+      }
+      return data;
+    }
+
+    return {
+      pollInterval,
+      fetchState,
+      submitAction,
+    };
+  }
+
   if (typeof window !== "undefined") {
     window.__workerPauseTest = {
       describeWorkerPauseState,
@@ -141,6 +197,7 @@
     !Array.isArray(systemConfig.workerPause)
       ? systemConfig.workerPause
       : null;
+  const workerPauseTransport = createWorkerPauseTransport(workerPauseConfig);
   const taskTemplateEndpoints = {
     list: String(queueSourceConfig.taskStepTemplates || "/api/task-step-templates"),
     detail: String(
@@ -377,12 +434,8 @@
     disposers.push(disposer);
   }
 
-  function initWorkerPauseBanner(workerPauseSettings) {
-    if (
-      !workerPauseSettings ||
-      typeof workerPauseSettings.get !== "string" ||
-      typeof workerPauseSettings.post !== "string"
-    ) {
+  function initWorkerPauseBanner(workerPauseTransport) {
+    if (!workerPauseTransport) {
       return null;
     }
     const section = document.querySelector("[data-worker-pause]");
@@ -392,59 +445,57 @@
 
     const statusNode = section.querySelector("[data-worker-pause-status]");
     const reasonNode = section.querySelector("[data-worker-pause-reason]");
-    const drainedNode = section.querySelector("[data-worker-pause-drained]");
-    const errorNode = section.querySelector("[data-worker-pause-error]");
-    const metricNodes = {
-      queued: section.querySelector("[data-worker-pause-metric='queued']"),
-      running: section.querySelector("[data-worker-pause-metric='running']"),
-      staleRunning: section.querySelector("[data-worker-pause-metric='staleRunning']"),
-    };
-    const pauseForm = section.querySelector('[data-worker-pause-form="pause"]');
-    const resumeForm = section.querySelector('[data-worker-pause-form="resume"]');
-    const pollInterval = Math.max(
-      1000,
-      Number(workerPauseSettings.pollIntervalMs) || 5000,
-    );
-    const numberFormatter = new Intl.NumberFormat();
-
     let latestSnapshot = null;
-    let requestInFlight = false;
-
-    function setError(message) {
-      if (errorNode) {
-        errorNode.hidden = false;
-        errorNode.textContent = message;
-      }
-    }
-
-    function clearError() {
-      if (errorNode) {
-        errorNode.hidden = true;
-        errorNode.textContent = "";
-      }
-    }
-
-    function toggleForms(disabled) {
-      [pauseForm, resumeForm].forEach((form) => {
-        if (!form) {
-          return;
-        }
-        const inputs = form.querySelectorAll("input, select, textarea, button");
-        inputs.forEach((node) => {
-          if (disabled) {
-            node.setAttribute("disabled", "disabled");
-          } else {
-            node.removeAttribute("disabled");
-          }
-        });
-      });
-    }
 
     function render(snapshot) {
-      section.hidden = false;
       const system = snapshot.system || {};
       const metrics = snapshot.metrics || {};
       const description = describeWorkerPauseState(system, metrics);
+      const isPaused = Boolean(system.workersPaused);
+      section.dataset.state = description.state;
+      if (!isPaused) {
+        section.hidden = true;
+        if (statusNode) {
+          statusNode.textContent = "Workers: Running";
+        }
+        if (reasonNode) {
+          reasonNode.textContent = "";
+        }
+        return;
+      }
+      section.hidden = false;
+      if (statusNode) {
+        if (description.label.startsWith("Workers:")) {
+          const normalized = description.label.replace("Workers:", "Workers").trim();
+          statusNode.textContent = `⚠️ ${normalized}`;
+        } else {
+          statusNode.textContent = `⚠️ ${description.label}`;
+        }
+      }
+      if (reasonNode) {
+        const rawReason = system.reason || description.reason || "";
+        reasonNode.textContent = rawReason ? `- "${rawReason}"` : "";
+      }
+      latestSnapshot = snapshot;
+    }
+
+    async function refresh() {
+      try {
+        const snapshot = await workerPauseTransport.fetchState();
+        render(snapshot);
+      } catch (error) {
+        console.error("worker pause banner refresh failed", error);
+      }
+    }
+
+    return {
+      pollInterval: workerPauseTransport.pollInterval,
+      refresh,
+      getLatestSnapshot() {
+        return latestSnapshot;
+      },
+    };
+  }
       section.dataset.state = description.state;
       if (statusNode) {
         statusNode.textContent = description.label;
@@ -5182,6 +5233,318 @@
     startPolling(() => load(true), pollIntervals.detail);
   }
 
+  async function renderSystemSettingsPage() {
+    if (!workerPauseTransport) {
+      setView(
+        "System Settings",
+        "Pause or resume worker processing.",
+        "<div class='notice error'>Worker pause controls are not configured for this deployment.</div>",
+      );
+      return;
+    }
+
+    const numberFormatter = new Intl.NumberFormat();
+    const state = {
+      snapshot: null,
+      notice: null,
+      requestInFlight: false,
+    };
+
+    function setNotice(level, text) {
+      if (!text) {
+        state.notice = null;
+        return;
+      }
+      state.notice = {
+        level: level === "error" ? "error" : "ok",
+        text,
+      };
+    }
+
+    function buildMetricsMarkup(metrics = {}) {
+      const entries = [
+        { key: "queued", label: "Queued" },
+        { key: "running", label: "Running" },
+        { key: "staleRunning", label: "Stale" },
+        { key: "isDrained", label: "Drained" },
+      ];
+      return `
+        <div class="system-settings-metrics">
+          ${entries
+            .map((entry) => {
+              const value =
+                entry.key === "isDrained"
+                  ? metrics.isDrained
+                    ? "Yes"
+                    : "No"
+                  : numberFormatter.format(
+                      typeof metrics[entry.key] === "number" ? metrics[entry.key] : 0,
+                    );
+              return `
+                <div class="system-settings-metric">
+                  <span class="label">${escapeHtml(entry.label)}</span>
+                  <span class="value">${escapeHtml(value)}</span>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `;
+    }
+
+    function buildAuditMarkup(events = []) {
+      if (!Array.isArray(events) || events.length === 0) {
+        return "<p class='small'>No recent pause or resume actions.</p>";
+      }
+      return `
+        <ul>
+          ${events
+            .map((event) => {
+              const actionLabel =
+                String(event?.action || "")
+                  .trim()
+                  .toUpperCase() || "-";
+              const modeLabel = event?.mode
+                ? ` | ${String(event.mode).toUpperCase()}`
+                : "";
+              const reason = event?.reason ? escapeHtml(event.reason) : "(no reason)";
+              const timestamp = formatTimestamp(event?.createdAt);
+              return `
+                <li>
+                  <strong>${escapeHtml(actionLabel)}${escapeHtml(modeLabel)}</strong>
+                  <span>${reason}</span>
+                  <time datetime="${escapeHtml(event?.createdAt || "")}">${escapeHtml(timestamp)}</time>
+                </li>
+              `;
+            })
+            .join("")}
+        </ul>
+      `;
+    }
+
+    function renderView() {
+      const hasSnapshot = Boolean(state.snapshot);
+      const system = (state.snapshot && state.snapshot.system) || {};
+      const metrics = (state.snapshot && state.snapshot.metrics) || {};
+      const auditEvents =
+        (state.snapshot && state.snapshot.audit && state.snapshot.audit.latest) || [];
+      const description = describeWorkerPauseState(system, metrics);
+      const noticeHtml = state.notice
+        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+        : "";
+      const summaryMarkup = hasSnapshot
+        ? `
+            <div class="stack">
+              <div class="stack">
+                <h3>${escapeHtml(description.label)}</h3>
+                <p class="page-meta">${escapeHtml(description.reason)}</p>
+                <p class="small">
+                  Mode: ${escapeHtml((system.mode || description.state).toString())} | Version: ${escapeHtml(
+            (system.version ?? "-").toString(),
+          )} | Updated: ${escapeHtml(
+            system.updatedAt ? formatTimestamp(system.updatedAt) : "-",
+          )}
+                </p>
+              </div>
+              ${buildMetricsMarkup(metrics)}
+            </div>
+          `
+        : "<p class='loading'>Loading worker status...</p>";
+      const auditMarkup = buildAuditMarkup(auditEvents);
+      const controlsMarkup = `
+        <section class="card system-settings-forms">
+          <h3>Worker Controls</h3>
+          <p class="form-caption">
+            Drain lets running jobs finish; Quiesce stops new claims immediately.
+          </p>
+          <form data-system-settings-form="pause" class="stack">
+            <fieldset>
+              <legend>Pause Workers</legend>
+              <label>
+                Mode
+                <select name="mode" required>
+                  <option value="drain" selected>Drain (default)</option>
+                  <option value="quiesce">Quiesce</option>
+                </select>
+              </label>
+              <label>
+                Reason
+                <input type="text" name="reason" maxlength="160" required />
+              </label>
+              <button type="submit">Pause Workers</button>
+            </fieldset>
+          </form>
+          <div class="system-settings-divider"></div>
+          <form data-system-settings-form="resume" class="stack">
+            <fieldset>
+              <legend>Resume Workers</legend>
+              <label>
+                Reason
+                <input type="text" name="reason" maxlength="160" required />
+              </label>
+              <button type="submit">Resume Workers</button>
+            </fieldset>
+          </form>
+        </section>
+      `;
+      const layout = `
+        ${noticeHtml}
+        <div class="system-settings">
+          <section class="card">
+            ${summaryMarkup}
+          </section>
+          <div class="system-settings-grid">
+            ${controlsMarkup}
+            <section class="system-settings-audit">
+              <h3>Recent Actions</h3>
+              ${auditMarkup}
+            </section>
+          </div>
+        </div>
+      `;
+      setView(
+        "System Settings",
+        "Pause or resume worker processing.",
+        layout,
+      );
+      attachHandlers();
+    }
+
+    function attachHandlers() {
+      const pauseForm = document.querySelector('[data-system-settings-form="pause"]');
+      const resumeForm = document.querySelector('[data-system-settings-form="resume"]');
+      const formsRoot = document.querySelector(".system-settings-forms");
+
+      const toggleForms = (disabled) => {
+        if (!formsRoot) {
+          return;
+        }
+        const inputs = formsRoot.querySelectorAll("input, select, textarea, button");
+        inputs.forEach((node) => {
+          if (disabled) {
+            node.setAttribute("disabled", "disabled");
+          } else {
+            node.removeAttribute("disabled");
+          }
+        });
+      };
+
+      if (state.requestInFlight) {
+        toggleForms(true);
+      }
+
+      pauseForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (state.requestInFlight) {
+          return;
+        }
+        const formData = new FormData(pauseForm);
+        const mode = String(formData.get("mode") || "").trim();
+        const reason = String(formData.get("reason") || "").trim();
+        if (!mode || !reason) {
+          setNotice("error", "Pause mode and reason are required.");
+          renderView();
+          return;
+        }
+        state.requestInFlight = true;
+        toggleForms(true);
+        try {
+          const snapshot = await workerPauseTransport.submitAction({
+            action: "pause",
+            mode,
+            reason,
+          });
+          state.snapshot = snapshot;
+          setNotice("ok", "Workers paused successfully.");
+          pauseForm.reset();
+        } catch (error) {
+          console.error("worker pause request failed", error);
+          const message =
+            error instanceof Error && error.message
+              ? error.message
+              : "Failed to pause workers.";
+          setNotice("error", message);
+        } finally {
+          state.requestInFlight = false;
+          renderView();
+        }
+      });
+
+      resumeForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (state.requestInFlight) {
+          return;
+        }
+        const formData = new FormData(resumeForm);
+        const reason = String(formData.get("reason") || "").trim();
+        if (!reason) {
+          setNotice("error", "Resume reason is required.");
+          renderView();
+          return;
+        }
+        let forceResume = false;
+        if (requiresResumeConfirmation(state.snapshot)) {
+          const confirmed = window.confirm(
+            "Workers are not drained yet. Resume anyway?",
+          );
+          if (!confirmed) {
+            return;
+          }
+          forceResume = true;
+        }
+        state.requestInFlight = true;
+        toggleForms(true);
+        try {
+          const snapshot = await workerPauseTransport.submitAction({
+            action: "resume",
+            reason,
+            forceResume,
+          });
+          state.snapshot = snapshot;
+          setNotice("ok", "Workers resumed successfully.");
+          resumeForm.reset();
+        } catch (error) {
+          console.error("worker resume request failed", error);
+          const message =
+            error instanceof Error && error.message
+              ? error.message
+              : "Failed to resume workers.";
+          setNotice("error", message);
+        } finally {
+          state.requestInFlight = false;
+          renderView();
+        }
+      });
+    }
+
+    const load = async (silent = false) => {
+      try {
+        state.snapshot = await workerPauseTransport.fetchState();
+        if (!silent) {
+          setNotice(null, "");
+        }
+      } catch (error) {
+        console.error("system settings load failed", error);
+        if (!silent) {
+          const message =
+            error instanceof Error && error.message
+              ? error.message
+              : "Failed to load worker pause status.";
+          setNotice("error", message);
+        }
+      }
+      renderView();
+    };
+
+    setView(
+      "System Settings",
+      "Pause or resume worker processing.",
+      "<p class='loading'>Loading system controls...</p>",
+    );
+    await load();
+    startPolling(() => load(true), workerPauseTransport.pollInterval);
+  }
+
   function renderNotFound() {
     setView(
       "Route Not Found",
@@ -5224,6 +5587,10 @@
       await renderProposalsListPage();
       return;
     }
+    if (pathname === "/tasks/settings") {
+      await renderSystemSettingsPage();
+      return;
+    }
 
     if (pathname === "/tasks/queue/new") {
       renderQueueSubmitPage();
@@ -5250,7 +5617,7 @@
     renderNotFound();
   }
 
-  const workerPauseController = initWorkerPauseBanner(workerPauseConfig);
+  const workerPauseController = initWorkerPauseBanner(workerPauseTransport);
   if (workerPauseController) {
     startPolling(
       () => workerPauseController.refresh(),
