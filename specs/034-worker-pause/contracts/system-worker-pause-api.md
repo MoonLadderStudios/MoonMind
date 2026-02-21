@@ -2,7 +2,8 @@
 
 ## 1. `GET /api/system/worker-pause`
 
-**Auth**: Operator (same scopes as queue dashboard).  
+**Auth**: In external auth modes, operator role (same scopes as queue dashboard).  
+When `AUTH_PROVIDER=disabled`, this endpoint is intentionally available without credentials and uses `DEFAULT_USER_ID`/built-in default for actor attribution.
 **Response 200**:
 ```json
 {

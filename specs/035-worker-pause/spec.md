@@ -84,7 +84,7 @@ For short maintenance windows, operators request Quiesce mode so running jobs pa
 
 ### Functional Requirements
 - **FR-001**: The platform MUST persist a singleton `system_worker_pause_state` record (id=1) containing paused flag, mode (`drain` default, `quiesce` optional), reason, requesting operator identity (when available), requested_at, updated_at, and a monotonically increasing version so workers can detect changes. *(Maps: DOC-REQ-002)*
-- **FR-002**: `POST /api/system/worker-pause` MUST accept `{action: pause|resume, mode: drain|quiesce, reason}` requests from authorized operators, validate that reason is non-empty on pause, and update the singleton state plus emit an immediate audit entry. *(Maps: DOC-REQ-001, DOC-REQ-006)*
+- **FR-002**: `POST /api/system/worker-pause` MUST accept `{action: pause|resume, mode: drain|quiesce, reason}` requests from authorized operators in configured auth modes. When `AUTH_PROVIDER=disabled`, endpoint access is intentionally open for local use and requests are attributed to `DEFAULT_USER_ID` (or built-in default) for actor audit fields. Validate that reason is non-empty on pause, and update the singleton state plus emit an immediate audit entry. *(Maps: DOC-REQ-001, DOC-REQ-006)*
 - **FR-003**: `GET /api/system/worker-pause` MUST return the current state plus `queuedCount`, `runningCount`, `staleRunningCount`, and boolean `isDrained=(runningCount==0 && staleRunningCount==0)` so operators have real-time situational awareness. *(Maps: DOC-REQ-006, DOC-REQ-010)*
 - **FR-004**: `POST /api/queue/jobs/claim` MUST check the pause state first and, when paused, immediately return `{job:null, system:{workersPaused:true, mode, reason, version, updatedAt}}` without invoking repository claim logic or `_requeue_expired_jobs`, ensuring the queue remains undisturbed. *(Maps: DOC-REQ-004, DOC-REQ-010)*
 - **FR-005**: Worker claim loops MUST treat the paused response as a non-error idle state, respect a configurable `pause_poll_interval_ms` (default 3–10s) before the next claim, and log the pause status once per `system.version` to avoid log spam. *(Maps: DOC-REQ-005, DOC-REQ-007)*
@@ -103,7 +103,9 @@ For short maintenance windows, operators request Quiesce mode so running jobs pa
 - **QueueSystemMetadata Envelope**: Optional `system` object included in claim and heartbeat responses so workers know the current pause status without altering existing job payload structures.
 
 ### Assumptions & Dependencies
-- Operator authentication/authorization already exists; this feature reuses existing admin scopes to protect POST operations.
+- In external auth modes, operator authentication/authorization already exists and this feature reuses existing admin scopes to protect pause operations.
+- In `AUTH_PROVIDER=disabled`, the pause endpoints are intentionally not blocked by operator checks so local deployments remain functional without OIDC; actor identity is sourced from `DEFAULT_USER_ID` (or built-in default).
+- Worker Pause controls are rendered in the `/tasks` dashboard shell as a global banner so they are visible even when no queue tasks are running.
 - Queue repositories continue to manage job lifecycle (queued → running → terminal); this feature only guards entry points and surface telemetry.
 - Worker runtimes already support periodic claim + heartbeat loops and per-step checkpoint hooks that can honor quiesce instructions without re-architecting job execution.
 - Metrics for queued/running counts already exist or can be derived from the task repository with ≤5s freshness.

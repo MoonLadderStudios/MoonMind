@@ -2,7 +2,7 @@
 
 Status: **Implemented**
 Owners: **MoonMind Engineering**
-Last Updated: **2026-02-20**
+Last Updated: **2026-02-21**
 
 ---
 
@@ -91,7 +91,7 @@ Singleton row keyed by `id = 1`.
 | `paused`               | bool         | If true, new claims are blocked          |
 | `mode`                 | enum         | `drain` \| `quiesce`. Nullable when `paused=false` |
 | `reason`               | text         | Operator-provided                        |
-| `requested_by_user_id` | uuid fk user | Nullable (local disabled auth)           |
+| `requested_by_user_id` | uuid fk user | In external auth: operator identity when available. In `AUTH_PROVIDER=disabled`, defaults to `DEFAULT_USER_ID` (or built-in default) so audit rows stay attributable. |
 | `requested_at`         | timestamptz  | First time pause enabled                 |
 | `updated_at`           | timestamptz  | Updated on every change                  |
 | `version`              | bigint       | Monotonic increment for change detection |
@@ -287,7 +287,8 @@ This prevents paused workers from inadvertently mutating job state (especially l
 
 ## 12. Security & Permissions
 
-* Only authenticated operators/admins can call `POST /api/system/worker-pause`.
+* In external auth modes (`AUTH_PROVIDER=keycloak`), only authenticated operators/admins can call `GET/POST /api/system/worker-pause`.
+* With `AUTH_PROVIDER=disabled`, pause endpoints are intentionally exposed without credentials and attributed to `DEFAULT_USER_ID` (or built-in fallback) so local/dev runs remain operable by default.
 
 * Workers learn pause state only via:
 
@@ -352,7 +353,7 @@ This prevents paused workers from inadvertently mutating job state (especially l
 ## 16. Implementation Notes (2026-02-20)
 
 * FastAPI now exposes `GET`/`POST /api/system/worker-pause` responses that include system metadata, drain metrics, and the latest five audit events. Frontend JS polls this endpoint every 5 seconds regardless of the dashboard auto-refresh toggle.
-* A global banner on the Tasks dashboard surfaces worker status, queued/running/stale counts, an `isDrained` indicator, and Pause/Resume controls with reason/mode validation. Resuming while `isDrained=false` prompts the operator before setting `forceResume=true`.
+* A global banner on the `/tasks` dashboard route surfaces worker status, queued/running/stale counts, an `isDrained` indicator, and Pause/Resume controls with reason/mode validation. It is visible regardless of queue depth so operators can pause/resume even when no jobs are running. Resuming while `isDrained=false` prompts the operator before setting `forceResume=true`.
 * Workers (Codex runtime) treat the new `system` envelope on claim/heartbeat responses as authoritative. A paused claim short-circuits before repository logic runs, logs once per version, and sleeps for `MOONMIND_PAUSE_POLL_INTERVAL_MS` (default 5000 ms, overridable via env). Heartbeats propagate quiesce instructions through the existing checkpoint pause event.
 * The queue API client and MCP tooling now return the `system` payload in both HTTP and CLI responses so IDE integrations honor pause state alongside workers.
 * Operators can script against the new API or use the dashboard banner; both paths emit audit rows in `system_control_events`, and the singleton `system_worker_pause_state` row increments `version` on every transition for worker diffing.

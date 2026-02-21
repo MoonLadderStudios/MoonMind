@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.auth import _DEFAULT_USER_ID
 from api_service.api.schemas import (
     QueueSystemMetadataModel,
     WorkerPauseAuditEventModel,
@@ -19,6 +21,7 @@ from api_service.api.schemas import (
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from moonmind.config.settings import settings
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
@@ -38,6 +41,9 @@ _CURRENT_USER = get_current_user()
 def _require_worker_pause_operator(user: User) -> None:
     """Require elevated privileges for global worker pause operations."""
 
+    if settings.oidc.AUTH_PROVIDER == "disabled":
+        return
+
     if not bool(getattr(user, "is_superuser", False)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -51,6 +57,12 @@ def _require_worker_pause_operator(user: User) -> None:
 def _require_actor_user_id(user: User):
     actor_user_id = getattr(user, "id", None)
     if actor_user_id is None:
+        if settings.oidc.AUTH_PROVIDER == "disabled":
+            actor_user_id = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+            try:
+                return uuid.UUID(actor_user_id)
+            except ValueError:
+                pass
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

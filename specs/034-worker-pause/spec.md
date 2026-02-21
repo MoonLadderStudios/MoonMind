@@ -103,7 +103,9 @@ During a short maintenance window, operators pause in Quiesce mode so workers ch
 
 ### Assumptions & Dependencies
 
-- Existing authentication already distinguishes operators/admins; this feature relies on that gating to protect the pause endpoint.
+- In external auth modes, existing authentication already distinguishes operators/admins and this feature relies on that gating to protect the pause endpoint.
+- With `AUTH_PROVIDER=disabled`, pause control is intentionally available without auth gates for local development, attributed to the local default user identity.
+- Worker Pause controls are rendered in the `/tasks` dashboard shell as a global banner and should remain visible even when the queue is idle.
 - Queue repository APIs expose efficient metrics for queued/running/stale counts so `GET /api/system/worker-pause` can compute drain progress without degrading performance.
 - Worker runtimes already implement checkpoint semantics for per-run pause controls; Quiesce will leverage the same hooks.
 
