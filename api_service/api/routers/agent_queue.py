@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from fastapi import (
@@ -89,6 +89,8 @@ from moonmind.workflows.agent_queue.service import (
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
 
+_QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
+
 
 @dataclass(frozen=True, slots=True)
 class _WorkerRequestAuth:
@@ -139,6 +141,106 @@ def _serialize_event(event: models.AgentJobEvent) -> JobEventModel:
 
 def _serialize_worker_token(token: models.AgentWorkerToken) -> WorkerTokenModel:
     return WorkerTokenModel.model_validate(token)
+
+
+def _coerce_summary_text(
+    value: object,
+    *,
+    max_chars: int | None = None,
+) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if max_chars is not None and len(normalized) > max_chars:
+        return normalized[:max_chars]
+    return normalized
+
+
+def _summarize_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    summary_payload: dict[str, Any] = {}
+    summary_task: dict[str, Any] = {}
+
+    direct_runtime = payload.get("targetRuntime")
+    if direct_runtime is None:
+        direct_runtime = payload.get("target_runtime")
+    if direct_runtime is None:
+        direct_runtime = payload.get("runtime")
+    direct_runtime_value = _coerce_summary_text(direct_runtime)
+    if direct_runtime_value:
+        summary_payload["runtime"] = direct_runtime_value
+
+    direct_publish_mode = payload.get("publishMode")
+    direct_publish_mode_value = _coerce_summary_text(direct_publish_mode)
+    if direct_publish_mode_value:
+        summary_payload["publish"] = {"mode": direct_publish_mode_value}
+
+    task_payload = payload.get("task")
+    if isinstance(task_payload, dict):
+        runtime_payload = task_payload.get("runtime")
+        runtime_value = None
+        if isinstance(runtime_payload, dict):
+            runtime_value = _coerce_summary_text(runtime_payload.get("mode"))
+        if runtime_value is None:
+            runtime_value = _coerce_summary_text(task_payload.get("targetRuntime"))
+        if runtime_value is None:
+            runtime_value = _coerce_summary_text(task_payload.get("target_runtime"))
+        if runtime_value is None:
+            runtime_value = _coerce_summary_text(task_payload.get("runtime"))
+        if runtime_value is not None:
+            summary_task["runtime"] = {"mode": runtime_value}
+
+        skill_payload = task_payload.get("skill")
+        if isinstance(skill_payload, dict):
+            skill_id = _coerce_summary_text(skill_payload.get("id"))
+            if skill_id:
+                summary_task["skill"] = {"id": skill_id}
+
+        publish_payload = task_payload.get("publish")
+        if isinstance(publish_payload, dict):
+            publish_mode = _coerce_summary_text(publish_payload.get("mode"))
+            if publish_mode:
+                summary_task["publish"] = {"mode": publish_mode}
+
+        task_instructions = _coerce_summary_text(
+            task_payload.get("instructions"),
+            max_chars=_QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS,
+        )
+        if task_instructions:
+            summary_task["instructions"] = task_instructions
+
+    if summary_task:
+        summary_payload["task"] = summary_task
+
+    payload_instruction = _coerce_summary_text(
+        payload.get("instruction"),
+        max_chars=_QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS,
+    )
+    if payload_instruction:
+        summary_payload["instruction"] = payload_instruction
+
+    # Keep the summary payload intentionally narrow to reduce serialization overhead.
+    return summary_payload
+
+
+def _serialize_job_for_list(
+    job: models.AgentJob,
+    *,
+    compact_payload: bool,
+) -> JobModel:
+    serialized = _serialize_job(job)
+    if not compact_payload:
+        return serialized
+    payload = serialized.payload
+    if isinstance(payload, dict):
+        serialized.payload = _summarize_job_payload(payload)
+    else:
+        serialized.payload = {}
+    return serialized
 
 
 async def _require_worker_auth(
@@ -361,6 +463,7 @@ async def list_jobs(
     status_filter: Optional[str] = Query(None, alias="status"),
     type_filter: Optional[str] = Query(None, alias="type"),
     limit: int = Query(50, ge=1, le=200),
+    summary: bool = Query(False, alias="summary"),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
 ) -> JobListResponse:
@@ -387,7 +490,12 @@ async def list_jobs(
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return JobListResponse(items=[_serialize_job(job) for job in jobs])
+
+    return JobListResponse(
+        items=[
+            _serialize_job_for_list(job, compact_payload=summary) for job in jobs
+        ]
+    )
 
 
 @router.get("/telemetry/migration", response_model=MigrationTelemetryResponse)

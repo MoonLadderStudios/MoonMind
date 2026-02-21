@@ -1076,6 +1076,17 @@
     return resolved;
   }
 
+  function withQueueSummaryFlag(url) {
+    if (!url || typeof url !== "string") {
+      return url;
+    }
+    if (/[?&]summary=/.test(url)) {
+      return url;
+    }
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}summary=true`;
+  }
+
   function sanitizeExternalHttpUrl(candidate) {
     const raw = String(candidate || "").trim();
     if (!raw) {
@@ -1451,12 +1462,14 @@
       const requests = [
         {
           source: "queue-running",
-          call: () => fetchJson("/api/queue/jobs?status=running&limit=200"),
+          call: () =>
+            fetchJson(withQueueSummaryFlag("/api/queue/jobs?status=running&limit=200")),
           transform: (payload) => toQueueRows(payload?.items || []),
         },
         {
           source: "queue-queued",
-          call: () => fetchJson("/api/queue/jobs?status=queued&limit=200"),
+          call: () =>
+            fetchJson(withQueueSummaryFlag("/api/queue/jobs?status=queued&limit=200")),
           transform: (payload) => toQueueRows(payload?.items || []),
         },
         {
@@ -1693,7 +1706,7 @@
 
     const load = async () => {
       let telemetryPayload = null;
-      const payload = await fetchJson("/api/queue/jobs?limit=200");
+      const payload = await fetchJson(withQueueSummaryFlag("/api/queue/jobs?limit=200"));
       try {
         telemetryPayload = await fetchJson(
           (queueSourceConfig.migrationTelemetry || "/api/queue/telemetry/migration") +
@@ -1727,7 +1740,7 @@
       const endpoint =
         manifestsSourceConfig.list ||
         "/api/queue/jobs?type=manifest&limit=200";
-      const payload = await fetchJson(endpoint);
+      const payload = await fetchJson(withQueueSummaryFlag(endpoint));
       const rows = sortRows(
         toQueueRows(payload?.items || []).map((row) => ({
           ...row,
