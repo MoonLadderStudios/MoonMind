@@ -9,6 +9,12 @@ import shlex
 import subprocess
 from typing import Mapping, Sequence
 
+from celery_worker.runtime_mode import (
+    format_invalid_gemini_cli_auth_mode_error,
+    inspect_gemini_home_for_auth_mode,
+    is_invalid_gemini_cli_auth_mode,
+    resolve_gemini_cli_auth_mode,
+)
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
 from moonmind.agents.codex_worker.utils import (
     CliVerificationError,
@@ -322,30 +328,32 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
             redaction_values=redaction_values,
         )
     if gemini_path is not None:
-        gemini_auth_mode = (
-            str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip().lower()
-            or "api_key"
-        )
-        if gemini_auth_mode not in {"api_key", "oauth"}:
+        gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(env=source)
+        if is_invalid_gemini_cli_auth_mode(gemini_auth_mode_raw):
             raise RuntimeError(
-                "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
+                format_invalid_gemini_cli_auth_mode_error(gemini_auth_mode_raw)
             )
-        if gemini_auth_mode == "oauth":
-            gemini_home = str(source.get("GEMINI_HOME", "")).strip()
-            if not gemini_home:
-                raise RuntimeError(
-                    "GEMINI_HOME is required when MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
-                )
-            if not os.path.isdir(gemini_home):
-                raise RuntimeError(
-                    "GEMINI_HOME must point to an existing directory when "
-                    "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
-                )
-            if not os.access(gemini_home, os.W_OK | os.X_OK):
-                raise RuntimeError(
-                    "GEMINI_HOME must be writable when "
-                    "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
-                )
+
+        _gemini_home, gemini_home_issue = inspect_gemini_home_for_auth_mode(
+            auth_mode=gemini_auth_mode,
+            gemini_home=source.get("GEMINI_HOME"),
+            isdir=os.path.isdir,
+            access=os.access,
+        )
+        if gemini_home_issue == "missing_for_oauth":
+            raise RuntimeError(
+                "GEMINI_HOME is required when MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
+            )
+        if gemini_home_issue == "not_directory":
+            raise RuntimeError(
+                "GEMINI_HOME must point to an existing directory when "
+                f"MOONMIND_GEMINI_CLI_AUTH_MODE={gemini_auth_mode}"
+            )
+        if gemini_home_issue == "not_writable_for_oauth":
+            raise RuntimeError(
+                "GEMINI_HOME must be writable when "
+                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
+            )
         _run_checked_command(
             [gemini_path, "--version"],
             redaction_values=redaction_values,

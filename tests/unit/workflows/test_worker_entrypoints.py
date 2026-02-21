@@ -6,7 +6,15 @@ import logging
 
 import pytest
 
-from celery_worker.runtime_mode import resolve_worker_queue, resolve_worker_runtime
+from celery_worker.runtime_mode import (
+    format_invalid_gemini_cli_auth_mode_error,
+    inspect_gemini_home_for_auth_mode,
+    is_invalid_gemini_cli_auth_mode,
+    resolve_gemini_cli_auth_mode,
+    resolve_worker_queue,
+    resolve_worker_runtime,
+    summarize_untrusted_auth_mode_value,
+)
 from celery_worker.startup_checks import (
     resolve_embedding_runtime_profile,
     validate_embedding_runtime_profile,
@@ -215,3 +223,46 @@ def test_resolve_worker_queue_falls_back_to_legacy_when_needed(monkeypatch):
     )
 
     assert queue == "gemini"
+
+
+def test_resolve_gemini_cli_auth_mode_defaults_invalid_value(monkeypatch):
+    monkeypatch.setenv("MOONMIND_GEMINI_CLI_AUTH_MODE", "invalid")
+
+    mode, raw = resolve_gemini_cli_auth_mode()
+
+    assert mode == "api_key"
+    assert raw == "invalid"
+    assert is_invalid_gemini_cli_auth_mode(raw) is True
+
+
+def test_format_invalid_gemini_cli_auth_mode_error_redacts_value():
+    raw_value = "AIza-secret-like-value"
+    message = format_invalid_gemini_cli_auth_mode_error(raw_value)
+
+    assert "api_key, oauth" in message
+    assert f"<redacted:{len(raw_value)} chars>" in message
+    assert raw_value not in message
+
+
+def test_inspect_gemini_home_for_auth_mode_only_requires_writable_for_oauth(tmp_path):
+    gemini_home = tmp_path / "gemini-home"
+    gemini_home.mkdir(parents=True)
+
+    _, api_key_issue = inspect_gemini_home_for_auth_mode(
+        auth_mode="api_key",
+        gemini_home=str(gemini_home),
+        access=lambda _path, _mode: False,
+    )
+    _, oauth_issue = inspect_gemini_home_for_auth_mode(
+        auth_mode="oauth",
+        gemini_home=str(gemini_home),
+        access=lambda _path, _mode: False,
+    )
+
+    assert api_key_issue is None
+    assert oauth_issue == "not_writable_for_oauth"
+
+
+def test_summarize_untrusted_auth_mode_value_handles_empty():
+    assert summarize_untrusted_auth_mode_value("") == "<empty>"
+    assert summarize_untrusted_auth_mode_value("oauth") == "<redacted:5 chars>"

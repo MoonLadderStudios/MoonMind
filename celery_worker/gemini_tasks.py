@@ -10,8 +10,10 @@ from typing import Any
 from celery.utils.log import get_task_logger
 
 from celery_worker.runtime_mode import (
+    is_invalid_gemini_cli_auth_mode,
     resolve_gemini_cli_auth_mode,
     resolve_worker_queue,
+    summarize_untrusted_auth_mode_value,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.speckit_celery import celery_app
@@ -32,13 +34,13 @@ def _resolve_gemini_cli_auth_mode() -> str:
     """Resolve Gemini CLI auth mode for subprocess execution."""
 
     mode, raw = resolve_gemini_cli_auth_mode()
-    if mode != (raw.lower() or "api_key"):
+    if is_invalid_gemini_cli_auth_mode(raw):
         logger.warning(
-            "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE '%s'; defaulting to api_key.",
-            raw,
+            "Unknown MOONMIND_GEMINI_CLI_AUTH_MODE value (%s); defaulting to api_key.",
+            summarize_untrusted_auth_mode_value(raw),
+            extra={"gemini_cli_auth_mode_invalid": True},
         )
     return mode
-
 
 _GEMINI_CLI_AUTH_MODE = _resolve_gemini_cli_auth_mode()
 
