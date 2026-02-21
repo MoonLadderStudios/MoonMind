@@ -650,6 +650,35 @@ def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
         )
 
 
+def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> None:
+    """Invalid auth mode should fail with a redacted diagnostic."""
+
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_is_executable",
+        lambda name: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, *args, **kwargs: subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"received <redacted:\d+ chars>"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "gemini",
+                "MOONMIND_GEMINI_CLI_AUTH_MODE": "AIza-secret-like-value",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+
 def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -> None:
     """Gemini oauth mode should enforce writable GEMINI_HOME directories."""
 
