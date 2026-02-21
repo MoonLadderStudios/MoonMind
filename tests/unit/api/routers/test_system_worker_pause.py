@@ -10,7 +10,6 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
-from moonmind.config.settings import settings
 
 from api_service.api.routers.system_worker_pause import (
     _CURRENT_USER,
@@ -18,6 +17,7 @@ from api_service.api.routers.system_worker_pause import (
     router,
 )
 from api_service.auth import _DEFAULT_USER_ID
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
     QueueSystemMetadata,
@@ -192,7 +192,9 @@ def test_disabled_auth_allows_non_superuser_pause_control(monkeypatch) -> None:
     app.dependency_overrides[_CURRENT_USER] = lambda: mock_user
 
     with TestClient(app) as test_client:
-        mock_service.apply_worker_pause_action.return_value = _build_snapshot(paused=False)
+        mock_service.apply_worker_pause_action.return_value = _build_snapshot(
+            paused=False
+        )
         response = test_client.post(
             "/api/system/worker-pause",
             json={"action": "resume", "reason": "done", "forceResume": True},
@@ -200,4 +202,6 @@ def test_disabled_auth_allows_non_superuser_pause_control(monkeypatch) -> None:
 
     assert response.status_code == status.HTTP_200_OK
     called = mock_service.apply_worker_pause_action.await_args.kwargs
-    assert called["actor_user_id"] == UUID(settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
+    assert called["actor_user_id"] == UUID(
+        settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+    )

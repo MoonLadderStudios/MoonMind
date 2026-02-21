@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth import _DEFAULT_USER_ID
 from api_service.api.schemas import (
     QueueSystemMetadataModel,
     WorkerPauseAuditEventModel,
@@ -18,6 +17,7 @@ from api_service.api.schemas import (
     WorkerPauseMetricsModel,
     WorkerPauseSnapshotResponse,
 )
+from api_service.auth import _DEFAULT_USER_ID
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
