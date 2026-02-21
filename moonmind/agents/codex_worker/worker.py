@@ -396,9 +396,7 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
         )
         gemini_cli_auth_mode = (
-            str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key"))
-            .strip()
-            .lower()
+            str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip().lower()
             or "api_key"
         )
         if gemini_cli_auth_mode not in {"api_key", "oauth"}:
