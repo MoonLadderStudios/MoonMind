@@ -660,7 +660,10 @@ def test_list_jobs_with_summary_returns_compact_payload(
     assert payload["task"]["skill"]["id"] == "speckit-run"
     assert payload["task"]["publish"]["mode"] == "pr"
     assert payload["task"]["instructions"] == "Task instructions for list rendering."
-    assert payload["instruction"] == "This is a long instruction that should be trimmed for list responses."
+    assert (
+        payload["instruction"]
+        == "This is a long instruction that should be trimmed for list responses."
+    )
     assert "unrelated" not in payload
 
 

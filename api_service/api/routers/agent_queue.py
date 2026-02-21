@@ -492,9 +492,7 @@ async def list_jobs(
         raise _to_http_exception(exc) from exc
 
     return JobListResponse(
-        items=[
-            _serialize_job_for_list(job, compact_payload=summary) for job in jobs
-        ]
+        items=[_serialize_job_for_list(job, compact_payload=summary) for job in jobs]
     )
 
 
