@@ -1468,6 +1468,21 @@
       stageStatus: "",
       publishMode: "",
     };
+    const telemetryEndpoint =
+      (queueSourceConfig.migrationTelemetry || "/api/queue/telemetry/migration") +
+      "?windowHours=168";
+    const telemetryRefreshMs = Math.max(
+      60000,
+      Math.max(1000, Number(pollIntervals.list) || 5000) * 12,
+    );
+    let telemetryPayload = null;
+    let telemetryInFlight = null;
+    let telemetryLastRequestedAt = 0;
+    let currentRows = [];
+    let pageActive = true;
+    registerDisposer(() => {
+      pageActive = false;
+    });
 
     function applyQueueFilters(rows) {
       return rows.filter((row) => {
@@ -1592,7 +1607,21 @@
       `;
     }
 
-    function attachFilterHandlers(rows, telemetryHtml) {
+    function renderQueueList(rows) {
+      if (!pageActive) {
+        return;
+      }
+      const filteredRows = applyQueueFilters(rows);
+      const telemetryHtml = renderTelemetrySummary(telemetryPayload);
+      setView(
+        "Queue Jobs",
+        `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
+        `${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
+      );
+      attachFilterHandlers(rows);
+    }
+
+    function attachFilterHandlers(rows) {
       const filterForm = document.getElementById("queue-filter-form");
       if (!filterForm) {
         return;
@@ -1603,13 +1632,7 @@
       const publishField = filterForm.elements.namedItem("publishMode");
 
       const rerender = () => {
-        const filteredRows = applyQueueFilters(rows);
-        setView(
-          "Queue Jobs",
-          `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-          `${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
-        );
-        attachFilterHandlers(rows, telemetryHtml);
+        renderQueueList(rows);
       };
 
       if (runtimeField) {
@@ -1638,26 +1661,49 @@
       }
     }
 
-    const load = async () => {
-      let telemetryPayload = null;
-      const payload = await fetchJson(withQueueSummaryFlag("/api/queue/jobs?limit=200"));
-      try {
-        telemetryPayload = await fetchJson(
-          (queueSourceConfig.migrationTelemetry || "/api/queue/telemetry/migration") +
-            "?windowHours=168",
-        );
-      } catch (error) {
-        console.error("queue migration telemetry load failed", error);
+    async function refreshTelemetryIfStale() {
+      if (!pageActive) {
+        return;
       }
-      const rows = sortRows(toQueueRows(payload?.items || []));
-      const filteredRows = applyQueueFilters(rows);
-      const telemetryHtml = renderTelemetrySummary(telemetryPayload);
-      setView(
-        "Queue Jobs",
-        `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-        `${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
-      );
-      attachFilterHandlers(rows, telemetryHtml);
+      const now = Date.now();
+      if (telemetryInFlight) {
+        return telemetryInFlight;
+      }
+      if (
+        telemetryPayload !== null &&
+        now - telemetryLastRequestedAt < telemetryRefreshMs
+      ) {
+        return;
+      }
+
+      telemetryLastRequestedAt = now;
+      telemetryInFlight = (async () => {
+        try {
+          const nextPayload = await fetchJson(telemetryEndpoint);
+          if (!pageActive) {
+            return;
+          }
+          telemetryPayload = nextPayload;
+          renderQueueList(currentRows);
+        } catch (error) {
+          console.error("queue migration telemetry load failed", error);
+        } finally {
+          telemetryInFlight = null;
+        }
+      })();
+      return telemetryInFlight;
+    }
+
+    const load = async () => {
+      const payload = await fetchJson(withQueueSummaryFlag("/api/queue/jobs?limit=200"));
+      if (!pageActive) {
+        return;
+      }
+      currentRows = sortRows(toQueueRows(payload?.items || []));
+      renderQueueList(currentRows);
+      refreshTelemetryIfStale().catch((error) => {
+        console.error("queue telemetry refresh failed", error);
+      });
     };
 
     startPolling(load, pollIntervals.list);
