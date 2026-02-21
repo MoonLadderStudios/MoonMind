@@ -31,6 +31,7 @@ _STATIC_PATHS = {
     "proposals",
     "manifests",
     "manifests/new",
+    "settings",
 }
 
 
@@ -135,7 +136,7 @@ async def task_dashboard_route(
             status_code=404,
             detail={
                 "code": "dashboard_route_not_found",
-                "message": "Dashboard route was not found. Use /tasks/queue, /tasks/orchestrator, or /tasks/proposals.",
+                "message": "Dashboard route was not found. Use /tasks/queue, /tasks/orchestrator, /tasks/proposals, /tasks/manifests, or /tasks/settings.",
             },
         )
 
