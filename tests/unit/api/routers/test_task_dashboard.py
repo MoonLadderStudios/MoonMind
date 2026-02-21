@@ -104,7 +104,12 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/not-a-valid-dashboard-path")
 
     assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+    detail = response.json()["detail"]
+    assert detail["code"] == "dashboard_route_not_found"
+    assert detail["message"] == (
+        "Dashboard route was not found. Use /tasks/queue, /tasks/orchestrator, "
+        "/tasks/proposals, /tasks/manifests, or /tasks/settings."
+    )
 
 
 def test_skills_api_returns_available_skill_ids(

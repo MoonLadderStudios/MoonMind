@@ -49,15 +49,45 @@
     const getEndpoint = workerPauseSettings.get;
     const postEndpoint = workerPauseSettings.post;
 
+    async function parseJsonBody(response, contextLabel) {
+      try {
+        return await response.json();
+      } catch (error) {
+        console.warn(`${contextLabel} response was not valid JSON`, {
+          status: response.status,
+          name: errorNameForLog(error),
+        });
+        return null;
+      }
+    }
+
+    function messageFromDetail(detail) {
+      if (!detail) {
+        return "";
+      }
+      if (typeof detail === "string") {
+        return detail;
+      }
+      if (typeof detail === "object" && typeof detail.message === "string") {
+        return detail.message;
+      }
+      return "";
+    }
+
     async function fetchState() {
       const response = await fetch(getEndpoint, {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
+      const responseBody = await parseJsonBody(response, "worker pause status");
       if (!response.ok) {
+        const detailMessage = messageFromDetail(responseBody && responseBody.detail).trim();
+        if (detailMessage && (response.status === 401 || response.status === 403)) {
+          throw new Error(detailMessage);
+        }
         throw new Error("Unable to load worker pause status.");
       }
-      return response.json();
+      return responseBody || {};
     }
 
     async function submitAction(payload) {
@@ -70,16 +100,11 @@
         },
         body: JSON.stringify(payload),
       });
-      const data = await response.json().catch(() => null);
+      const responseBody = await parseJsonBody(response, "worker pause update");
       if (!response.ok) {
-        const detailMessage =
-          (data && data.detail && data.detail.message) ||
-          (data && data.detail) ||
-          response.statusText ||
-          "Failed to update worker pause state.";
-        throw new Error(detailMessage);
+        throw new Error(response.statusText || "Failed to update worker pause state.");
       }
-      return data;
+      return responseBody || {};
     }
 
     return {
@@ -494,148 +519,6 @@
       getLatestSnapshot() {
         return latestSnapshot;
       },
-    };
-  }
-      section.dataset.state = description.state;
-      if (statusNode) {
-        statusNode.textContent = description.label;
-      }
-      if (reasonNode) {
-        reasonNode.textContent = description.reason;
-      }
-      Object.entries(metricNodes).forEach(([key, node]) => {
-        if (node) {
-          node.textContent = numberFormatter.format(
-            typeof metrics[key] === "number" ? metrics[key] : 0,
-          );
-        }
-      });
-      if (drainedNode) {
-        drainedNode.textContent = description.drained;
-      }
-    }
-
-    async function refresh() {
-      try {
-        const response = await fetch(workerPauseSettings.get, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error("Unable to load worker pause status.");
-        }
-        const snapshot = await response.json();
-        latestSnapshot = snapshot;
-        render(snapshot);
-        clearError();
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : errorNameForLog(error) || "Failed to load worker pause state.";
-        setError(message);
-      } finally {
-        toggleForms(false);
-      }
-    }
-
-    async function submitAction(payload) {
-      if (requestInFlight) {
-        return latestSnapshot;
-      }
-      requestInFlight = true;
-      toggleForms(true);
-      try {
-        const response = await fetch(workerPauseSettings.post, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok) {
-          const detailMessage =
-            (data && data.detail && data.detail.message) ||
-            (data && data.detail) ||
-            response.statusText ||
-            "Failed to update worker pause state.";
-          throw new Error(detailMessage);
-        }
-        latestSnapshot = data;
-        render(latestSnapshot);
-        clearError();
-        return latestSnapshot;
-      } finally {
-        requestInFlight = false;
-        toggleForms(false);
-      }
-    }
-
-    pauseForm?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (requestInFlight) {
-        return;
-      }
-      const formData = new FormData(pauseForm);
-      const mode = String(formData.get("mode") || "").trim();
-      const reason = String(formData.get("reason") || "").trim();
-      if (!mode || !reason) {
-        setError("Pause mode and reason are required.");
-        return;
-      }
-      clearError();
-      submitAction({
-        action: "pause",
-        mode,
-        reason,
-      })
-        .then(() => pauseForm.reset())
-        .catch((error) => {
-          setError(error.message || "Failed to pause workers.");
-        });
-    });
-
-    resumeForm?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (requestInFlight) {
-        return;
-      }
-      const formData = new FormData(resumeForm);
-      const reason = String(formData.get("reason") || "").trim();
-      if (!reason) {
-        setError("Resume reason is required.");
-        return;
-      }
-      let forceResume = false;
-      if (requiresResumeConfirmation(latestSnapshot)) {
-        const confirmed = window.confirm(
-          "Workers are not drained yet. Resume anyway?",
-        );
-        if (!confirmed) {
-          return;
-        }
-        forceResume = true;
-      }
-      clearError();
-      submitAction({
-        action: "resume",
-        reason,
-        forceResume,
-      })
-        .then(() => resumeForm.reset())
-        .catch((error) => {
-          setError(error.message || "Failed to resume workers.");
-        });
-    });
-
-    toggleForms(true);
-
-    return {
-      pollInterval,
-      refresh,
     };
   }
 
@@ -5249,6 +5132,7 @@
       notice: null,
       requestInFlight: false,
     };
+    let hasRendered = false;
 
     function setNotice(level, text) {
       if (!text) {
@@ -5324,33 +5208,9 @@
 
     function renderView() {
       const hasSnapshot = Boolean(state.snapshot);
-      const system = (state.snapshot && state.snapshot.system) || {};
-      const metrics = (state.snapshot && state.snapshot.metrics) || {};
-      const auditEvents =
-        (state.snapshot && state.snapshot.audit && state.snapshot.audit.latest) || [];
-      const description = describeWorkerPauseState(system, metrics);
       const noticeHtml = state.notice
         ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
         : "";
-      const summaryMarkup = hasSnapshot
-        ? `
-            <div class="stack">
-              <div class="stack">
-                <h3>${escapeHtml(description.label)}</h3>
-                <p class="page-meta">${escapeHtml(description.reason)}</p>
-                <p class="small">
-                  Mode: ${escapeHtml((system.mode || description.state).toString())} | Version: ${escapeHtml(
-            (system.version ?? "-").toString(),
-          )} | Updated: ${escapeHtml(
-            system.updatedAt ? formatTimestamp(system.updatedAt) : "-",
-          )}
-                </p>
-              </div>
-              ${buildMetricsMarkup(metrics)}
-            </div>
-          `
-        : "<p class='loading'>Loading worker status...</p>";
-      const auditMarkup = buildAuditMarkup(auditEvents);
       const controlsMarkup = `
         <section class="card system-settings-forms">
           <h3>Worker Controls</h3>
@@ -5388,16 +5248,16 @@
         </section>
       `;
       const layout = `
-        ${noticeHtml}
+        <div data-system-settings-notice>${noticeHtml}</div>
         <div class="system-settings">
           <section class="card">
-            ${summaryMarkup}
+            <div data-system-settings-summary></div>
           </section>
           <div class="system-settings-grid">
             ${controlsMarkup}
             <section class="system-settings-audit">
               <h3>Recent Actions</h3>
-              ${auditMarkup}
+              <div data-system-settings-audit></div>
             </section>
           </div>
         </div>
@@ -5408,6 +5268,47 @@
         layout,
       );
       attachHandlers();
+      syncDynamicView();
+      hasRendered = true;
+    }
+
+    function syncDynamicView() {
+      const summaryNode = document.querySelector("[data-system-settings-summary]");
+      const auditNode = document.querySelector("[data-system-settings-audit]");
+      const noticeNode = document.querySelector("[data-system-settings-notice]");
+      if (!summaryNode || !auditNode || !noticeNode) {
+        return;
+      }
+
+      const hasSnapshot = Boolean(state.snapshot);
+      const system = (state.snapshot && state.snapshot.system) || {};
+      const metrics = (state.snapshot && state.snapshot.metrics) || {};
+      const auditEvents =
+        (state.snapshot && state.snapshot.audit && state.snapshot.audit.latest) || [];
+      const description = describeWorkerPauseState(system, metrics);
+
+      summaryNode.innerHTML = hasSnapshot
+        ? `
+            <div class="stack">
+              <div class="stack">
+                <h3>${escapeHtml(description.label)}</h3>
+                <p class="page-meta">${escapeHtml(description.reason)}</p>
+                <p class="small">
+                  Mode: ${escapeHtml((system.mode || description.state).toString())} | Version: ${escapeHtml(
+            (system.version ?? "-").toString(),
+          )} | Updated: ${escapeHtml(
+            system.updatedAt ? formatTimestamp(system.updatedAt) : "-",
+          )}
+                </p>
+              </div>
+              ${buildMetricsMarkup(metrics)}
+            </div>
+          `
+        : "<p class='loading'>Loading worker status...</p>";
+      auditNode.innerHTML = buildAuditMarkup(auditEvents);
+      noticeNode.innerHTML = state.notice
+        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+        : "";
     }
 
     function attachHandlers() {
@@ -5459,11 +5360,7 @@
           pauseForm.reset();
         } catch (error) {
           console.error("worker pause request failed", error);
-          const message =
-            error instanceof Error && error.message
-              ? error.message
-              : "Failed to pause workers.";
-          setNotice("error", message);
+          setNotice("error", "Failed to pause workers.");
         } finally {
           state.requestInFlight = false;
           renderView();
@@ -5505,11 +5402,7 @@
           resumeForm.reset();
         } catch (error) {
           console.error("worker resume request failed", error);
-          const message =
-            error instanceof Error && error.message
-              ? error.message
-              : "Failed to resume workers.";
-          setNotice("error", message);
+          setNotice("error", "Failed to resume workers.");
         } finally {
           state.requestInFlight = false;
           renderView();
@@ -5532,6 +5425,10 @@
               : "Failed to load worker pause status.";
           setNotice("error", message);
         }
+      }
+      if (silent && hasRendered) {
+        syncDynamicView();
+        return;
       }
       renderView();
     };
