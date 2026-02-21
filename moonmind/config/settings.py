@@ -513,7 +513,7 @@ class SpecWorkflowSettings(BaseSettings):
         le=64,
     )
     enable_task_proposals: bool = Field(
-        False,
+        True,
         env=("MOONMIND_ENABLE_TASK_PROPOSALS", "ENABLE_TASK_PROPOSALS"),
         validation_alias=AliasChoices(
             "MOONMIND_ENABLE_TASK_PROPOSALS",
