@@ -121,7 +121,7 @@ def test_normalize_task_payload_accepts_steps_schema() -> None:
                 "git": {"startingBranch": None, "newBranch": None},
                 "publish": {"mode": "none"},
                 "steps": [
-                    {"id": "inspect", "instructions": "Inspect current behavior"},
+                    {"instructions": "Inspect current behavior"},
                     {
                         "title": "Apply patch",
                         "skill": {"id": "speckit", "args": {"phase": "patch"}},
@@ -132,8 +132,33 @@ def test_normalize_task_payload_accepts_steps_schema() -> None:
     )
 
     assert len(normalized["task"]["steps"]) == 2
-    assert normalized["task"]["steps"][0]["id"] == "inspect"
+    assert normalized["task"]["steps"][0]["id"] == "step-1"
+    assert normalized["task"]["steps"][1]["id"] == "step-2"
     assert normalized["task"]["steps"][1]["skill"]["id"] == "speckit"
+
+
+def test_normalize_task_payload_overrides_custom_step_ids() -> None:
+    """User-supplied step ids should be replaced with sequential identifiers."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "Run step flow",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "custom-alpha", "instructions": "First"},
+                    {"id": "tpl:template:02", "instructions": "Second"},
+                ],
+            },
+        },
+    )
+
+    assert [step["id"] for step in normalized["task"]["steps"]] == ["step-1", "step-2"]
 
 
 def test_normalize_task_payload_derives_step_skill_required_capabilities() -> None:

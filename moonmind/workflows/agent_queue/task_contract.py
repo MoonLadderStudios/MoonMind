@@ -708,6 +708,21 @@ class CanonicalTaskPayload(BaseModel):
         return payload
 
 
+def _assign_sequential_step_ids(steps: list[Any]) -> None:
+    """Ensure every task step has a deterministic `step-{index}` identifier."""
+
+    for index, raw in enumerate(steps):
+        if not isinstance(raw, Mapping):
+            steps[index] = {"id": f"step-{index + 1}"}
+            continue
+        if isinstance(raw, dict):
+            target = raw
+        else:
+            target = dict(raw)
+            steps[index] = target
+        target["id"] = f"step-{index + 1}"
+
+
 def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     publish_raw = payload.get("publish")
     publish = publish_raw if isinstance(publish_raw, Mapping) else {}
@@ -949,6 +964,7 @@ def build_canonical_task_view(
 
     steps_node = (canonical.get("task") or {}).get("steps")
     if isinstance(steps_node, list):
+        _assign_sequential_step_ids(steps_node)
         for step_raw in steps_node:
             if not isinstance(step_raw, Mapping):
                 continue

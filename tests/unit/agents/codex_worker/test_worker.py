@@ -910,8 +910,8 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     ]
     assert len(started) == 2
     assert len(finished) == 2
-    assert started[0]["payload"]["stepId"] == "inspect"
-    assert started[1]["payload"]["stepId"] == "patch"
+    assert started[0]["payload"]["stepId"] == "step-1"
+    assert started[1]["payload"]["stepId"] == "step-2"
 
 
 async def test_compose_step_instruction_dedupes_objective_text(
