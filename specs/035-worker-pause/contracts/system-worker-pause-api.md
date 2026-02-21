@@ -2,7 +2,8 @@
 
 ## 1. `GET /api/system/worker-pause`
 
-**Auth**: Operator (same dependency used by dashboard routes).  
+**Auth**: In external auth modes, operator role via the same dependency used by dashboard routes.  
+When `AUTH_PROVIDER=disabled`, the endpoint is intentionally callable without credentials and writes are attributed to `DEFAULT_USER_ID` (or built-in fallback) so audit output includes an actor identity in local/dev mode.
 **Response 200**:
 ```json
 {

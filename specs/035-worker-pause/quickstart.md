@@ -2,12 +2,22 @@
 
 ## Prerequisites
 - MoonMind services running locally (`docker compose up api rabbitmq celery-worker orchestrator ...`).
-- Operator credentials (OIDC session in the dashboard or an API token for curl).
+- Operator credentials (OIDC session in the dashboard or an API token for curl) when auth is enabled.
 - At least one Codex worker pointed at the local API so claim/heartbeat loops are active.
+- Dashboard path: `https://localhost:8443/tasks` (or your local equivalent). The Worker Pause banner/controls are part of this global dashboard shell and remain visible even when no jobs are running.
+
+If you run with `AUTH_PROVIDER=disabled`, omit API credentials and use the curl commands below without `Authorization` headers; this remains fully functional for local/dev mode.
+
+```bash
+AUTH_HEADER_ARGS=()
+if [ -n "${TOKEN:-}" ]; then
+  AUTH_HEADER_ARGS=(-H "Authorization: Bearer $TOKEN")
+fi
+```
 
 ## 1. Inspect the current state
 ```bash
-curl -sS -H "Authorization: Bearer $TOKEN" \
+curl -sS "${AUTH_HEADER_ARGS[@]}" \
   https://localhost:8443/api/system/worker-pause | jq
 ```
 - Expect `workersPaused: false`, `version >= 1`, and `metrics` populated (`queued`, `running`, `staleRunning`, `isDrained`).
@@ -16,7 +26,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 ## 2. Pause in Drain mode
 ```bash
 curl -sS -X POST \
-  -H "Authorization: Bearer $TOKEN" \
+  "${AUTH_HEADER_ARGS[@]}" \
   -H "Content-Type: application/json" \
   -d '{
         "action": "pause",
@@ -40,7 +50,7 @@ curl -sS -X POST \
 ## 5. Exercise Quiesce mode (optional but recommended)
 ```bash
 curl -sS -X POST \
-  -H "Authorization: Bearer $TOKEN" \
+  "${AUTH_HEADER_ARGS[@]}" \
   -H "Content-Type: application/json" \
   -d '{
         "action": "pause",
@@ -55,7 +65,7 @@ curl -sS -X POST \
 ## 6. Resume work
 ```bash
 curl -sS -X POST \
-  -H "Authorization: Bearer $TOKEN" \
+  "${AUTH_HEADER_ARGS[@]}" \
   -H "Content-Type: application/json" \
   -d '{
         "action": "resume",

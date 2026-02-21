@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, status
@@ -16,6 +16,8 @@ from api_service.api.routers.system_worker_pause import (
     _get_service,
     router,
 )
+from api_service.auth import _DEFAULT_USER_ID
+from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
     QueueSystemMetadata,
@@ -130,9 +132,10 @@ def test_apply_worker_pause_state_validation_error(
     assert detail["code"] == "worker_pause_invalid_request"
 
 
-def test_apply_worker_pause_state_requires_operator_role() -> None:
+def test_apply_worker_pause_state_requires_operator_role(monkeypatch) -> None:
     """Non-superusers should not be allowed to toggle global worker pause."""
 
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -153,9 +156,10 @@ def test_apply_worker_pause_state_requires_operator_role() -> None:
     assert response.json()["detail"]["code"] == "worker_pause_forbidden"
 
 
-def test_apply_worker_pause_state_requires_actor_identity() -> None:
+def test_apply_worker_pause_state_requires_actor_identity(monkeypatch) -> None:
     """Missing actor id should be rejected to keep audit trails complete."""
 
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -172,3 +176,32 @@ def test_apply_worker_pause_state_requires_actor_identity() -> None:
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
     assert response.json()["detail"]["code"] == "worker_pause_actor_missing"
+
+
+def test_disabled_auth_allows_non_superuser_pause_control(monkeypatch) -> None:
+    """Disabled auth mode should not require superuser for pause controls."""
+
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", None, raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+
+    mock_user = SimpleNamespace(id=None, email="user@example.com", is_superuser=False)
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[_CURRENT_USER] = lambda: mock_user
+
+    with TestClient(app) as test_client:
+        mock_service.apply_worker_pause_action.return_value = _build_snapshot(
+            paused=False
+        )
+        response = test_client.post(
+            "/api/system/worker-pause",
+            json={"action": "resume", "reason": "done", "forceResume": True},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    called = mock_service.apply_worker_pause_action.await_args.kwargs
+    assert called["actor_user_id"] == UUID(
+        settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+    )

@@ -1292,6 +1292,42 @@ class AppSettings(BaseSettings):
         exclude=True,
         description="Compatibility passthrough for worker Codex effort env flags.",
     )
+    orchestrator_docker_host: Optional[str] = Field(
+        None,
+        env="ORCHESTRATOR_DOCKER_HOST",
+        exclude=True,
+        description="Compatibility passthrough for DooD docker host settings.",
+    )
+    moonmind_workdir: Optional[str] = Field(
+        None,
+        env="MOONMIND_WORKDIR",
+        exclude=True,
+        description="Compatibility passthrough for worker workspace root.",
+    )
+    moonmind_agent_workspaces_volume_name: Optional[str] = Field(
+        None,
+        env="MOONMIND_AGENT_WORKSPACES_VOLUME_NAME",
+        exclude=True,
+        description="Compatibility passthrough for worker workspace volume name.",
+    )
+    moonmind_worker_capabilities: Optional[str] = Field(
+        None,
+        env="MOONMIND_WORKER_CAPABILITIES",
+        exclude=True,
+        description="Compatibility passthrough for worker capabilities declaration.",
+    )
+    moonmind_unreal_ccache_volume_name: Optional[str] = Field(
+        None,
+        env="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
+        exclude=True,
+        description="Compatibility passthrough for ccache volume in DooD workflows.",
+    )
+    moonmind_unreal_ubt_volume_name: Optional[str] = Field(
+        None,
+        env="MOONMIND_UNREAL_UBT_VOLUME_NAME",
+        exclude=True,
+        description="Compatibility passthrough for UBT metadata volume in DooD workflows.",
+    )
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
