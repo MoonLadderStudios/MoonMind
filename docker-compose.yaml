@@ -296,7 +296,7 @@ services:
       - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker,proposals_write}
       - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_WORKER_TOKEN_DESCRIPTION:-Docker Compose codex worker}
       - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
-      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/workspace/var/agent_jobs}
+      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
       - MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT=${MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT:-/workspace}
       - SPEC_SKILLS_LOCAL_MIRROR_ROOT=${MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}
       - SPEC_SKILLS_LEGACY_MIRROR_ROOT=${MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}
@@ -323,6 +323,7 @@ services:
       - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
       - speckit_workspaces:/work/runs
       - ./var/artifacts:/workspace/var/artifacts
+      - agent_workspaces:/work/agent_jobs
     working_dir: /workspace
     command: >-
       /workspace/tools/start-codex-worker.sh
@@ -467,6 +468,10 @@ volumes:
   speckit_workspaces:
   agent_workspaces:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
+  unreal_ccache_volume:
+    name: unreal_ccache_volume
+  unreal_ubt_volume:
+    name: unreal_ubt_volume
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   claude_auth_volume:
