@@ -27,6 +27,7 @@ from moonmind.workflows.agent_queue.manifest_contract import (
     normalize_manifest_job_payload,
 )
 from moonmind.workflows.agent_queue.repositories import (
+    AgentJobStateError,
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
 )
@@ -1333,16 +1334,22 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_operator: bool = False,
         mode: Literal["cancel", "clone"],
     ) -> tuple[models.AgentJob, models.AgentJob | None]:
         """Request cancellation and optionally clone a replacement job."""
 
         job = await self._repository.require_job_for_update(job_id)
+        if not actor_is_operator:
+            await self._assert_task_run_user_access(
+                task_run_id=job_id,
+                actor_user_id=actor_user_id,
+            )
         if job.status not in {
             models.AgentJobStatus.RUNNING,
             models.AgentJobStatus.QUEUED,
         }:
-            raise AgentQueueStateError(
+            raise AgentJobStateError(
                 f"Job {job_id} is {job.status.value} and cannot be recovered"
             )
 
@@ -1363,7 +1370,6 @@ class AgentQueueService:
             job.lease_expires_at = None
             job.next_attempt_at = None
         job.updated_at = now
-        await self._repository.flush()
         await self._repository.append_event(
             job_id=job.id,
             level=models.AgentJobEventLevel.WARN,
@@ -1376,9 +1382,10 @@ class AgentQueueService:
 
         cloned_job: models.AgentJob | None = None
         if mode == "clone":
-            cloned_job = await self._repository.create_job(
+            source_payload = job.payload if isinstance(job.payload, dict) else {}
+            cloned_job = await self.create_job(
                 job_type=job.type,
-                payload=copy.deepcopy(job.payload or {}),
+                payload=copy.deepcopy(source_payload),
                 priority=job.priority,
                 created_by_user_id=actor_user_id or job.created_by_user_id,
                 requested_by_user_id=actor_user_id or job.requested_by_user_id,
@@ -1852,6 +1859,14 @@ class AgentQueueService:
                     return "failed"
         return "unknown"
 
+    @staticmethod
+    def _coerce_utc(dt: datetime) -> datetime:
+        """Normalize persisted timestamps to UTC-aware datetimes."""
+
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+
     def _job_runtime_seconds(
         self,
         job: models.AgentJob,
@@ -1860,7 +1875,8 @@ class AgentQueueService:
     ) -> int | None:
         if job.started_at is None:
             return None
-        return int((now - job.started_at).total_seconds())
+        started_at = self._coerce_utc(job.started_at)
+        return int((now - started_at).total_seconds())
 
     def _job_lease_overdue_seconds(
         self,
@@ -1870,9 +1886,10 @@ class AgentQueueService:
     ) -> int | None:
         if job.lease_expires_at is None:
             return None
-        if job.lease_expires_at >= now:
+        lease_expires_at = self._coerce_utc(job.lease_expires_at)
+        if lease_expires_at >= now:
             return None
-        return int((now - job.lease_expires_at).total_seconds())
+        return int((now - lease_expires_at).total_seconds())
 
     async def _maybe_trigger_runtime_timeout(
         self,

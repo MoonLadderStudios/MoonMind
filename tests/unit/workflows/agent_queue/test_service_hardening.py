@@ -18,6 +18,7 @@ from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
+    AgentQueueJobAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
 )
@@ -175,11 +176,12 @@ async def test_heartbeat_triggers_runtime_timeout(tmp_path: Path) -> None:
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
             )
-            claimed = await repo.claim_job(
+            claim = await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex"],
+                worker_capabilities=["codex", "git"],
             )
+            claimed = claim.job
             assert claimed is not None
             claimed.started_at = datetime.now(UTC) - timedelta(seconds=5)
             await repo.commit()
@@ -218,11 +220,11 @@ async def test_get_queue_safeguard_snapshot_classifies_jobs(tmp_path: Path) -> N
                 payload={"repository": "Moon/Mind", "instruction": "run"},
             )
             await repo.commit()
-            for job in (fresh, timed_out, stale):
-                await repo.claim_job(
+            for _ in (fresh, timed_out, stale):
+                await service.claim_job(
                     worker_id="executor",
                     lease_seconds=30,
-                    worker_capabilities=["codex"],
+                    worker_capabilities=["codex", "git"],
                 )
             fresh.started_at = datetime.now(UTC)
             timed_out.started_at = datetime.now(UTC) - timedelta(seconds=10)
@@ -250,17 +252,19 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
             )
-            claimed = await repo.claim_job(
+            claim = await service.claim_job(
                 worker_id="executor",
                 lease_seconds=30,
-                worker_capabilities=["codex"],
+                worker_capabilities=["codex", "git"],
             )
+            claimed = claim.job
             assert claimed is not None
             actor = uuid4()
 
             recovered, cloned = await service.recover_job(
                 job_id=job.id,
                 actor_user_id=actor,
+                actor_is_operator=True,
                 mode="clone",
             )
 
@@ -268,6 +272,44 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
     assert recovered.cancel_reason == "Operator recovery requested"
     assert cloned is not None
     assert cloned.payload == job.payload
+
+
+async def test_recover_job_requires_owner_or_operator(tmp_path: Path) -> None:
+    """Recover should reject non-owners unless caller has operator privilege."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            owner = uuid4()
+            other_user = uuid4()
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+                created_by_user_id=owner,
+                requested_by_user_id=owner,
+            )
+            await service.claim_job(
+                worker_id="executor",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.recover_job(
+                    job_id=job.id,
+                    actor_user_id=other_user,
+                    mode="cancel",
+                )
+
+            recovered, _ = await service.recover_job(
+                job_id=job.id,
+                actor_user_id=other_user,
+                actor_is_operator=True,
+                mode="cancel",
+            )
+
+    assert recovered.cancel_requested_by_user_id == other_user
 
 
 async def test_append_and_list_events_with_after_cursor(tmp_path: Path) -> None:

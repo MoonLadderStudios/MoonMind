@@ -121,6 +121,19 @@ async def _get_service(
     return AgentQueueService(repository)
 
 
+def _require_queue_operator(user: User) -> None:
+    """Require superuser role for queue operator-only endpoints."""
+
+    if not bool(getattr(user, "is_superuser", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "operator_role_required",
+                "message": "Operator privileges are required.",
+            },
+        )
+
+
 def _serialize_job(
     job: models.AgentJob,
     system: QueueSystemMetadata | None = None,
@@ -596,9 +609,11 @@ async def queue_safeguards(
     *,
     limit: int = Query(200, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
 ) -> QueueSafeguardResponse:
     """Return queue safeguard alerts for operator triage."""
+
+    _require_queue_operator(user)
 
     try:
         snapshot: QueueSafeguardSnapshot = await service.get_queue_safeguard_snapshot(
@@ -794,6 +809,7 @@ async def recover_job(
         recovered, cloned = await service.recover_job(
             job_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_operator=bool(getattr(user, "is_superuser", False)),
             mode=payload.mode,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer

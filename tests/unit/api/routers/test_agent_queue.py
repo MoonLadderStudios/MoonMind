@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -211,6 +211,7 @@ def client() -> Iterator[tuple[TestClient, AsyncMock]]:
         id=uuid4(),
         email="queue-tester@example.com",
         is_active=True,
+        is_superuser=False,
     )
 
     user_dependencies = {
@@ -599,12 +600,32 @@ def test_migration_telemetry_returns_summary(
     assert payload["publishOutcomes"]["publishedRate"] == 0.6
 
 
-def test_queue_safeguards_endpoint(
+def test_queue_safeguards_endpoint_requires_operator(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """Safeguard telemetry endpoint should serialize snapshot entries."""
+    """Safeguard telemetry endpoint should be operator-only."""
 
     test_client, service = client
+
+    response = test_client.get("/api/queue/telemetry/safeguards")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "operator_role_required"
+    service.get_queue_safeguard_snapshot.assert_not_awaited()
+
+
+def test_queue_safeguards_endpoint_operator_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Operator should receive safeguard telemetry payload."""
+
+    test_client, service = client
+    test_client.app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=uuid4(),
+        email="ops@example.com",
+        is_active=True,
+        is_superuser=True,
+    )
     job = _build_job(status=models.AgentJobStatus.RUNNING)
     snapshot = QueueSafeguardSnapshot(
         generated_at=datetime.now(UTC),
@@ -805,7 +826,12 @@ def test_recover_job_clone_success(
     body = response.json()
     assert body["recoveredJob"]["id"] == str(original.id)
     assert body["clonedJob"]["id"] == str(cloned.id)
-    service.recover_job.assert_awaited_once()
+    service.recover_job.assert_awaited_once_with(
+        job_id=original.id,
+        actor_user_id=ANY,
+        actor_is_operator=False,
+        mode="clone",
+    )
 
 
 def test_ack_cancel_worker_mismatch_maps_403(
