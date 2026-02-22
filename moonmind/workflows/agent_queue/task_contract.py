@@ -56,6 +56,12 @@ def _default_publish_mode() -> str:
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
 
+def _default_propose_tasks() -> bool:
+    """Default queue-task proposal generation toggle."""
+
+    return bool(getattr(settings.spec_workflow, "enable_task_proposals", True))
+
+
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     candidate = _clean_optional_str(value)
     if candidate is None:
@@ -526,6 +532,9 @@ class TaskExecutionSpec(BaseModel):
     publish: TaskPublishSelection = Field(
         default_factory=TaskPublishSelection, alias="publish"
     )
+    propose_tasks: bool = Field(
+        default_factory=_default_propose_tasks, alias="proposeTasks"
+    )
     steps: list[TaskStepSpec] = Field(default_factory=list, alias="steps")
     container: TaskContainerSelection | None = Field(None, alias="container")
     proposal_policy: TaskProposalPolicy | None = Field(None, alias="proposalPolicy")
@@ -537,6 +546,20 @@ class TaskExecutionSpec(BaseModel):
         if not cleaned:
             raise TaskContractError("task.instructions is required")
         return cleaned
+
+    @field_validator("propose_tasks", mode="before")
+    @classmethod
+    def _normalize_propose_tasks(cls, value: object) -> bool:
+        if value is None or value == "":
+            return _default_propose_tasks()
+        if isinstance(value, bool):
+            return value
+        lowered = str(value).strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        raise TaskContractError("task.proposeTasks must be a boolean")
 
     @model_validator(mode="before")
     @classmethod

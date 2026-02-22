@@ -94,6 +94,8 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
         "artifact_gap",
     }
 )
+_FIX_PROPOSAL_SKILL_ID = "fix-proposal"
+_CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -1311,6 +1313,10 @@ class CodexWorker:
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
+        task_proposals_requested = self._task_proposals_requested(canonical_payload)
+        proposal_workflow_enabled = (
+            self._config.enable_task_proposals and task_proposals_requested
+        )
         await self._emit_event(
             job_id=job.id,
             level="info",
@@ -1464,31 +1470,88 @@ class CodexWorker:
                     pause_event=pause_requested_event,
                     cancel_event=cancel_requested_event,
                 )
-                publish_note = await self._run_publish_stage(
-                    job_id=job.id,
-                    canonical_payload=canonical_payload,
-                    prepared=prepared,
-                    skill_meta=skill_meta,
-                    job_type=job.type,
-                    staged_artifacts=staged_artifacts,
-                )
-                if publish_note:
-                    base_summary = result.summary or "task completed"
+                try:
+                    publish_note = await self._run_publish_stage(
+                        job_id=job.id,
+                        canonical_payload=canonical_payload,
+                        prepared=prepared,
+                        skill_meta=skill_meta,
+                        job_type=job.type,
+                        staged_artifacts=staged_artifacts,
+                    )
+                except CommandCancelledError:
+                    raise
+                except Exception as exc:
+                    logger.exception(
+                        "Publish stage failed for job %s", job.id, exc_info=exc
+                    )
                     result = type(result)(
-                        succeeded=True,
-                        summary=f"{base_summary}; {publish_note}",
-                        error_message=None,
+                        succeeded=False,
+                        summary=result.summary,
+                        error_message=str(exc),
                         artifacts=result.artifacts,
                     )
+                else:
+                    if publish_note:
+                        base_summary = result.summary or "task completed"
+                        result = type(result)(
+                            succeeded=True,
+                            summary=f"{base_summary}; {publish_note}",
+                            error_message=None,
+                            artifacts=result.artifacts,
+                        )
                 await self._raise_if_cancel_requested(
                     cancel_event=cancel_requested_event
                 )
-                if self._config.enable_task_proposals:
-                    with suppress(Exception):
-                        await self._maybe_submit_task_proposals(
-                            job=job,
-                            prepared=prepared,
-                        )
+
+            if proposal_workflow_enabled:
+                await self._raise_if_cancel_requested(
+                    cancel_event=cancel_requested_event
+                )
+                await self._wait_if_paused(
+                    job_id=job.id,
+                    pause_event=pause_requested_event,
+                    cancel_event=cancel_requested_event,
+                )
+                try:
+                    proposal_artifacts = await self._run_post_task_proposal_skills(
+                        job=job,
+                        canonical_payload=canonical_payload,
+                        source_payload=job.payload,
+                        runtime_mode=runtime_mode,
+                        prepared=prepared,
+                        task_result=result,
+                        selected_skills=selected_skills,
+                    )
+                except CommandCancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Post-task proposal skill execution failed for job %s", job.id
+                    )
+                    proposal_artifacts = []
+                if proposal_artifacts:
+                    staged_artifacts.extend(proposal_artifacts)
+                    await _handle_incremental_artifacts(proposal_artifacts)
+                await self._raise_if_cancel_requested(
+                    cancel_event=cancel_requested_event
+                )
+                try:
+                    await self._maybe_submit_task_proposals(
+                        job=job,
+                        prepared=prepared,
+                    )
+                except CommandCancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Failed submitting post-task proposals for job %s", job.id
+                    )
+                    await self._emit_event(
+                        job_id=job.id,
+                        level="warn",
+                        message="task.proposalSubmission.failed",
+                    )
 
             await _flush_staged_artifacts()
             if optional_artifact_failures:
@@ -1845,6 +1908,29 @@ class CodexWorker:
             "ragMode": mode,
             "ragCommand": "moonmind rag search --query '<query>' --output-file <path>",
         }
+
+    @staticmethod
+    def _coerce_bool(value: object, *, default: bool) -> bool:
+        """Normalize bool-like payload values with a caller-provided default."""
+
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        lowered = str(value).strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def _task_proposals_requested(self, canonical_payload: Mapping[str, Any]) -> bool:
+        """Return whether post-run proposal generation is requested for this task."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        default_enabled = bool(settings.spec_workflow.enable_task_proposals)
+        return self._coerce_bool(task.get("proposeTasks"), default=default_enabled)
 
     @staticmethod
     def _safe_workdir_mode(source_payload: Mapping[str, Any]) -> str:
@@ -3360,6 +3446,388 @@ class CodexWorker:
         if codex_overrides:
             payload["codex"] = codex_overrides
         return payload
+
+    @staticmethod
+    def _proposal_hook_skill_ids(*, include_continuation: bool) -> tuple[str, ...]:
+        """Return ordered post-run proposal hook skills."""
+
+        if include_continuation:
+            return (_FIX_PROPOSAL_SKILL_ID, _CONTINUATION_PROPOSAL_SKILL_ID)
+        return (_FIX_PROPOSAL_SKILL_ID,)
+
+    def _build_proposal_task_request_template(
+        self, canonical_payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Build a safe default taskCreateRequest template for proposal skills."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        runtime_node = task.get("runtime")
+        runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
+        git_node = task.get("git")
+        git = git_node if isinstance(git_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = publish_node if isinstance(publish_node, Mapping) else {}
+
+        runtime_mode = (
+            str(
+                runtime.get("mode") or canonical_payload.get("targetRuntime") or "codex"
+            )
+            .strip()
+            .lower()
+            or "codex"
+        )
+        runtime_model = str(runtime.get("model") or "").strip() or None
+        runtime_effort = str(runtime.get("effort") or "").strip() or None
+        starting_branch = str(git.get("startingBranch") or "").strip() or None
+        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
+        if publish_mode not in {"none", "branch", "pr"}:
+            publish_mode = "pr"
+
+        return {
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {
+                "repository": str(canonical_payload.get("repository") or "").strip(),
+                "targetRuntime": runtime_mode,
+                "task": {
+                    "instructions": "TODO: replace with the proposed follow-up task objective",
+                    "skill": {"id": "auto", "args": {}},
+                    "runtime": {
+                        "mode": runtime_mode,
+                        "model": runtime_model,
+                        "effort": runtime_effort,
+                    },
+                    "git": {"startingBranch": starting_branch, "newBranch": None},
+                    "publish": {
+                        "mode": publish_mode,
+                        "prBaseBranch": None,
+                        "commitMessage": None,
+                        "prTitle": None,
+                        "prBody": None,
+                    },
+                },
+            },
+        }
+
+    def _compose_post_task_proposal_instruction(
+        self,
+        *,
+        canonical_payload: Mapping[str, Any],
+        task_result: WorkerExecutionResult,
+        skill_id: str,
+        proposal_output_path: str,
+    ) -> str:
+        """Build runtime instruction for post-run proposal generation hooks."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        objective = str(task.get("instructions") or "").strip() or "(missing objective)"
+        status_text = "succeeded" if task_result.succeeded else "failed"
+        request_template = json.dumps(
+            self._build_proposal_task_request_template(canonical_payload),
+            indent=2,
+            sort_keys=True,
+        )
+
+        if skill_id == _FIX_PROPOSAL_SKILL_ID:
+            focus_text = (
+                "Analyze MoonMind execution quality issues and propose one high-value fix. "
+                "Prioritize access/auth failures, unclear instructions, retries, loops, "
+                "duplicate/repetitive output, missing references, conflicting instructions, and artifact gaps."
+            )
+        else:
+            focus_text = (
+                "Propose the best continuation. If this task is part of a series/phased plan, "
+                "propose the next concrete phase/task. If not, propose one meaningful refactor, "
+                "performance improvement, or feature extension related to the completed work."
+            )
+
+        return (
+            "MOONMIND TASK OBJECTIVE:\n"
+            f"{objective}\n\n"
+            "POST-RUN PROPOSAL SKILL:\n"
+            f"- Skill: {skill_id}\n"
+            f"- Task status: {status_text}\n"
+            f"- Task summary: {task_result.summary or '-'}\n"
+            f"- Task error: {task_result.error_message or '-'}\n\n"
+            "WORKSPACE:\n"
+            "- Repository cwd is the task repo.\n"
+            "- Use ../artifacts/task_context.json and ../artifacts/logs/** as evidence.\n"
+            "- Relevant skill docs are under ../skills_active/<skill-id>/.\n"
+            "- Do NOT modify repository files.\n"
+            "- Do NOT commit or push.\n\n"
+            "GOAL:\n"
+            f"{focus_text}\n\n"
+            "OUTPUT CONTRACT:\n"
+            f"- Write a JSON array to {proposal_output_path}.\n"
+            "- If the file already exists, read and append; keep it valid JSON.\n"
+            "- Keep total proposals concise (max 3).\n"
+            "- Each entry must include: title, summary, taskCreateRequest.\n"
+            "- For MoonMind run-quality proposals, include category=run_quality, at least one tag from "
+            "{retry, duplicate_output, missing_ref, conflicting_instructions, flaky_test, loop_detected, artifact_gap}, "
+            "and signal.severity in {low, medium, high, critical}.\n"
+            "- If no strong proposal is warranted, keep existing proposals unchanged.\n\n"
+            "taskCreateRequest template (copy this and edit values):\n"
+            "```json\n"
+            f"{request_template}\n"
+            "```\n"
+        )
+
+    def _ensure_post_task_proposal_skills_materialized(
+        self,
+        *,
+        job_id: UUID,
+        prepared: PreparedTaskWorkspace,
+        selected_skills: Sequence[str],
+        hook_skill_ids: Sequence[str],
+    ) -> bool:
+        """Materialize hook skills alongside selected task skills for post-run usage."""
+
+        combined = tuple(
+            dict.fromkeys(
+                [
+                    skill.strip()
+                    for skill in [*selected_skills, *hook_skill_ids]
+                    if str(skill or "").strip()
+                ]
+            )
+        )
+        if not combined:
+            return False
+        try:
+            selection = resolve_run_skill_selection(
+                run_id=str(job_id),
+                context={"skill_selection": list(combined)},
+            )
+            materialize_run_skill_workspace(
+                selection=selection,
+                run_root=prepared.job_root,
+                cache_root=self._resolve_skills_cache_root(),
+                verify_signatures=settings.spec_workflow.skills_verify_signatures,
+            )
+        except (SkillResolutionError, SkillMaterializationError):
+            logger.warning(
+                "Failed to materialize proposal hook skills for job %s", job_id
+            )
+            return False
+        return True
+
+    def _normalize_post_task_proposal_artifacts(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        skill_id: str,
+    ) -> list[ArtifactUpload]:
+        """Copy post-run proposal skill artifacts into deterministic paths."""
+
+        artifacts: list[ArtifactUpload] = []
+        source_log_path = prepared.artifacts_dir / "codex_exec.log"
+        if source_log_path.exists():
+            proposal_log_path = (
+                prepared.artifacts_dir / "logs" / "proposals" / f"{skill_id}.log"
+            )
+            proposal_log_path.parent.mkdir(parents=True, exist_ok=True)
+            if source_log_path != proposal_log_path:
+                shutil.copy2(source_log_path, proposal_log_path)
+            artifacts.append(
+                ArtifactUpload(
+                    path=proposal_log_path,
+                    name=f"logs/proposals/{skill_id}.log",
+                    content_type="text/plain",
+                    required=False,
+                )
+            )
+
+        return artifacts
+
+    async def _run_post_task_proposal_skills(
+        self,
+        *,
+        job: ClaimedJob,
+        canonical_payload: Mapping[str, Any],
+        source_payload: Mapping[str, Any],
+        runtime_mode: str,
+        prepared: PreparedTaskWorkspace,
+        task_result: WorkerExecutionResult,
+        selected_skills: Sequence[str],
+    ) -> list[ArtifactUpload]:
+        """Execute post-run proposal skills and collect generated artifacts."""
+
+        hook_skill_ids = self._proposal_hook_skill_ids(
+            include_continuation=task_result.succeeded
+        )
+        if self._config.skill_policy_mode == "allowlist":
+            allowed_skills = set(self._config.allowed_skills)
+            skipped_skills = [
+                skill_id for skill_id in hook_skill_ids if skill_id not in allowed_skills
+            ]
+            hook_skill_ids = tuple(
+                skill_id for skill_id in hook_skill_ids if skill_id in allowed_skills
+            )
+            if skipped_skills:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="warn",
+                    message="task.proposalSkill.disallowed",
+                    payload={"skills": skipped_skills},
+                )
+        if not hook_skill_ids:
+            return []
+        if not self._ensure_post_task_proposal_skills_materialized(
+            job_id=job.id,
+            prepared=prepared,
+            selected_skills=selected_skills,
+            hook_skill_ids=hook_skill_ids,
+        ):
+            await self._emit_event(
+                job_id=job.id,
+                level="warn",
+                message="task.proposalSkill.materializationFailed",
+                payload={"skills": list(hook_skill_ids)},
+            )
+            return []
+
+        proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
+        proposal_output_path.write_text("[]\n", encoding="utf-8")
+        proposal_output_relative = "../artifacts/task_proposals.json"
+        cancel_event = getattr(self, "_active_cancel_event", None)
+        (prepared.artifacts_dir / "codex_exec.log").unlink(missing_ok=True)
+        (prepared.artifacts_dir / "changes.patch").unlink(missing_ok=True)
+
+        collected: list[ArtifactUpload] = []
+        for skill_index, skill_id in enumerate(hook_skill_ids):
+            await self._raise_if_cancel_requested(cancel_event=cancel_event)
+            await self._emit_event(
+                job_id=job.id,
+                level="info",
+                message="task.proposalSkill.started",
+                payload={"skillId": skill_id},
+            )
+            skill_args = {
+                "jobId": str(job.id),
+                "repository": str(canonical_payload.get("repository") or "").strip(),
+                "runtimeMode": runtime_mode,
+                "taskStatus": "succeeded" if task_result.succeeded else "failed",
+                "taskSummary": str(task_result.summary or ""),
+                "taskError": str(task_result.error_message or ""),
+                "taskContextPath": "../artifacts/task_context.json",
+                "artifactsPath": "../artifacts",
+                "proposalOutputPath": proposal_output_relative,
+            }
+            try:
+                proposal_log_callback = self._build_live_log_chunk_callback(
+                    job_id=job.id,
+                    stage="moonmind.task.proposals",
+                    step_id=skill_id,
+                    step_index=skill_index,
+                )
+                instruction = self._compose_post_task_proposal_instruction(
+                    canonical_payload=canonical_payload,
+                    task_result=task_result,
+                    skill_id=skill_id,
+                    proposal_output_path=proposal_output_relative,
+                )
+                if runtime_mode == "codex":
+                    skill_result = await self._codex_exec_handler.handle_skill(
+                        job_id=job.id,
+                        payload=self._build_skill_payload(
+                            canonical_payload=canonical_payload,
+                            selected_skill=skill_id,
+                            source_payload=source_payload,
+                            instruction_override=instruction,
+                            skill_args_override=skill_args,
+                            ref_override=None,
+                            publish_mode_override="none",
+                            publish_base_override=None,
+                            workdir_mode_override="reuse",
+                            include_ref=False,
+                        ),
+                        selected_skill=skill_id,
+                        fallback=True,
+                        cancel_event=cancel_event,
+                        output_chunk_callback=proposal_log_callback,
+                    )
+                else:
+                    runtime_model, runtime_effort = self._resolve_runtime_overrides(
+                        canonical_payload=canonical_payload,
+                        runtime_mode=runtime_mode,
+                    )
+                    command = self._build_non_codex_runtime_command(
+                        runtime_mode=runtime_mode,
+                        instruction=instruction,
+                        model=runtime_model,
+                        effort=runtime_effort,
+                    )
+                    runtime_env = self._build_non_codex_runtime_env(
+                        runtime_mode=runtime_mode
+                    )
+                    proposal_log_path = prepared.artifacts_dir / "codex_exec.log"
+                    await self._run_stage_command(
+                        command,
+                        cwd=prepared.repo_dir,
+                        log_path=proposal_log_path,
+                        env=runtime_env,
+                    )
+                    skill_result = WorkerExecutionResult(
+                        succeeded=True,
+                        summary=f"{runtime_mode} proposal skill execution completed",
+                        error_message=None,
+                        artifacts=(),
+                    )
+            except CommandCancelledError:
+                raise
+            except Exception:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="warn",
+                    message="task.proposalSkill.failed",
+                    payload={"skillId": skill_id},
+                )
+                logger.exception(
+                    "Post-task proposal skill failed for job %s skill=%s",
+                    job.id,
+                    skill_id,
+                )
+                continue
+
+            collected.extend(
+                self._normalize_post_task_proposal_artifacts(
+                    prepared=prepared,
+                    skill_id=skill_id,
+                )
+            )
+            await self._emit_event(
+                job_id=job.id,
+                level="info" if skill_result.succeeded else "warn",
+                message="task.proposalSkill.finished",
+                payload={
+                    "skillId": skill_id,
+                    "succeeded": skill_result.succeeded,
+                    "summary": skill_result.summary,
+                    "error": skill_result.error_message,
+                },
+            )
+
+        if proposal_output_path.exists():
+            collected.append(
+                ArtifactUpload(
+                    path=proposal_output_path,
+                    name="task_proposals.json",
+                    content_type="application/json",
+                    required=False,
+                )
+            )
+
+        deduped: list[ArtifactUpload] = []
+        seen_names: set[str] = set()
+        for artifact in collected:
+            if artifact.name in seen_names:
+                continue
+            seen_names.add(artifact.name)
+            deduped.append(artifact)
+        return deduped
 
     async def _run_execute_stage(
         self,
