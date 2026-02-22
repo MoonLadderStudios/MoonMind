@@ -1098,11 +1098,16 @@
 
   function setView(title, subtitle, body, options = {}) {
     const { showAutoRefreshControls = true } = options;
+    const normalizedSubtitle = String(subtitle || "").trim();
     root.innerHTML = `
       <div class="toolbar">
         <div>
           <h2 class="page-title">${escapeHtml(title)}</h2>
-          <p class="page-meta">${escapeHtml(subtitle)}</p>
+          ${
+            normalizedSubtitle
+              ? `<p class="page-meta">${escapeHtml(normalizedSubtitle)}</p>`
+              : ""
+          }
         </div>
         ${showAutoRefreshControls ? renderAutoRefreshControls() : ""}
       </div>
@@ -2006,7 +2011,7 @@
 
     setView(
       "Submit Queue Task",
-      `Create a typed Task job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
+      "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
@@ -2123,6 +2128,41 @@
       ...overrides,
     });
     const stepState = [createStepStateEntry()];
+    const isDefaultSkillSelection = (value) => {
+      const normalized = String(value || "").trim().toLowerCase();
+      return normalized === "" || normalized === "auto";
+    };
+    const shouldShowSkillArgs = (step) => !isDefaultSkillSelection(step?.skillId);
+    const clearSkillArgsForStep = (index) => {
+      if (index < 0 || index >= stepState.length) {
+        return;
+      }
+      stepState[index].skillArgs = "";
+      if (!stepsList) {
+        return;
+      }
+      const textarea = stepsList.querySelector(`[data-step-field="skillArgs"][data-step-index="${index}"]`);
+      if (textarea instanceof HTMLTextAreaElement) {
+        textarea.value = "";
+      }
+    };
+    const updateSkillArgsVisibility = (index) => {
+      if (!stepsList || index < 0 || index >= stepState.length) {
+        return;
+      }
+      const wrapper = stepsList.querySelector(
+        `[data-skill-args-index="${index}"]`,
+      );
+      if (!(wrapper instanceof HTMLElement)) {
+        return;
+      }
+      if (shouldShowSkillArgs(stepState[index])) {
+        wrapper.classList.remove("hidden");
+      } else {
+        clearSkillArgsForStep(index);
+        wrapper.classList.add("hidden");
+      }
+    };
     let appliedTemplateState = [];
     const renderStepEditor = () => {
       if (!stepsList) {
@@ -2149,6 +2189,11 @@
           const defaultHint = isPrimaryStep
             ? "Primary step skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
             : "Leave skill blank to inherit primary step defaults.";
+          const showSkillArgsField = shouldShowSkillArgs(step);
+          const skillArgsLabelClasses = ["queue-step-skill-args-field"];
+          if (!showSkillArgsField) {
+            skillArgsLabelClasses.push("hidden");
+          }
           return `
             <section class="queue-step-section stack" data-step-index="${index}">
               <div class="queue-step-header">
@@ -2219,7 +2264,7 @@
                   <span class="small">Merged into job <span class="inline-code">requiredCapabilities</span> when provided.</span>
                 </label>
               </div>
-              <label>Skill Args (optional JSON object)
+              <label class="${skillArgsLabelClasses.join(" ")}" data-skill-args-index="${index}">Skill Args (optional JSON object)
                 <textarea class="queue-step-skill-args" data-step-field="skillArgs" data-step-index="${index}" placeholder='{"notes":"optional context"}'>${escapeHtml(
                   step.skillArgs,
                 )}</textarea>
@@ -2312,6 +2357,9 @@
           return;
         }
         stepState[index][field] = fieldInput.value || "";
+        if (field === "skillId") {
+          updateSkillArgsVisibility(index);
+        }
         if (
           field === "instructions" &&
           stepState[index].templateStepId &&
@@ -3004,7 +3052,9 @@
       }
 
       const skillId = String(primaryStep.skillId || "").trim() || "auto";
-      const skillArgsRaw = String(primaryStep.skillArgs || "").trim();
+      const skillArgsRaw = shouldShowSkillArgs(primaryStep)
+        ? String(primaryStep.skillArgs || "").trim()
+        : "";
       const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
         primaryStep.skillRequiredCapabilities || "",
       );
@@ -3033,7 +3083,9 @@
         const rawStep = stepState[index] || {};
         const stepInstructions = String(rawStep.instructions || "").trim();
         const stepSkillId = String(rawStep.skillId || "").trim();
-        const stepSkillArgsRaw = String(rawStep.skillArgs || "").trim();
+        const stepSkillArgsRaw = shouldShowSkillArgs(rawStep)
+          ? String(rawStep.skillArgs || "").trim()
+          : "";
         const stepSkillCaps = parseCapabilitiesCsv(rawStep.skillRequiredCapabilities || "");
         const hasStepContent =
           Boolean(stepInstructions) ||
