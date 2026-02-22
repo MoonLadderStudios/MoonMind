@@ -271,7 +271,9 @@ def _serialize_job_for_list(
 ) -> JobModel:
     if not compact_payload:
         return _serialize_job(job)
-    payload = _summarize_job_payload(job.payload) if isinstance(job.payload, dict) else {}
+    payload = (
+        _summarize_job_payload(job.payload) if isinstance(job.payload, dict) else {}
+    )
     return _build_job_model(job=job, payload=payload)
 
 
