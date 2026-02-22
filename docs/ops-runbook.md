@@ -32,3 +32,10 @@ Use `./tools/auth-gemini-volume.sh` once per environment to bootstrap OAuth cred
 - **Pre-flight visibility**: The Docker-based login probe emits `Codex pre-flight check passed/failed` log lines that include `codex_volume`, the Docker exit code, and the condensed CLI output. Use these messages to pinpoint shards that need re-authentication before rerunning the workflow.
 - **Structured extras**: Failures propagate structured `details=` entries (for example `codex_task_id`, `codex_preflight_status`, `codex_queue`). Forward worker logs to a JSON-aware sink so these extras remain queryable when triaging routing or credential issues.
 - **Retry procedure**: When a run fails, POST `/api/workflows/speckit/runs/{id}/retry` with `{"mode": "resume_failed_task"}` to re-enter the chain at the failed step. If credentials were corrected, the resumed task will reuse prior Codex logs and patch paths; otherwise the logs will immediately surface the credential error with the same run_id for continuity.
+
+## Queue Job Recovery
+
+- **Wall-clock timeout** (`AGENT_JOB_MAX_RUNTIME_SECONDS`, default 4h): once a job exceeds this runtime the API marks it for cancellation, emits a `task.safeguard.runtime_timeout` event, and workers exit during their next heartbeat instead of running indefinitely.
+- **Stale lease detection** (`AGENT_JOB_STALE_LEASE_GRACE_SECONDS`, default 5m): running jobs whose leases expired beyond this grace window are surfaced as `staleRunning` so you can decide whether to pause or restart workers before resuming claims.
+- **Telemetry endpoint**: call `GET /api/queue/telemetry/safeguards` (or use the dashboard Tasks view) to list timed-out and stale jobs along with runtime/lease deltas.
+- **Operator recovery**: use `POST /api/queue/jobs/{jobId}/recover` with `{"mode":"cancel"}` to stop a stuck job in place, or `{"mode":"clone"}` to cancel _and_ clone the payload into a fresh queued job. Each invocation emits `task.safeguard.recovery.*` events for audit trails.

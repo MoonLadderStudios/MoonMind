@@ -51,6 +51,10 @@ from moonmind.schemas.agent_queue_models import (
     JobListResponse,
     JobModel,
     MigrationTelemetryResponse,
+    QueueSafeguardJobModel,
+    QueueSafeguardResponse,
+    RecoverJobRequest,
+    RecoverJobResponse,
     RevokeTaskRunLiveSessionRequest,
     TaskRunControlEventModel,
     TaskRunControlRequest,
@@ -82,6 +86,8 @@ from moonmind.workflows.agent_queue.service import (
     LiveSessionNotFoundError,
     LiveSessionStateError,
     QueueMigrationTelemetry,
+    QueueSafeguardJob,
+    QueueSafeguardSnapshot,
     QueueSystemMetadata,
     WorkerAuthPolicy,
 )
@@ -113,6 +119,19 @@ async def _get_service(
     repository: AgentQueueRepository = Depends(_get_repository),
 ) -> AgentQueueService:
     return AgentQueueService(repository)
+
+
+def _require_queue_operator(user: User) -> None:
+    """Require superuser role for queue operator-only endpoints."""
+
+    if not bool(getattr(user, "is_superuser", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "operator_role_required",
+                "message": "Operator privileges are required.",
+            },
+        )
 
 
 def _serialize_job(
@@ -182,6 +201,23 @@ def _serialize_event(event: models.AgentJobEvent) -> JobEventModel:
 
 def _serialize_worker_token(token: models.AgentWorkerToken) -> WorkerTokenModel:
     return WorkerTokenModel.model_validate(token)
+
+
+def _serialize_safeguard_job(
+    entry: QueueSafeguardJob,
+) -> QueueSafeguardJobModel:
+    job = entry.job
+    return QueueSafeguardJobModel(
+        id=job.id,
+        status=job.status,
+        claimed_by=job.claimed_by,
+        started_at=job.started_at,
+        lease_expires_at=job.lease_expires_at,
+        cancel_requested_at=job.cancel_requested_at,
+        cancel_reason=job.cancel_reason,
+        runtime_seconds=entry.runtime_seconds,
+        lease_overdue_seconds=entry.lease_overdue_seconds,
+    )
 
 
 def _coerce_summary_text(
@@ -568,6 +604,33 @@ async def migration_telemetry(
     )
 
 
+@router.get("/telemetry/safeguards", response_model=QueueSafeguardResponse)
+async def queue_safeguards(
+    *,
+    limit: int = Query(200, ge=1, le=500),
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> QueueSafeguardResponse:
+    """Return queue safeguard alerts for operator triage."""
+
+    _require_queue_operator(user)
+
+    try:
+        snapshot: QueueSafeguardSnapshot = await service.get_queue_safeguard_snapshot(
+            limit=limit
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    return QueueSafeguardResponse(
+        generated_at=snapshot.generated_at,
+        max_runtime_seconds=snapshot.max_runtime_seconds,
+        stale_lease_grace_seconds=snapshot.stale_lease_grace_seconds,
+        timed_out=[_serialize_safeguard_job(entry) for entry in snapshot.timed_out],
+        stale_leases=[_serialize_safeguard_job(entry) for entry in snapshot.stale],
+    )
+
+
 @router.get("/jobs/{job_id}", response_model=JobModel)
 async def get_job(
     job_id: UUID,
@@ -731,6 +794,31 @@ async def ack_cancel_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)
+
+
+@router.post("/jobs/{job_id}/recover", response_model=RecoverJobResponse)
+async def recover_job(
+    job_id: UUID,
+    payload: RecoverJobRequest,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RecoverJobResponse:
+    """Cancel a stuck job and optionally clone a replacement."""
+
+    try:
+        recovered, cloned = await service.recover_job(
+            job_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+            actor_is_operator=bool(getattr(user, "is_superuser", False)),
+            mode=payload.mode,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    return RecoverJobResponse(
+        recovered_job=_serialize_job(recovered),
+        cloned_job=_serialize_job(cloned) if cloned else None,
+    )
 
 
 @router.post(

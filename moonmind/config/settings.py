@@ -146,6 +146,24 @@ class SpecWorkflowSettings(BaseSettings):
         description="Maximum allowed artifact upload size in bytes for queue jobs.",
         gt=0,
     )
+    agent_job_max_runtime_seconds: int = Field(
+        4 * 3600,
+        env="AGENT_JOB_MAX_RUNTIME_SECONDS",
+        description=(
+            "Maximum wall-clock runtime (seconds) a queue job may run before it is"
+            " automatically timed out."
+        ),
+        ge=300,
+    )
+    agent_job_stale_lease_grace_seconds: int = Field(
+        300,
+        env="AGENT_JOB_STALE_LEASE_GRACE_SECONDS",
+        description=(
+            "Grace period (seconds) after a lease expires before the job is reported"
+            " as stale-running to operators."
+        ),
+        ge=60,
+    )
     allow_manifest_path_source: bool = Field(
         False,
         env="MOONMIND_ALLOW_MANIFEST_PATH_SOURCE",

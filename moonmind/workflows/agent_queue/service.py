@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import re
@@ -26,6 +27,7 @@ from moonmind.workflows.agent_queue.manifest_contract import (
     normalize_manifest_job_payload,
 )
 from moonmind.workflows.agent_queue.repositories import (
+    AgentJobStateError,
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
 )
@@ -176,6 +178,26 @@ class QueueSystemResponse:
     system: QueueSystemMetadata
 
 
+@dataclass(frozen=True, slots=True)
+class QueueSafeguardJob:
+    """Snapshot of a job violating one or more safeguards."""
+
+    job: models.AgentJob
+    runtime_seconds: int | None
+    lease_overdue_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class QueueSafeguardSnapshot:
+    """Aggregate Safeguard summary returned to operators."""
+
+    generated_at: datetime
+    max_runtime_seconds: int
+    stale_lease_grace_seconds: int
+    timed_out: tuple[QueueSafeguardJob, ...]
+    stale: tuple[QueueSafeguardJob, ...]
+
+
 class AgentQueueService:
     """Application service exposing validated queue operations."""
 
@@ -187,6 +209,8 @@ class AgentQueueService:
         artifact_max_bytes: int | None = None,
         retry_backoff_base_seconds: int = 15,
         retry_backoff_max_seconds: int = 600,
+        max_runtime_seconds: int | None = None,
+        stale_lease_grace_seconds: int | None = None,
     ) -> None:
         self._repository = repository
         self._artifact_storage = artifact_storage or AgentQueueArtifactStorage(
@@ -202,6 +226,21 @@ class AgentQueueService:
         self._retry_backoff_max_seconds = max(
             self._retry_backoff_base_seconds,
             int(retry_backoff_max_seconds),
+        )
+        default_runtime = int(settings.spec_workflow.agent_job_max_runtime_seconds)
+        default_stale_grace = int(
+            settings.spec_workflow.agent_job_stale_lease_grace_seconds
+        )
+        self._max_runtime_seconds = max(
+            0, default_runtime if max_runtime_seconds is None else max_runtime_seconds
+        )
+        self._stale_lease_grace_seconds = max(
+            0,
+            (
+                default_stale_grace
+                if stale_lease_grace_seconds is None
+                else stale_lease_grace_seconds
+            ),
         )
 
     @staticmethod
@@ -467,6 +506,7 @@ class AgentQueueService:
         if lease_seconds < 1:
             raise AgentQueueValidationError("leaseSeconds must be >= 1")
 
+        now = datetime.now(UTC)
         job = await self._repository.heartbeat(
             job_id=job_id,
             worker_id=worker,
@@ -478,6 +518,7 @@ class AgentQueueService:
             message="Heartbeat received",
             payload={"workerId": worker, "leaseSeconds": lease_seconds},
         )
+        await self._maybe_trigger_runtime_timeout(job=job, now=now)
         await self._repository.commit()
         metadata = await self._load_system_metadata()
         return QueueSystemResponse(job=job, system=metadata)
@@ -1288,6 +1329,127 @@ class AgentQueueService:
         await self._repository.commit()
         return event
 
+    async def recover_job(
+        self,
+        *,
+        job_id: UUID,
+        actor_user_id: UUID | None,
+        actor_is_operator: bool = False,
+        mode: Literal["cancel", "clone"],
+    ) -> tuple[models.AgentJob, models.AgentJob | None]:
+        """Request cancellation and optionally clone a replacement job."""
+
+        job = await self._repository.require_job_for_update(job_id)
+        if not actor_is_operator:
+            await self._assert_task_run_user_access(
+                task_run_id=job_id,
+                actor_user_id=actor_user_id,
+            )
+        if job.status not in {
+            models.AgentJobStatus.RUNNING,
+            models.AgentJobStatus.QUEUED,
+        }:
+            raise AgentJobStateError(
+                f"Job {job_id} is {job.status.value} and cannot be recovered"
+            )
+
+        now = datetime.now(UTC)
+        reason = "Operator recovery requested"
+        if job.status is models.AgentJobStatus.RUNNING:
+            if job.cancel_requested_at is None:
+                job.cancel_requested_at = now
+                job.cancel_requested_by_user_id = actor_user_id
+                job.cancel_reason = reason
+        else:
+            job.status = models.AgentJobStatus.CANCELLED
+            job.cancel_requested_at = now
+            job.cancel_requested_by_user_id = actor_user_id
+            job.cancel_reason = reason
+            job.finished_at = now
+            job.claimed_by = None
+            job.lease_expires_at = None
+            job.next_attempt_at = None
+        job.updated_at = now
+        await self._repository.append_event(
+            job_id=job.id,
+            level=models.AgentJobEventLevel.WARN,
+            message="task.safeguard.recovery.requested",
+            payload={
+                "actorUserId": str(actor_user_id) if actor_user_id else None,
+                "mode": mode,
+            },
+        )
+
+        cloned_job: models.AgentJob | None = None
+        if mode == "clone":
+            source_payload = job.payload if isinstance(job.payload, dict) else {}
+            cloned_job = await self.create_job(
+                job_type=job.type,
+                payload=copy.deepcopy(source_payload),
+                priority=job.priority,
+                created_by_user_id=actor_user_id or job.created_by_user_id,
+                requested_by_user_id=actor_user_id or job.requested_by_user_id,
+                affinity_key=job.affinity_key,
+                max_attempts=job.max_attempts,
+            )
+            await self._repository.append_event(
+                job_id=cloned_job.id,
+                level=models.AgentJobEventLevel.INFO,
+                message="task.safeguard.recovery.cloned",
+                payload={"sourceJobId": str(job.id)},
+            )
+
+        await self._repository.commit()
+        return job, cloned_job
+
+    async def get_queue_safeguard_snapshot(
+        self,
+        *,
+        limit: int = 200,
+    ) -> QueueSafeguardSnapshot:
+        """Return jobs matching safeguard alerts for operator review."""
+
+        now = datetime.now(UTC)
+        running_jobs = await self._repository.list_running_jobs(limit=limit)
+        timed_out: list[QueueSafeguardJob] = []
+        stale: list[QueueSafeguardJob] = []
+
+        for job in running_jobs:
+            runtime_seconds = self._job_runtime_seconds(job, now=now)
+            lease_overdue = self._job_lease_overdue_seconds(job, now=now)
+            if (
+                self._max_runtime_seconds > 0
+                and runtime_seconds is not None
+                and runtime_seconds >= self._max_runtime_seconds
+            ):
+                timed_out.append(
+                    QueueSafeguardJob(
+                        job=job,
+                        runtime_seconds=runtime_seconds,
+                        lease_overdue_seconds=lease_overdue,
+                    )
+                )
+            if (
+                self._stale_lease_grace_seconds > 0
+                and lease_overdue is not None
+                and lease_overdue >= self._stale_lease_grace_seconds
+            ):
+                stale.append(
+                    QueueSafeguardJob(
+                        job=job,
+                        runtime_seconds=runtime_seconds,
+                        lease_overdue_seconds=lease_overdue,
+                    )
+                )
+
+        return QueueSafeguardSnapshot(
+            generated_at=now,
+            max_runtime_seconds=self._max_runtime_seconds,
+            stale_lease_grace_seconds=self._stale_lease_grace_seconds,
+            timed_out=tuple(timed_out),
+            stale=tuple(stale),
+        )
+
     async def issue_worker_token(
         self,
         *,
@@ -1696,3 +1858,74 @@ class AgentQueueService:
                 ):
                     return "failed"
         return "unknown"
+
+    @staticmethod
+    def _coerce_utc(dt: datetime) -> datetime:
+        """Normalize persisted timestamps to UTC-aware datetimes."""
+
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+
+    def _job_runtime_seconds(
+        self,
+        job: models.AgentJob,
+        *,
+        now: datetime,
+    ) -> int | None:
+        if job.started_at is None:
+            return None
+        started_at = self._coerce_utc(job.started_at)
+        return int((now - started_at).total_seconds())
+
+    def _job_lease_overdue_seconds(
+        self,
+        job: models.AgentJob,
+        *,
+        now: datetime,
+    ) -> int | None:
+        if job.lease_expires_at is None:
+            return None
+        lease_expires_at = self._coerce_utc(job.lease_expires_at)
+        if lease_expires_at >= now:
+            return None
+        return int((now - lease_expires_at).total_seconds())
+
+    async def _maybe_trigger_runtime_timeout(
+        self,
+        *,
+        job: models.AgentJob,
+        now: datetime,
+    ) -> None:
+        """Automatically request cancellation when runtime exceeds limit."""
+
+        if (
+            self._max_runtime_seconds <= 0
+            or job.started_at is None
+            or job.cancel_requested_at is not None
+            or job.status is not models.AgentJobStatus.RUNNING
+        ):
+            return
+
+        runtime_seconds = (now - job.started_at).total_seconds()
+        if runtime_seconds < self._max_runtime_seconds:
+            return
+
+        reason = (
+            f"Job exceeded max runtime ({self._max_runtime_seconds} seconds); "
+            "cancellation requested."
+        )
+        job.cancel_requested_at = now
+        job.cancel_requested_by_user_id = None
+        job.cancel_reason = reason
+        job.error_message = job.error_message or reason
+        job.updated_at = now
+        await self._repository.append_event(
+            job_id=job.id,
+            level=models.AgentJobEventLevel.ERROR,
+            message="task.safeguard.runtime_timeout",
+            payload={
+                "runtimeSeconds": int(runtime_seconds),
+                "maxRuntimeSeconds": self._max_runtime_seconds,
+            },
+        )
