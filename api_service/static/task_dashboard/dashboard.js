@@ -2348,7 +2348,7 @@
     let templateItems = [];
     const templateInputMemory = {};
     const preferredTemplateSlug = "speckit-orchestrate";
-    const templateScopeLoadOrder = ["global", "personal"];
+    const templateScopeLoadOrder = ["global", "team", "personal"];
 
     const setTemplateMessage = (text, isError = false) => {
       if (!templateMessage) {
@@ -2356,6 +2356,10 @@
       }
       templateMessage.className = isError ? "notice error" : "small";
       templateMessage.textContent = text;
+    };
+    const sanitizedErrorMessage = (error, fallback = "request failed") => {
+      const message = String(error?.message || "").trim();
+      return message || fallback;
     };
 
     const currentTemplateFeatureRequest = () =>
@@ -2462,20 +2466,26 @@
         return;
       }
       setTemplateMessage("Loading presets...");
-      const loadedItems = [];
-      const failedScopes = [];
-      for (const scope of templateScopeLoadOrder) {
+      const scopeLoads = templateScopeLoadOrder.map(async (scope) => {
         const params = new URLSearchParams();
         params.set("scope", scope);
         try {
           const payload = await fetchJson(`${taskTemplateEndpoints.list}?${params.toString()}`);
-          const items = Array.isArray(payload?.items) ? payload.items : [];
-          loadedItems.push(...items);
+          return {
+            scope,
+            items: Array.isArray(payload?.items) ? payload.items : [],
+            failed: false,
+          };
         } catch (error) {
-          console.error(`template list fetch failed (scope=${scope})`, error);
-          failedScopes.push(scope);
+          console.error(
+            `template list fetch failed (scope=${scope}): ${sanitizedErrorMessage(error)}`,
+          );
+          return { scope, items: [], failed: true };
         }
-      }
+      });
+      const scopeResults = await Promise.all(scopeLoads);
+      const loadedItems = scopeResults.flatMap((result) => result.items);
+      const failedScopes = scopeResults.filter((result) => result.failed).map((result) => result.scope);
       templateItems = loadedItems;
       renderTemplateSelect();
       if (failedScopes.length === templateScopeLoadOrder.length) {
@@ -2735,9 +2745,9 @@
           `Applied preset '${selected.title}' (${mappedSteps.length} steps).${autoFillSuffix}`,
         );
       } catch (error) {
-        console.error("template apply failed", error);
+        console.error(`template apply failed: ${sanitizedErrorMessage(error)}`);
         setTemplateMessage(
-          "Failed to apply preset: " + String(error?.message || "request failed"),
+          "Failed to apply preset: " + sanitizedErrorMessage(error),
           true,
         );
       }
@@ -2827,9 +2837,9 @@
         setTemplateMessage(`Saved preset '${created?.title || body.title}'. Reloading catalog...`);
         await fetchTemplateList();
       } catch (error) {
-        console.error("template save failed", error);
+        console.error(`template save failed: ${sanitizedErrorMessage(error)}`);
         setTemplateMessage(
-          "Failed to save preset: " + String(error?.message || "request failed"),
+          "Failed to save preset: " + sanitizedErrorMessage(error),
           true,
         );
       }
@@ -2838,20 +2848,20 @@
     if (templateApply instanceof HTMLButtonElement) {
       templateApply.addEventListener("click", () => {
         applySelectedTemplate().catch((error) => {
-          console.error("template apply failed", error);
+          console.error(`template apply failed: ${sanitizedErrorMessage(error)}`);
         });
       });
     }
     if (templateSaveCurrent instanceof HTMLButtonElement) {
       templateSaveCurrent.addEventListener("click", () => {
         saveCurrentStepsAsTemplate().catch((error) => {
-          console.error("template save-current failed", error);
+          console.error(`template save-current failed: ${sanitizedErrorMessage(error)}`);
         });
       });
     }
     if (taskTemplateCatalogEnabled) {
       fetchTemplateList().catch((error) => {
-        console.error("initial template load failed", error);
+        console.error(`initial template load failed: ${sanitizedErrorMessage(error)}`);
       });
     }
 
