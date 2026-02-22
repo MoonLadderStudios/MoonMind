@@ -371,7 +371,7 @@ form {
 
 .queue-submit-form {
   margin: 0 auto;
-  padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: 2.5rem;
 }
 
 label {
@@ -560,29 +560,19 @@ button.secondary:hover {
 }
 
 .queue-submit-actions {
-  position: fixed;
-  left: 50%;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.85rem);
-  transform: translateX(-50%);
-  z-index: 40;
-  width: min(760px, calc(100vw - 1.5rem));
+  position: static;
+  width: 100%;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-end;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.7rem;
-  padding: 0.65rem 0.72rem;
-  border: 1px solid rgb(var(--mm-border) / 0.88);
-  border-radius: 0.9rem;
-  background: rgb(var(--mm-panel) / 0.92);
-  box-shadow: 0 16px 34px -24px rgb(var(--mm-ink) / 0.75), 0 0 0 1px rgb(var(--mm-accent) / 0.14);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-  .queue-submit-actions {
-    background: rgb(var(--mm-panel) / 0.98);
-  }
+  margin-top: 0.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .queue-submit-actions-row {
@@ -592,6 +582,27 @@ button.secondary:hover {
 .queue-submit-message {
   margin: 0;
   min-height: 1.25rem;
+  flex: 1 1 auto;
+}
+
+.queue-submit-actions button[type="submit"] {
+  background: linear-gradient(135deg, rgb(var(--mm-accent-2)), rgb(var(--mm-ok)));
+  border-color: transparent;
+  box-shadow: 0 15px 32px -18px rgb(var(--mm-ok) / 0.9);
+}
+
+.queue-submit-actions button[type="submit"]:hover {
+  background: linear-gradient(
+    135deg,
+    rgb(var(--mm-accent-2) / 0.9),
+    rgb(var(--mm-ok) / 0.95)
+  );
+  box-shadow: 0 18px 36px -20px rgb(var(--mm-ok) / 0.95);
+  transform: translateY(-1px);
+}
+
+.queue-submit-actions button[type="submit"]:focus-visible {
+  outline-color: rgb(var(--mm-accent-2));
 }
 
 .queue-submit-message.notice {
@@ -666,11 +677,11 @@ button.secondary:hover {
   }
 
   .queue-submit-form {
-    padding-bottom: calc(9.5rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: 4rem;
   }
 
   .queue-submit-actions {
-    width: calc(100vw - 1rem);
+    position: static;
     flex-direction: column;
     align-items: stretch;
   }
