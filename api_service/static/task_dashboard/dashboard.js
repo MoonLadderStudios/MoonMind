@@ -207,6 +207,12 @@
   const defaultRepository = String(systemConfig.defaultRepository || "").trim();
   const defaultPublishMode =
     normalizePublishModeInput(systemConfig.defaultPublishMode) || "pr";
+  const defaultProposeTasks = Object.prototype.hasOwnProperty.call(
+    systemConfig,
+    "defaultProposeTasks",
+  )
+    ? Boolean(systemConfig.defaultProposeTasks)
+    : true;
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const taskTemplateCatalogConfig =
     systemConfig.taskTemplateCatalog &&
@@ -2031,6 +2037,12 @@
             <input type="number" min="1" name="maxAttempts" value="3" />
           </label>
         </div>
+        <label class="checkbox">
+          <input type="checkbox" name="proposeTasks" ${
+            defaultProposeTasks ? "checked" : ""
+          } />
+          Propose Tasks
+        </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
           <button type="submit" class="queue-submit-primary">Submit</button>
@@ -2933,6 +2945,7 @@
         message.textContent = "Max Attempts must be an integer >= 1.";
         return;
       }
+      const proposeTasks = formData.get("proposeTasks") !== null;
 
       const skillId = String(primaryStep.skillId || "").trim() || "auto";
       const skillArgsRaw = shouldShowSkillArgs(primaryStep)
@@ -3108,6 +3121,7 @@
               ? { requiredCapabilities: taskSkillRequiredCapabilities }
               : {}),
           },
+          proposeTasks,
           runtime: { mode: runtimeMode, model, effort },
           git: { startingBranch, newBranch },
           publish: {

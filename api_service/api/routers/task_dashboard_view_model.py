@@ -176,6 +176,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultTaskModelByRuntime": default_task_model_by_runtime,
             "defaultTaskEffortByRuntime": default_task_effort_by_runtime,
             "defaultPublishMode": default_publish_mode,
+            "defaultProposeTasks": bool(settings.spec_workflow.enable_task_proposals),
             "queueEnv": "MOONMIND_QUEUE",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),
