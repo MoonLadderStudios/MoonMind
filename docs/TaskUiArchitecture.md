@@ -188,7 +188,6 @@ Current UI fields:
 - Publish mode (`pr` default, `branch`, `none`)
 - Queue priority
 - Max attempts
-- Optional affinity key
 
 Primary step:
 
@@ -223,7 +222,7 @@ The submit flow:
 3. Optionally includes:
    - `task.steps`
    - `task.appliedStepTemplates` metadata
-4. Emits queue create envelope with `type`, `payload`, `priority`, `maxAttempts`, and optional `affinityKey`.
+4. Emits queue create envelope with `type`, `payload`, `priority`, and `maxAttempts`.
 
 Security constraint:
 
@@ -237,7 +236,6 @@ Example emitted request body:
   "type": "task",
   "priority": 0,
   "maxAttempts": 3,
-  "affinityKey": "optional-key",
   "payload": {
     "repository": "MoonLadderStudios/MoonMind",
     "requiredCapabilities": ["codex", "git", "gh"],
