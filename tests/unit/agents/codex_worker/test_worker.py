@@ -1261,7 +1261,9 @@ async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
                 / "gate.json"
             )
             gate_path.parent.mkdir(parents=True, exist_ok=True)
-            gate_path.write_text(json.dumps({"reason": "missing status field"}), encoding="utf-8")
+            gate_path.write_text(
+                json.dumps({"reason": "missing status field"}), encoding="utf-8"
+            )
             return await super().handle_skill(
                 job_id=job_id,
                 payload=payload,

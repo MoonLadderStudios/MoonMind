@@ -2843,7 +2843,9 @@ class CodexWorker:
         if source_allowed:
             reason = f"{gate_label} artifact is missing"
         else:
-            reason = f"{gate_label} artifact path is outside allowed artifacts directories"
+            reason = (
+                f"{gate_label} artifact path is outside allowed artifacts directories"
+            )
 
         source_payload: dict[str, Any] = {}
         if source_allowed and source_exists:
