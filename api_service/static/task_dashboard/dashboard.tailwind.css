@@ -372,7 +372,7 @@ form {
 .queue-submit-form {
   width: 100%;
   max-width: 100%;
-  padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: 0;
 }
 
 label {
@@ -560,36 +560,6 @@ button.secondary:hover {
   flex-wrap: wrap;
 }
 
-.queue-submit-actions {
-  position: fixed;
-  left: 50%;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.85rem);
-  transform: translateX(-50%);
-  z-index: 40;
-  width: min(1100px, calc(100vw - 1.5rem));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.7rem;
-  padding: 0.65rem 0.72rem;
-  border: 1px solid rgb(var(--mm-border) / 0.88);
-  border-radius: 0.9rem;
-  background: rgb(var(--mm-panel) / 0.92);
-  box-shadow: 0 16px 34px -24px rgb(var(--mm-ink) / 0.75), 0 0 0 1px rgb(var(--mm-accent) / 0.14);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-  .queue-submit-actions {
-    background: rgb(var(--mm-panel) / 0.98);
-  }
-}
-
-.queue-submit-actions-row {
-  margin-left: auto;
-}
-
 .queue-submit-message {
   margin: 0;
   min-height: 1.25rem;
@@ -667,19 +637,7 @@ button.secondary:hover {
   }
 
   .queue-submit-form {
-    padding-bottom: calc(9.5rem + env(safe-area-inset-bottom, 0px));
-  }
-
-  .queue-submit-actions {
-    width: calc(100vw - 1rem);
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .queue-submit-actions-row {
-    margin-left: 0;
-    width: 100%;
-    justify-content: flex-end;
+    padding-bottom: 0;
   }
 
   th,

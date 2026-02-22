@@ -2064,11 +2064,9 @@
           <input name="affinityKey" placeholder="optional affinity key" />
         </label>
         <p class="small">Submission emits canonical <span class="inline-code">type="task"</span> payloads; server validation rejects malformed contracts.</p>
-        <div class="queue-submit-actions" role="group" aria-label="Queue submission actions">
+        <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <div class="actions queue-submit-actions-row">
-            <button type="submit">Submit</button>
-          </div>
+          <button type="submit">Submit</button>
         </div>
       </form>
       `,
