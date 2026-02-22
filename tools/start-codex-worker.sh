@@ -61,6 +61,32 @@ CAPABILITIES_RAW="${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker,proposals_
 normalize_csv() {
   printf '%s' "$1" | tr -d '[:space:]'
 }
+is_truthy() {
+  case "$(lower "$1")" in
+    1|true|yes|on)
+      return 0
+      ;;
+  esac
+  return 1
+}
+extract_policy_value() {
+  local policy="$1"
+  local key="$2"
+  printf '%s' "$policy" | tr ';' '\n' | awk -F= -v key="$key" '$1 == key {print $2; exit}'
+}
+PROPOSALS_ENABLED_RAW="${MOONMIND_ENABLE_TASK_PROPOSALS:-${ENABLE_TASK_PROPOSALS:-true}}"
+if is_truthy "$PROPOSALS_ENABLED_RAW"; then
+  PROPOSALS_ENABLED="true"
+else
+  PROPOSALS_ENABLED="false"
+fi
+CAPABILITIES_CSV="$(normalize_csv "$CAPABILITIES_RAW")"
+if [[ "$PROPOSALS_ENABLED" == "true" ]] && [[ ",$CAPABILITIES_CSV," != *",proposals_write,"* ]]; then
+  log "MOONMIND_ENABLE_TASK_PROPOSALS is enabled; adding proposals_write to MOONMIND_WORKER_CAPABILITIES for proposal support."
+  CAPABILITIES_RAW="${CAPABILITIES_RAW:+$CAPABILITIES_RAW,}proposals_write"
+  CAPABILITIES_CSV="$(normalize_csv "$CAPABILITIES_RAW")"
+fi
+export MOONMIND_WORKER_CAPABILITIES="$CAPABILITIES_CSV"
 desired_token_policy="allowed_types=$(normalize_csv "$ALLOWED_TYPES_RAW");capabilities=$(normalize_csv "$CAPABILITIES_RAW")"
 
 persist_token_policy_marker() {
@@ -81,7 +107,7 @@ persist_token_policy_marker() {
   return 0
 }
 
-if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
+  if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
   should_load_cached_token=true
   if [[ "$BOOTSTRAP" == "true" ]]; then
     if [[ ! -f "$TOKEN_POLICY_PATH" ]]; then
@@ -93,7 +119,11 @@ if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
       fi
     else
       cached_token_policy="$(tr -d '\r\n' <"$TOKEN_POLICY_PATH")"
-      if [[ "$cached_token_policy" != "$desired_token_policy" ]]; then
+      cached_token_capabilities="$(normalize_csv "$(extract_policy_value "$cached_token_policy" capabilities)")"
+      if [[ "$PROPOSALS_ENABLED" == "true" && -n "$cached_token_capabilities" && ",$cached_token_capabilities," != *",proposals_write,"* ]]; then
+        should_load_cached_token=false
+        log "Cached worker token policy is missing proposals_write while proposals are enabled; rotating token to refresh capabilities."
+      elif [[ "$cached_token_policy" != "$desired_token_policy" ]]; then
         if [[ "$ENFORCE_TOKEN_POLICY" == "true" ]]; then
           should_load_cached_token=false
           log "Cached worker token policy does not match configured allowed types/capabilities; rotating token because MOONMIND_WORKER_ENFORCE_TOKEN_POLICY=true."
