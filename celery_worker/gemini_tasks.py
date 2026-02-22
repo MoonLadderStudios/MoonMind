@@ -45,8 +45,6 @@ def _resolve_gemini_cli_auth_mode() -> str:
 
 @celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)
 def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
-@celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)
-def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
     """Invoke Gemini CLI to generate content."""
     logger.info("Starting Gemini generation")
 
