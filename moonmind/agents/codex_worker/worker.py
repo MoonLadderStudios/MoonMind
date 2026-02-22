@@ -4563,8 +4563,23 @@ class CodexWorker:
 
         if not self._config.enable_task_proposals:
             return
-        proposals_path = prepared.task_context_path / "task_proposals.json"
-        if not proposals_path.exists():
+        task_context_path = prepared.task_context_path
+        proposals_paths = [task_context_path / "task_proposals.json"]
+        if task_context_path.suffix == ".json":
+            proposals_paths.insert(
+                0,
+                task_context_path.with_name("task_proposals.json"),
+            )
+        proposals_path = next(
+            (path for path in proposals_paths if path.exists()),
+            None,
+        )
+        if proposals_path is None:
+            logger.debug(
+                "No task proposal artifact found for job %s; searched %s",
+                job.id,
+                ", ".join(str(path) for path in proposals_paths),
+            )
             return
         try:
             raw_text = proposals_path.read_text(encoding="utf-8")

@@ -2060,9 +2060,6 @@
             <input type="number" min="1" name="maxAttempts" value="3" />
           </label>
         </div>
-        <label>Affinity Key (optional)
-          <input name="affinityKey" placeholder="optional affinity key" />
-        </label>
         <p class="small">Submission emits canonical <span class="inline-code">type="task"</span> payloads; server validation rejects malformed contracts.</p>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
@@ -2972,7 +2969,6 @@
         return;
       }
 
-      const affinityKey = String(formData.get("affinityKey") || "").trim();
       const rawRuntime = String(formData.get("runtime") || "").trim();
       const runtimeCandidate = rawRuntime || defaultTaskRuntime;
       const runtimeMode = normalizeTaskRuntimeInput(runtimeCandidate);
@@ -3199,9 +3195,6 @@
         priority,
         maxAttempts,
       };
-      if (affinityKey) {
-        requestBody.affinityKey = affinityKey;
-      }
 
       try {
         const created = await fetchJson("/api/queue/jobs", {
