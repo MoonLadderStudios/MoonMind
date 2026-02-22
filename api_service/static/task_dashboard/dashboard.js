@@ -1957,46 +1957,16 @@
           <div class="actions">
             <strong>Task Presets (optional)</strong>
           </div>
-          <div class="grid-2">
-            <label>Scope
-              <select id="queue-template-scope">
-                <option value="global">global</option>
-                <option value="personal">personal</option>
-                <option value="team">team</option>
-              </select>
-            </label>
-            <label>Scope Ref (optional)
-              <input id="queue-template-scope-ref" placeholder="team-id (team scope only)" />
-            </label>
-          </div>
-          <div class="grid-2">
-            <label>Search
-              <input id="queue-template-search" placeholder="filter by title, slug, tags" />
-            </label>
-            <label>Preset
-              <select id="queue-template-select">
-                <option value="">Select preset...</option>
-              </select>
-            </label>
-          </div>
+          <label>Preset
+            <select id="queue-template-select">
+              <option value="">Select preset...</option>
+            </select>
+          </label>
           <label>Feature Request / Initial Instructions
             <textarea id="queue-template-feature-request" placeholder="Describe the feature request this preset should execute."></textarea>
             <span class="small">Used as <span class="inline-code">feature_request</span> input when required by the preset. If left blank, the primary step instructions are used.</span>
           </label>
-          <div class="grid-2">
-            <label>Apply Mode
-              <select id="queue-template-apply-mode">
-                <option value="append">append</option>
-                <option value="replace">replace</option>
-              </select>
-            </label>
-            <label>Version
-              <input id="queue-template-version" readonly />
-            </label>
-          </div>
           <div class="actions">
-            <button type="button" id="queue-template-reload">Reload Presets</button>
-            <button type="button" id="queue-template-preview">Preview</button>
             <button type="button" id="queue-template-apply">Apply</button>
             ${
               taskTemplateSaveEnabled
@@ -2052,9 +2022,6 @@
             <option value="branch" ${defaultPublishMode === "branch" ? "selected" : ""}>branch</option>
             <option value="none" ${defaultPublishMode === "none" ? "selected" : ""}>none</option>
           </select>
-          <span class="small">Defaults: no branch fields resolve at execution time; publish default is <span class="inline-code">${escapeHtml(
-            defaultPublishMode,
-          )}</span>.</span>
         </label>
         <div class="grid-2">
           <label>Priority
@@ -2064,10 +2031,9 @@
             <input type="number" min="1" name="maxAttempts" value="3" />
           </label>
         </div>
-        <p class="small">Submission emits canonical <span class="inline-code">type="task"</span> payloads; server validation rejects malformed contracts.</p>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <button type="submit">Submit</button>
+          <button type="submit" class="queue-submit-primary">Submit</button>
         </div>
       </form>
       `,
@@ -2173,7 +2139,7 @@
         .map((step, index) => {
           const isPrimaryStep = index === 0;
           const stepLabel = isPrimaryStep ? " (Primary)" : "";
-          const skillLabel = isPrimaryStep ? "Skill (default)" : "Skill (optional)";
+          const skillLabel = "Skill (optional)";
           const skillPlaceholder = isPrimaryStep
             ? "auto (default), speckit-orchestrate, ..."
             : "inherit primary step skill";
@@ -2187,7 +2153,7 @@
           const downDisabled = index === stepState.length - 1 ? "disabled" : "";
           const removeDisabled = "";
           const defaultHint = isPrimaryStep
-            ? "Primary step skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
+            ? "Leave blank to auto-select a skill."
             : "Leave skill blank to inherit primary step defaults.";
           const showSkillArgsField = shouldShowSkillArgs(step);
           const skillArgsLabelClasses = ["queue-step-skill-args-field"];
@@ -2261,7 +2227,6 @@
                   <input data-step-field="skillRequiredCapabilities" data-step-index="${index}" value="${escapeHtml(
                     step.skillRequiredCapabilities,
                   )}" placeholder="docker,qdrant,unity" />
-                  <span class="small">Merged into job <span class="inline-code">requiredCapabilities</span> when provided.</span>
                 </label>
               </div>
               <label class="${skillArgsLabelClasses.join(" ")}" data-skill-args-index="${index}">Skill Args (optional JSON object)
@@ -2376,21 +2341,14 @@
     });
 
     const templateMessage = document.getElementById("queue-template-message");
-    const templateScope = document.getElementById("queue-template-scope");
-    const templateScopeRef = document.getElementById("queue-template-scope-ref");
-    const templateSearch = document.getElementById("queue-template-search");
     const templateSelect = document.getElementById("queue-template-select");
     const templateFeatureRequest = document.getElementById("queue-template-feature-request");
-    const templateVersion = document.getElementById("queue-template-version");
-    const templateApplyMode = document.getElementById("queue-template-apply-mode");
-    const templateReload = document.getElementById("queue-template-reload");
-    const templatePreview = document.getElementById("queue-template-preview");
     const templateApply = document.getElementById("queue-template-apply");
     const templateSaveCurrent = document.getElementById("queue-template-save-current");
     let templateItems = [];
     const templateInputMemory = {};
     const preferredTemplateSlug = "speckit-orchestrate";
-    const preferredTemplateVersion = "1.0.0";
+    const templateScopeLoadOrder = ["global", "team", "personal"];
 
     const setTemplateMessage = (text, isError = false) => {
       if (!templateMessage) {
@@ -2399,17 +2357,11 @@
       templateMessage.className = isError ? "notice error" : "small";
       templateMessage.textContent = text;
     };
+    const sanitizedErrorMessage = (error, fallback = "request failed") => {
+      const message = String(error?.message || "").trim();
+      return message || fallback;
+    };
 
-    const currentTemplateScope = () =>
-      templateScope instanceof HTMLSelectElement ? templateScope.value : "global";
-    const currentTemplateScopeRef = () =>
-      templateScopeRef instanceof HTMLInputElement
-        ? String(templateScopeRef.value || "").trim()
-        : "";
-    const currentTemplateSearch = () =>
-      templateSearch instanceof HTMLInputElement
-        ? String(templateSearch.value || "").trim()
-        : "";
     const currentTemplateFeatureRequest = () =>
       templateFeatureRequest instanceof HTMLTextAreaElement
         ? String(templateFeatureRequest.value || "").trim()
@@ -2459,27 +2411,33 @@
       }
       return primaryInstructions;
     };
-    const templateVersionForItem = (item) =>
-      String(item?.latestVersion || item?.version || "1.0.0").trim();
-    const preferredTemplateFrom = (items) => {
-      const exact = items.find(
-        (item) =>
-          String(item?.slug || "").trim() === preferredTemplateSlug &&
-          templateVersionForItem(item) === preferredTemplateVersion,
-      );
-      if (exact) {
-        return exact;
-      }
-      return (
-        items.find((item) => String(item?.slug || "").trim() === preferredTemplateSlug) || null
-      );
+    const templateItemKey = (item) => {
+      const scope = String(item?.scope || "global").trim();
+      const scopeRef = String(item?.scopeRef || "").trim();
+      const slug = String(item?.slug || "").trim();
+      return `${scope}::${scopeRef}::${slug}`;
     };
-    const syncTemplateVersion = () => {
-      if (!(templateVersion instanceof HTMLInputElement)) {
-        return;
+    const scopeLabelForItem = (item) => {
+      const scope = String(item?.scope || "").trim().toLowerCase();
+      if (scope === "personal") {
+        return "Personal";
       }
-      const selected = selectedTemplate();
-      templateVersion.value = selected ? templateVersionForItem(selected) : "";
+      if (scope === "team") {
+        return "Team";
+      }
+      return "Global";
+    };
+    const preferredTemplateFrom = (items) => {
+      const slugMatches = items.filter(
+        (item) => String(item?.slug || "").trim() === preferredTemplateSlug,
+      );
+      if (slugMatches.length === 0) {
+        return items[0] || null;
+      }
+      const globalMatch = slugMatches.find(
+        (item) => String(item?.scope || "").trim().toLowerCase() === "global",
+      );
+      return globalMatch || slugMatches[0];
     };
 
     const renderTemplateSelect = () => {
@@ -2487,79 +2445,76 @@
         return;
       }
       const previousSelection = String(templateSelect.value || "").trim();
-      const searchFilter = currentTemplateSearch().toLowerCase();
-      const filtered = templateItems.filter((item) => {
-        if (!searchFilter) {
-          return true;
-        }
-        const haystack = `${item.slug} ${item.title} ${(item.tags || []).join(" ")}`.toLowerCase();
-        return haystack.includes(searchFilter);
+      const options = templateItems.map((item) => {
+        const labelScope = scopeLabelForItem(item);
+        const key = templateItemKey(item);
+        const optionLabel = labelScope ? `${item.title} (${labelScope})` : item.title;
+        return `<option value="${escapeHtml(key)}">${escapeHtml(optionLabel)}</option>`;
       });
-      templateSelect.innerHTML = [
-        '<option value="">Select preset...</option>',
-        ...filtered.map(
-          (item) =>
-            `<option value="${escapeHtml(item.slug)}">${escapeHtml(item.title)} (${escapeHtml(
-              templateVersionForItem(item),
-            )})</option>`,
-        ),
-      ].join("");
-      const hasPreviousSelection = filtered.some(
-        (item) => String(item?.slug || "").trim() === previousSelection,
+      templateSelect.innerHTML = ['<option value="">Select preset...</option>', ...options].join("");
+      const hasPreviousSelection = templateItems.some(
+        (item) => templateItemKey(item) === previousSelection,
       );
-      const preferredTemplate = preferredTemplateFrom(filtered);
-      const fallbackTemplate = filtered[0] || null;
-      const nextSelection = hasPreviousSelection
-        ? previousSelection
-        : String(
-            preferredTemplate?.slug ||
-              fallbackTemplate?.slug ||
-              "",
-          ).trim();
+      const preferredTemplate = preferredTemplateFrom(templateItems);
+      const fallbackSelection = preferredTemplate ? templateItemKey(preferredTemplate) : "";
+      const nextSelection = hasPreviousSelection ? previousSelection : fallbackSelection;
       templateSelect.value = nextSelection;
-      if (!nextSelection && filtered.length === 0) {
-        templateSelect.value = "";
-      }
-      syncTemplateVersion();
     };
 
     const fetchTemplateList = async () => {
       if (!taskTemplateCatalogEnabled) {
         return;
       }
-      const scope = currentTemplateScope();
-      const scopeRef = currentTemplateScopeRef();
-      const params = new URLSearchParams();
-      params.set("scope", scope);
-      if (scopeRef) {
-        params.set("scopeRef", scopeRef);
-      }
       setTemplateMessage("Loading presets...");
-      try {
-        const payload = await fetchJson(`${taskTemplateEndpoints.list}?${params.toString()}`);
-        templateItems = Array.isArray(payload?.items) ? payload.items : [];
-        renderTemplateSelect();
-        setTemplateMessage(`Loaded ${templateItems.length} presets.`);
-      } catch (error) {
-        console.error("template list fetch failed", error);
-        templateItems = [];
-        renderTemplateSelect();
+      const scopeLoads = templateScopeLoadOrder.map(async (scope) => {
+        const params = new URLSearchParams();
+        params.set("scope", scope);
+        try {
+          const payload = await fetchJson(`${taskTemplateEndpoints.list}?${params.toString()}`);
+          return {
+            scope,
+            items: Array.isArray(payload?.items) ? payload.items : [],
+            failed: false,
+          };
+        } catch (error) {
+          console.error(
+            `template list fetch failed (scope=${scope}): ${sanitizedErrorMessage(error)}`,
+          );
+          return { scope, items: [], failed: true };
+        }
+      });
+      const scopeResults = await Promise.all(scopeLoads);
+      const loadedItems = scopeResults.flatMap((result) => result.items);
+      const failedScopes = scopeResults.filter((result) => result.failed).map((result) => result.scope);
+      templateItems = loadedItems;
+      renderTemplateSelect();
+      if (failedScopes.length === templateScopeLoadOrder.length) {
+        setTemplateMessage("Failed to load presets: all scopes unavailable.", true);
+        return;
+      }
+      if (failedScopes.length > 0) {
         setTemplateMessage(
-          "Failed to load presets: " + String(error?.message || "request failed"),
+          `Loaded ${templateItems.length} presets (missing scopes: ${failedScopes.join(", ")}).`,
           true,
         );
+        return;
       }
+      setTemplateMessage(
+        templateItems.length > 0
+          ? `Loaded ${templateItems.length} presets.`
+          : "No presets available for your account.",
+      );
     };
 
     const selectedTemplate = () => {
       if (!(templateSelect instanceof HTMLSelectElement)) {
         return null;
       }
-      const slug = String(templateSelect.value || "").trim();
-      if (!slug) {
+      const selectedKey = String(templateSelect.value || "").trim();
+      if (!selectedKey) {
         return null;
       }
-      return templateItems.find((item) => String(item.slug || "").trim() === slug) || null;
+      return templateItems.find((item) => templateItemKey(item) === selectedKey) || null;
     };
 
     const resolveTemplateInputs = (inputs) => {
@@ -2719,20 +2674,20 @@
     const hasOnlyEmptyDefaultStep = () =>
       stepState.length === 1 && isEmptyStepStateEntry(stepState[0]);
 
-    const applySelectedTemplate = async ({ previewOnly }) => {
+    const applySelectedTemplate = async () => {
       const selected = selectedTemplate();
       if (!selected) {
         setTemplateMessage("Choose a preset first.", true);
         return;
       }
-      const scope = currentTemplateScope();
-      const scopeRef = currentTemplateScopeRef();
+      const scope = String(selected.scope || "global").trim() || "global";
+      const scopeRef = String(selected.scopeRef || "").trim();
       const scopeParams = new URLSearchParams({ scope });
       if (scopeRef) {
         scopeParams.set("scopeRef", scopeRef);
       }
 
-      setTemplateMessage(previewOnly ? "Loading preview..." : "Applying preset...");
+      setTemplateMessage("Applying preset...");
       try {
         const detail = await fetchJson(
           `${endpoint(taskTemplateEndpoints.detail, { slug: selected.slug })}?${scopeParams.toString()}`,
@@ -2750,39 +2705,9 @@
           },
         );
         const expandedSteps = Array.isArray(expanded?.steps) ? expanded.steps : [];
-        if (templateVersion instanceof HTMLInputElement) {
-          templateVersion.value = String(
-            expanded?.appliedTemplate?.version ||
-              detail?.version ||
-              detail?.latestVersion ||
-              selected.latestVersion ||
-              "",
-          );
-        }
-        if (previewOnly) {
-          const previewLines = expandedSteps.map((step, index) => {
-            const title = String(step?.title || "").trim() || `Step ${index + 1}`;
-            return `${index + 1}. ${title}`;
-          });
-          const warningText =
-            Array.isArray(expanded?.warnings) && expanded.warnings.length > 0
-              ? `\\nWarnings: ${expanded.warnings.join("; ")}`
-              : "";
-          window.alert(
-            `Preset preview (${expandedSteps.length} steps):\\n${previewLines.join(
-              "\\n",
-            )}${warningText}`,
-          );
-          setTemplateMessage(`Preview loaded (${expandedSteps.length} steps).`);
-          return;
-        }
-
         const mappedSteps = expandedSteps.map(mapExpandedStepToState);
-        const applyMode =
-          templateApplyMode instanceof HTMLSelectElement ? templateApplyMode.value : "append";
-        const shouldReplaceEmptyDefaultStep =
-          applyMode !== "replace" && hasOnlyEmptyDefaultStep();
-        if (applyMode === "replace" || shouldReplaceEmptyDefaultStep) {
+        const shouldReplaceEmptyDefaultStep = hasOnlyEmptyDefaultStep();
+        if (shouldReplaceEmptyDefaultStep) {
           stepState.splice(0, stepState.length, ...(mappedSteps.length > 0 ? mappedSteps : [createStepStateEntry()]));
           appliedTemplateState = [];
         } else {
@@ -2820,9 +2745,9 @@
           `Applied preset '${selected.title}' (${mappedSteps.length} steps).${autoFillSuffix}`,
         );
       } catch (error) {
-        console.error("template apply failed", error);
+        console.error(`template apply failed: ${sanitizedErrorMessage(error)}`);
         setTemplateMessage(
-          "Failed to apply preset: " + String(error?.message || "request failed"),
+          "Failed to apply preset: " + sanitizedErrorMessage(error),
           true,
         );
       }
@@ -2910,75 +2835,33 @@
           body: JSON.stringify(body),
         });
         setTemplateMessage(`Saved preset '${created?.title || body.title}'. Reloading catalog...`);
-        if (templateScope instanceof HTMLSelectElement) {
-          templateScope.value = scope;
-        }
-        if (templateScopeRef instanceof HTMLInputElement) {
-          templateScopeRef.value = scope === "team" ? scopeRef : "";
-        }
         await fetchTemplateList();
       } catch (error) {
-        console.error("template save failed", error);
+        console.error(`template save failed: ${sanitizedErrorMessage(error)}`);
         setTemplateMessage(
-          "Failed to save preset: " + String(error?.message || "request failed"),
+          "Failed to save preset: " + sanitizedErrorMessage(error),
           true,
         );
       }
     };
 
-    if (templateScope instanceof HTMLSelectElement) {
-      templateScope.addEventListener("change", () => {
-        fetchTemplateList().catch((error) => {
-          console.error("template scope change failed", error);
-        });
-      });
-    }
-    if (templateScopeRef instanceof HTMLInputElement) {
-      templateScopeRef.addEventListener("change", () => {
-        fetchTemplateList().catch((error) => {
-          console.error("template scopeRef change failed", error);
-        });
-      });
-    }
-    if (templateSearch instanceof HTMLInputElement) {
-      templateSearch.addEventListener("input", renderTemplateSelect);
-    }
-    if (templateSelect instanceof HTMLSelectElement) {
-      templateSelect.addEventListener("change", () => {
-        syncTemplateVersion();
-      });
-    }
-    if (templateReload instanceof HTMLButtonElement) {
-      templateReload.addEventListener("click", () => {
-        fetchTemplateList().catch((error) => {
-          console.error("template reload failed", error);
-        });
-      });
-    }
-    if (templatePreview instanceof HTMLButtonElement) {
-      templatePreview.addEventListener("click", () => {
-        applySelectedTemplate({ previewOnly: true }).catch((error) => {
-          console.error("template preview failed", error);
-        });
-      });
-    }
     if (templateApply instanceof HTMLButtonElement) {
       templateApply.addEventListener("click", () => {
-        applySelectedTemplate({ previewOnly: false }).catch((error) => {
-          console.error("template apply failed", error);
+        applySelectedTemplate().catch((error) => {
+          console.error(`template apply failed: ${sanitizedErrorMessage(error)}`);
         });
       });
     }
     if (templateSaveCurrent instanceof HTMLButtonElement) {
       templateSaveCurrent.addEventListener("click", () => {
         saveCurrentStepsAsTemplate().catch((error) => {
-          console.error("template save-current failed", error);
+          console.error(`template save-current failed: ${sanitizedErrorMessage(error)}`);
         });
       });
     }
     if (taskTemplateCatalogEnabled) {
       fetchTemplateList().catch((error) => {
-        console.error("initial template load failed", error);
+        console.error(`initial template load failed: ${sanitizedErrorMessage(error)}`);
       });
     }
 

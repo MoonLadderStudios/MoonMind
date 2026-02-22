@@ -554,6 +554,21 @@ button.secondary:hover {
   border-color: rgb(var(--mm-accent));
 }
 
+.queue-submit-primary {
+  background: rgb(var(--mm-accent-2));
+  color: rgb(var(--mm-ink));
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent-2) / 0.35), 0 14px 26px -18px rgb(var(--mm-accent-2));
+}
+
+.queue-submit-primary:hover {
+  background: rgb(var(--mm-accent-2) / 0.9);
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent-2) / 0.55), 0 18px 28px -20px rgb(var(--mm-accent-2));
+}
+
+.queue-submit-primary:focus-visible {
+  outline-color: rgb(var(--mm-accent));
+}
+
 .actions {
   display: flex;
   gap: 0.55rem;
