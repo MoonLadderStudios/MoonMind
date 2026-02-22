@@ -2005,7 +2005,7 @@
 
     setView(
       "Submit Queue Task",
-      `Create a typed Task job. Jobs are consumed from the shared queue ${defaultQueueName}.`,
+      "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
@@ -2123,6 +2123,27 @@
       ...overrides,
     });
     const stepState = [createStepStateEntry()];
+    const isDefaultSkillSelection = (value) => {
+      const normalized = String(value || "").trim().toLowerCase();
+      return normalized === "" || normalized === "auto";
+    };
+    const shouldShowSkillArgs = (step) => !isDefaultSkillSelection(step?.skillId);
+    const updateSkillArgsVisibility = (index) => {
+      if (!stepsList || index < 0 || index >= stepState.length) {
+        return;
+      }
+      const wrapper = stepsList.querySelector(
+        `[data-skill-args-index="${index}"]`,
+      );
+      if (!(wrapper instanceof HTMLElement)) {
+        return;
+      }
+      if (shouldShowSkillArgs(stepState[index])) {
+        wrapper.classList.remove("hidden");
+      } else {
+        wrapper.classList.add("hidden");
+      }
+    };
     let appliedTemplateState = [];
     const renderStepEditor = () => {
       if (!stepsList) {
@@ -2149,6 +2170,11 @@
           const defaultHint = isPrimaryStep
             ? "Primary step skill values are forwarded to <span class=\"inline-code\">task.skill</span>."
             : "Leave skill blank to inherit primary step defaults.";
+          const showSkillArgsField = shouldShowSkillArgs(step);
+          const skillArgsLabelClasses = ["queue-step-skill-args-field"];
+          if (!showSkillArgsField) {
+            skillArgsLabelClasses.push("hidden");
+          }
           return `
             <section class="queue-step-section stack" data-step-index="${index}">
               <div class="queue-step-header">
@@ -2219,7 +2245,7 @@
                   <span class="small">Merged into job <span class="inline-code">requiredCapabilities</span> when provided.</span>
                 </label>
               </div>
-              <label>Skill Args (optional JSON object)
+              <label class="${skillArgsLabelClasses.join(" ")}" data-skill-args-index="${index}">Skill Args (optional JSON object)
                 <textarea class="queue-step-skill-args" data-step-field="skillArgs" data-step-index="${index}" placeholder='{"notes":"optional context"}'>${escapeHtml(
                   step.skillArgs,
                 )}</textarea>
@@ -2312,6 +2338,9 @@
           return;
         }
         stepState[index][field] = fieldInput.value || "";
+        if (field === "skillId") {
+          updateSkillArgsVisibility(index);
+        }
         if (
           field === "instructions" &&
           stepState[index].templateStepId &&
