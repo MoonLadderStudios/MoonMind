@@ -1096,7 +1096,8 @@
     return "other";
   }
 
-  function setView(title, subtitle, body) {
+  function setView(title, subtitle, body, options = {}) {
+    const { showAutoRefreshControls = true } = options;
     const normalizedSubtitle = String(subtitle || "").trim();
     root.innerHTML = `
       <div class="toolbar">
@@ -1108,7 +1109,7 @@
               : ""
           }
         </div>
-        ${renderAutoRefreshControls()}
+        ${showAutoRefreshControls ? renderAutoRefreshControls() : ""}
       </div>
       ${body}
     `;
@@ -2014,8 +2015,6 @@
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
-          <strong>Steps</strong>
-          <span class="small">At least one step is required to submit. You can remove all steps while editing, but submit stays disabled by validation until a step is added back.</span>
           <div id="queue-steps-list" class="stack"></div>
         </section>
         ${templateControlsHtml}
@@ -2072,6 +2071,7 @@
         </div>
       </form>
       `,
+      { showAutoRefreshControls: false },
     );
 
     const form = document.getElementById("queue-submit-form");
