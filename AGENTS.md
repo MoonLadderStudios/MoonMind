@@ -5,6 +5,14 @@
 - **WSL Unit Test Mode**: In WSL, `./tools/test_unit.sh` automatically delegates to `./tools/test_unit_docker.sh` (unless `MOONMIND_FORCE_LOCAL_TESTS=1` is set) so tests run in the Docker test environment by default. Use this path when working in WSL.
 - **Integration Tests**: Orchestrator integration tests run via GitHub Actions on main branch pushes or manually. Locally, use `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`.
 
+## Agent Job Storage Locations
+- Agent jobs are executed in a per-run workspace directory named with the job UUID.
+- In a Docker worker container, look under `/work/agent_jobs/<job_id>/`.
+- Per-job artifacts for those runs are under `/work/agent_jobs/<job_id>/artifacts`, and the checked-out repo is at `/work/agent_jobs/<job_id>/repo`.
+- To inspect a run from the host, use the Docker volume directly:  
+  `docker run --rm -v agent_workspaces:/work/agent_jobs -it -v /tmp:/host_tmp alpine sh -lc 'ls /work/agent_jobs/<job_id> | head'`.
+- In the repository code/docs path, durable workflow artifacts for workflow automation are typically written to `var/artifacts/<scope>/<run_id>` (for example `var/artifacts/spec_workflows/<run_id>`).
+
 ## Security Guardrails
 - Never post or commit raw credentials (tokens, API keys, passwords, private keys, cookies, auth headers, session IDs).
 - Never paste full `docker compose` output, `.env` files, or environment/config dumps into PR comments. Summarize and redact.
