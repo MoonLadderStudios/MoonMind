@@ -2865,7 +2865,10 @@ class CodexWorker:
             "sourceGate": source_payload,
         }
         gate_path = (
-            prepared.artifacts_dir / "gates" / "steps" / f"step-{step.step_index:04d}.json"
+            prepared.artifacts_dir
+            / "gates"
+            / "steps"
+            / f"step-{step.step_index:04d}.json"
         )
         gate_path.parent.mkdir(parents=True, exist_ok=True)
         gate_path.write_text(

@@ -1006,7 +1006,9 @@ async def test_run_once_tactics_test_step_fails_when_gate_reports_failure(
     assert "tactics-test gate failed" in queue.failed[0]
     assert handler.calls == ["codex_skill:tactics-test:True"]
     assert "gates/steps/step-0000.json" in queue.uploaded
-    assert not any(event["message"] == "moonmind.task.publish" for event in queue.events)
+    assert not any(
+        event["message"] == "moonmind.task.publish" for event in queue.events
+    )
     failed_events = [
         event for event in queue.events if event["message"] == "task.step.failed"
     ]
@@ -1069,7 +1071,10 @@ async def test_run_once_tactics_test_step_succeeds_when_gate_reports_pass(
             gate_path.parent.mkdir(parents=True, exist_ok=True)
             gate_path.write_text(
                 json.dumps(
-                    {"status": "PASS", "reason": "Requested phases completed successfully"}
+                    {
+                        "status": "PASS",
+                        "reason": "Requested phases completed successfully",
+                    }
                 ),
                 encoding="utf-8",
             )
