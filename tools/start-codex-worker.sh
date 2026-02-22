@@ -75,10 +75,16 @@ extract_policy_value() {
   printf '%s' "$policy" | tr ';' '\n' | awk -F= -v key="$key" '$1 == key {print $2; exit}'
 }
 PROPOSALS_ENABLED_RAW="${MOONMIND_ENABLE_TASK_PROPOSALS:-${ENABLE_TASK_PROPOSALS:-true}}"
+ROTATE_TOKEN_FOR_PROPOSALS_RAW="${MOONMIND_WORKER_ROTATE_TOKEN_FOR_PROPOSALS:-false}"
 if is_truthy "$PROPOSALS_ENABLED_RAW"; then
   PROPOSALS_ENABLED="true"
 else
   PROPOSALS_ENABLED="false"
+fi
+if is_truthy "$ROTATE_TOKEN_FOR_PROPOSALS_RAW"; then
+  ROTATE_TOKEN_FOR_PROPOSALS="true"
+else
+  ROTATE_TOKEN_FOR_PROPOSALS="false"
 fi
 CAPABILITIES_CSV="$(normalize_csv "$CAPABILITIES_RAW")"
 if [[ "$PROPOSALS_ENABLED" == "true" ]] && [[ ",$CAPABILITIES_CSV," != *",proposals_write,"* ]]; then
@@ -107,7 +113,7 @@ persist_token_policy_marker() {
   return 0
 }
 
-  if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
+if [[ -z "${MOONMIND_WORKER_TOKEN:-}" && -f "$TOKEN_PATH" ]]; then
   should_load_cached_token=true
   if [[ "$BOOTSTRAP" == "true" ]]; then
     if [[ ! -f "$TOKEN_POLICY_PATH" ]]; then
@@ -120,9 +126,13 @@ persist_token_policy_marker() {
     else
       cached_token_policy="$(tr -d '\r\n' <"$TOKEN_POLICY_PATH")"
       cached_token_capabilities="$(normalize_csv "$(extract_policy_value "$cached_token_policy" capabilities)")"
-      if [[ "$PROPOSALS_ENABLED" == "true" && -n "$cached_token_capabilities" && ",$cached_token_capabilities," != *",proposals_write,"* ]]; then
-        should_load_cached_token=false
-        log "Cached worker token policy is missing proposals_write while proposals are enabled; rotating token to refresh capabilities."
+      if [[ "$PROPOSALS_ENABLED" == "true" && ",$cached_token_capabilities," != *",proposals_write,"* ]]; then
+        if [[ "$ENFORCE_TOKEN_POLICY" == "true" || -n "${MOONMIND_API_TOKEN:-}" || "$ROTATE_TOKEN_FOR_PROPOSALS" == "true" ]]; then
+          should_load_cached_token=false
+          log "Cached worker token policy is missing proposals_write while proposals are enabled; rotating token to refresh capabilities."
+        else
+          log "WARNING: Cached worker token policy is missing proposals_write while proposals are enabled, but policy enforcement/bootstrap auth is unavailable; loading cached token and proposal submission may fail until token refresh."
+        fi
       elif [[ "$cached_token_policy" != "$desired_token_policy" ]]; then
         if [[ "$ENFORCE_TOKEN_POLICY" == "true" ]]; then
           should_load_cached_token=false
