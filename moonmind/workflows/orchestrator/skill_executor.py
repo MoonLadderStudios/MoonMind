@@ -12,7 +12,9 @@ from typing import Any, Mapping
 
 
 def _resolve_workspace_root() -> Path:
-    raw = (os.getenv("SPEC_WORKFLOW_REPO_ROOT") or os.getenv("WORKSPACE_ROOT") or "").strip()
+    raw = (
+        os.getenv("SPEC_WORKFLOW_REPO_ROOT") or os.getenv("WORKSPACE_ROOT") or ""
+    ).strip()
     if raw:
         root = Path(raw).expanduser()
         if not root.is_absolute():
@@ -146,7 +148,9 @@ def _resolve_skill_command(
         skill_args.get("noComposePull") or skill_args.get("no_compose_pull")
     ):
         command.append("--no-compose-pull")
-    if is_moonmind_update and bool(skill_args.get("dryRun") or skill_args.get("dry_run")):
+    if is_moonmind_update and bool(
+        skill_args.get("dryRun") or skill_args.get("dry_run")
+    ):
         command.append("--dry-run")
 
     return (command, repo_path)
