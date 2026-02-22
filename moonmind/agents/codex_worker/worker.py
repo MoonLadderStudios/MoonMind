@@ -830,6 +830,14 @@ class StepGateResult:
     artifacts: tuple[ArtifactUpload, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class StepGateSpec:
+    """Resolved gate contract for a step skill."""
+
+    gate_type: str
+    source_path: Path
+
+
 class QueueApiClient:
     """HTTP client wrapper for queue and artifact endpoints."""
 
@@ -2801,25 +2809,30 @@ class CodexWorker:
     ) -> StepGateResult:
         """Evaluate runtime gate checks for steps that require hard publish blocking."""
 
-        if step.effective_skill_id != "tactics-test":
+        gate_spec = self._resolve_step_gate_spec(step=step, repo_dir=prepared.repo_dir)
+        if gate_spec is None:
             return StepGateResult(passed=True)
-        return self._evaluate_tactics_test_gate(step=step, prepared=prepared)
+        return self._evaluate_machine_readable_gate(
+            step=step,
+            prepared=prepared,
+            gate_spec=gate_spec,
+        )
 
-    def _evaluate_tactics_test_gate(
+    def _evaluate_machine_readable_gate(
         self,
         *,
         step: ResolvedTaskStep,
         prepared: PreparedTaskWorkspace,
+        gate_spec: StepGateSpec,
     ) -> StepGateResult:
-        """Validate tactics-test machine-readable gate output."""
+        """Validate machine-readable gate output for a step skill."""
 
-        source_path = self._resolve_tactics_test_gate_path(
-            step=step,
-            repo_dir=prepared.repo_dir,
-        )
+        source_path = gate_spec.source_path
+        gate_type = gate_spec.gate_type
+        gate_label = f"{gate_type} gate"
         source_exists = source_path.exists()
         source_status = "MISSING"
-        reason = f"tactics-test gate artifact is missing: {source_path}"
+        reason = f"{gate_label} artifact is missing: {source_path}"
 
         source_payload: dict[str, Any] = {}
         if source_exists:
@@ -2827,7 +2840,7 @@ class CodexWorker:
                 payload = json.loads(source_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 source_status = "INVALID"
-                reason = f"tactics-test gate artifact is invalid JSON: {exc}"
+                reason = f"{gate_label} artifact is invalid JSON: {exc}"
             else:
                 if isinstance(payload, Mapping):
                     source_payload = dict(payload)
@@ -2836,25 +2849,25 @@ class CodexWorker:
                     source_status = raw_status
                 raw_reason = str(source_payload.get("reason") or "").strip()
                 if source_status == "PASS":
-                    reason = raw_reason or "tactics-test gate passed"
+                    reason = raw_reason or f"{gate_label} passed"
                 elif source_status:
-                    reason = raw_reason or f"tactics-test gate status={source_status}"
+                    reason = raw_reason or f"{gate_label} status={source_status}"
                 else:
                     source_status = "INVALID"
-                    reason = "tactics-test gate artifact is missing required status"
+                    reason = f"{gate_label} artifact is missing required status"
 
         passed = source_status == "PASS"
         gate_status = "PASS" if passed else "FAIL"
         if passed:
-            if reason and reason != "tactics-test gate passed":
-                gate_reason = f"tactics-test gate passed: {reason}"
+            if reason and reason != f"{gate_label} passed":
+                gate_reason = f"{gate_label} passed: {reason}"
             else:
-                gate_reason = "tactics-test gate passed"
+                gate_reason = f"{gate_label} passed"
         else:
-            gate_reason = f"tactics-test gate failed: {reason}"
+            gate_reason = f"{gate_label} failed: {reason}"
         gate_payload = {
             "status": gate_status,
-            "gateType": "tactics-test",
+            "gateType": gate_type,
             "stepId": step.step_id,
             "stepIndex": step.step_index,
             "skillId": step.effective_skill_id,
@@ -2889,17 +2902,25 @@ class CodexWorker:
         )
 
     @staticmethod
-    def _resolve_tactics_test_gate_path(
+    def _resolve_step_gate_spec(
         *,
         step: ResolvedTaskStep,
         repo_dir: Path,
-    ) -> Path:
-        """Resolve expected tactics-test gate artifact path from step args."""
+    ) -> StepGateSpec | None:
+        """Resolve expected gate settings from generic step skill arguments."""
 
         args = step.effective_skill_args
+        gate_required = CodexWorker._coerce_bool_arg_value(
+            args,
+            keys=("gateRequired", "gate_required", "requireGate", "require_gate"),
+        )
         gate_path = CodexWorker._first_non_empty_arg_value(
             args,
             keys=("gateFile", "gate_file", "gatePath", "gate_path"),
+        )
+        gate_type = CodexWorker._first_non_empty_arg_value(
+            args,
+            keys=("gateType", "gate_type"),
         )
         if gate_path is None:
             results_subdir = CodexWorker._first_non_empty_arg_value(
@@ -2909,12 +2930,46 @@ class CodexWorker:
             if results_subdir:
                 cleaned = results_subdir.strip("/")
                 gate_path = f"{cleaned}/latest/gate.json" if cleaned else None
+        if gate_path is None and gate_required is not True:
+            return None
         if gate_path is None:
-            gate_path = ".artifacts/dood-unreal-tactics/latest/gate.json"
+            skill_segment = CodexWorker._sanitize_gate_path_segment(
+                step.effective_skill_id
+            )
+            gate_path = f".artifacts/skill-gates/{skill_segment}/latest/gate.json"
+        gate_type = gate_type or step.effective_skill_id or "skill-gate"
         candidate = Path(gate_path).expanduser()
-        if candidate.is_absolute():
-            return candidate
-        return repo_dir / candidate
+        source_path = candidate if candidate.is_absolute() else repo_dir / candidate
+        return StepGateSpec(gate_type=gate_type, source_path=source_path)
+
+    @staticmethod
+    def _coerce_bool_arg_value(
+        mapping: Mapping[str, Any],
+        *,
+        keys: Sequence[str],
+    ) -> bool | None:
+        """Return first bool-like arg value from key candidates."""
+
+        for key in keys:
+            raw = mapping.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, bool):
+                return raw
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "yes", "on"}:
+                return True
+            if text in {"0", "false", "no", "off"}:
+                return False
+        return None
+
+    @staticmethod
+    def _sanitize_gate_path_segment(value: str) -> str:
+        """Normalize path segments for generated gate file defaults."""
+
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip())
+        cleaned = cleaned.strip("-.")
+        return cleaned or "skill"
 
     @staticmethod
     def _first_non_empty_arg_value(
@@ -4240,7 +4295,7 @@ class CodexWorker:
                         artifacts=tuple(step_artifacts),
                     )
                 step_summary = step_result.summary
-                if step.effective_skill_id == "tactics-test" and gate_result.message:
+                if gate_result.message:
                     base = step_summary or "step completed"
                     step_summary = f"{base}; {gate_result.message}"
                 event_payload["summary"] = step_summary

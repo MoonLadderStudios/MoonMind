@@ -914,12 +914,12 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert started[1]["payload"]["stepId"] == "step-2"
 
 
-async def test_run_once_tactics_test_step_fails_when_gate_reports_failure(
+async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     tmp_path: Path,
 ) -> None:
-    """tactics-test must hard-fail the task when its machine-readable gate is FAIL."""
+    """Gated skills must hard-fail the task when machine-readable gate is FAIL."""
 
-    step_log = tmp_path / "tactics-step.log"
+    step_log = tmp_path / "gate-step.log"
     step_log.write_text("step", encoding="utf-8")
 
     job = ClaimedJob(
@@ -929,16 +929,22 @@ async def test_run_once_tactics_test_step_fails_when_gate_reports_failure(
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
             "task": {
-                "instructions": "Run tactics gate",
+                "instructions": "Run skill gate",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "main", "newBranch": None},
                 "publish": {"mode": "branch"},
                 "steps": [
                     {
-                        "id": "tactics",
-                        "instructions": "Execute tactics-test skill",
-                        "skill": {"id": "tactics-test", "args": {}},
+                        "id": "quality-gate",
+                        "instructions": "Execute gated skill",
+                        "skill": {
+                            "id": "speckit",
+                            "args": {
+                                "gateType": "quality-gate",
+                                "resultsSubdir": ".artifacts/skill-gates/quality-gate",
+                            },
+                        },
                     }
                 ],
             },
@@ -962,7 +968,8 @@ async def test_run_once_tactics_test_step_fails_when_gate_reports_failure(
                 / str(job_id)
                 / "repo"
                 / ".artifacts"
-                / "dood-unreal-tactics"
+                / "skill-gates"
+                / "quality-gate"
                 / "latest"
                 / "gate.json"
             )
@@ -1003,8 +1010,8 @@ async def test_run_once_tactics_test_step_fails_when_gate_reports_failure(
     assert processed is True
     assert queue.completed == []
     assert len(queue.failed) == 1
-    assert "tactics-test gate failed" in queue.failed[0]
-    assert handler.calls == ["codex_skill:tactics-test:True"]
+    assert "quality-gate gate failed" in queue.failed[0]
+    assert handler.calls == ["codex_skill:speckit:False"]
     assert "gates/steps/step-0000.json" in queue.uploaded
     assert not any(
         event["message"] == "moonmind.task.publish" for event in queue.events
@@ -1013,15 +1020,15 @@ async def test_run_once_tactics_test_step_fails_when_gate_reports_failure(
         event for event in queue.events if event["message"] == "task.step.failed"
     ]
     assert len(failed_events) == 1
-    assert "tactics-test gate failed" in str(failed_events[0]["payload"]["summary"])
+    assert "quality-gate gate failed" in str(failed_events[0]["payload"]["summary"])
 
 
-async def test_run_once_tactics_test_step_succeeds_when_gate_reports_pass(
+async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
     tmp_path: Path,
 ) -> None:
-    """tactics-test gate PASS should permit normal task completion."""
+    """PASS gate status should permit normal task completion."""
 
-    step_log = tmp_path / "tactics-step.log"
+    step_log = tmp_path / "gate-step.log"
     step_log.write_text("step", encoding="utf-8")
 
     job = ClaimedJob(
@@ -1031,16 +1038,22 @@ async def test_run_once_tactics_test_step_succeeds_when_gate_reports_pass(
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
             "task": {
-                "instructions": "Run tactics gate",
+                "instructions": "Run skill gate",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "main", "newBranch": None},
                 "publish": {"mode": "none"},
                 "steps": [
                     {
-                        "id": "tactics",
-                        "instructions": "Execute tactics-test skill",
-                        "skill": {"id": "tactics-test", "args": {}},
+                        "id": "quality-gate",
+                        "instructions": "Execute gated skill",
+                        "skill": {
+                            "id": "speckit",
+                            "args": {
+                                "gateType": "quality-gate",
+                                "resultsSubdir": ".artifacts/skill-gates/quality-gate",
+                            },
+                        },
                     }
                 ],
             },
@@ -1064,7 +1077,8 @@ async def test_run_once_tactics_test_step_succeeds_when_gate_reports_pass(
                 / str(job_id)
                 / "repo"
                 / ".artifacts"
-                / "dood-unreal-tactics"
+                / "skill-gates"
+                / "quality-gate"
                 / "latest"
                 / "gate.json"
             )
@@ -1110,13 +1124,13 @@ async def test_run_once_tactics_test_step_succeeds_when_gate_reports_pass(
     assert processed is True
     assert queue.failed == []
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:tactics-test:True"]
+    assert handler.calls == ["codex_skill:speckit:False"]
     assert "gates/steps/step-0000.json" in queue.uploaded
     finished_events = [
         event for event in queue.events if event["message"] == "task.step.finished"
     ]
     assert len(finished_events) == 1
-    assert "tactics-test gate passed" in str(finished_events[0]["payload"]["summary"])
+    assert "quality-gate gate passed" in str(finished_events[0]["payload"]["summary"])
 
 
 async def test_compose_step_instruction_dedupes_objective_text(

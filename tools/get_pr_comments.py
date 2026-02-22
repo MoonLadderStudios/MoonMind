@@ -72,7 +72,7 @@ def resolve_token(cli_token: str | None) -> str | None:
 def api_get_json(url: str, token: str | None) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "tactics-get-pr-comments",
+        "User-Agent": "moonmind-get-pr-comments",
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"

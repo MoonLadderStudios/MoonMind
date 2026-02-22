@@ -316,9 +316,9 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
     cwd_root = tmp_path / "workspace"
     local_root = cwd_root / ".agents" / "skills" / "local"
     local_root.mkdir(parents=True)
-    local_skill = local_root / "tactics-test"
+    local_skill = local_root / "local-gate-tool"
     local_skill.mkdir()
-    (local_skill / "SKILL.md").write_text("name: tactics-test\n", encoding="utf-8")
+    (local_skill / "SKILL.md").write_text("name: local-gate-tool\n", encoding="utf-8")
 
     monkeypatch.chdir(cwd_root)
 
@@ -353,7 +353,7 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
         raising=False,
     )
 
-    assert list_available_skill_names() == ("speckit", "tactics-test")
+    assert list_available_skill_names() == ("speckit", "local-gate-tool")
 
 
 def test_project_root_fallback_handles_shallow_paths(monkeypatch):
