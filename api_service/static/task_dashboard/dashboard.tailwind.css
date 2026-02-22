@@ -370,7 +370,6 @@ form {
 }
 
 .queue-submit-form {
-  margin: 0 auto;
   width: 100%;
   max-width: 100%;
   padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
@@ -567,7 +566,7 @@ button.secondary:hover {
   bottom: calc(env(safe-area-inset-bottom, 0px) + 0.85rem);
   transform: translateX(-50%);
   z-index: 40;
-  width: min(760px, calc(100vw - 1.5rem));
+  width: min(1100px, calc(100vw - 1.5rem));
   display: flex;
   align-items: center;
   justify-content: space-between;
