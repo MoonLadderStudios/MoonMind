@@ -1482,9 +1482,12 @@ class CodexWorker:
                 except CommandCancelledError:
                     raise
                 except Exception as exc:
+                    logger.exception(
+                        "Publish stage failed for job %s", job.id, exc_info=exc
+                    )
                     result = type(result)(
                         succeeded=False,
-                        summary=None,
+                        summary=result.summary,
                         error_message=str(exc),
                         artifacts=result.artifacts,
                     )
@@ -1533,10 +1536,21 @@ class CodexWorker:
                 await self._raise_if_cancel_requested(
                     cancel_event=cancel_requested_event
                 )
-                with suppress(Exception):
+                try:
                     await self._maybe_submit_task_proposals(
                         job=job,
                         prepared=prepared,
+                    )
+                except CommandCancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Failed submitting post-task proposals for job %s", job.id
+                    )
+                    await self._emit_event(
+                        job_id=job.id,
+                        level="warn",
+                        message="task.proposalSubmission.failed",
                     )
 
             await _flush_staged_artifacts()
@@ -3466,7 +3480,6 @@ class CodexWorker:
         runtime_model = str(runtime.get("model") or "").strip() or None
         runtime_effort = str(runtime.get("effort") or "").strip() or None
         starting_branch = str(git.get("startingBranch") or "").strip() or None
-        new_branch = str(git.get("newBranch") or "").strip() or None
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
         if publish_mode not in {"none", "branch", "pr"}:
             publish_mode = "pr"
@@ -3486,7 +3499,7 @@ class CodexWorker:
                         "model": runtime_model,
                         "effort": runtime_effort,
                     },
-                    "git": {"startingBranch": starting_branch, "newBranch": new_branch},
+                    "git": {"startingBranch": starting_branch, "newBranch": None},
                     "publish": {
                         "mode": publish_mode,
                         "prBaseBranch": None,
@@ -3627,23 +3640,6 @@ class CodexWorker:
                 )
             )
 
-        source_patch_path = prepared.artifacts_dir / "changes.patch"
-        if source_patch_path.exists() and source_patch_path.stat().st_size > 0:
-            proposal_patch_path = (
-                prepared.artifacts_dir / "patches" / "proposals" / f"{skill_id}.patch"
-            )
-            proposal_patch_path.parent.mkdir(parents=True, exist_ok=True)
-            if source_patch_path != proposal_patch_path:
-                shutil.copy2(source_patch_path, proposal_patch_path)
-            artifacts.append(
-                ArtifactUpload(
-                    path=proposal_patch_path,
-                    name=f"patches/proposals/{skill_id}.patch",
-                    content_type="text/x-diff",
-                    required=False,
-                )
-            )
-
         return artifacts
 
     async def _run_post_task_proposal_skills(
@@ -3662,6 +3658,21 @@ class CodexWorker:
         hook_skill_ids = self._proposal_hook_skill_ids(
             include_continuation=task_result.succeeded
         )
+        if self._config.skill_policy_mode == "allowlist":
+            allowed_skills = set(self._config.allowed_skills)
+            skipped_skills = [
+                skill_id for skill_id in hook_skill_ids if skill_id not in allowed_skills
+            ]
+            hook_skill_ids = tuple(
+                skill_id for skill_id in hook_skill_ids if skill_id in allowed_skills
+            )
+            if skipped_skills:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="warn",
+                    message="task.proposalSkill.disallowed",
+                    payload={"skills": skipped_skills},
+                )
         if not hook_skill_ids:
             return []
         if not self._ensure_post_task_proposal_skills_materialized(
@@ -3679,13 +3690,15 @@ class CodexWorker:
             return []
 
         proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
-        if not proposal_output_path.exists():
-            proposal_output_path.write_text("[]\n", encoding="utf-8")
+        proposal_output_path.write_text("[]\n", encoding="utf-8")
         proposal_output_relative = "../artifacts/task_proposals.json"
         cancel_event = getattr(self, "_active_cancel_event", None)
+        (prepared.artifacts_dir / "codex_exec.log").unlink(missing_ok=True)
+        (prepared.artifacts_dir / "changes.patch").unlink(missing_ok=True)
 
         collected: list[ArtifactUpload] = []
         for skill_index, skill_id in enumerate(hook_skill_ids):
+            await self._raise_if_cancel_requested(cancel_event=cancel_event)
             await self._emit_event(
                 job_id=job.id,
                 level="info",
@@ -3710,38 +3723,72 @@ class CodexWorker:
                     step_id=skill_id,
                     step_index=skill_index,
                 )
-                skill_result = await self._codex_exec_handler.handle_skill(
-                    job_id=job.id,
-                    payload=self._build_skill_payload(
-                        canonical_payload=canonical_payload,
-                        selected_skill=skill_id,
-                        source_payload=source_payload,
-                        instruction_override=self._compose_post_task_proposal_instruction(
-                            canonical_payload=canonical_payload,
-                            task_result=task_result,
-                            skill_id=skill_id,
-                            proposal_output_path=proposal_output_relative,
-                        ),
-                        skill_args_override=skill_args,
-                        ref_override=None,
-                        publish_mode_override="none",
-                        publish_base_override=None,
-                        workdir_mode_override="reuse",
-                        include_ref=False,
-                    ),
-                    selected_skill=skill_id,
-                    fallback=True,
-                    cancel_event=cancel_event,
-                    output_chunk_callback=proposal_log_callback,
+                instruction = self._compose_post_task_proposal_instruction(
+                    canonical_payload=canonical_payload,
+                    task_result=task_result,
+                    skill_id=skill_id,
+                    proposal_output_path=proposal_output_relative,
                 )
+                if runtime_mode == "codex":
+                    skill_result = await self._codex_exec_handler.handle_skill(
+                        job_id=job.id,
+                        payload=self._build_skill_payload(
+                            canonical_payload=canonical_payload,
+                            selected_skill=skill_id,
+                            source_payload=source_payload,
+                            instruction_override=instruction,
+                            skill_args_override=skill_args,
+                            ref_override=None,
+                            publish_mode_override="none",
+                            publish_base_override=None,
+                            workdir_mode_override="reuse",
+                            include_ref=False,
+                        ),
+                        selected_skill=skill_id,
+                        fallback=True,
+                        cancel_event=cancel_event,
+                        output_chunk_callback=proposal_log_callback,
+                    )
+                else:
+                    runtime_model, runtime_effort = self._resolve_runtime_overrides(
+                        canonical_payload=canonical_payload,
+                        runtime_mode=runtime_mode,
+                    )
+                    command = self._build_non_codex_runtime_command(
+                        runtime_mode=runtime_mode,
+                        instruction=instruction,
+                        model=runtime_model,
+                        effort=runtime_effort,
+                    )
+                    runtime_env = self._build_non_codex_runtime_env(
+                        runtime_mode=runtime_mode
+                    )
+                    proposal_log_path = prepared.artifacts_dir / "codex_exec.log"
+                    await self._run_stage_command(
+                        command,
+                        cwd=prepared.repo_dir,
+                        log_path=proposal_log_path,
+                        env=runtime_env,
+                    )
+                    skill_result = WorkerExecutionResult(
+                        succeeded=True,
+                        summary=f"{runtime_mode} proposal skill execution completed",
+                        error_message=None,
+                        artifacts=(),
+                    )
             except CommandCancelledError:
                 raise
-            except Exception as exc:
+            except Exception:
                 await self._emit_event(
                     job_id=job.id,
                     level="warn",
                     message="task.proposalSkill.failed",
-                    payload={"skillId": skill_id, "error": str(exc)},
+                    payload={"skillId": skill_id},
+                )
+                logger.exception(
+                    "Post-task proposal skill failed for job %s skill=%s",
+                    job.id,
+                    skill_id,
                 )
                 continue
 
