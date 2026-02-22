@@ -24,7 +24,10 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunStatus,
     OrchestratorRunSummaryModel,
 )
-from moonmind.workflows.orchestrator.action_plan import generate_action_plan
+from moonmind.workflows.orchestrator.action_plan import (
+    generate_action_plan,
+    generate_skill_action_plan,
+)
 from moonmind.workflows.orchestrator.metrics import record_run_queued
 from moonmind.workflows.orchestrator.policies import (
     resolve_policy,
@@ -45,6 +48,7 @@ from moonmind.workflows.orchestrator.storage import (
     resolve_artifact_root,
 )
 from moonmind.workflows.orchestrator.tasks import enqueue_action_plan
+from moonmind.workflows.skills.resolver import list_available_skill_names
 
 router = APIRouter(prefix="/orchestrator", tags=["Orchestrator"])
 
@@ -104,7 +108,25 @@ async def create_orchestrator_run(
         ) from exc
 
     try:
-        plan = generate_action_plan(payload.instruction, profile)
+        requested_skill = (payload.skill_id or "").strip()
+        if requested_skill:
+            if requested_skill == "auto":
+                raise ValueError(
+                    "Orchestrator skill runs require an explicit skill id, not 'auto'."
+                )
+            available_skills = set(list_available_skill_names())
+            if requested_skill not in available_skills:
+                raise ValueError(
+                    f"Selected skill '{requested_skill}' is not available from configured mirrors."
+                )
+            plan = generate_skill_action_plan(
+                payload.instruction,
+                profile,
+                skill_id=requested_skill,
+                skill_args=payload.skill_args,
+            )
+        else:
+            plan = generate_action_plan(payload.instruction, profile)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

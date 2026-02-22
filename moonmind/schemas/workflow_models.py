@@ -394,6 +394,8 @@ class OrchestratorCreateRunRequest(BaseModel):
 
     instruction: str = Field(..., alias="instruction")
     target_service: str = Field(..., alias="targetService")
+    skill_id: str | None = Field(None, alias="skillId")
+    skill_args: dict[str, Any] = Field(default_factory=dict, alias="skillArgs")
     approval_token: Optional[str] = Field(None, alias="approvalToken")
     priority: OrchestratorRunPriority = Field(
         OrchestratorRunPriority.NORMAL, alias="priority"

@@ -74,6 +74,20 @@ class ServiceProfile:
 
 
 _DEFAULT_PROFILES: Mapping[str, ServiceProfile] = {
+    "orchestrator": ServiceProfile(
+        key="orchestrator",
+        compose_service="orchestrator",
+        workspace_path=Path("."),
+        description="MoonMind orchestrator worker service",
+        allowlist_globs=(
+            "services/orchestrator/**",
+            "moonmind/workflows/orchestrator/**",
+            "docker-compose*.y*ml",
+            "pyproject.toml",
+            "poetry.lock",
+        ),
+        healthcheck=None,
+    ),
     "api": ServiceProfile(
         key="api",
         compose_service="api",
