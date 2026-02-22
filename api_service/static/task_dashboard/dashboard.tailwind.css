@@ -371,6 +371,8 @@ form {
 
 .queue-submit-form {
   margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
   padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
 }
 
@@ -446,7 +448,7 @@ textarea {
 .queue-step-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.5rem;
 }
 
