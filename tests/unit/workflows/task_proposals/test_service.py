@@ -84,6 +84,62 @@ async def test_create_proposal_persists_normalized_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_proposal_accepts_enum_origin_source() -> None:
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.normalize_task_job_payload = MagicMock(
+        return_value={"repository": "Moon/Repo", "task": {"instructions": "tests"}}
+    )
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_job_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.QUEUE,
+        origin_id=None,
+        origin_metadata={},
+        task_create_request={},
+    )
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["Auth"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source=TaskProposalOriginSource.QUEUE,
+        origin_id=None,
+        origin_metadata={},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+    )
+
+    repo.create_proposal.assert_awaited_once()
+    args, kwargs = repo.create_proposal.await_args
+    assert kwargs["origin_source"] == TaskProposalOriginSource.QUEUE
+
+
+@pytest.mark.asyncio
 async def test_create_proposal_enforces_moonmind_metadata() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
