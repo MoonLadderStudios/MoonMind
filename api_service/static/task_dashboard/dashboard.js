@@ -1097,11 +1097,16 @@
   }
 
   function setView(title, subtitle, body) {
+    const normalizedSubtitle = String(subtitle || "").trim();
     root.innerHTML = `
       <div class="toolbar">
         <div>
           <h2 class="page-title">${escapeHtml(title)}</h2>
-          <p class="page-meta">${escapeHtml(subtitle)}</p>
+          ${
+            normalizedSubtitle
+              ? `<p class="page-meta">${escapeHtml(normalizedSubtitle)}</p>`
+              : ""
+          }
         </div>
         ${renderAutoRefreshControls()}
       </div>
@@ -2128,6 +2133,19 @@
       return normalized === "" || normalized === "auto";
     };
     const shouldShowSkillArgs = (step) => !isDefaultSkillSelection(step?.skillId);
+    const clearSkillArgsForStep = (index) => {
+      if (index < 0 || index >= stepState.length) {
+        return;
+      }
+      stepState[index].skillArgs = "";
+      if (!stepsList) {
+        return;
+      }
+      const textarea = stepsList.querySelector(`[data-step-field="skillArgs"][data-step-index="${index}"]`);
+      if (textarea instanceof HTMLTextAreaElement) {
+        textarea.value = "";
+      }
+    };
     const updateSkillArgsVisibility = (index) => {
       if (!stepsList || index < 0 || index >= stepState.length) {
         return;
@@ -2141,6 +2159,7 @@
       if (shouldShowSkillArgs(stepState[index])) {
         wrapper.classList.remove("hidden");
       } else {
+        clearSkillArgsForStep(index);
         wrapper.classList.add("hidden");
       }
     };
@@ -3033,7 +3052,9 @@
       }
 
       const skillId = String(primaryStep.skillId || "").trim() || "auto";
-      const skillArgsRaw = String(primaryStep.skillArgs || "").trim();
+      const skillArgsRaw = shouldShowSkillArgs(primaryStep)
+        ? String(primaryStep.skillArgs || "").trim()
+        : "";
       const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
         primaryStep.skillRequiredCapabilities || "",
       );
@@ -3062,7 +3083,9 @@
         const rawStep = stepState[index] || {};
         const stepInstructions = String(rawStep.instructions || "").trim();
         const stepSkillId = String(rawStep.skillId || "").trim();
-        const stepSkillArgsRaw = String(rawStep.skillArgs || "").trim();
+        const stepSkillArgsRaw = shouldShowSkillArgs(rawStep)
+          ? String(rawStep.skillArgs || "").trim()
+          : "";
         const stepSkillCaps = parseCapabilitiesCsv(rawStep.skillRequiredCapabilities || "");
         const hasStepContent =
           Boolean(stepInstructions) ||
