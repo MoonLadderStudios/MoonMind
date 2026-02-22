@@ -3661,7 +3661,9 @@ class CodexWorker:
         if self._config.skill_policy_mode == "allowlist":
             allowed_skills = set(self._config.allowed_skills)
             skipped_skills = [
-                skill_id for skill_id in hook_skill_ids if skill_id not in allowed_skills
+                skill_id
+                for skill_id in hook_skill_ids
+                if skill_id not in allowed_skills
             ]
             hook_skill_ids = tuple(
                 skill_id for skill_id in hook_skill_ids if skill_id in allowed_skills
