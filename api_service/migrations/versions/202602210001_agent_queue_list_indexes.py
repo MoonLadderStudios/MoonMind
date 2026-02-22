@@ -9,28 +9,39 @@ from alembic import op
 revision: str = "202602210001"
 down_revision: Union[str, None] = "e1c2d0f1a9f7"
 branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
     """Create indexes used by queue list/status queries."""
 
-    op.create_index(
-        "ix_agent_jobs_status_created_at_id",
-        "agent_jobs",
-        ["status", "created_at", "id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_agent_jobs_created_at_id",
-        "agent_jobs",
-        ["created_at", "id"],
-        unique=False,
-    )
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_agent_jobs_status_created_at_id",
+            "agent_jobs",
+            ["status", "created_at", "id"],
+            unique=False,
+            postgresql_concurrently=True,
+        )
+        op.create_index(
+            "ix_agent_jobs_created_at_id",
+            "agent_jobs",
+            ["created_at", "id"],
+            unique=False,
+            postgresql_concurrently=True,
+        )
 
 
 def downgrade() -> None:
     """Drop list indexes added for queue performance."""
 
-    op.drop_index("ix_agent_jobs_created_at_id", table_name="agent_jobs")
-    op.drop_index("ix_agent_jobs_status_created_at_id", table_name="agent_jobs")
+    with op.get_context().autocommit_block():
+        op.drop_index(
+            "ix_agent_jobs_created_at_id",
+            table_name="agent_jobs",
+            postgresql_concurrently=True,
+        )
+        op.drop_index(
+            "ix_agent_jobs_status_created_at_id",
+            table_name="agent_jobs",
+            postgresql_concurrently=True,
+        )

@@ -128,7 +128,16 @@ def _build_job_model(
     payload: Any,
     system: QueueSystemMetadata | None = None,
 ) -> JobModel:
-    model_payload = payload if isinstance(payload, dict) else {}
+    model_payload: dict[str, Any]
+    if isinstance(payload, dict):
+        model_payload = payload
+    else:
+        logger.warning(
+            "Queue job %s returned non-dict payload (%s); serializing as empty payload.",
+            job.id,
+            type(payload).__name__,
+        )
+        model_payload = {}
     return JobModel(
         id=job.id,
         type=job.type,

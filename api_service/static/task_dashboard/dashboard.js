@@ -1669,10 +1669,7 @@
       if (telemetryInFlight) {
         return telemetryInFlight;
       }
-      if (
-        telemetryPayload !== null &&
-        now - telemetryLastRequestedAt < telemetryRefreshMs
-      ) {
+      if (now - telemetryLastRequestedAt < telemetryRefreshMs) {
         return;
       }
 
@@ -1686,7 +1683,7 @@
           telemetryPayload = nextPayload;
           renderQueueList(currentRows);
         } catch (error) {
-          console.error("queue migration telemetry load failed", error);
+          console.warn("queue migration telemetry load failed");
         } finally {
           telemetryInFlight = null;
         }
@@ -1701,8 +1698,8 @@
       }
       currentRows = sortRows(toQueueRows(payload?.items || []));
       renderQueueList(currentRows);
-      refreshTelemetryIfStale().catch((error) => {
-        console.error("queue telemetry refresh failed", error);
+      refreshTelemetryIfStale().catch(() => {
+        console.warn("queue telemetry refresh failed");
       });
     };
 
