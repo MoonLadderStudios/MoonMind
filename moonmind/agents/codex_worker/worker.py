@@ -2830,27 +2830,44 @@ class CodexWorker:
         source_path = gate_spec.source_path
         gate_type = gate_spec.gate_type
         gate_label = f"{gate_type} gate"
-        source_exists = source_path.exists()
-        source_status = "MISSING"
-        reason = f"{gate_label} artifact is missing: {source_path}"
+        source_path_display = self._format_gate_source_path(
+            source_path=source_path,
+            prepared=prepared,
+        )
+        source_allowed = self._is_gate_source_path_allowed(
+            source_path=source_path,
+            prepared=prepared,
+        )
+        source_exists = source_allowed and source_path.exists()
+        source_status = "MISSING" if source_allowed else "INVALID_PATH"
+        if source_allowed:
+            reason = f"{gate_label} artifact is missing"
+        else:
+            reason = f"{gate_label} artifact path is outside allowed artifacts directories"
 
         source_payload: dict[str, Any] = {}
-        if source_exists:
+        if source_allowed and source_exists:
             try:
                 payload = json.loads(source_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 source_status = "INVALID"
-                reason = f"{gate_label} artifact is invalid JSON: {exc}"
+                reason = f"{gate_label} artifact is invalid JSON"
+                logger.warning(
+                    "%s failed JSON parse for gate artifact at %s: %s",
+                    gate_label,
+                    source_path,
+                    exc,
+                )
             else:
                 if isinstance(payload, Mapping):
                     source_payload = dict(payload)
                 raw_status = str(source_payload.get("status") or "").strip().upper()
-                if raw_status:
-                    source_status = raw_status
                 raw_reason = str(source_payload.get("reason") or "").strip()
-                if source_status == "PASS":
+                if raw_status == "PASS":
+                    source_status = "PASS"
                     reason = raw_reason or f"{gate_label} passed"
-                elif source_status:
+                elif raw_status:
+                    source_status = raw_status
                     reason = raw_reason or f"{gate_label} status={source_status}"
                 else:
                     source_status = "INVALID"
@@ -2871,7 +2888,8 @@ class CodexWorker:
             "stepId": step.step_id,
             "stepIndex": step.step_index,
             "skillId": step.effective_skill_id,
-            "sourcePath": str(source_path),
+            "sourcePath": source_path_display,
+            "sourceAllowed": source_allowed,
             "sourceExists": source_exists,
             "sourceStatus": source_status,
             "reason": gate_reason,
@@ -2970,6 +2988,61 @@ class CodexWorker:
         cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip())
         cleaned = cleaned.strip("-.")
         return cleaned or "skill"
+
+    @staticmethod
+    def _is_relative_to(path: Path, root: Path) -> bool:
+        """Return True when path is within root (or equal)."""
+
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def _is_gate_source_path_allowed(
+        cls,
+        *,
+        source_path: Path,
+        prepared: PreparedTaskWorkspace,
+    ) -> bool:
+        """Restrict gate reads to workspace artifact directories."""
+
+        resolved_source = source_path.resolve(strict=False)
+        allowed_roots = (
+            (prepared.repo_dir / ".artifacts").resolve(strict=False),
+            prepared.artifacts_dir.resolve(strict=False),
+        )
+        return any(cls._is_relative_to(resolved_source, root) for root in allowed_roots)
+
+    @classmethod
+    def _format_gate_source_path(
+        cls,
+        *,
+        source_path: Path,
+        prepared: PreparedTaskWorkspace,
+    ) -> str:
+        """Return a redacted source path label safe for surfaced metadata."""
+
+        resolved_source = source_path.resolve(strict=False)
+        repo_artifacts_root = (prepared.repo_dir / ".artifacts").resolve(strict=False)
+        worker_artifacts_root = prepared.artifacts_dir.resolve(strict=False)
+        repo_root = prepared.repo_dir.resolve(strict=False)
+
+        if cls._is_relative_to(resolved_source, repo_artifacts_root):
+            relative = resolved_source.relative_to(repo_artifacts_root).as_posix()
+            return f".artifacts/{relative}" if relative != "." else ".artifacts"
+        if cls._is_relative_to(resolved_source, worker_artifacts_root):
+            relative = resolved_source.relative_to(worker_artifacts_root).as_posix()
+            return (
+                f"worker_artifacts/{relative}"
+                if relative != "."
+                else "worker_artifacts"
+            )
+        if cls._is_relative_to(resolved_source, repo_root):
+            relative = resolved_source.relative_to(repo_root).as_posix()
+            return f"repo/{relative}" if relative != "." else "repo"
+        return "<restricted>"
 
     @staticmethod
     def _first_non_empty_arg_value(

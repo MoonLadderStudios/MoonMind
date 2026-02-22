@@ -201,6 +201,7 @@ services:
         condition: service_started
     networks:
       - local-network
+      - docker-proxy-network
     restart: unless-stopped
 
   docker-proxy:
@@ -214,12 +215,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - local-network
+      - docker-proxy-network
     restart: unless-stopped
 
 networks:
   local-network:
     external: true
+  docker-proxy-network:
+    internal: true
 
 volumes:
   rabbitmq-data:

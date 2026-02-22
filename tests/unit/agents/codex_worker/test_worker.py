@@ -1133,6 +1133,173 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
     assert "quality-gate gate passed" in str(finished_events[0]["payload"]["summary"])
 
 
+async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_roots(
+    tmp_path: Path,
+) -> None:
+    """Gate artifact paths must stay inside workspace artifact directories."""
+
+    step_log = tmp_path / "gate-step.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Run skill gate",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "quality-gate",
+                        "instructions": "Execute gated skill",
+                        "skill": {
+                            "id": "speckit",
+                            "args": {
+                                "gateType": "quality-gate",
+                                "gateFile": "/tmp/quality-gate.json",
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="skill returned",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert (
+        "quality-gate gate failed: quality-gate gate artifact path is outside allowed "
+        "artifacts directories" in queue.failed[0]
+    )
+    assert handler.calls == ["codex_skill:speckit:False"]
+    assert "gates/steps/step-0000.json" in queue.uploaded
+
+
+async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
+    tmp_path: Path,
+) -> None:
+    """Gate payloads missing status must produce INVALID gate failure."""
+
+    step_log = tmp_path / "gate-step.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Run skill gate",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "quality-gate",
+                        "instructions": "Execute gated skill",
+                        "skill": {
+                            "id": "speckit",
+                            "args": {
+                                "gateType": "quality-gate",
+                                "resultsSubdir": ".artifacts/skill-gates/quality-gate",
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+
+    class MissingStatusGateHandler(FakeHandler):
+        async def handle_skill(
+            self,
+            *,
+            job_id,
+            payload,
+            selected_skill,
+            fallback=False,
+            cancel_event=None,
+            output_chunk_callback=None,
+        ):
+            gate_path = (
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / ".artifacts"
+                / "skill-gates"
+                / "quality-gate"
+                / "latest"
+                / "gate.json"
+            )
+            gate_path.parent.mkdir(parents=True, exist_ok=True)
+            gate_path.write_text(json.dumps({"reason": "missing status field"}), encoding="utf-8")
+            return await super().handle_skill(
+                job_id=job_id,
+                payload=payload,
+                selected_skill=selected_skill,
+                fallback=fallback,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+    handler = MissingStatusGateHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="skill returned",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert (
+        "quality-gate gate failed: quality-gate gate artifact is missing required status"
+        in queue.failed[0]
+    )
+
+
 async def test_compose_step_instruction_dedupes_objective_text(
     tmp_path: Path,
 ) -> None:
