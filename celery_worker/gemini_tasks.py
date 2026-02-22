@@ -67,7 +67,6 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
     # Prepare environment with auth and config
     env = os.environ.copy()
     auth_mode = _resolve_gemini_cli_auth_mode()
-    auth_mode = _resolve_gemini_cli_auth_mode()
     if auth_mode == "oauth":
         env.pop("GEMINI_API_KEY", None)
         env.pop("GOOGLE_API_KEY", None)
