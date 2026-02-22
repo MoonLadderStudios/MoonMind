@@ -382,6 +382,7 @@ services:
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.1.1
     environment:
+      INFO: 1
       CONTAINERS: 1
       IMAGES: 1
       NETWORKS: 1

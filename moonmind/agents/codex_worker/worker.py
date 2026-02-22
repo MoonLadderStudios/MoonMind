@@ -821,6 +821,15 @@ class ResolvedTaskStep:
     has_step_instructions: bool
 
 
+@dataclass(frozen=True, slots=True)
+class StepGateResult:
+    """Outcome of an optional per-step execution gate check."""
+
+    passed: bool
+    message: str | None = None
+    artifacts: tuple[ArtifactUpload, ...] = ()
+
+
 class QueueApiClient:
     """HTTP client wrapper for queue and artifact endpoints."""
 
@@ -2784,6 +2793,143 @@ class CodexWorker:
             )
         return normalized
 
+    def _evaluate_step_gate(
+        self,
+        *,
+        step: ResolvedTaskStep,
+        prepared: PreparedTaskWorkspace,
+    ) -> StepGateResult:
+        """Evaluate runtime gate checks for steps that require hard publish blocking."""
+
+        if step.effective_skill_id != "tactics-test":
+            return StepGateResult(passed=True)
+        return self._evaluate_tactics_test_gate(step=step, prepared=prepared)
+
+    def _evaluate_tactics_test_gate(
+        self,
+        *,
+        step: ResolvedTaskStep,
+        prepared: PreparedTaskWorkspace,
+    ) -> StepGateResult:
+        """Validate tactics-test machine-readable gate output."""
+
+        source_path = self._resolve_tactics_test_gate_path(
+            step=step,
+            repo_dir=prepared.repo_dir,
+        )
+        source_exists = source_path.exists()
+        source_status = "MISSING"
+        reason = f"tactics-test gate artifact is missing: {source_path}"
+
+        source_payload: dict[str, Any] = {}
+        if source_exists:
+            try:
+                payload = json.loads(source_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                source_status = "INVALID"
+                reason = f"tactics-test gate artifact is invalid JSON: {exc}"
+            else:
+                if isinstance(payload, Mapping):
+                    source_payload = dict(payload)
+                raw_status = str(source_payload.get("status") or "").strip().upper()
+                if raw_status:
+                    source_status = raw_status
+                raw_reason = str(source_payload.get("reason") or "").strip()
+                if source_status == "PASS":
+                    reason = raw_reason or "tactics-test gate passed"
+                elif source_status:
+                    reason = raw_reason or f"tactics-test gate status={source_status}"
+                else:
+                    source_status = "INVALID"
+                    reason = "tactics-test gate artifact is missing required status"
+
+        passed = source_status == "PASS"
+        gate_status = "PASS" if passed else "FAIL"
+        if passed:
+            if reason and reason != "tactics-test gate passed":
+                gate_reason = f"tactics-test gate passed: {reason}"
+            else:
+                gate_reason = "tactics-test gate passed"
+        else:
+            gate_reason = f"tactics-test gate failed: {reason}"
+        gate_payload = {
+            "status": gate_status,
+            "gateType": "tactics-test",
+            "stepId": step.step_id,
+            "stepIndex": step.step_index,
+            "skillId": step.effective_skill_id,
+            "sourcePath": str(source_path),
+            "sourceExists": source_exists,
+            "sourceStatus": source_status,
+            "reason": gate_reason,
+            "sourceGate": source_payload,
+        }
+        gate_path = (
+            prepared.artifacts_dir / "gates" / "steps" / f"step-{step.step_index:04d}.json"
+        )
+        gate_path.parent.mkdir(parents=True, exist_ok=True)
+        gate_path.write_text(
+            json.dumps(gate_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        return StepGateResult(
+            passed=passed,
+            message=gate_reason,
+            artifacts=(
+                ArtifactUpload(
+                    path=gate_path,
+                    name=f"gates/steps/step-{step.step_index:04d}.json",
+                    content_type="application/json",
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _resolve_tactics_test_gate_path(
+        *,
+        step: ResolvedTaskStep,
+        repo_dir: Path,
+    ) -> Path:
+        """Resolve expected tactics-test gate artifact path from step args."""
+
+        args = step.effective_skill_args
+        gate_path = CodexWorker._first_non_empty_arg_value(
+            args,
+            keys=("gateFile", "gate_file", "gatePath", "gate_path"),
+        )
+        if gate_path is None:
+            results_subdir = CodexWorker._first_non_empty_arg_value(
+                args,
+                keys=("resultsSubdir", "results_subdir", "results-subdir"),
+            )
+            if results_subdir:
+                cleaned = results_subdir.strip("/")
+                gate_path = f"{cleaned}/latest/gate.json" if cleaned else None
+        if gate_path is None:
+            gate_path = ".artifacts/dood-unreal-tactics/latest/gate.json"
+        candidate = Path(gate_path).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        return repo_dir / candidate
+
+    @staticmethod
+    def _first_non_empty_arg_value(
+        mapping: Mapping[str, Any],
+        *,
+        keys: Sequence[str],
+    ) -> str | None:
+        """Return first non-empty string value from key candidates."""
+
+        for key in keys:
+            raw = mapping.get(key)
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if text:
+                return text
+        return None
+
     async def _emit_stage_event(
         self,
         *,
@@ -4062,7 +4208,39 @@ class CodexWorker:
                 await artifact_callback(normalized_step_artifacts)
 
             if step_result.succeeded:
-                event_payload["summary"] = step_result.summary
+                gate_result = self._evaluate_step_gate(step=step, prepared=prepared)
+                if gate_result.artifacts:
+                    gate_artifacts = list(gate_result.artifacts)
+                    step_artifacts.extend(gate_artifacts)
+                    if artifact_callback is not None:
+                        await artifact_callback(gate_artifacts)
+                if not gate_result.passed:
+                    gate_message = gate_result.message or "step gate failed"
+                    event_payload["summary"] = gate_message
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="error",
+                        message="task.step.failed",
+                        payload=event_payload,
+                    )
+                    self._append_stage_log(
+                        prepared.execute_log_path,
+                        (
+                            f"step {step.step_index + 1}/{len(resolved_steps)} failed: "
+                            f"{step.step_id}; error={gate_message}"
+                        ),
+                    )
+                    return WorkerExecutionResult(
+                        succeeded=False,
+                        summary=None,
+                        error_message=gate_message,
+                        artifacts=tuple(step_artifacts),
+                    )
+                step_summary = step_result.summary
+                if step.effective_skill_id == "tactics-test" and gate_result.message:
+                    base = step_summary or "step completed"
+                    step_summary = f"{base}; {gate_result.message}"
+                event_payload["summary"] = step_summary
                 await self._emit_event(
                     job_id=job_id,
                     level="info",
@@ -4073,7 +4251,7 @@ class CodexWorker:
                     prepared.execute_log_path,
                     (
                         f"step {step.step_index + 1}/{len(resolved_steps)} finished: "
-                        f"{step.step_id}; summary={step_result.summary or '-'}"
+                        f"{step.step_id}; summary={step_summary or '-'}"
                     ),
                 )
                 continue
