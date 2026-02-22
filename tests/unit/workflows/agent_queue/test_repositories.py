@@ -432,6 +432,7 @@ async def test_list_running_jobs_orders_by_start_time(tmp_path):
 
     assert [job.id for job in items] == [running_old.id, running_new.id]
 
+
 async def test_claim_denies_jobs_without_required_capabilities(tmp_path):
     """Deny-by-default claim path should skip jobs missing capability requirements."""
 

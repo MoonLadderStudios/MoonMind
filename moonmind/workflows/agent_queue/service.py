@@ -27,7 +27,6 @@ from moonmind.workflows.agent_queue.manifest_contract import (
     normalize_manifest_job_payload,
 )
 from moonmind.workflows.agent_queue.repositories import (
-    AgentJobStateError,
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
 )
@@ -236,9 +235,11 @@ class AgentQueueService:
         )
         self._stale_lease_grace_seconds = max(
             0,
-            default_stale_grace
-            if stale_lease_grace_seconds is None
-            else stale_lease_grace_seconds,
+            (
+                default_stale_grace
+                if stale_lease_grace_seconds is None
+                else stale_lease_grace_seconds
+            ),
         )
 
     @staticmethod

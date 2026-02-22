@@ -402,8 +402,12 @@ class QueueSafeguardResponse(BaseModel):
     generated_at: datetime = Field(..., alias="generatedAt")
     max_runtime_seconds: int = Field(..., alias="maxRuntimeSeconds")
     stale_lease_grace_seconds: int = Field(..., alias="staleLeaseGraceSeconds")
-    timed_out: list[QueueSafeguardJobModel] = Field(default_factory=list, alias="timedOut")
-    stale_leases: list[QueueSafeguardJobModel] = Field(default_factory=list, alias="staleLeases")
+    timed_out: list[QueueSafeguardJobModel] = Field(
+        default_factory=list, alias="timedOut"
+    )
+    stale_leases: list[QueueSafeguardJobModel] = Field(
+        default_factory=list, alias="staleLeases"
+    )
 
 
 class RecoverJobRequest(BaseModel):
