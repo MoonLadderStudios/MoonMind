@@ -274,6 +274,8 @@ class TaskProposalService:
         return None, None
 
     def _normalize_origin_source(self, raw_source: object) -> TaskProposalOriginSource:
+        if isinstance(raw_source, TaskProposalOriginSource):
+            return raw_source
         text = self._clean_str(raw_source).lower()
         if not text:
             raise TaskProposalValidationError("origin.source is required")

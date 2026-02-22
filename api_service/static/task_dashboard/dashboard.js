@@ -1970,7 +1970,6 @@
           </label>
           <label>Feature Request / Initial Instructions
             <textarea id="queue-template-feature-request" placeholder="Describe the feature request this preset should execute."></textarea>
-            <span class="small">Used as <span class="inline-code">feature_request</span> input when required by the preset. If left blank, the primary step instructions are used.</span>
           </label>
           <div class="actions">
             <button type="button" id="queue-template-apply">Apply</button>
