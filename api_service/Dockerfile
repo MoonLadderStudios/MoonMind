@@ -320,6 +320,7 @@ RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
 # This ensures that code changes don't invalidate the dependency cache
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
+COPY celery_worker /app/celery_worker/
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
