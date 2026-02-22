@@ -14,6 +14,7 @@ from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.agent_queue import (
+    _build_job_model,
     _get_service,
     _require_worker_auth,
     _WorkerRequestAuth,
@@ -136,6 +137,17 @@ def _build_system_metadata(*, paused: bool = False, version: int = 1):
     )
 
 
+def test_build_job_model_warns_and_falls_back_for_non_dict_payload(caplog) -> None:
+    """Non-dict payloads should be coerced with visibility for troubleshooting."""
+
+    job = _build_job()
+    with caplog.at_level("WARNING"):
+        model = _build_job_model(job=job, payload="not-a-dict")
+
+    assert model.payload == {}
+    assert "returned non-dict payload" in caplog.text
+
+
 def _build_live_session(
     *,
     task_run_id=None,
@@ -242,7 +254,7 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
 
 
 def test_create_manifest_job_sanitizes_payload(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Manifest submissions should return sanitized payload metadata."""
 
@@ -288,7 +300,7 @@ def test_create_manifest_job_sanitizes_payload(
 
 
 def test_create_manifest_job_validation_error(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Manifest contract errors should map to HTTP 422."""
 
@@ -313,7 +325,7 @@ def test_create_manifest_job_validation_error(
 
 
 def test_claim_job_empty_queue_returns_null(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Claim should return null job when queue has no eligible entries."""
 
@@ -379,7 +391,7 @@ async def test_require_worker_auth_rejects_missing_credentials_when_oidc_enabled
 
 
 def test_heartbeat_job_includes_system_metadata(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Heartbeat responses should surface system metadata to workers."""
 
@@ -409,7 +421,7 @@ def test_heartbeat_job_includes_system_metadata(
 
 
 def test_claim_job_worker_mismatch_maps_403(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Claim should reject worker ids that do not match token policy."""
 
@@ -456,7 +468,7 @@ def test_create_job_live_session_success(client: tuple[TestClient, AsyncMock]) -
 
 
 def test_get_job_live_session_not_found_maps_404(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """GET /jobs/{id}/live-session should map missing session to 404."""
 
@@ -471,7 +483,7 @@ def test_get_job_live_session_not_found_maps_404(
 
 
 def test_get_job_live_session_unauthorized_maps_403(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """GET /jobs/{id}/live-session should map ownership check failures to 403."""
 
@@ -485,7 +497,7 @@ def test_get_job_live_session_unauthorized_maps_403(
 
 
 def test_grant_job_live_session_write_success(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """POST grant-write alias should return RW attach details."""
 
@@ -529,7 +541,7 @@ def test_apply_job_control_action_success(client: tuple[TestClient, AsyncMock]) 
 
 
 def test_append_job_operator_message_success(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """POST /jobs/{id}/operator-messages should append one control event."""
 
@@ -706,7 +718,7 @@ def test_list_jobs_returns_manifest_metadata(
 
 
 def test_fail_job_validation_error_maps_422(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Fail endpoint should map validation failures to HTTP 422."""
 
@@ -723,7 +735,7 @@ def test_fail_job_validation_error_maps_422(
 
 
 def test_cancel_job_success_maps_service_response(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Cancel endpoint should return serialized queue job response."""
 
@@ -742,7 +754,7 @@ def test_cancel_job_success_maps_service_response(
 
 
 def test_ack_cancel_worker_mismatch_maps_403(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Worker identity mismatch on cancel ack should map to forbidden."""
 
@@ -758,7 +770,7 @@ def test_ack_cancel_worker_mismatch_maps_403(
 
 
 def test_ack_cancel_state_conflict_maps_409(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Cancel ack should map repository state conflicts to HTTP 409."""
 
@@ -823,7 +835,7 @@ def test_list_job_events_success(client: tuple[TestClient, AsyncMock]) -> None:
 
 
 def test_list_job_events_forwards_composite_cursor(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Polling endpoint should forward after + afterEventId cursor fields."""
 
@@ -847,7 +859,7 @@ def test_list_job_events_forwards_composite_cursor(
 
 
 def test_list_job_events_forwards_before_cursor_and_sort(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Event list endpoint should forward before + beforeEventId + sort."""
 
@@ -873,7 +885,7 @@ def test_list_job_events_forwards_before_cursor_and_sort(
 
 @pytest.mark.asyncio
 async def test_stream_job_events_sse_emits_queue_event(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """SSE endpoint should emit serialized queue events."""
 

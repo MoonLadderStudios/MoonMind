@@ -81,6 +81,8 @@ class AgentJob(Base):
             "created_at",
         ),
         Index("ix_agent_jobs_type_status_created_at", "type", "status", "created_at"),
+        Index("ix_agent_jobs_status_created_at_id", "status", "created_at", "id"),
+        Index("ix_agent_jobs_created_at_id", "created_at", "id"),
         Index("ix_agent_jobs_lease_expires_at", "lease_expires_at"),
     )
 

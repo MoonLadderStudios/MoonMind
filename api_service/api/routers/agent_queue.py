@@ -119,10 +119,51 @@ def _serialize_job(
     job: models.AgentJob,
     system: QueueSystemMetadata | None = None,
 ) -> JobModel:
-    serialized = JobModel.model_validate(job)
-    if system is not None:
-        serialized.system = _serialize_system_metadata(system)
-    return serialized
+    return _build_job_model(job=job, payload=job.payload, system=system)
+
+
+def _build_job_model(
+    *,
+    job: models.AgentJob,
+    payload: Any,
+    system: QueueSystemMetadata | None = None,
+) -> JobModel:
+    model_payload: dict[str, Any]
+    if isinstance(payload, dict):
+        model_payload = payload
+    else:
+        logger.warning(
+            "Queue job %s returned non-dict payload (%s); serializing as empty payload.",
+            job.id,
+            type(payload).__name__,
+        )
+        model_payload = {}
+    return JobModel(
+        id=job.id,
+        type=job.type,
+        status=job.status,
+        priority=job.priority,
+        payload=model_payload,
+        created_by_user_id=job.created_by_user_id,
+        requested_by_user_id=job.requested_by_user_id,
+        cancel_requested_by_user_id=job.cancel_requested_by_user_id,
+        cancel_requested_at=job.cancel_requested_at,
+        cancel_reason=job.cancel_reason,
+        affinity_key=job.affinity_key,
+        claimed_by=job.claimed_by,
+        lease_expires_at=job.lease_expires_at,
+        next_attempt_at=job.next_attempt_at,
+        attempt=job.attempt,
+        max_attempts=job.max_attempts,
+        result_summary=job.result_summary,
+        error_message=job.error_message,
+        artifacts_path=job.artifacts_path,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        system=_serialize_system_metadata(system) if system is not None else None,
+    )
 
 
 def _serialize_system_metadata(
@@ -237,15 +278,12 @@ def _serialize_job_for_list(
     *,
     compact_payload: bool,
 ) -> JobModel:
-    serialized = _serialize_job(job)
     if not compact_payload:
-        return serialized
-    payload = serialized.payload
-    if isinstance(payload, dict):
-        serialized.payload = _summarize_job_payload(payload)
-    else:
-        serialized.payload = {}
-    return serialized
+        return _serialize_job(job)
+    payload = (
+        _summarize_job_payload(job.payload) if isinstance(job.payload, dict) else {}
+    )
+    return _build_job_model(job=job, payload=payload)
 
 
 async def _require_worker_auth(
