@@ -344,6 +344,7 @@ services:
         condition: service_completed_successfully
     networks:
       - local-network
+      - docker-proxy-network
     restart: unless-stopped
 
   orchestrator:
@@ -377,11 +378,13 @@ services:
         condition: service_started
     networks:
       - local-network
+      - docker-proxy-network
     restart: unless-stopped
 
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.1.1
     environment:
+      INFO: 1
       CONTAINERS: 1
       IMAGES: 1
       NETWORKS: 1
@@ -389,7 +392,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - local-network
+      - docker-proxy-network
     restart: unless-stopped
 
   ollama:
@@ -491,3 +494,5 @@ volumes:
 networks:
   local-network:
     external: true
+  docker-proxy-network:
+    internal: true

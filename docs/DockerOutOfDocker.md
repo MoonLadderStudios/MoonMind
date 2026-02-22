@@ -40,6 +40,7 @@ This keeps workers generic and lets each repository/task choose different runner
 
 2. **Docker Proxy (`docker-proxy`)**
    * Proxies host Docker daemon APIs needed for container execution.
+   * Must expose the Docker `info` API (`INFO=1`) so worker-side preflight checks (`docker info`) can hard-fail cleanly when daemon access is unavailable.
 
 3. **Runner Images (Repo/Task-specific)**
    * Any pullable image may be used per task/repository (Unity, .NET, Unreal, custom CI tool images).
@@ -195,7 +196,7 @@ Container labels include `moonmind.job_id` to support operator debugging via `do
 
 #### Keep (already present)
 
-* `docker-proxy` service with the required Docker API surface.
+* `docker-proxy` service with the required Docker API surface, including `INFO=1`.
 
 #### Update `codex-worker`
 
