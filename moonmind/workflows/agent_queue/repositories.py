@@ -156,6 +156,28 @@ class AgentQueueRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_running_jobs(
+        self,
+        *,
+        limit: int = 200,
+    ) -> list[models.AgentJob]:
+        """Return a bounded list of running jobs ordered by start time."""
+
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        stmt: Select[tuple[models.AgentJob]] = (
+            select(models.AgentJob)
+            .where(models.AgentJob.status == models.AgentJobStatus.RUNNING)
+            .order_by(
+                models.AgentJob.started_at.asc().nulls_last(),
+                models.AgentJob.created_at.asc(),
+            )
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def claim_job(
         self,
         *,

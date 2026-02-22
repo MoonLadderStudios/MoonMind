@@ -412,6 +412,26 @@ async def test_claim_applies_repository_and_capability_filters(tmp_path):
     assert claimed.id == allowed.id
 
 
+async def test_list_running_jobs_orders_by_start_time(tmp_path):
+    """Running job listing should return only running jobs ordered by start time."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            queued = await _create_job(repo)
+            running_new = await _create_job(repo)
+            running_old = await _create_job(repo)
+            queued.status = models.AgentJobStatus.QUEUED
+            running_new.status = models.AgentJobStatus.RUNNING
+            running_old.status = models.AgentJobStatus.RUNNING
+            running_new.started_at = datetime.now(UTC)
+            running_old.started_at = datetime.now(UTC) - timedelta(hours=1)
+            await repo.commit()
+
+            items = await repo.list_running_jobs(limit=10)
+
+    assert [job.id for job in items] == [running_old.id, running_new.id]
+
 async def test_claim_denies_jobs_without_required_capabilities(tmp_path):
     """Deny-by-default claim path should skip jobs missing capability requirements."""
 

@@ -160,6 +160,116 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
     assert second.next_attempt_at is None
 
 
+async def test_heartbeat_triggers_runtime_timeout(tmp_path: Path) -> None:
+    """Heartbeat should auto-request cancellation when runtime exceeds threshold."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(
+                repo,
+                max_runtime_seconds=1,
+                stale_lease_grace_seconds=60,
+            )
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            claimed = await repo.claim_job(
+                worker_id="executor-01",
+                lease_seconds=30,
+                worker_capabilities=["codex"],
+            )
+            assert claimed is not None
+            claimed.started_at = datetime.now(UTC) - timedelta(seconds=5)
+            await repo.commit()
+
+            response = await service.heartbeat(
+                job_id=job.id,
+                worker_id="executor-01",
+                lease_seconds=30,
+            )
+
+    assert response.job.cancel_reason.startswith("Job exceeded max runtime")
+    assert response.job.cancel_requested_at is not None
+
+
+async def test_get_queue_safeguard_snapshot_classifies_jobs(tmp_path: Path) -> None:
+    """Safeguard snapshot should surface timed-out and stale jobs."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(
+                repo,
+                max_runtime_seconds=5,
+                stale_lease_grace_seconds=5,
+            )
+            fresh = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            timed_out = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            stale = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            await repo.commit()
+            for job in (fresh, timed_out, stale):
+                await repo.claim_job(
+                    worker_id="executor",
+                    lease_seconds=30,
+                    worker_capabilities=["codex"],
+                )
+            fresh.started_at = datetime.now(UTC)
+            timed_out.started_at = datetime.now(UTC) - timedelta(seconds=10)
+            stale.started_at = datetime.now(UTC)
+            stale.lease_expires_at = datetime.now(UTC) - timedelta(seconds=10)
+            await repo.commit()
+
+            snapshot = await service.get_queue_safeguard_snapshot(limit=10)
+
+    timed_ids = {entry.job.id for entry in snapshot.timed_out}
+    stale_ids = {entry.job.id for entry in snapshot.stale}
+    assert timed_out.id in timed_ids
+    assert stale.id in stale_ids
+    assert fresh.id not in timed_ids
+
+
+async def test_recover_job_with_clone(tmp_path: Path) -> None:
+    """Recover job endpoint should cancel and optionally clone payload."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="codex_exec",
+                payload={"repository": "Moon/Mind", "instruction": "run"},
+            )
+            claimed = await repo.claim_job(
+                worker_id="executor",
+                lease_seconds=30,
+                worker_capabilities=["codex"],
+            )
+            assert claimed is not None
+            actor = uuid4()
+
+            recovered, cloned = await service.recover_job(
+                job_id=job.id,
+                actor_user_id=actor,
+                mode="clone",
+            )
+
+    assert recovered.cancel_requested_at is not None
+    assert recovered.cancel_reason == "Operator recovery requested"
+    assert cloned is not None
+    assert cloned.payload == job.payload
+
+
 async def test_append_and_list_events_with_after_cursor(tmp_path: Path) -> None:
     """Event reads should support incremental polling with `after` cursor."""
 

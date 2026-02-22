@@ -323,6 +323,30 @@ Required artifacts:
 - `task_context.json`
 - `publish_result.json` (when publish enabled)
 
+### 8.1 Job Safeguards & Recovery
+
+Long-running jobs can monopolize workers even when they are no longer making progress. The queue now enforces two safeguards:
+
+- **Wall-clock timeout** (`AGENT_JOB_MAX_RUNTIME_SECONDS`, default `14400` seconds). When a running job exceeds this runtime, the service auto-requests cancellation, emits a `task.safeguard.runtime_timeout` event, and surfaces the reason inside the job payload. Workers observe the cancellation flag via heartbeat and tear down the run before acking cancellation.
+- **Stale lease detection** (`AGENT_JOB_STALE_LEASE_GRACE_SECONDS`, default `300` seconds). When a running job fails to heartbeat before its lease expires plus the grace period, the job is reported as `staleRunning` so operators know the worker needs attention even if claims remain paused.
+
+Operators can inspect safeguard state via the new telemetry endpoint:
+
+```
+GET /api/queue/telemetry/safeguards
+```
+
+The response lists timed-out and stale-running jobs with runtime/lease deltas. From the dashboard or CLI, operators can then call:
+
+```
+POST /api/queue/jobs/{jobId}/recover { "mode": "cancel" | "clone" }
+```
+
+- `mode="cancel"` requests cancellation for the stuck job (no clone).
+- `mode="clone"` both cancels the stuck job **and** enqueues a clone with the same payload/priority so work resumes automatically once capacity is free.
+
+Both safeguards emit queue events so downstream log streaming and alerting tools can trigger automated remediation workflows if desired.
+
 ## 9. Security
 
 - No raw secrets in queue payloads, events, or artifacts.

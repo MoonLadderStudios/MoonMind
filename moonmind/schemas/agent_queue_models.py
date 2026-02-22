@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -376,6 +376,51 @@ class WorkerTokenListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[WorkerTokenModel] = Field(default_factory=list, alias="items")
+
+
+class QueueSafeguardJobModel(BaseModel):
+    """Serialized safeguard job entry."""
+
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: UUID = Field(..., alias="id")
+    status: models.AgentJobStatus = Field(..., alias="status")
+    claimed_by: Optional[str] = Field(None, alias="claimedBy")
+    started_at: Optional[datetime] = Field(None, alias="startedAt")
+    lease_expires_at: Optional[datetime] = Field(None, alias="leaseExpiresAt")
+    cancel_requested_at: Optional[datetime] = Field(None, alias="cancelRequestedAt")
+    cancel_reason: Optional[str] = Field(None, alias="cancelReason")
+    runtime_seconds: Optional[int] = Field(None, alias="runtimeSeconds")
+    lease_overdue_seconds: Optional[int] = Field(None, alias="leaseOverdueSeconds")
+
+
+class QueueSafeguardResponse(BaseModel):
+    """Safeguard telemetry response model."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    generated_at: datetime = Field(..., alias="generatedAt")
+    max_runtime_seconds: int = Field(..., alias="maxRuntimeSeconds")
+    stale_lease_grace_seconds: int = Field(..., alias="staleLeaseGraceSeconds")
+    timed_out: list[QueueSafeguardJobModel] = Field(default_factory=list, alias="timedOut")
+    stale_leases: list[QueueSafeguardJobModel] = Field(default_factory=list, alias="staleLeases")
+
+
+class RecoverJobRequest(BaseModel):
+    """Operator request payload for job recovery actions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: Literal["cancel", "clone"] = Field("cancel", alias="mode")
+
+
+class RecoverJobResponse(BaseModel):
+    """Response payload for operator recovery actions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    recovered_job: JobModel = Field(..., alias="recoveredJob")
+    cloned_job: Optional[JobModel] = Field(None, alias="clonedJob")
 
 
 class ManifestSecretProfileValue(BaseModel):

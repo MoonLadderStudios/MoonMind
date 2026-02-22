@@ -32,6 +32,8 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueJobAuthorizationError,
     AgentQueueValidationError,
+    QueueSafeguardJob,
+    QueueSafeguardSnapshot,
     QueueSystemMetadata,
     QueueSystemResponse,
 )
@@ -597,6 +599,37 @@ def test_migration_telemetry_returns_summary(
     assert payload["publishOutcomes"]["publishedRate"] == 0.6
 
 
+def test_queue_safeguards_endpoint(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Safeguard telemetry endpoint should serialize snapshot entries."""
+
+    test_client, service = client
+    job = _build_job(status=models.AgentJobStatus.RUNNING)
+    snapshot = QueueSafeguardSnapshot(
+        generated_at=datetime.now(UTC),
+        max_runtime_seconds=60,
+        stale_lease_grace_seconds=30,
+        timed_out=(
+            QueueSafeguardJob(
+                job=job,
+                runtime_seconds=120,
+                lease_overdue_seconds=None,
+            ),
+        ),
+        stale=(),
+    )
+    service.get_queue_safeguard_snapshot.return_value = snapshot
+
+    response = test_client.get("/api/queue/telemetry/safeguards")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["maxRuntimeSeconds"] == 60
+    assert body["timedOut"][0]["id"] == str(job.id)
+    service.get_queue_safeguard_snapshot.assert_awaited_once()
+
+
 def test_complete_job_state_conflict_maps_409(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -751,6 +784,28 @@ def test_cancel_job_success_maps_service_response(
     assert response.status_code == 200
     assert response.json()["status"] == "cancelled"
     service.request_cancel.assert_awaited_once()
+
+
+def test_recover_job_clone_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Recover endpoint should delegate to service and serialize both jobs."""
+
+    test_client, service = client
+    original = _build_job(status=models.AgentJobStatus.RUNNING)
+    cloned = _build_job()
+    service.recover_job.return_value = (original, cloned)
+
+    response = test_client.post(
+        f"/api/queue/jobs/{original.id}/recover",
+        json={"mode": "clone"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recoveredJob"]["id"] == str(original.id)
+    assert body["clonedJob"]["id"] == str(cloned.id)
+    service.recover_job.assert_awaited_once()
 
 
 def test_ack_cancel_worker_mismatch_maps_403(
