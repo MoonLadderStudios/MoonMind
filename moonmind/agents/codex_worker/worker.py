@@ -3456,7 +3456,9 @@ class CodexWorker:
         publish = publish_node if isinstance(publish_node, Mapping) else {}
 
         runtime_mode = (
-            str(runtime.get("mode") or canonical_payload.get("targetRuntime") or "codex")
+            str(
+                runtime.get("mode") or canonical_payload.get("targetRuntime") or "codex"
+            )
             .strip()
             .lower()
             or "codex"
