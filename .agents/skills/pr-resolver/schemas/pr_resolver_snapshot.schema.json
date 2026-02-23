@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "pr": {
+      "type": "object",
+      "description": "Raw metadata output from gh pr view --json"
+    },
+    "ci": {
+      "type": "object",
+      "properties": {
+        "isRunning": { "type": "boolean" },
+        "hasFailures": { "type": "boolean" },
+        "failedChecks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "state": { "type": "string" },
+              "url": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["isRunning", "hasFailures", "failedChecks"]
+    },
+    "comments": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  },
+  "required": ["pr", "ci", "comments"]
+}

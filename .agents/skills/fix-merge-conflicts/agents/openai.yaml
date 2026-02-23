@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge Conflicts"
+  short_description: "Fetch main, merge, resolve conflicts, push"
+  default_prompt: "Fetch latest origin/main, merge origin/main into the current branch, resolve all conflicts, verify resolution, then commit and push."
