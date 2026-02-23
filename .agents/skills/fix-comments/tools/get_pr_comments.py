@@ -277,7 +277,11 @@ def main() -> None:
         "comments": comments,
     }
 
-    json_output = json.dumps(result, separators=(",", ":") if args.compact else None, indent=None if args.compact else 2)
+    json_output = json.dumps(
+        result,
+        separators=(",", ":") if args.compact else None,
+        indent=None if args.compact else 2,
+    )
     if args.output:
         out_path = os.path.abspath(args.output)
         if not out_path.startswith(os.path.abspath(".")):
