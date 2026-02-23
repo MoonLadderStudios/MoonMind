@@ -3,7 +3,13 @@ set -euo pipefail
 
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 NO_DEPS="${MOONMIND_CLAUDE_AUTH_NO_DEPS:-1}"
-ALLOW_INTERACTIVE="${CLAUDE_AUTH_ALLOW_INTERACTIVE:-0}"
+if [[ -n "${CLAUDE_AUTH_ALLOW_INTERACTIVE:-}" ]]; then
+  ALLOW_INTERACTIVE="$CLAUDE_AUTH_ALLOW_INTERACTIVE"
+elif [[ -t 0 && -t 1 ]]; then
+  ALLOW_INTERACTIVE=1
+else
+  ALLOW_INTERACTIVE=0
+fi
 CLAUDE_THEME="${CLAUDE_THEME:-dark}"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -18,6 +24,10 @@ fi
 RUN_OPTS=(run --rm --user root)
 if [[ "$NO_DEPS" == "1" ]]; then
   RUN_OPTS+=(--no-deps)
+fi
+
+if [[ "$ALLOW_INTERACTIVE" == "1" ]]; then
+  RUN_OPTS+=(--interactive)
 fi
 
 RUN_OPTS+=(
