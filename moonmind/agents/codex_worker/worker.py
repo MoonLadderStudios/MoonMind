@@ -4103,8 +4103,15 @@ class CodexWorker:
             )
 
         if proposal_output_path_for_skill.exists():
-            with suppress(Exception):
+            try:
                 shutil.copy2(proposal_output_path_for_skill, proposal_output_path)
+            except Exception:
+                logger.warning(
+                    "Failed to copy proposal output from %s to %s for job %s",
+                    proposal_output_path_for_skill,
+                    proposal_output_path,
+                    job.id,
+                )
 
         if proposal_output_path.exists():
             collected.append(
