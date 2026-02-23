@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import ANY, AsyncMock
@@ -65,6 +66,20 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         finished_at=None,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _build_artifact(job_id: UUID | None = None):
+    now = datetime.now(UTC)
+    return SimpleNamespace(
+        id=uuid4(),
+        job_id=job_id or uuid4(),
+        name="inputs/abc/file.png",
+        content_type="image/png",
+        size_bytes=123,
+        digest="sha256:abc123",
+        storage_path="job/inputs/abc/file.png",
+        created_at=now,
     )
 
 
@@ -254,6 +269,124 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert body["status"] == models.AgentJobStatus.QUEUED.value
     assert body["type"] == "codex_exec"
     service.create_job.assert_awaited_once()
+
+
+def test_create_job_with_attachments_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """POST /jobs/with-attachments should call attachment-aware service."""
+
+    test_client, service = client
+    job = _build_job()
+    artifact = _build_artifact(job.id)
+    service.create_job_with_attachments.return_value = (job, [artifact])
+
+    payload = {
+        "request": json.dumps(
+            {
+                "type": "task",
+                "priority": 5,
+                "payload": {"repository": "Moon/Test"},
+                "maxAttempts": 3,
+            }
+        )
+    }
+    files = [
+        (
+            "files",
+            (
+                "image.png",
+                b"\x89PNG\r\n\x1a\n" + b"\x00" * 10,
+                "image/png",
+            ),
+        )
+    ]
+
+    response = test_client.post("/api/queue/jobs/with-attachments", data=payload, files=files)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["job"]["id"] == str(job.id)
+    assert len(body["attachments"]) == 1
+    service.create_job_with_attachments.assert_awaited_once()
+    called_attachments = service.create_job_with_attachments.await_args.kwargs["attachments"]
+    assert len(called_attachments) == 1
+    assert called_attachments[0].filename == "image.png"
+    assert called_attachments[0].content_type == "image/png"
+    assert called_attachments[0].data.startswith(b"\x89PNG")
+
+
+def test_create_job_with_attachments_invalid_request(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Malformed job request payload should return HTTP 422."""
+
+    test_client, service = client
+    files = [
+        (
+            "files",
+            ("image.png", b"\x89PNG\r\n\x1a\n", "image/png"),
+        )
+    ]
+    response = test_client.post(
+        "/api/queue/jobs/with-attachments",
+        data={"request": "{not-json}"},
+        files=files,
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    service.create_job_with_attachments.assert_not_awaited()
+
+
+def test_create_job_with_attachments_file_too_large(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Router should reject oversized attachments before service dispatch."""
+
+    test_client, service = client
+    monkeypatch.setattr(
+        settings.spec_workflow,
+        "agent_job_attachment_max_bytes",
+        2,
+    )
+    files = [
+        (
+            "files",
+            ("image.png", b"\x00" * 3, "image/png"),
+        )
+    ]
+    response = test_client.post(
+        "/api/queue/jobs/with-attachments",
+        data={"request": json.dumps({"type": "task", "payload": {}})},
+        files=files,
+    )
+    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    service.create_job_with_attachments.assert_not_awaited()
+
+
+def test_create_job_with_attachments_total_too_large(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Router should enforce total attachment byte limits."""
+
+    test_client, service = client
+    monkeypatch.setattr(
+        settings.spec_workflow,
+        "agent_job_attachment_total_bytes",
+        4,
+    )
+    files = [
+        ("files", ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")),
+        ("files", ("b.png", b"\x89PNG\r\n\x1a\n", "image/png")),
+    ]
+    response = test_client.post(
+        "/api/queue/jobs/with-attachments",
+        data={"request": json.dumps({"type": "task", "payload": {}})},
+        files=files,
+    )
+    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    service.create_job_with_attachments.assert_not_awaited()
 
 
 def test_create_manifest_job_sanitizes_payload(

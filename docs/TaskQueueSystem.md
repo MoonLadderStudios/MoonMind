@@ -58,6 +58,11 @@ Queue status model:
 - `POST /api/queue/jobs/{jobId}/artifacts/upload`
 - `GET /api/queue/jobs/{jobId}/artifacts`
 - `GET /api/queue/jobs/{jobId}/artifacts/{artifactId}/download`
+- `POST /api/queue/jobs/with-attachments`
+- `GET /api/queue/jobs/{jobId}/attachments`
+- `GET /api/queue/jobs/{jobId}/attachments/{attachmentId}/download`
+- `GET /api/queue/jobs/{jobId}/attachments/worker`
+- `GET /api/queue/jobs/{jobId}/attachments/{attachmentId}/download/worker`
 
 ### 3.2 Task Preset Catalog REST
 
@@ -105,6 +110,16 @@ steps = merge_expanded_steps(existing_steps=[], expanded_steps=expanded["steps"]
 - `queue.upload_artifact`
 
 MCP tools map to the same queue service methods used by REST.
+
+### 3.4 Attachment Submission & Retrieval
+
+Phase 1 of the Tasks Image System adds attachment-aware endpoints:
+
+- `POST /api/queue/jobs/with-attachments` accepts multipart requests containing a `request` JSON string (`CreateJobRequest`) plus one or more `files[]` entries. Attachments are validated (PNG/JPEG/WebP only, size/count/total-byte limits configurable via `AGENT_JOB_ATTACHMENT_*` settings) and stored as artifacts under the reserved `inputs/<attachmentUuid>/<sanitized-filename>` namespace.
+- `GET /api/queue/jobs/{jobId}/attachments` and `/attachments/{attachmentId}/download` expose attachment metadata and download streams to the job owner (user auth required).
+- Worker-scoped list/download endpoints (`.../attachments/worker`) require an active claim (`job.status = running` and `claimed_by` matches worker token).
+
+The `inputs/` namespace is reserved for user-provided attachments. Worker uploads via `POST /artifacts/upload` are rejected when the artifact name starts with `inputs/`, ensuring runtime output cannot masquerade as user input. Workers download attachments during prepare stage and hydrate `.moonmind/inputs/` plus `.moonmind/vision/image_context.md`.
 
 ## 4. Canonical Task Payload
 
