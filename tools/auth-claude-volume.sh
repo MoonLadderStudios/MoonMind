@@ -15,7 +15,7 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   docker network create "$NETWORK_NAME" >/dev/null
 fi
 
-RUN_OPTS=(run --rm --user app)
+RUN_OPTS=(run --rm --user root)
 if [[ "$NO_DEPS" == "1" ]]; then
   RUN_OPTS+=(--no-deps)
 fi
@@ -32,6 +32,9 @@ docker compose "${RUN_OPTS[@]}" codex-worker \
   bash -lc '
 set -euo pipefail
 
+claude_home="/home/app/.claude"
+settings_file="$claude_home/settings.json"
+
 status_quiet() {
   claude auth status >/dev/null 2>&1 || claude login status >/dev/null 2>&1
 }
@@ -40,11 +43,56 @@ status_verbose() {
   claude auth status || claude login status
 }
 
-set_theme_dark() {
-  # Some CLI builds support explicit theme config; ignore failures to stay
-  # compatible across versions.
-  claude config set theme dark >/dev/null 2>&1 || true
-  claude config set -g theme dark >/dev/null 2>&1 || true
+initialize_settings() {
+  mkdir -p "$claude_home" "$claude_home/debug"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$settings_file" "$CLAUDE_THEME" <<'PY'
+import json
+import os
+import sys
+
+path, theme = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
+    except Exception:
+        data = {}
+
+data.update(
+    {
+        "theme": theme,
+        "hasCompletedOnboarding": True,
+        "hasCompletedClaudeInChromeOnboarding": True,
+        "hasCompletedProjectOnboarding": True,
+        "hasCompletedAuthFlow": True,
+        "hasCompletedResults": True,
+    }
+)
+
+with open(path + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+    f.write("\n")
+os.replace(path + ".tmp", path)
+PY
+  else
+    cat > "$settings_file" <<EOF
+{
+  "theme": "${CLAUDE_THEME}",
+  "hasCompletedOnboarding": true,
+  "hasCompletedClaudeInChromeOnboarding": true,
+  "hasCompletedProjectOnboarding": true,
+  "hasCompletedAuthFlow": true,
+  "hasCompletedResults": true
+}
+EOF
+  fi
+
+  chown -R app:app "$claude_home"
 }
 
 if status_quiet; then
@@ -52,18 +100,13 @@ if status_quiet; then
   exit 0
 fi
 
-set_theme_dark
+initialize_settings
 
 if [[ "${CLAUDE_AUTH_ALLOW_INTERACTIVE:-0}" == "1" ]]; then
-  if claude auth login; then
-    :
-  elif claude login --device-auth; then
-    :
-  else
-    claude login
-  fi
+  claude auth login
 else
-  claude login --device-auth
+  echo "Claude auth is not interactive in this run. Set CLAUDE_AUTH_ALLOW_INTERACTIVE=1 to open OAuth login."
+  exit 1
 fi
 
 status_verbose
