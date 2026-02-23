@@ -36,6 +36,11 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   docker network create "$NETWORK_NAME" >/dev/null
 fi
 
+COMPOSE_NETWORK_ARGS=()
+if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
+  COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
+fi
+
 ACCESS_TOKEN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -114,7 +119,7 @@ docker compose run --rm \
   -e CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   -e FORCE_DARK_THEME="$FORCE_DARK_THEME" \
   -v "$TOKEN_FILE:/tmp/claude-access-token.txt:ro" \
-  --network "$NETWORK_NAME" codex-worker \
+  "${COMPOSE_NETWORK_ARGS[@]}" codex-worker \
   bash -lc '
 set -e
 TOKEN="$(cat /tmp/claude-access-token.txt | tr -d "\r\n")"

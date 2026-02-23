@@ -14,6 +14,11 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   docker network create "$NETWORK_NAME" >/dev/null
 fi
 
+COMPOSE_NETWORK_ARGS=()
+if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
+  COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
+fi
+
 if [ ! -t 0 ] || [ ! -t 1 ]; then
   echo "Error: OAuth login requires an interactive terminal."
   echo "Run this command from an interactive shell or use the token mode instead."
@@ -26,7 +31,7 @@ docker compose run --rm -it \
   -e CLAUDE_AUTH_ALLOW_INTERACTIVE=1 \
   -e CLAUDE_HOME="$CLAUDE_HOME" \
   -e CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
-  --network "$NETWORK_NAME" codex-worker \
+  "${COMPOSE_NETWORK_ARGS[@]}" codex-worker \
   bash -lc '
 set -e
 node - <<'"'"'EOF'"'"'
