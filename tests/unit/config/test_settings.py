@@ -62,6 +62,17 @@ def test_default_model_fields_removed(app_settings_defaults):
     assert not hasattr(settings, "default_embed_model")
 
 
+class TestGoogleSettings:
+    def test_google_api_key_accepts_gemini_alias(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+        settings = GoogleSettings(_env_file=None)
+
+        assert settings.google_api_key == "gemini-key"
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+
 class TestAtlassianSettings:
     def test_atlassian_url_correction(self, monkeypatch):
         # Test case 1: URL with "https://https://"

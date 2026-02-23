@@ -486,7 +486,21 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
         lowered = str(exc).lower()
-        if "exceeds max bytes" in lowered:
+        if "attachments exceed max count" in lowered:
+            code = "attachments_too_many"
+            message = "Too many attachments were provided."
+        elif "attachments exceed max total bytes" in lowered:
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            code = "attachment_total_too_large"
+            message = "Combined attachment size exceeds the maximum allowed total."
+        elif "attachment exceeds max bytes" in lowered:
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            code = "attachment_too_large"
+            message = "Attachment exceeds the maximum allowed size."
+        elif "attachment content type" in lowered:
+            code = "attachment_type_not_allowed"
+            message = "Attachment content type is not allowed."
+        elif "exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
             message = "Artifact exceeds the maximum allowed size."
@@ -565,12 +579,12 @@ async def create_job_with_attachments(
     try:
         create_request = CreateJobRequest.model_validate_json(request_payload)
     except ValidationError as exc:
+        logger.info("Invalid attachment queue payload: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "invalid_queue_payload",
                 "message": "Queue request payload is invalid.",
-                "errors": exc.errors(),
             },
         ) from exc
 
@@ -599,6 +613,25 @@ async def create_job_with_attachments(
                     "message": "Attachment captions must be provided as a JSON object.",
                 },
             )
+
+    max_count = max(1, int(settings.spec_workflow.agent_job_attachment_max_count))
+    if len(files) > max_count:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "attachments_too_many",
+                "message": "Too many attachments were provided.",
+            },
+        )
+
+    if captions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "attachment_captions_not_supported",
+                "message": "Attachment captions are not yet supported.",
+            },
+        )
 
     per_file_limit = max(1, int(settings.spec_workflow.agent_job_attachment_max_bytes))
     total_limit = max(1, int(settings.spec_workflow.agent_job_attachment_total_bytes))
@@ -632,7 +665,7 @@ async def create_job_with_attachments(
                 filename=upload.filename or "",
                 content_type=upload.content_type,
                 data=payload,
-                caption=captions.get(upload.filename or ""),
+                caption=captions.get((upload.filename or "").strip()),
             )
         )
 

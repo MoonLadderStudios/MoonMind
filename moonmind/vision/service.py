@@ -171,9 +171,11 @@ class VisionService:
             if entry.digest:
                 lines.append(f"   - digest: {entry.digest}")
             lines.append("   - description:")
-            lines.append(f"     {entry.description}")
+            for line in entry.description.splitlines() or [""]:
+                lines.append(f"     {line}")
             lines.append("   - ocr:")
-            lines.append(f"     {entry.ocr_text}")
+            for line in entry.ocr_text.splitlines() or [""]:
+                lines.append(f"     {line}")
         if status is VisionContextStatus.PROVIDER_UNAVAILABLE:
             lines.append("")
             lines.append(

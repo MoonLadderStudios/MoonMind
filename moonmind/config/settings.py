@@ -952,7 +952,12 @@ class SecuritySettings(BaseSettings):
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
-    google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
+    google_api_key: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices(
+            "google_api_key", "GOOGLE_API_KEY", "GEMINI_API_KEY"
+        ),
+    )
     google_chat_model: str = Field("gemini-2.5-flash", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
         "gemini-embedding-001", env="GOOGLE_EMBEDDING_MODEL"
