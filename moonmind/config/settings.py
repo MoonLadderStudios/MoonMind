@@ -169,13 +169,13 @@ class SpecWorkflowSettings(BaseSettings):
         description="Maximum combined size (bytes) for all input attachments for a job.",
         gt=0,
     )
-    agent_job_attachment_allowed_content_types: Annotated[
-        tuple[str, ...], NoDecode
-    ] = Field(
-        ("image/png", "image/jpeg", "image/webp"),
-        env="AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
-        validation_alias=AliasChoices("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES"),
-        description="Allowed MIME types for input attachments.",
+    agent_job_attachment_allowed_content_types: Annotated[tuple[str, ...], NoDecode] = (
+        Field(
+            ("image/png", "image/jpeg", "image/webp"),
+            env="AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
+            validation_alias=AliasChoices("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES"),
+            description="Allowed MIME types for input attachments.",
+        )
     )
     vision_context_enabled: bool = Field(
         True,
@@ -1456,7 +1456,9 @@ class AppSettings(BaseSettings):
     workflow_git_user_name: Optional[str] = Field(
         None,
         env="WORKFLOW_GIT_USER_NAME",
-        validation_alias=AliasChoices("workflow_git_user_name", "WORKFLOW_GIT_USER_NAME"),
+        validation_alias=AliasChoices(
+            "workflow_git_user_name", "WORKFLOW_GIT_USER_NAME"
+        ),
         description="Compatibility passthrough for workflow git user display name.",
         exclude=True,
     )
@@ -1472,7 +1474,9 @@ class AppSettings(BaseSettings):
     moonmind_git_user_name: Optional[str] = Field(
         None,
         env="MOONMIND_GIT_USER_NAME",
-        validation_alias=AliasChoices("moonmind_git_user_name", "MOONMIND_GIT_USER_NAME"),
+        validation_alias=AliasChoices(
+            "moonmind_git_user_name", "MOONMIND_GIT_USER_NAME"
+        ),
         description="Compatibility passthrough for legacy MoonMind git user display name.",
         exclude=True,
     )

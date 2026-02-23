@@ -1085,9 +1085,7 @@ class AgentQueueService:
         if not artifact_name:
             raise AgentQueueValidationError("name must be a non-empty string")
         try:
-            normalized_artifact_name = (
-                artifact_name.replace("\\", "/").strip()
-            )
+            normalized_artifact_name = artifact_name.replace("\\", "/").strip()
             while normalized_artifact_name.startswith("./"):
                 normalized_artifact_name = normalized_artifact_name[2:]
             if not normalized_artifact_name:
