@@ -8,22 +8,27 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-def run_command(cmd, failure_hint=""):
-    try:
-        output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
-        if output.strip() == "":
-            return {}
-        return json.loads(output)
-    except subprocess.CalledProcessError as e:
-        print(f"Command failed: {' '.join(cmd)}
-{failure_hint}
-{e.output}", file=sys.stderr)
-        sys.exit(1)
-    except json.JSONDecodeError:
-        print(f"Command returned invalid JSON: {' '.join(cmd)}", file=sys.stderr)
-        sys.exit(1)
+def run_command(cmd, failure_hint="", max_attempts=3, initial_delay_seconds=1.0, max_delay_seconds=8.0):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+            if output.strip() == "":
+                return {}
+            return json.loads(output)
+        except subprocess.CalledProcessError as e:
+            if attempt < max_attempts:
+                delay = min(max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1)))
+                print(f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...", file=sys.stderr)
+                time.sleep(delay)
+                continue
+            print(f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{e.output}", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError:
+            print(f"Command returned invalid JSON: {' '.join(cmd)}", file=sys.stderr)
+            sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(description="Snapshot PR state for pr-resolver skill")
@@ -67,8 +72,8 @@ def main():
                 })
 
     # 3. Fetch Comments
-    # tools/get_branch_pr_comments.py should be in the root of the project
-    comments_script = Path("tools/get_branch_pr_comments.py")
+    # .agents/skills/fix-comments/tools/get_branch_pr_comments.py should be in the root of the project
+    comments_script = Path(".agents/skills/fix-comments/tools/get_branch_pr_comments.py")
     comments_data = {}
     if comments_script.exists():
         comments_cmd = [sys.executable, str(comments_script), "--compact"]

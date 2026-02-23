@@ -44,7 +44,7 @@ def detect_repo_from_git() -> tuple[str, str] | None:
 		return None
 
 	remote_url = remote_bytes.decode("utf-8").strip()
-	match = re.search(r"(?:[:/])([^/]+)/([^/.]+)(?:\.git)?$", remote_url)
+	match = re.search(r"(?:[:/])([^/]+)/(.+?)(?:\.git)?$", remote_url)
 	if not match:
 		return None
 
@@ -120,6 +120,8 @@ def api_get_json(
 			raise RuntimeError(f"Network error while calling {url}: {exc.reason}") from exc
 		except json.JSONDecodeError as exc:
 			raise RuntimeError(f"Invalid JSON returned from {url}: {exc}") from exc
+
+	raise RuntimeError(f"Failed to fetch {url} after {max_attempts} attempts")
 
 
 def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
@@ -257,10 +259,13 @@ def main() -> None:
 
 	json_output = json.dumps(result, separators=(",", ":") if args.compact else None, indent=None if args.compact else 2)
 	if args.output:
-		with open(args.output, "w", encoding="utf-8") as handle:
+		out_path = os.path.abspath(args.output)
+		if not out_path.startswith(os.path.abspath(".")):
+			raise PermissionError("Output path must be within the current directory")
+		with open(out_path, "w", encoding="utf-8") as handle:
 			handle.write(json_output)
 			handle.write("\n")
-		eprint(f"Wrote {len(comments)} comments to {args.output}")
+		eprint(f"Wrote {len(comments)} comments to {out_path}")
 	else:
 		print(json_output)
 

@@ -253,9 +253,9 @@ def main() -> int:
 	)
 
 	if args.output:
-		output_path = Path(args.output)
-		if not output_path.is_absolute():
-			output_path = Path.cwd() / output_path
+		output_path = Path(args.output).resolve()
+		if not str(output_path).startswith(str(Path.cwd())):
+			raise PermissionError("Output path must be within the current directory")
 		output_path.parent.mkdir(parents=True, exist_ok=True)
 		output_path.write_text(json_output + "\n", encoding="utf-8")
 		eprint(f"Wrote {result.get('comment_count', 0)} comments to {output_path}")
