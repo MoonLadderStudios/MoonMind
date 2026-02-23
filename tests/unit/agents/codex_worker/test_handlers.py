@@ -510,10 +510,13 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
 
     assert result.succeeded is True
     assert any(cmd[:2] == ["git", "clone"] for cmd in calls)
-    assert (
-        ["codex", "exec", "--sandbox", "danger-full-access", "Implement task"]
-        in calls
-    )
+    assert [
+        "codex",
+        "exec",
+        "--sandbox",
+        "danger-full-access",
+        "Implement task",
+    ] in calls
     assert any(cmd[:2] == ["git", "diff"] for cmd in calls)
     assert any(item.name == "logs/codex_exec.log" for item in result.artifacts)
     assert any(item.name == "patches/changes.patch" for item in result.artifacts)
