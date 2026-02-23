@@ -178,7 +178,7 @@ services:
     environment:
       - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
     command: >-
-      sh -lc "mkdir -p ${CODEX_HOME} && chown -R 1000:1000 ${CODEX_HOME} && chmod 0775 ${CODEX_HOME}"
+      sh -lc "CODEX_HOME=$${CODEX_HOME:-/home/app/.codex}; mkdir -p \"$${CODEX_HOME}\" && chown -R 1000:1000 \"$${CODEX_HOME}\" && chmod 0775 \"$${CODEX_HOME}\""
     volumes:
       - codex_auth_volume:${CODEX_HOME:-/home/app/.codex}
     restart: "no"
@@ -188,7 +188,7 @@ services:
     environment:
       - CLAUDE_HOME=${CLAUDE_HOME:-/home/app/.claude}
     command: >-
-      sh -lc "mkdir -p ${CLAUDE_HOME} && chown -R 1000:1000 ${CLAUDE_HOME} && chmod 0775 ${CLAUDE_HOME}"
+      sh -lc "CLAUDE_HOME=$${CLAUDE_HOME:-/home/app/.claude}; mkdir -p \"$${CLAUDE_HOME}\" && chown -R 1000:1000 \"$${CLAUDE_HOME}\" && chmod 0775 \"$${CLAUDE_HOME}\""
     volumes:
       - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
     restart: "no"
