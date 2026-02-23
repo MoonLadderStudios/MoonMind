@@ -13,7 +13,11 @@ from pathlib import Path
 
 
 def run_command(
-    cmd, failure_hint="", max_attempts=3, initial_delay_seconds=1.0, max_delay_seconds=8.0
+    cmd,
+    failure_hint="",
+    max_attempts=3,
+    initial_delay_seconds=1.0,
+    max_delay_seconds=8.0,
 ):
     for attempt in range(1, max_attempts + 1):
         try:
@@ -93,7 +97,9 @@ def main():
 
     # 3. Fetch Comments
     # .agents/skills/fix-comments/tools/get_branch_pr_comments.py should be in the root of the project
-    comments_script = Path(".agents/skills/fix-comments/tools/get_branch_pr_comments.py")
+    comments_script = Path(
+        ".agents/skills/fix-comments/tools/get_branch_pr_comments.py"
+    )
     comments_data = {}
     if comments_script.exists():
         comments_cmd = [sys.executable, str(comments_script), "--compact"]
