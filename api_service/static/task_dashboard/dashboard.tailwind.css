@@ -293,6 +293,123 @@ tbody tr:hover {
   background: rgb(var(--mm-accent) / 0.18);
 }
 
+.queue-layouts {
+  display: grid;
+  gap: 1rem;
+}
+
+.queue-table-wrapper {
+  display: block;
+}
+
+.queue-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.queue-card {
+  border: 1px solid rgb(var(--mm-border) / 0.8);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgb(var(--mm-panel) / 0.78);
+  box-shadow: var(--mm-shadow);
+  display: grid;
+  gap: 0.85rem;
+}
+
+.queue-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.queue-card-title {
+  font-weight: 600;
+  text-decoration: none;
+  color: inherit;
+}
+
+.queue-card-title:hover {
+  text-decoration: underline;
+}
+
+.queue-card-meta {
+  margin: 0.2rem 0 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.85rem;
+}
+
+.queue-card-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+}
+
+.queue-card-fields {
+  margin: 0;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.queue-card-fields > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.queue-card-fields dt {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(var(--mm-muted));
+}
+
+.queue-card-fields dd {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.queue-card-actions {
+  margin-top: 0.25rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.queue-card-actions .button {
+  flex: 1 1 auto;
+  text-align: center;
+}
+
+@media (min-width: 768px) {
+  .queue-card-list {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .queue-table-wrapper {
+    display: none;
+  }
+
+  .queue-table-wrapper[data-sticky-table="true"] {
+    display: block;
+  }
+
+  .queue-card-list {
+    display: grid;
+  }
+
+  .queue-card-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 .status {
   display: inline-flex;
   align-items: center;

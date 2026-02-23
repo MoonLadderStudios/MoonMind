@@ -1123,27 +1123,45 @@
     syncAutoRefreshControls();
   }
 
-  function renderRowsTable(rows) {
+  function renderQueueTable(rows) {
     if (rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
     }
 
+    const primaryFields = queueFieldDefinitions.filter(
+      (definition) => definition.tableSection !== "timeline",
+    );
+    const timelineFields = queueFieldDefinitions.filter(
+      (definition) => definition.tableSection === "timeline",
+    );
+
+    const renderDefinitionHeader = (definition) =>
+      `<th data-field="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</th>`;
+    const primaryHeaders = primaryFields.map(renderDefinitionHeader).join("");
+    const timelineHeaders = timelineFields.map(renderDefinitionHeader).join("");
+
+    const renderDefinitionCell = (row, definition) =>
+      `<td data-field="${escapeHtml(definition.key)}">${renderQueueFieldValue(row, definition)}</td>`;
+
     const body = rows
       .map((row) => {
+        const primaryCells = primaryFields.map((definition) => renderDefinitionCell(row, definition)).join("");
+        const timelineCells = timelineFields.map((definition) => renderDefinitionCell(row, definition)).join("");
+        const linkTarget = row.link ? escapeHtml(row.link) : "#";
+        const idLabel = row.id ? escapeHtml(row.id) : "-";
+        const titleLabel = row.title ? escapeHtml(row.title) : "-";
+        const sourceLabel = row.sourceLabel ? escapeHtml(row.sourceLabel) : "-";
+        const rawStatus = String(row.rawStatus || "").trim() || "-";
         return `
         <tr>
-          <td>${escapeHtml(row.sourceLabel)}</td>
-          <td><a href="${escapeHtml(row.link)}">${escapeHtml(row.id)}</a></td>
-          <td>${escapeHtml(row.queueName || "-")}</td>
-          <td>${renderRuntime(row.runtimeMode)}</td>
-          <td>${escapeHtml(row.skillId || "-")}</td>
+          <td>${sourceLabel}</td>
+          <td><a href="${linkTarget}">${idLabel}</a></td>
+          ${primaryCells}
           <td>${statusBadge(row.source, row.rawStatus)} <span class="small">${escapeHtml(
-            row.rawStatus,
+            rawStatus,
           )}</span></td>
-          <td>${escapeHtml(row.title)}</td>
-          <td>${formatTimestamp(row.createdAt)}</td>
-          <td>${formatTimestamp(row.startedAt)}</td>
-          <td>${formatTimestamp(row.finishedAt)}</td>
+          <td>${titleLabel}</td>
+          ${timelineCells}
         </tr>
       `;
       })
@@ -1155,19 +1173,107 @@
           <tr>
             <th>Source</th>
             <th>ID</th>
-            <th>Queue</th>
-            <th>Runtime</th>
-            <th>Skill</th>
+            ${primaryHeaders}
             <th>Status</th>
             <th>Title</th>
-            <th>Created</th>
-            <th>Started</th>
-            <th>Finished</th>
+            ${timelineHeaders}
           </tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
     `;
+  }
+
+  function renderRowsTable(rows) {
+    return renderQueueTable(rows);
+  }
+
+  function renderQueueCards(rows) {
+    if (!rows || rows.length === 0) {
+      return "";
+    }
+    return rows
+      .map((row) => {
+        if (row.source !== "queue") {
+          return "";
+        }
+        const fieldItems = queueFieldDefinitions
+          .map(
+            (definition) => `
+              <div>
+                <dt>${escapeHtml(definition.label)}</dt>
+                <dd>${renderQueueFieldValue(row, definition)}</dd>
+              </div>
+            `,
+          )
+          .join("");
+        const queueLabel = row.queueName || defaultQueueName;
+        const skillLabel = row.skillId || "";
+        const metaParts = [queueLabel, skillLabel].filter(Boolean);
+        const metaText = metaParts.join(" · ") || queueLabel;
+        const linkTarget = row.link ? escapeHtml(row.link) : "#";
+        const titleBase = row.title ? row.title : "Queue Job";
+        const titleWithId = row.id ? `${titleBase} · ${row.id}` : titleBase;
+        const rawStatus = String(row.rawStatus || "").trim() || "-";
+        return `
+          <li class="queue-card">
+            <div class="queue-card-header">
+              <div>
+                <a href="${linkTarget}" class="queue-card-title">${escapeHtml(titleWithId)}</a>
+                <p class="queue-card-meta">${escapeHtml(metaText)}</p>
+              </div>
+              <div class="queue-card-status">
+                ${statusBadge(row.source, row.rawStatus)}
+                <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
+              </div>
+            </div>
+            <dl class="queue-card-fields">
+              ${fieldItems}
+            </dl>
+            <div class="queue-card-actions">
+              <a href="${linkTarget}" class="button secondary">View details</a>
+            </div>
+          </li>
+        `;
+      })
+      .filter(Boolean)
+      .join("");
+  }
+
+  function renderQueueLayouts(rows) {
+    if (!rows || rows.length === 0) {
+      return "<p class='small'>No rows available.</p>";
+    }
+    const hasQueueRows = rows.some((row) => row.source === "queue");
+    const hasNonQueueRows = rows.some((row) => row.source !== "queue");
+    const tableAttributes = [
+      'class="queue-table-wrapper"',
+      'data-layout="table"',
+      `data-sticky-table="${hasNonQueueRows ? "true" : "false"}"`,
+    ].join(" ");
+    const cardsHtml = hasQueueRows
+      ? `<ul class="queue-card-list" data-layout="card" role="list">${renderQueueCards(rows)}</ul>`
+      : "";
+    return `
+      <div class="queue-layouts">
+        <div ${tableAttributes}>${renderQueueTable(rows)}</div>
+        ${cardsHtml}
+      </div>
+    `;
+  }
+
+  function renderActivePageContent(rows, errors = []) {
+    const notices = (errors || [])
+      .map(
+        (source) =>
+          `<div class="notice error">${escapeHtml(
+            `Unable to load ${source} data source.`,
+          )}</div>`,
+      )
+      .join("");
+    const normalizedRows = Array.isArray(rows) ? rows.slice() : [];
+    const layouts = renderQueueLayouts(sortRows(normalizedRows));
+    return `${notices}${layouts}`;
   }
 
   function summarizeInstructionPreview(value) {
@@ -1225,6 +1331,73 @@
         link: `/tasks/queue/${encodeURIComponent(String(pick(item, "id") || ""))}`,
       };
     });
+  }
+
+  // Queue/table/card metadata lives in one definition list so new fields only
+  // require a single entry plus a render helper. When expanding queue metadata,
+  // update docs/TaskUiQueue.md ("Extending queue fields") and add tests that
+  // exercise the new label/value pairs.
+  const queueFieldDefinitions = [
+    {
+      key: "queueName",
+      label: "Queue",
+      render: (row) => escapeHtml(row.queueName || defaultQueueName),
+      tableSection: "primary",
+    },
+    {
+      key: "runtimeMode",
+      label: "Runtime",
+      render: (row) => renderRuntime(row.runtimeMode),
+      tableSection: "primary",
+    },
+    {
+      key: "skillId",
+      label: "Skill",
+      render: (row) => escapeHtml(row.skillId || "-"),
+      tableSection: "primary",
+    },
+    {
+      key: "createdAt",
+      label: "Created",
+      render: (row) => escapeHtml(formatTimestamp(row.createdAt)),
+      tableSection: "timeline",
+    },
+    {
+      key: "startedAt",
+      label: "Started",
+      render: (row) => escapeHtml(formatTimestamp(row.startedAt)),
+      tableSection: "timeline",
+    },
+    {
+      key: "finishedAt",
+      label: "Finished",
+      render: (row) => escapeHtml(formatTimestamp(row.finishedAt)),
+      tableSection: "timeline",
+    },
+  ];
+
+  function renderQueueFieldValue(row, definition) {
+    if (!definition || typeof definition.render !== "function") {
+      return "-";
+    }
+    const rendered = definition.render(row);
+    if (rendered === null || rendered === undefined || rendered === "") {
+      return "-";
+    }
+    return rendered;
+  }
+
+  if (typeof window !== "undefined") {
+    window.__queueLayoutTest = {
+      queueFieldDefinitions,
+      renderQueueFieldValue,
+      renderQueueTable,
+      renderQueueCards,
+      renderQueueLayouts,
+      renderActivePageContent,
+      renderRowsTable,
+      toQueueRows,
+    };
   }
 
   async function apiPromoteProposal(proposalId, overrides = {}) {
@@ -1448,19 +1621,11 @@
       });
 
       const notices = errors
-        .map(
-          (source) =>
-            `<div class="notice error">${escapeHtml(
-              `Unable to load ${source} data source.`,
-            )}</div>`,
-        )
-        .join("");
-
       root.querySelector(".panel")?.remove();
       setView(
         "Active Tasks",
         `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
-        `${notices}${renderRowsTable(sortRows(rows))}`,
+        renderActivePageContent(rows, errors),
       );
     };
 
@@ -1628,7 +1793,7 @@
       setView(
         "Queue Jobs",
         `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-        `${telemetryHtml}${renderQueueFilters()}${renderRowsTable(filteredRows)}`,
+        `${telemetryHtml}${renderQueueFilters()}${renderQueueLayouts(filteredRows)}`,
       );
       attachFilterHandlers(rows);
     }
@@ -5547,19 +5712,28 @@
   }
 
   const disposeTheme = initTheme();
-  window.addEventListener("beforeunload", () => {
-    stopPolling();
-    stopPersistentPolling();
-    if (typeof disposeTheme === "function") {
-      disposeTheme();
-    }
-  });
-  renderForPath(window.location.pathname).catch((error) => {
-    console.error("dashboard render failed", error);
-    setView(
-      "Dashboard Error",
-      "Unexpected rendering failure.",
-      "<div class='notice error'>Unexpected dashboard rendering failure.</div>",
-    );
-  });
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("beforeunload", () => {
+      stopPolling();
+      stopPersistentPolling();
+      if (typeof disposeTheme === "function") {
+        disposeTheme();
+      }
+    });
+  }
+
+  const skipInitialRender = Boolean(
+    window.__MOONMIND_DASHBOARD_TEST && window.__MOONMIND_DASHBOARD_TEST.skipInitialRender,
+  );
+
+  if (!skipInitialRender) {
+    renderForPath(window.location.pathname).catch((error) => {
+      console.error("dashboard render failed", error);
+      setView(
+        "Dashboard Error",
+        "Unexpected rendering failure.",
+        "<div class='notice error'>Unexpected dashboard rendering failure.</div>",
+      );
+    });
+  }
 })();
