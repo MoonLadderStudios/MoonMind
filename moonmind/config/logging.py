@@ -92,8 +92,10 @@ def configure_logging(
         default_fields: Base fields appended to each structured log record
     """
     if structured is None:
-        env_value = os.getenv("STRUCTURED_LOGS") or os.getenv(
-            "SPEC_WORKFLOW_STRUCTURED_LOGS"
+        env_value = (
+            os.getenv("WORKFLOW_STRUCTURED_LOGS")
+            or os.getenv("STRUCTURED_LOGS")
+            or os.getenv("SPEC_WORKFLOW_STRUCTURED_LOGS")
         )
         structured = env_value.lower() in {"1", "true", "yes"} if env_value else False
 

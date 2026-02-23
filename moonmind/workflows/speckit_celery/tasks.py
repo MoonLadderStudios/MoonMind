@@ -397,10 +397,18 @@ class _MetricsEmitter:
     """Best-effort StatsD emitter used for workflow task instrumentation."""
 
     def __init__(self) -> None:
-        prefix = os.getenv("SPEC_WORKFLOW_METRICS_PREFIX", "moonmind.spec_workflow")
+        prefix = (
+            os.getenv("WORKFLOW_METRICS_PREFIX")
+            or os.getenv("SPEC_WORKFLOW_METRICS_PREFIX")
+            or "moonmind.spec_workflow"
+        )
         self._prefix = prefix.rstrip(".")
-        host = os.getenv("SPEC_WORKFLOW_METRICS_HOST", os.getenv("STATSD_HOST"))
-        port = os.getenv("SPEC_WORKFLOW_METRICS_PORT", os.getenv("STATSD_PORT", "8125"))
+        host = os.getenv("WORKFLOW_METRICS_HOST") or os.getenv(
+            "SPEC_WORKFLOW_METRICS_HOST", os.getenv("STATSD_HOST")
+        )
+        port = os.getenv("WORKFLOW_METRICS_PORT") or os.getenv(
+            "SPEC_WORKFLOW_METRICS_PORT", os.getenv("STATSD_PORT", "8125")
+        )
         self._configured = bool(host)
         self._enabled = self._configured
         self._address: tuple[str, int] | None = None

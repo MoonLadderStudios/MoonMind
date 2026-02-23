@@ -62,7 +62,7 @@ The **Codex worker group** is a set of Celery worker processes bound exclusively
 Implementation entrypoints:
 
 - `celery_worker/speckit_worker.py` – Celery worker bootstrap + Codex helpers.:contentReference[oaicite:18]{index=18}
-- `docker-compose.yaml` – defines the `celery_codex_worker` service using the shared `x-celery-worker-base` image and a Codex-only queue (`SPEC_WORKFLOW_CODEX_QUEUE` defaulting to `codex`).:contentReference[oaicite:20]{index=20}
+- `docker-compose.yaml` – defines the `celery_codex_worker` service using the shared `x-celery-worker-base` image and a Codex-only queue (`WORKFLOW_CODEX_QUEUE`, legacy alias `SPEC_WORKFLOW_CODEX_QUEUE`) defaulting to `codex`.:contentReference[oaicite:20]{index=20}
 
 ### 3.2 Scaling the Worker Group
 
@@ -79,7 +79,7 @@ Scaling strategies:
 
 Compose highlights:
 
-- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${CELERY_DEFAULT_QUEUE:-speckit},${SPEC_WORKFLOW_CODEX_QUEUE:-codex}` so discovery and Codex phases can execute on the same worker.
+- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${CELERY_DEFAULT_QUEUE:-speckit},${WORKFLOW_CODEX_QUEUE:-${SPEC_WORKFLOW_CODEX_QUEUE:-codex}}` so discovery and Codex phases can execute on the same worker.
 - The worker inherits the shared Celery image and mounts the Codex auth volume at `${CODEX_VOLUME_PATH:-/home/app/.codex}` via `CODEX_VOLUME_NAME`.
 - The managed Codex config template lives at `/app/api_service/config.template.toml` and is exposed through `CODEX_TEMPLATE_PATH` for non-interactive runs.
 

@@ -293,8 +293,11 @@ class CodexWorkerConfig:
         default_skill = (
             str(
                 source.get(
-                    "MOONMIND_DEFAULT_SKILL",
-                    source.get("SPEC_WORKFLOW_DEFAULT_SKILL", "speckit"),
+                    "WORKFLOW_DEFAULT_SKILL",
+                    source.get(
+                        "SPEC_WORKFLOW_DEFAULT_SKILL",
+                        source.get("MOONMIND_DEFAULT_SKILL", "speckit"),
+                    ),
                 )
             ).strip()
             or "speckit"
@@ -302,10 +305,13 @@ class CodexWorkerConfig:
         skill_policy_mode = (
             str(
                 source.get(
-                    "MOONMIND_SKILL_POLICY_MODE",
+                    "WORKFLOW_SKILL_POLICY_MODE",
                     source.get(
                         "SPEC_WORKFLOW_SKILL_POLICY_MODE",
-                        source.get("SKILL_POLICY_MODE", "permissive"),
+                        source.get(
+                            "MOONMIND_SKILL_POLICY_MODE",
+                            source.get("SKILL_POLICY_MODE", "permissive"),
+                        ),
                     ),
                 )
             )
@@ -315,12 +321,15 @@ class CodexWorkerConfig:
         )
         if skill_policy_mode not in {"permissive", "allowlist"}:
             raise ValueError(
-                "MOONMIND_SKILL_POLICY_MODE must be one of: permissive, allowlist"
+                "WORKFLOW_SKILL_POLICY_MODE must be one of: permissive, allowlist"
             )
         allowed_skills_csv = str(
             source.get(
-                "MOONMIND_ALLOWED_SKILLS",
-                source.get("SPEC_WORKFLOW_ALLOWED_SKILLS", default_skill),
+                "WORKFLOW_ALLOWED_SKILLS",
+                source.get(
+                    "SPEC_WORKFLOW_ALLOWED_SKILLS",
+                    source.get("MOONMIND_ALLOWED_SKILLS", default_skill),
+                ),
             )
         ).strip()
         allowed_skills_items = [
@@ -437,21 +446,32 @@ class CodexWorkerConfig:
             raise ValueError("MOONMIND_CONTAINER_TIMEOUT_SECONDS must be >= 1")
         stage_command_timeout_raw = str(
             source.get(
-                "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+                "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
                 source.get(
                     "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-                    str(settings.spec_workflow.stage_command_timeout_seconds),
+                    source.get(
+                        "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
+                        str(settings.spec_workflow.stage_command_timeout_seconds),
+                    ),
                 ),
             )
         ).strip()
+        if not stage_command_timeout_raw:
+            stage_command_timeout_raw = str(
+                settings.spec_workflow.stage_command_timeout_seconds
+            )
         try:
             stage_command_timeout_seconds = int(stage_command_timeout_raw)
         except ValueError as exc:
             raise ValueError(
-                "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer"
+                "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer "
+                "(or legacy MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS)"
             ) from exc
         if stage_command_timeout_seconds < 1:
-            raise ValueError("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be >= 1")
+            raise ValueError(
+                "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS must be >= 1 "
+                "(or legacy MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS)"
+            )
 
         vault_address = str(source.get("MOONMIND_VAULT_ADDR", "")).strip() or None
         vault_token_file_raw = str(source.get("MOONMIND_VAULT_TOKEN_FILE", "")).strip()

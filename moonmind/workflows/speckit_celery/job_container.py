@@ -39,6 +39,7 @@ _SECRET_ENV_PREFIXES: tuple[str, ...] = (
     "GIT_AUTHOR_",
     "GIT_COMMITTER_",
     "SPEC_AUTOMATION_SECRET_",
+    "WORKFLOW_SECRET_",
     "SPEC_WORKFLOW_SECRET_",
     "GITHUB_",
     "GH_",
