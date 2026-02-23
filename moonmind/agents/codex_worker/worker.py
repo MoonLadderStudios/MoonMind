@@ -4936,11 +4936,13 @@ class CodexWorker:
             return None
         if self._config.gemini_cli_auth_mode != "oauth":
             return None
-        gemini_home = str(environ.get("GEMINI_HOME", "")).strip()
+        gemini_home = str(
+            environ.get("GEMINI_CLI_HOME") or environ.get("GEMINI_HOME") or ""
+        ).strip()
         if not gemini_home:
             logger.warning(
-                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth is set but GEMINI_HOME is missing; "
-                "retaining API key variables for Gemini runtime command auth.",
+                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth is set but GEMINI_CLI_HOME/GEMINI_HOME "
+                "is missing; retaining API key variables for Gemini runtime command auth.",
                 extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
             )
             return None
@@ -4948,7 +4950,7 @@ class CodexWorker:
             gemini_home, os.W_OK | os.X_OK
         ):
             logger.warning(
-                "GEMINI_HOME=%s is not a writable directory; retaining API key variables "
+                "Gemini auth home is not a writable directory; retaining API key variables "
                 "for Gemini runtime command auth.",
                 gemini_home,
                 extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},

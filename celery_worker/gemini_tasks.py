@@ -44,10 +44,16 @@ def _resolve_gemini_cli_auth_mode() -> str:
 
 
 def _resolve_gemini_cli_home() -> str | None:
-    """Resolve Gemini CLI home and keep GEMINI_CLI_HOME in sync."""
+    """Resolve Gemini CLI home and preserve explicit GEMINI_HOME values."""
 
-    raw_home = os.environ.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_HOME")
-    if not raw_home:
+    gemini_cli_home_raw = os.environ.get("GEMINI_CLI_HOME")
+    gemini_home_raw = os.environ.get("GEMINI_HOME")
+
+    if gemini_cli_home_raw:
+        raw_home = gemini_cli_home_raw
+    elif gemini_home_raw:
+        raw_home = gemini_home_raw
+    else:
         return None
 
     gemini_home = raw_home.strip()
@@ -55,7 +61,8 @@ def _resolve_gemini_cli_home() -> str | None:
         return None
 
     os.environ["GEMINI_CLI_HOME"] = gemini_home
-    os.environ["GEMINI_HOME"] = gemini_home
+    if not (gemini_home_raw and gemini_home_raw.strip()):
+        os.environ["GEMINI_HOME"] = gemini_home
     return gemini_home
 
 
