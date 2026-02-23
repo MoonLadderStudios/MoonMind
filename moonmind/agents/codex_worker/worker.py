@@ -3797,6 +3797,8 @@ class CodexWorker:
         task_result: WorkerExecutionResult,
         skill_id: str,
         proposal_output_path: str,
+        task_context_path: str,
+        artifacts_path: str,
     ) -> str:
         """Build runtime instruction for post-run proposal generation hooks."""
 
@@ -3833,7 +3835,7 @@ class CodexWorker:
             f"- Task error: {task_result.error_message or '-'}\n\n"
             "WORKSPACE:\n"
             "- Repository cwd is the task repo.\n"
-            "- Use ../artifacts/task_context.json and ../artifacts/logs/** as evidence.\n"
+            f"- Use {task_context_path} and {artifacts_path}/logs/** as evidence.\n"
             "- Relevant skill docs are under ../skills_active/<skill-id>/.\n"
             "- Do NOT modify repository files.\n"
             "- Do NOT commit or push.\n\n"
@@ -3972,7 +3974,14 @@ class CodexWorker:
 
         proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
         proposal_output_path.write_text("[]\n", encoding="utf-8")
-        proposal_output_relative = "../artifacts/task_proposals.json"
+        proposal_output_path_for_skill = (
+            prepared.repo_dir / ".artifacts" / "task_proposals.json"
+        )
+        proposal_output_path_for_skill.parent.mkdir(parents=True, exist_ok=True)
+        proposal_output_path_for_skill.write_text("[]\n", encoding="utf-8")
+        proposal_output_relative = str(proposal_output_path_for_skill)
+        task_context_path = str((prepared.artifacts_dir / "task_context.json").resolve())
+        artifacts_path = str(prepared.artifacts_dir.resolve())
         cancel_event = getattr(self, "_active_cancel_event", None)
         (prepared.artifacts_dir / "codex_exec.log").unlink(missing_ok=True)
         (prepared.artifacts_dir / "changes.patch").unlink(missing_ok=True)
@@ -3993,8 +4002,8 @@ class CodexWorker:
                 "taskStatus": "succeeded" if task_result.succeeded else "failed",
                 "taskSummary": str(task_result.summary or ""),
                 "taskError": str(task_result.error_message or ""),
-                "taskContextPath": "../artifacts/task_context.json",
-                "artifactsPath": "../artifacts",
+                "taskContextPath": task_context_path,
+                "artifactsPath": artifacts_path,
                 "proposalOutputPath": proposal_output_relative,
             }
             try:
@@ -4009,6 +4018,8 @@ class CodexWorker:
                     task_result=task_result,
                     skill_id=skill_id,
                     proposal_output_path=proposal_output_relative,
+                    task_context_path=task_context_path,
+                    artifacts_path=artifacts_path,
                 )
                 if runtime_mode == "codex":
                     skill_result = await self._codex_exec_handler.handle_skill(
@@ -4090,6 +4101,10 @@ class CodexWorker:
                     "error": skill_result.error_message,
                 },
             )
+
+        if proposal_output_path_for_skill.exists():
+            with suppress(Exception):
+                shutil.copy2(proposal_output_path_for_skill, proposal_output_path)
 
         if proposal_output_path.exists():
             collected.append(
