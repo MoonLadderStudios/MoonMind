@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -78,6 +79,30 @@ def _build_build_step(profile: ServiceProfile) -> PlanStep:
             profile.compose_project,
             "build",
             profile.compose_service,
+        ],
+    }
+    return PlanStep(db_models.OrchestratorPlanStep.BUILD, parameters)
+
+
+def _build_skill_build_step(
+    profile: ServiceProfile,
+    *,
+    skill_id: str,
+    skill_args: Mapping[str, Any] | None,
+) -> PlanStep:
+    serialized_args = json.dumps(dict(skill_args or {}), sort_keys=True)
+    parameters = {
+        "service": profile.compose_service,
+        "workspace": str(profile.workspace_path),
+        "logArtifact": "skill.log",
+        "command": [
+            "python",
+            "-m",
+            "moonmind.workflows.orchestrator.skill_executor",
+            "--skill-id",
+            skill_id,
+            "--skill-args-json",
+            serialized_args,
         ],
     }
     return PlanStep(db_models.OrchestratorPlanStep.BUILD, parameters)
@@ -182,4 +207,47 @@ def generate_action_plan(instruction: str, profile: ServiceProfile) -> ActionPla
     )
 
 
-__all__ = ["ActionPlan", "PlanStep", "generate_action_plan"]
+def generate_skill_action_plan(
+    instruction: str,
+    profile: ServiceProfile,
+    *,
+    skill_id: str,
+    skill_args: Mapping[str, Any] | None = None,
+) -> ActionPlan:
+    """Expand ``instruction`` into a skill-execution action plan."""
+
+    normalized = instruction.strip()
+    normalized_skill_id = skill_id.strip()
+    if not normalized:
+        raise ValueError("Instruction must not be empty")
+    if not normalized_skill_id:
+        raise ValueError("Skill id must not be empty")
+
+    steps: list[PlanStep] = [
+        _build_analyze_step(
+            f"{normalized}\nRequested orchestrator skill: {normalized_skill_id}",
+            profile,
+        ),
+        _build_skill_build_step(
+            profile,
+            skill_id=normalized_skill_id,
+            skill_args=skill_args,
+        ),
+        _build_verify_step(profile),
+        _build_rollback_step(profile),
+    ]
+    generated_at = datetime.now(tz=timezone.utc)
+    return ActionPlan(
+        instruction=normalized,
+        service=profile,
+        steps=steps,
+        generated_at=generated_at,
+    )
+
+
+__all__ = [
+    "ActionPlan",
+    "PlanStep",
+    "generate_action_plan",
+    "generate_skill_action_plan",
+]

@@ -3170,7 +3170,13 @@
           <textarea name="instruction" required placeholder="Describe what should be changed and verified."></textarea>
         </label>
         <label>Target Service
-          <input name="targetService" required placeholder="api" />
+          <input name="targetService" required value="orchestrator" placeholder="orchestrator" />
+        </label>
+        <label>Skill (optional)
+          <input name="skillId" placeholder="moonmind-update" list="orchestrator-skill-options" />
+        </label>
+        <label>Skill Args (optional JSON object)
+          <textarea name="skillArgs" placeholder='{"repo":"/workspace","branch":"main"}'></textarea>
         </label>
         <div class="grid-2">
           <label>Priority
@@ -3189,8 +3195,22 @@
         </div>
         <p class="small" id="orchestrator-submit-message"></p>
       </form>
+      <datalist id="orchestrator-skill-options"></datalist>
       `,
     );
+
+    loadAvailableSkillIds().then((skillIds) => {
+      const explicitSkills = skillIds.filter((skillId) => skillId !== "auto");
+      const node = document.getElementById("orchestrator-skill-options");
+      if (!node) {
+        return;
+      }
+      node.innerHTML = explicitSkills
+        .map(
+          (skillId) => `<option value="${escapeHtml(skillId)}"></option>`,
+        )
+        .join("");
+    });
 
     const form = document.getElementById("orchestrator-submit-form");
     const message = document.getElementById("orchestrator-submit-message");
@@ -3209,7 +3229,32 @@
         targetService: String(formData.get("targetService") || "").trim(),
         priority: String(formData.get("priority") || "normal").trim() || "normal",
       };
+      const skillId = String(formData.get("skillId") || "").trim();
+      const skillArgsRaw = String(formData.get("skillArgs") || "").trim();
       const token = String(formData.get("approvalToken") || "").trim();
+
+      if (skillId) {
+        body.skillId = skillId;
+      }
+      if (skillArgsRaw) {
+        try {
+          const parsedArgs = JSON.parse(skillArgsRaw);
+          if (
+            !parsedArgs ||
+            typeof parsedArgs !== "object" ||
+            Array.isArray(parsedArgs)
+          ) {
+            throw new Error("Skill args must be a JSON object.");
+          }
+          body.skillArgs = parsedArgs;
+        } catch (error) {
+          message.className = "notice error";
+          message.textContent = String(
+            error?.message || "Skill args must be valid JSON object.",
+          );
+          return;
+        }
+      }
       if (token) {
         body.approvalToken = token;
       }
