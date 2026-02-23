@@ -11,7 +11,10 @@ import sys
 import time
 from pathlib import Path
 
-def run_command(cmd, failure_hint="", max_attempts=3, initial_delay_seconds=1.0, max_delay_seconds=8.0):
+
+def run_command(
+    cmd, failure_hint="", max_attempts=3, initial_delay_seconds=1.0, max_delay_seconds=8.0
+):
     for attempt in range(1, max_attempts + 1):
         try:
             output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
@@ -20,18 +23,29 @@ def run_command(cmd, failure_hint="", max_attempts=3, initial_delay_seconds=1.0,
             return json.loads(output)
         except subprocess.CalledProcessError as e:
             if attempt < max_attempts:
-                delay = min(max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1)))
-                print(f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...", file=sys.stderr)
+                delay = min(
+                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                )
+                print(
+                    f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
                 time.sleep(delay)
                 continue
-            print(f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{e.output}", file=sys.stderr)
+            print(
+                f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{e.output}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         except json.JSONDecodeError:
             print(f"Command returned invalid JSON: {' '.join(cmd)}", file=sys.stderr)
             sys.exit(1)
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Snapshot PR state for pr-resolver skill")
+    parser = argparse.ArgumentParser(
+        description="Snapshot PR state for pr-resolver skill"
+    )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
     args = parser.parse_args()
 
@@ -39,12 +53,16 @@ def main():
     pr_cmd = ["gh", "pr", "view"]
     if args.pr:
         pr_cmd.append(args.pr)
-    pr_cmd.extend([
-        "--json", 
-        "number,title,url,isDraft,state,headRefName,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup"
-    ])
-    
-    pr_data = run_command(pr_cmd, "Ensure gh is authenticated and the branch has an open PR.")
+    pr_cmd.extend(
+        [
+            "--json",
+            "number,title,url,isDraft,state,headRefName,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
+        ]
+    )
+
+    pr_data = run_command(
+        pr_cmd, "Ensure gh is authenticated and the branch has an open PR."
+    )
 
     # 2. Evaluate CI Status
     ci_is_running = False
@@ -57,19 +75,21 @@ def main():
             state = check.get("state", "").upper()
             status = check.get("status", "").upper()
             conclusion = check.get("conclusion", "").upper()
-            
+
             combined_state = state or status or conclusion
-            
+
             if combined_state in {"IN_PROGRESS", "QUEUED", "PENDING"}:
                 ci_is_running = True
             elif combined_state in {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}:
                 ci_has_failures = True
                 name = check.get("name") or check.get("context") or "Unknown Check"
-                failed_checks.append({
-                    "name": name, 
-                    "state": combined_state, 
-                    "url": check.get("targetUrl", "")
-                })
+                failed_checks.append(
+                    {
+                        "name": name,
+                        "state": combined_state,
+                        "url": check.get("targetUrl", ""),
+                    }
+                )
 
     # 3. Fetch Comments
     # .agents/skills/fix-comments/tools/get_branch_pr_comments.py should be in the root of the project
@@ -81,7 +101,10 @@ def main():
             comments_cmd.extend(["--pr", args.pr])
         comments_data = run_command(comments_cmd, "Failed to retrieve PR comments.")
     else:
-        print(f"Warning: {comments_script} not found. Skipping comments fetch.", file=sys.stderr)
+        print(
+            f"Warning: {comments_script} not found. Skipping comments fetch.",
+            file=sys.stderr,
+        )
 
     # 4. Construct Snapshot
     snapshot = {
@@ -91,7 +114,7 @@ def main():
             "hasFailures": ci_has_failures,
             "failedChecks": failed_checks,
         },
-        "comments": comments_data.get("comments", [])
+        "comments": comments_data.get("comments", []),
     }
 
     # Save to artifacts/pr_resolver_snapshot.json
@@ -99,9 +122,9 @@ def main():
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     snapshot_path = artifacts_dir / "pr_resolver_snapshot.json"
     snapshot_path.write_text(json.dumps(snapshot, indent=2))
-    
+
     print(f"Snapshot written to {snapshot_path}")
-    
+
     # Print a quick summary to stdout
     summary = {
         "pr_number": pr_data.get("number"),
@@ -109,9 +132,10 @@ def main():
         "mergeStateStatus": pr_data.get("mergeStateStatus"),
         "reviewDecision": pr_data.get("reviewDecision"),
         "ci": snapshot["ci"],
-        "comment_count": len(snapshot["comments"])
+        "comment_count": len(snapshot["comments"]),
     }
     print(json.dumps(summary, indent=2))
+
 
 if __name__ == "__main__":
     main()
