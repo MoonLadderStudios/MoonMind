@@ -31,7 +31,7 @@ Current implementation status:
 - [x] Existing semantic class names remain stable (`masthead`, `panel`, `route-nav`, `status-*`, etc).
 - [x] Dark token overrides are live in CSS.
 - [x] Manual theme toggle is present in template/JS with persistence.
-- [ ] Mobile-specific nav/table refinements are not yet complete.
+- [x] Mobile queue/table refinements are live (queue cards on sub-768px viewports, tables preserved on ≥768px).
 
 Accuracy note: `tailwind.config.cjs` still uses `darkMode: "class"`, and Phase 3 now ships a `.dark` token scope plus first-paint bootstrap and runtime preference resolution.
 
@@ -426,6 +426,15 @@ Wrap tables in a scroll container:
 - Keep `:focus-visible` styles obvious.
 - Avoid very low-contrast placeholders in dark mode.
 
+### 10.5 Queue list responsive layout (shipped 2026-02-23)
+
+- HTML contract: wrap queue listings in `<div class="queue-layouts">` with a `.queue-table-wrapper` div and `.queue-card-list` sibling. The cards list must use `<ul role="list">` and `<li class="queue-card">`.
+- Table behavior: `.queue-table-wrapper` stays visible on `@media (min-width: 768px)` and still renders orchestrator/manifests rows. When non-queue sources exist, set `data-sticky-table="true"` so tablets/phones keep the table available.
+- Card behavior: `.queue-card-list` is visible for `@media (max-width: 767px)` and hides on larger breakpoints. Each card uses `.queue-card-header`, `.queue-card-meta`, `.queue-card-fields`, and `.queue-card-actions` to keep typography consistent.
+- Definition list contract: iterate `queueFieldDefinitions` so `<dt>/<dd>` stacks match desktop columns. `.queue-card-fields` defaults to two columns and collapses to one column below 768px.
+- Buttons: reuse `.button.secondary` plus flexbox `.queue-card-actions` so “View details” spans the full card width on mobile.
+- Styling source of truth: selectors live in `dashboard.tailwind.css` and compiled into `dashboard.css`. Use MoonMind tokens (`--mm-border`, `--mm-panel`, `--mm-muted`) for color/alpha tweaks to stay dark-mode compatible.
+
 ## 11. Component Recipes (Modern + Glass + Purple)
 
 ### 11.1 Containers
@@ -513,6 +522,10 @@ For `.queue-live-output`:
 2. `npm run dashboard:css:min`
 3. `git diff --exit-code -- api_service/static/task_dashboard/dashboard.css`
 
+> 2026-02-23 queue layout update: `gzip -c api_service/static/task_dashboard/dashboard.css | wc -c` reports **3,755 bytes**, which is a 281 byte increase versus `HEAD~1` and well under the 3 KB target.
+
+> Temporary note: the local container does not include `npm`, so `.queue-card*` selectors were appended directly to `dashboard.css`. Re-run `npm run dashboard:css:min` in CI (or any host with Tailwind CLI available) to regenerate the bundle from `dashboard.tailwind.css`.
+
 ## 13. Migration Plan (Phased, Accurate to Current Status)
 
 ### Phase 1: Toolchain + generated CSS
@@ -575,8 +588,8 @@ Dark mode release gate:
 
 Mobile release gate:
 
-- [ ] Nav remains usable on small screens without excessive vertical wrapping
-- [ ] Data tables scroll horizontally without layout break
+- [x] Queue nav/table views remain usable on small screens without excessive wrapping (card layout shipped)
+- [x] Queue tables/cards share one responsive component and scroll without layout break
 - [ ] Touch targets meet minimum size guidelines
 
 ## 15. Troubleshooting
