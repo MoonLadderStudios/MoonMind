@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-auth-claude-volume-token.sh - Write Claude OAuth access token into the codex worker volume.
+auth-claude-volume-token.sh - Write Claude OAuth access token into the claude worker volume.
 
 Usage:
   ./tools/auth-claude-volume-token.sh --token <value>
@@ -119,7 +119,7 @@ docker compose run --rm \
   -e CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   -e FORCE_DARK_THEME="$FORCE_DARK_THEME" \
   -v "$TOKEN_FILE:/tmp/claude-access-token.txt:ro" \
-  "${COMPOSE_NETWORK_ARGS[@]}" codex-worker \
+  "${COMPOSE_NETWORK_ARGS[@]}" claude-worker \
   bash -lc '
 set -e
 TOKEN="$(cat /tmp/claude-access-token.txt | tr -d "\r\n")"

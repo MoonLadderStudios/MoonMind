@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db import models as db_models
 from api_service.db.base import get_async_session
 from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.schemas.workflow_models import (
     OrchestratorApprovalRequest,
     OrchestratorArtifactListResponse,
@@ -34,6 +36,7 @@ from moonmind.workflows.orchestrator.policies import (
     validate_approval_token,
 )
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
+from moonmind.workflows.orchestrator.queue_dispatch import enqueue_orchestrator_run_job
 from moonmind.workflows.orchestrator.serializers import (
     serialize_artifacts,
     serialize_run_detail,
@@ -51,7 +54,6 @@ from moonmind.workflows.orchestrator.storage import (
     ArtifactStorageError,
     resolve_artifact_root,
 )
-from moonmind.workflows.orchestrator.tasks import enqueue_action_plan
 
 router = APIRouter(prefix="/orchestrator", tags=["Orchestrator"])
 
@@ -86,6 +88,10 @@ def _extract_step_names(plan_steps: Sequence[object] | None) -> list[str]:
         if name:
             steps.append(str(name))
     return steps
+
+
+def _queue_service(session: AsyncSession) -> AgentQueueService:
+    return AgentQueueService(AgentQueueRepository(session))
 
 
 @router.post(
@@ -150,6 +156,7 @@ async def create_orchestrator_run(
         repository=repo,
         artifact_storage=ArtifactStorage(artifact_root),
     )
+    queue_service = _queue_service(session)
     run = await service.create_run(
         plan,
         approval_token=payload.approval_token,
@@ -158,7 +165,12 @@ async def create_orchestrator_run(
 
     if run.status != db_models.OrchestratorRunStatus.AWAITING_APPROVAL:
         step_sequence = [step.name for step in plan.steps]
-        enqueue_action_plan(run.id, step_sequence, include_rollback=True)
+        await enqueue_orchestrator_run_job(
+            queue_service=queue_service,
+            run_id=run.id,
+            steps=step_sequence,
+            include_rollback=True,
+        )
         record_run_queued(run.target_service)
 
     return serialize_run_summary(run)
@@ -196,6 +208,7 @@ async def get_orchestrator_run(
     session: AsyncSession = Depends(get_async_session),
 ) -> OrchestratorRunDetailModel:
     repo = OrchestratorRepository(session)
+    queue_service = _queue_service(session)
     run = await repo.get_run(run_id, with_relations=True)
     if run is None:
         raise HTTPException(
@@ -277,7 +290,12 @@ async def provide_orchestrator_approval(
 
     step_sequence = _extract_step_names(getattr(run.action_plan, "steps", None))
     if step_sequence:
-        enqueue_action_plan(run.id, step_sequence, include_rollback=True)
+        await enqueue_orchestrator_run_job(
+            queue_service=queue_service,
+            run_id=run.id,
+            steps=step_sequence,
+            include_rollback=True,
+        )
         record_run_queued(run.target_service)
 
     return serialize_run_summary(run)
@@ -296,6 +314,7 @@ async def retry_orchestrator_run(
     """Retry a failed orchestrator run from the requested step."""
 
     repo = OrchestratorRepository(session)
+    queue_service = _queue_service(session)
     run = await repo.get_run(run_id, with_relations=True)
     if run is None:
         raise HTTPException(
@@ -368,6 +387,11 @@ async def retry_orchestrator_run(
     )
     await repo.commit()
 
-    enqueue_action_plan(run.id, step_sequence, include_rollback=True)
+    await enqueue_orchestrator_run_job(
+        queue_service=queue_service,
+        run_id=run.id,
+        steps=step_sequence,
+        include_rollback=True,
+    )
     record_run_queued(run.target_service)
     return serialize_run_summary(run)
