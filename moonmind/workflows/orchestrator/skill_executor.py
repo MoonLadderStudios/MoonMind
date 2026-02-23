@@ -16,7 +16,10 @@ _SKILL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 def _resolve_workspace_root() -> Path:
     raw = (
-        os.getenv("SPEC_WORKFLOW_REPO_ROOT") or os.getenv("WORKSPACE_ROOT") or ""
+        os.getenv("WORKFLOW_REPO_ROOT")
+        or os.getenv("SPEC_WORKFLOW_REPO_ROOT")
+        or os.getenv("WORKSPACE_ROOT")
+        or ""
     ).strip()
     if raw:
         root = Path(raw).expanduser()
@@ -28,11 +31,13 @@ def _resolve_workspace_root() -> Path:
 
 def _resolve_skill_roots(workspace_root: Path) -> tuple[Path, ...]:
     local_root_raw = (
-        os.getenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT")
+        os.getenv("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT")
+        or os.getenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT")
         or f"{workspace_root}/.agents/skills/local"
     )
     legacy_root_raw = (
-        os.getenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT")
+        os.getenv("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT")
+        or os.getenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT")
         or f"{workspace_root}/.agents/skills"
     )
 

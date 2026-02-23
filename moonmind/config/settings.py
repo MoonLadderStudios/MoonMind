@@ -116,19 +116,26 @@ class SpecWorkflowSettings(BaseSettings):
 
     repo_root: str = Field(
         ".",
-        env="SPEC_WORKFLOW_REPO_ROOT",
+        env=("WORKFLOW_REPO_ROOT", "SPEC_WORKFLOW_REPO_ROOT"),
         validation_alias=AliasChoices("WORKFLOW_REPO_ROOT", "SPEC_WORKFLOW_REPO_ROOT"),
     )
     tasks_root: str = Field(
         "specs",
+        env=("WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"),
         validation_alias=AliasChoices(
             "WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"
         ),
     )
     artifacts_root: str = Field(
         "var/artifacts/spec_workflows",
-        env=("SPEC_WORKFLOW_ARTIFACT_ROOT", "SPEC_WORKFLOW_ARTIFACTS_ROOT"),
+        env=(
+            "WORKFLOW_ARTIFACT_ROOT",
+            "WORKFLOW_ARTIFACTS_ROOT",
+            "SPEC_WORKFLOW_ARTIFACT_ROOT",
+            "SPEC_WORKFLOW_ARTIFACTS_ROOT",
+        ),
         validation_alias=AliasChoices(
+            "WORKFLOW_ARTIFACT_ROOT",
             "WORKFLOW_ARTIFACTS_ROOT",
             "SPEC_WORKFLOW_ARTIFACT_ROOT",
             "SPEC_WORKFLOW_ARTIFACTS_ROOT",
@@ -233,7 +240,7 @@ class SpecWorkflowSettings(BaseSettings):
     )
     manifest_required_capabilities: tuple[str, ...] = Field(
         ("manifest",),
-        env="SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+        env="WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
         description="Comma-delimited list of base capability labels applied to manifest jobs.",
     )
     job_image: str = Field(
@@ -248,32 +255,40 @@ class SpecWorkflowSettings(BaseSettings):
     )
     celery_broker_url: Optional[str] = Field(
         None,
-        env=("SPEC_WORKFLOW_CELERY_BROKER_URL", "CELERY_BROKER_URL"),
+        env=(
+            "WORKFLOW_CELERY_BROKER_URL",
+            "SPEC_WORKFLOW_CELERY_BROKER_URL",
+            "CELERY_BROKER_URL",
+        ),
         description="Override Celery broker URL dedicated to Spec workflow chains.",
     )
     celery_result_backend: Optional[str] = Field(
         None,
-        env=("SPEC_WORKFLOW_CELERY_RESULT_BACKEND", "CELERY_RESULT_BACKEND"),
+        env=(
+            "WORKFLOW_CELERY_RESULT_BACKEND",
+            "SPEC_WORKFLOW_CELERY_RESULT_BACKEND",
+            "CELERY_RESULT_BACKEND",
+        ),
         description="Override Celery result backend for Spec workflow chains.",
     )
     metrics_enabled: bool = Field(
         False,
-        env="SPEC_WORKFLOW_METRICS_ENABLED",
+        env=("WORKFLOW_METRICS_ENABLED", "SPEC_WORKFLOW_METRICS_ENABLED"),
         description="Toggle emission of Spec Automation StatsD metrics.",
     )
     metrics_host: Optional[str] = Field(
         None,
-        env="SPEC_WORKFLOW_METRICS_HOST",
+        env=("WORKFLOW_METRICS_HOST", "SPEC_WORKFLOW_METRICS_HOST"),
         description="Hostname for the StatsD metrics sink (optional).",
     )
     metrics_port: Optional[int] = Field(
         None,
-        env="SPEC_WORKFLOW_METRICS_PORT",
+        env=("WORKFLOW_METRICS_PORT", "SPEC_WORKFLOW_METRICS_PORT"),
         description="Port for the StatsD metrics sink (optional).",
     )
     metrics_namespace: str = Field(
         "spec_automation",
-        env="SPEC_WORKFLOW_METRICS_NAMESPACE",
+        env=("WORKFLOW_METRICS_NAMESPACE", "SPEC_WORKFLOW_METRICS_NAMESPACE"),
         description="Namespace/prefix applied to emitted Spec Automation metrics.",
     )
     default_feature_key: str = Field(
@@ -346,8 +361,13 @@ class SpecWorkflowSettings(BaseSettings):
     )
     default_task_runtime: str = Field(
         "codex",
-        env=("MOONMIND_DEFAULT_TASK_RUNTIME", "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME"),
+        env=(
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+        ),
         validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_TASK_RUNTIME",
             "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
         ),
@@ -356,10 +376,12 @@ class SpecWorkflowSettings(BaseSettings):
     default_publish_mode: str = Field(
         "pr",
         env=(
+            "WORKFLOW_DEFAULT_PUBLISH_MODE",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
             "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
         validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_PUBLISH_MODE",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
             "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
@@ -367,8 +389,14 @@ class SpecWorkflowSettings(BaseSettings):
     )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
-        env="SPEC_WORKFLOW_GITHUB_REPOSITORY",
-        validation_alias=AliasChoices("SPEC_WORKFLOW_GITHUB_REPOSITORY"),
+        env=(
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        ),
+        validation_alias=AliasChoices(
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        ),
     )
     git_user_name: Optional[str] = Field(
         None,
@@ -398,8 +426,16 @@ class SpecWorkflowSettings(BaseSettings):
         ),
         description="Optional Git author/committer email used by worker publish stages.",
     )
-    github_token: Optional[str] = Field(None, env="SPEC_WORKFLOW_GITHUB_TOKEN")
-    test_mode: bool = Field(False, env="SPEC_WORKFLOW_TEST_MODE")
+    github_token: Optional[str] = Field(
+        None,
+        env=("WORKFLOW_GITHUB_TOKEN", "SPEC_WORKFLOW_GITHUB_TOKEN"),
+        validation_alias=AliasChoices("WORKFLOW_GITHUB_TOKEN", "SPEC_WORKFLOW_GITHUB_TOKEN"),
+    )
+    test_mode: bool = Field(
+        False,
+        env=("WORKFLOW_TEST_MODE", "SPEC_WORKFLOW_TEST_MODE"),
+        validation_alias=AliasChoices("WORKFLOW_TEST_MODE", "SPEC_WORKFLOW_TEST_MODE"),
+    )
     agent_backend: str = Field(
         "codex_cli",
         env="SPEC_AUTOMATION_AGENT_BACKEND",
@@ -427,22 +463,22 @@ class SpecWorkflowSettings(BaseSettings):
     )
     skills_enabled: bool = Field(
         True,
-        env="SPEC_WORKFLOW_USE_SKILLS",
+        env=("WORKFLOW_USE_SKILLS", "SPEC_WORKFLOW_USE_SKILLS"),
         description="Enable skills-first orchestration policy for workflow stages.",
     )
     skills_shadow_mode: bool = Field(
         False,
-        env="SPEC_WORKFLOW_SKILLS_SHADOW_MODE",
+        env=("WORKFLOW_SKILLS_SHADOW_MODE", "SPEC_WORKFLOW_SKILLS_SHADOW_MODE"),
         description="Enable shadow-mode telemetry for skills orchestration.",
     )
     skills_fallback_enabled: bool = Field(
         True,
-        env="SPEC_WORKFLOW_SKILLS_FALLBACK_ENABLED",
+        env=("WORKFLOW_SKILLS_FALLBACK_ENABLED", "SPEC_WORKFLOW_SKILLS_FALLBACK_ENABLED"),
         description="Allow direct stage fallback when skill adapters fail.",
     )
     skills_canary_percent: int = Field(
         100,
-        env="SPEC_WORKFLOW_SKILLS_CANARY_PERCENT",
+        env=("WORKFLOW_SKILLS_CANARY_PERCENT", "SPEC_WORKFLOW_SKILLS_CANARY_PERCENT"),
         description="Percentage of runs routed through skills-first policy (0-100).",
         ge=0,
         le=100,
@@ -491,7 +527,7 @@ class SpecWorkflowSettings(BaseSettings):
             "MOONMIND_SKILL_POLICY_MODE",
             "SKILL_POLICY_MODE",
         ),
-        description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces SPEC_WORKFLOW_ALLOWED_SKILLS.",
+        description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces allowed skills list.",
     )
     allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
         ("speckit",),
@@ -504,29 +540,54 @@ class SpecWorkflowSettings(BaseSettings):
     )
     skills_cache_root: str = Field(
         "var/skill_cache",
-        env="SPEC_SKILLS_CACHE_ROOT",
+        env=("WORKFLOW_SKILLS_CACHE_ROOT", "SPEC_SKILLS_CACHE_ROOT"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_CACHE_ROOT",
+            "SPEC_SKILLS_CACHE_ROOT",
+        ),
         description="Immutable cache root for verified skill artifacts.",
     )
     skills_workspace_root: str = Field(
         "runs",
-        env="SPEC_SKILLS_WORKSPACE_ROOT",
-        description="Workspace subdirectory (under SPEC_WORKFLOW_WORKSPACE_ROOT) for per-run active skills links.",
+        env=("WORKFLOW_SKILLS_WORKSPACE_ROOT", "SPEC_SKILLS_WORKSPACE_ROOT"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_WORKSPACE_ROOT",
+            "SPEC_SKILLS_WORKSPACE_ROOT",
+            "SPEC_WORKFLOW_WORKSPACE_ROOT",
+        ),
+        description="Workspace subdirectory (under WORKFLOW_WORKSPACE_ROOT) for per-run active skills links.",
     )
     skills_registry_source: Optional[str] = Field(
         None,
-        env="SPEC_SKILLS_REGISTRY_SOURCE",
+        env=(
+            "WORKFLOW_SKILLS_REGISTRY_SOURCE",
+            "SPEC_SKILLS_REGISTRY_SOURCE",
+        ),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_REGISTRY_SOURCE",
+            "SPEC_SKILLS_REGISTRY_SOURCE",
+        ),
         description="Optional registry profile/URI for skill source resolution.",
     )
     skills_local_mirror_root: str = Field(
         ".agents/skills/local",
-        env="SPEC_SKILLS_LOCAL_MIRROR_ROOT",
-        validation_alias=AliasChoices("SPEC_SKILLS_LOCAL_MIRROR_ROOT"),
+        env=("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT", "SPEC_SKILLS_LOCAL_MIRROR_ROOT"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
+            "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
+        ),
         description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
         ".agents/skills",
-        env="SPEC_SKILLS_LEGACY_MIRROR_ROOT",
-        validation_alias=AliasChoices("SPEC_SKILLS_LEGACY_MIRROR_ROOT"),
+        env=(
+            "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
+            "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+        ),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
+            "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+        ),
         description=(
             "Secondary shared mirror root checked after local-only skills; "
             "nested '<root>/skills' is auto-detected for compatibility."
@@ -534,12 +595,23 @@ class SpecWorkflowSettings(BaseSettings):
     )
     skills_verify_signatures: bool = Field(
         False,
-        env="SPEC_SKILLS_VERIFY_SIGNATURES",
+        env=("WORKFLOW_SKILLS_VERIFY_SIGNATURES", "SPEC_SKILLS_VERIFY_SIGNATURES"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_VERIFY_SIGNATURES",
+            "SPEC_SKILLS_VERIFY_SIGNATURES",
+        ),
         description="Require signature metadata for selected skills before activation.",
     )
     skills_validate_local_mirror: bool = Field(
         False,
-        env="SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
+        env=(
+            "WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR",
+            "SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
+        ),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR",
+            "SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
+        ),
         description="Enable startup validation of the configured local skill mirror root.",
     )
     live_session_enabled_default: bool = Field(
@@ -643,10 +715,12 @@ class SpecWorkflowSettings(BaseSettings):
     stage_command_timeout_seconds: int = Field(
         3600,
         env=(
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
             "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
         validation_alias=AliasChoices(
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
             "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
@@ -1382,10 +1456,12 @@ class AppSettings(BaseSettings):
     worker_stage_command_timeout_seconds: Optional[int] = Field(
         None,
         env=(
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
             "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
         validation_alias=AliasChoices(
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
             "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),

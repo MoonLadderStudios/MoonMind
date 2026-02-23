@@ -110,22 +110,22 @@ description: Private project-specific scan helper skill
 
 - For spec workflow/Celery/Gemini workers, set in `.env`:
 
-  - `SPEC_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
-  - `SPEC_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills` (shared mirror root; nested `.agents/skills/skills` is auto-detected for compatibility)
-  - `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
-  - `SPEC_WORKFLOW_SKILL_POLICY_MODE=permissive` (or `WORKFLOW_SKILL_POLICY_MODE`; default auto-accepts resolvable skills without allowlist maintenance)
-  - `SPEC_WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (or `WORKFLOW_ALLOWED_SKILLS`; only enforced when policy mode is `allowlist`)
-  - `SPEC_WORKFLOW_DEFAULT_SKILL=my-private-scan` (or `WORKFLOW_DEFAULT_SKILL`; optional)
-  - `SPEC_WORKFLOW_DISCOVER_SKILL=my-private-scan` / `SPEC_WORKFLOW_SUBMIT_SKILL=my-private-scan` / `SPEC_WORKFLOW_PUBLISH_SKILL=my-private-scan` (or `WORKFLOW_DISCOVER_SKILL` / `WORKFLOW_SUBMIT_SKILL` / `WORKFLOW_PUBLISH_SKILL`)
+  - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
+  - `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills` (shared mirror root; nested `.agents/skills/skills` is auto-detected for compatibility)
+  - `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
+  - `WORKFLOW_SKILL_POLICY_MODE=permissive` (legacy aliases: `SPEC_WORKFLOW_SKILL_POLICY_MODE`; default auto-accepts resolvable skills without allowlist maintenance)
+  - `WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (legacy aliases: `SPEC_WORKFLOW_ALLOWED_SKILLS`; only enforced when policy mode is `allowlist`)
+  - `WORKFLOW_DEFAULT_SKILL=my-private-scan` (legacy aliases: `SPEC_WORKFLOW_DEFAULT_SKILL`; optional)
+  - `WORKFLOW_DISCOVER_SKILL=my-private-scan` / `WORKFLOW_SUBMIT_SKILL=my-private-scan` / `WORKFLOW_PUBLISH_SKILL=my-private-scan` (legacy aliases: `SPEC_WORKFLOW_DISCOVER_SKILL` / `SPEC_WORKFLOW_SUBMIT_SKILL` / `SPEC_WORKFLOW_PUBLISH_SKILL`)
 
 - For standalone `moonmind-codex-worker`, also use:
 
   - `MOONMIND_DEFAULT_SKILL=my-private-scan`
   - `MOONMIND_SKILL_POLICY_MODE=permissive` (default; set `allowlist` to enforce worker allowlists)
   - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit` (only enforced when `MOONMIND_SKILL_POLICY_MODE=allowlist`)
-  - `MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT=/workspace` (resolve relative skill roots against mounted workspace)
-  - `MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT=/workspace/.agents/skills/local`
-  - `MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT=/workspace/.agents/skills`
+  - `MOONMIND_WORKER_WORKFLOW_REPO_ROOT=/workspace` (legacy alias: `MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT`; resolve relative skill roots against mounted workspace)
+  - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=/workspace/.agents/skills/local` (legacy aliases: `MOONMIND_WORKER_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT`, `MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT`)
+  - `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=/workspace/.agents/skills` (legacy aliases: `MOONMIND_WORKER_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT`, `MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT`)
 
 3. Source private skills from external locations when needed.
 
@@ -158,7 +158,7 @@ These mappings are consumed from workflow job context as `skill_selection` + `sk
 
 5. Validate the path after startup:
 
-- Start workers with `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR=true` and confirm startup logs show skill materialization success.
+- Start workers with `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR=true` (legacy alias: `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR`) and confirm startup logs show skill materialization success.
 - For run workspace checks, inspect `<run_root>/skills_active` and linked adapters:
   - `<run_root>/.agents/skills -> ../skills_active`
   - `<run_root>/.gemini/skills -> ../skills_active`
@@ -174,17 +174,17 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `CELERY_DEFAULT_QUEUE` – Default queue name for workflow tasks (`moonmind.jobs`).
 - `CELERY_DEFAULT_EXCHANGE` – Exchange used for the workflow queue (`moonmind.jobs`).
 - `CELERY_DEFAULT_ROUTING_KEY` – Routing key for workflow tasks (`moonmind.jobs`).
-- `SPEC_WORKFLOW_CODEX_QUEUE` – Codex queue name (default `codex`).
-- `SPEC_WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`).
-- `SPEC_WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`).
-- `SPEC_WORKFLOW_SKILL_POLICY_MODE` – Skill policy mode (`permissive` default, `allowlist` for strict enforcement).
-- `SPEC_WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (enforced when policy mode is `allowlist`).
-- `SPEC_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `SPEC_WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
-- `SPEC_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`).
-- `SPEC_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`).
-- `SPEC_SKILLS_LEGACY_MIRROR_ROOT` – Shared mirror root checked after the local mirror (default `.agents/skills`; nested `.agents/skills/skills` is still auto-detected for compatibility).
-- `SPEC_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (default `false`).
-- `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (default `false`).
+- `WORKFLOW_CODEX_QUEUE` – Codex queue name (legacy alias: `SPEC_WORKFLOW_CODEX_QUEUE`; default `codex`).
+- `WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`; legacy alias `SPEC_WORKFLOW_USE_SKILLS`).
+- `WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`; legacy alias `SPEC_WORKFLOW_DEFAULT_SKILL`).
+- `WORKFLOW_SKILL_POLICY_MODE` – Skill policy mode (`permissive` default, `allowlist` for strict enforcement; legacy alias `SPEC_WORKFLOW_SKILL_POLICY_MODE`).
+- `WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (legacy alias `SPEC_WORKFLOW_ALLOWED_SKILLS`; enforced when policy mode is `allowlist`).
+- `WORKFLOW_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`; legacy aliases: `SPEC_SKILLS_WORKSPACE_ROOT`, `SPEC_WORKFLOW_WORKSPACE_ROOT`).
+- `WORKFLOW_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`; legacy alias `SPEC_SKILLS_CACHE_ROOT`).
+- `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`; legacy alias `SPEC_SKILLS_LOCAL_MIRROR_ROOT`).
+- `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT` – Shared mirror root checked after the local mirror (default `.agents/skills`; nested `.agents/skills/skills` is still auto-detected for compatibility; legacy alias `SPEC_SKILLS_LEGACY_MIRROR_ROOT`).
+- `WORKFLOW_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (legacy alias `SPEC_SKILLS_VERIFY_SIGNATURES`).
+- `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (legacy alias `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR`; default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
 - `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
 - `CLAUDE_VOLUME_NAME` – Docker volume that stores persistent Claude auth (default `claude_auth_volume`).

@@ -77,7 +77,8 @@ class CodexClient:
 
         raise RuntimeError(
             "Real Codex submission is not yet implemented. Enable test mode via "
-            "SPEC_WORKFLOW_TEST_MODE=1 for local development."
+            "WORKFLOW_TEST_MODE=1 (or SPEC_WORKFLOW_TEST_MODE=1 for legacy environments) "
+            "for local development."
         )
 
     def retrieve_patch(
@@ -116,7 +117,8 @@ class CodexClient:
 
         raise RuntimeError(
             "Real Codex patch retrieval is not yet implemented. Enable test mode via "
-            "SPEC_WORKFLOW_TEST_MODE=1 for local development."
+            "WORKFLOW_TEST_MODE=1 (or SPEC_WORKFLOW_TEST_MODE=1 for legacy environments) "
+            "for local development."
         )
 
 
