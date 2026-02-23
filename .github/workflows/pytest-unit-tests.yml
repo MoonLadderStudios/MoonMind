@@ -51,7 +51,7 @@ jobs:
       if: steps.pre_commit.outcome == 'failure' && steps.auto_commit.outputs.changes_detected == 'false'
       run: exit 1
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
         cache: 'npm'
