@@ -2535,6 +2535,36 @@ async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
     assert config.git_user_email == "workflow@example.com"
 
 
+async def test_config_from_env_supports_legacy_skill_policy_mode_env(
+    monkeypatch,
+) -> None:
+    """Legacy SKILL_POLICY_MODE should remain supported for compatibility."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
+    monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
+    monkeypatch.setenv("SKILL_POLICY_MODE", "allowlist")
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.skill_policy_mode == "allowlist"
+
+
+async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
+    monkeypatch,
+) -> None:
+    """Legacy MOONMIND_ALLOWED_SKILLS should still participate in resolution."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
+    monkeypatch.delenv("SPEC_WORKFLOW_ALLOWED_SKILLS", raising=False)
+    monkeypatch.setenv("MOONMIND_ALLOWED_SKILLS", "custom,speckit")
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.allowed_skills == ("custom", "speckit")
+
+
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     """Unset optional values should fall back to defaults."""
 
@@ -2623,7 +2653,7 @@ async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) ->
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "invalid")
 
-    with pytest.raises(ValueError, match="MOONMIND_SKILL_POLICY_MODE must be one of"):
+    with pytest.raises(ValueError, match="WORKFLOW_SKILL_POLICY_MODE must be one of"):
         CodexWorkerConfig.from_env()
 
 
@@ -2637,7 +2667,7 @@ async def test_config_from_env_rejects_non_integer_stage_command_timeout(
 
     with pytest.raises(
         ValueError,
-        match="MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer",
+        match="WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS must be an integer",
     ):
         CodexWorkerConfig.from_env()
 

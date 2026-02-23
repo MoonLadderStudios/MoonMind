@@ -307,7 +307,10 @@ class CodexWorkerConfig:
                     "WORKFLOW_SKILL_POLICY_MODE",
                     source.get(
                         "SPEC_WORKFLOW_SKILL_POLICY_MODE",
-                        source.get("MOONMIND_SKILL_POLICY_MODE", "permissive"),
+                        source.get(
+                            "MOONMIND_SKILL_POLICY_MODE",
+                            source.get("SKILL_POLICY_MODE", "permissive"),
+                        ),
                     ),
                 )
             )
@@ -322,7 +325,10 @@ class CodexWorkerConfig:
         allowed_skills_csv = str(
             source.get(
                 "WORKFLOW_ALLOWED_SKILLS",
-                source.get("SPEC_WORKFLOW_ALLOWED_SKILLS", default_skill),
+                source.get(
+                    "SPEC_WORKFLOW_ALLOWED_SKILLS",
+                    source.get("MOONMIND_ALLOWED_SKILLS", default_skill),
+                ),
             )
         ).strip()
         allowed_skills_items = [

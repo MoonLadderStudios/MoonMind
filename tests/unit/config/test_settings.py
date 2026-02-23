@@ -376,6 +376,24 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
 
+    def test_manifest_required_capabilities_supports_legacy_spec_prefix(
+        self, monkeypatch
+    ):
+        """Legacy SPEC_WORKFLOW manifest capability env var should remain supported."""
+
+        monkeypatch.delenv("WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False)
+        monkeypatch.setenv(
+            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", '["manifest", "planner"]'
+        )
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.manifest_required_capabilities == ("manifest", "planner")
+
+        monkeypatch.delenv(
+            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False
+        )
+
     def test_default_publish_mode_rejects_invalid_value(self, monkeypatch):
         """Default publish mode should validate supported options."""
 

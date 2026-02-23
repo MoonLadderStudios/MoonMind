@@ -240,7 +240,14 @@ class SpecWorkflowSettings(BaseSettings):
     )
     manifest_required_capabilities: tuple[str, ...] = Field(
         ("manifest",),
-        env="WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+        env=(
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+        ),
+        validation_alias=AliasChoices(
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+        ),
         description="Comma-delimited list of base capability labels applied to manifest jobs.",
     )
     job_image: str = Field(
