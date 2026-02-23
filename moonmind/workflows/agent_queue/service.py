@@ -268,7 +268,9 @@ class AgentQueueService:
             settings.spec_workflow.agent_job_attachment_allowed_content_types or ()
         )
         self._attachment_allowed_content_types = (
-            allowed_types if allowed_types else ("image/png", "image/jpeg", "image/webp")
+            allowed_types
+            if allowed_types
+            else ("image/png", "image/jpeg", "image/webp")
         )
         self._retry_backoff_base_seconds = max(1, int(retry_backoff_base_seconds))
         self._retry_backoff_max_seconds = max(
@@ -515,7 +517,9 @@ class AgentQueueService:
 
         uploads = list(attachments or [])
         if not uploads:
-            raise AgentQueueValidationError("attachments must include at least one file")
+            raise AgentQueueValidationError(
+                "attachments must include at least one file"
+            )
         if self._attachment_max_count and len(uploads) > self._attachment_max_count:
             raise AgentQueueValidationError(
                 f"attachments exceed max count ({self._attachment_max_count})"
@@ -542,7 +546,9 @@ class AgentQueueService:
             affinity_key=affinity_key,
             max_attempts=max_attempts,
         )
-        stored = await self._persist_attachments(job_id=job.id, uploads=normalized_uploads)
+        stored = await self._persist_attachments(
+            job_id=job.id, uploads=normalized_uploads
+        )
         await self._repository.commit()
         return job, stored
 
@@ -1190,7 +1196,9 @@ class AgentQueueService:
             task_run_id=job_id,
             actor_user_id=actor_user_id,
         )
-        return await self._get_attachment_download(job_id=job_id, attachment_id=attachment_id)
+        return await self._get_attachment_download(
+            job_id=job_id, attachment_id=attachment_id
+        )
 
     async def get_attachment_download_for_worker(
         self,
@@ -1202,7 +1210,9 @@ class AgentQueueService:
         """Resolve an attachment download for the claiming worker."""
 
         await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker_id)
-        return await self._get_attachment_download(job_id=job_id, attachment_id=attachment_id)
+        return await self._get_attachment_download(
+            job_id=job_id, attachment_id=attachment_id
+        )
 
     async def _list_input_artifacts(
         self,
@@ -1222,7 +1232,9 @@ class AgentQueueService:
         job_id: UUID,
         attachment_id: UUID,
     ) -> ArtifactDownload:
-        download = await self.get_artifact_download(job_id=job_id, artifact_id=attachment_id)
+        download = await self.get_artifact_download(
+            job_id=job_id, artifact_id=attachment_id
+        )
         if not download.artifact.name.startswith(_ATTACHMENT_NAMESPACE):
             raise AgentArtifactNotFoundError(attachment_id)
         return download

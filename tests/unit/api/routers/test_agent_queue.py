@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import ANY, AsyncMock
@@ -302,14 +301,18 @@ def test_create_job_with_attachments_success(
         )
     ]
 
-    response = test_client.post("/api/queue/jobs/with-attachments", data=payload, files=files)
+    response = test_client.post(
+        "/api/queue/jobs/with-attachments", data=payload, files=files
+    )
 
     assert response.status_code == 201
     body = response.json()
     assert body["job"]["id"] == str(job.id)
     assert len(body["attachments"]) == 1
     service.create_job_with_attachments.assert_awaited_once()
-    called_attachments = service.create_job_with_attachments.await_args.kwargs["attachments"]
+    called_attachments = service.create_job_with_attachments.await_args.kwargs[
+        "attachments"
+    ]
     assert len(called_attachments) == 1
     assert called_attachments[0].filename == "image.png"
     assert called_attachments[0].content_type == "image/png"

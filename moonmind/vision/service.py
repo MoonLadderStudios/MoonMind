@@ -139,12 +139,8 @@ class VisionService:
         if status is VisionContextStatus.DISABLED:
             return "Vision context generation disabled."
         if status is VisionContextStatus.PROVIDER_UNAVAILABLE:
-            return (
-                "Vision provider credentials unavailable; review image manually."
-            )
-        return (
-            "Vision provider is enabled but automatic captions are pending."
-        )
+            return "Vision provider credentials unavailable; review image manually."
+        return "Vision provider is enabled but automatic captions are pending."
 
     @staticmethod
     def _render_empty_markdown() -> str:
@@ -185,5 +181,7 @@ class VisionService:
             )
         elif status is VisionContextStatus.DISABLED:
             lines.append("")
-            lines.append("NOTE: Vision context generation is disabled via configuration.")
+            lines.append(
+                "NOTE: Vision context generation is disabled via configuration."
+            )
         return "\n".join(lines)

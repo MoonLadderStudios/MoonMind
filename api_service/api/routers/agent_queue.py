@@ -600,12 +600,8 @@ async def create_job_with_attachments(
                 },
             )
 
-    per_file_limit = max(
-        1, int(settings.spec_workflow.agent_job_attachment_max_bytes)
-    )
-    total_limit = max(
-        1, int(settings.spec_workflow.agent_job_attachment_total_bytes)
-    )
+    per_file_limit = max(1, int(settings.spec_workflow.agent_job_attachment_max_bytes))
+    total_limit = max(1, int(settings.spec_workflow.agent_job_attachment_total_bytes))
     attachments: list[AttachmentUpload] = []
     total_bytes = 0
 
@@ -1198,7 +1194,9 @@ async def list_job_attachments(
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return ArtifactListResponse(items=[_serialize_artifact(item) for item in attachments])
+    return ArtifactListResponse(
+        items=[_serialize_artifact(item) for item in attachments]
+    )
 
 
 @router.get("/jobs/{job_id}/attachments/{attachment_id}/download")
@@ -1256,7 +1254,9 @@ async def list_job_attachments_worker(
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
-    return ArtifactListResponse(items=[_serialize_artifact(item) for item in attachments])
+    return ArtifactListResponse(
+        items=[_serialize_artifact(item) for item in attachments]
+    )
 
 
 @router.get("/jobs/{job_id}/attachments/{attachment_id}/download/worker")

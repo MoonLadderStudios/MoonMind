@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -104,8 +104,12 @@ async def test_create_job_with_attachments_respects_total_limit(
         async with session_maker() as session:
             service = await _create_service(session, tmp_path / "artifacts")
             uploads = [
-                AttachmentUpload(filename="one.png", content_type="image/png", data=_png_bytes()),
-                AttachmentUpload(filename="two.png", content_type="image/png", data=_png_bytes()),
+                AttachmentUpload(
+                    filename="one.png", content_type="image/png", data=_png_bytes()
+                ),
+                AttachmentUpload(
+                    filename="two.png", content_type="image/png", data=_png_bytes()
+                ),
             ]
             with pytest.raises(AgentQueueValidationError):
                 await service.create_job_with_attachments(
@@ -224,7 +228,9 @@ async def test_get_attachment_download_filters_namespace(tmp_path: Path) -> None
                 data=b"hello",
             )
             artifacts = await service.list_artifacts(job_id=job.id)
-            non_input = next(item for item in artifacts if not item.name.startswith("inputs/"))
+            non_input = next(
+                item for item in artifacts if not item.name.startswith("inputs/")
+            )
 
             with pytest.raises(AgentArtifactNotFoundError):
                 await service.get_attachment_download_for_user(
