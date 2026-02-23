@@ -145,7 +145,7 @@ def test_run_forever_fails_jobs_without_stopping() -> None:
     asyncio.run(worker.run_forever(stop_event=stop_event))
 
     assert queue.fail_calls == [
-        (run_id, "orchestrator worker failed while processing queue job"),
+        (run_id, "orchestrator run execution failed"),
     ]
 
 
@@ -248,7 +248,7 @@ def test_process_job_acks_cancellation_after_step_execution(monkeypatch) -> None
     asyncio.run(worker._process_job(job))
 
     assert queue.cancel_acks == [
-        (run_id, f"orchestrator run {run_id} cancelled"),
+        (run_id, "orchestrator run cancelled"),
     ]
     assert queue.complete_calls == []
     assert queue.fail_calls == []
