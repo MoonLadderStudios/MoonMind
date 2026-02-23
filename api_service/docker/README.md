@@ -4,7 +4,7 @@
 
 The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooling-builder` to install Spec Kit and Codex CLIs. The stage accepts two build arguments:
 
-- `CODEX_CLI_VERSION` (default `latest`)
+- `CODEX_CLI_VERSION` (default `0.104.0`)
 - `SPEC_KIT_VERSION` (default `0.4.0`)
 
 During the build the stage:
@@ -22,7 +22,7 @@ Override the defaults when building an image:
 
 ```bash
 docker build \
-  --build-arg CODEX_CLI_VERSION=latest \
+  --build-arg CODEX_CLI_VERSION=0.104.0 \
   --build-arg SPEC_KIT_VERSION=0.4.1 \
   -f api_service/Dockerfile .
 ```

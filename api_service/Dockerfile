@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1.4
-ARG CODEX_CLI_VERSION=0.103.0
+ARG CODEX_CLI_VERSION=0.104.0
 ARG SPEC_KIT_VERSION=0.4.0
-ARG CLAUDE_CLI_VERSION=latest
+ARG CLAUDE_CLI_VERSION=2.1.50
 # Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
 # the API, orchestrator, and Celery workers can run from the same image tag.
 # Disable selectively in test-only or constrained builds when needed.
 ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_GEMINI_CLI=true
 ARG INSTALL_CLAUDE_CLI=true
-ARG GEMINI_CLI_VERSION=latest
+ARG GEMINI_CLI_VERSION=0.29.5
 ARG INSTALL_TEST_DEPS=false
 
 FROM node:20-bookworm AS tooling-builder
