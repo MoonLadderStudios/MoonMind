@@ -1596,14 +1596,14 @@ smmap = ">=3.0.1,<6"
 
 [[package]]
 name = "gitpython"
-version = "3.1.46"
+version = "3.1.45"
 description = "GitPython is a Python library used to interact with Git repositories"
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
-    {file = "gitpython-3.1.46-py3-none-any.whl", hash = "sha256:79812ed143d9d25b6d176a10bb511de0f9c67b1fa641d82097b0ab90398a2058"},
-    {file = "gitpython-3.1.46.tar.gz", hash = "sha256:400124c7d0ef4ea03f7310ac2fbf7151e09ff97f2a3288d64a440c584a29c37f"},
+    {file = "gitpython-3.1.45-py3-none-any.whl", hash = "sha256:8908cb2e02fb3b93b7eb0f2827125cb699869470432cc885f019b8fd0fccff77"},
+    {file = "gitpython-3.1.45.tar.gz", hash = "sha256:85b0ee964ceddf211c41b9f27a49086010a190fd8132a24e21f362a4b36a791c"},
 ]
 
 [package.dependencies]
@@ -1611,7 +1611,7 @@ gitdb = ">=4.0.1,<5"
 
 [package.extras]
 doc = ["sphinx (>=7.1.2,<7.2)", "sphinx-autodoc-typehints", "sphinx_rtd_theme"]
-test = ["coverage[toml]", "ddt (>=1.1.1,!=1.4.3)", "mock ; python_version < \"3.8\"", "mypy (==1.18.2) ; python_version >= \"3.9\"", "pre-commit", "pytest (>=7.3.1)", "pytest-cov", "pytest-instafail", "pytest-mock", "pytest-sugar", "typing-extensions ; python_version < \"3.11\""]
+test = ["coverage[toml]", "ddt (>=1.1.1,!=1.4.3)", "mock ; python_version < \"3.8\"", "mypy", "pre-commit", "pytest (>=7.3.1)", "pytest-cov", "pytest-instafail", "pytest-mock", "pytest-sugar", "typing-extensions ; python_version < \"3.11\""]
 
 [[package]]
 name = "gkeepapi"
@@ -2889,19 +2889,19 @@ tenacity = ">=8.5.0,<10.0"
 
 [[package]]
 name = "llama-index"
-version = "0.14.14"
+version = "0.14.15"
 description = "Interface between LLMs and your data"
 optional = false
 python-versions = "<4.0,>=3.9"
 groups = ["main"]
 files = [
-    {file = "llama_index-0.14.14-py3-none-any.whl", hash = "sha256:c3be0880ea7323c70ad1dfe8c393dc99c2a30a8743c2e47c18f3c40ac4a358ee"},
-    {file = "llama_index-0.14.14.tar.gz", hash = "sha256:cb3524adade2d5171caf67bac5ce1c5c080be312497956f31b597a79a9dee225"},
+    {file = "llama_index-0.14.15-py3-none-any.whl", hash = "sha256:469bf8ff77a445dbf402ed08978a0c8ebf59d40fcd15d289e07e5791e0513cea"},
+    {file = "llama_index-0.14.15.tar.gz", hash = "sha256:079f65e72af87c72dd8b516aa2dd520b52eb2128722d66ecce1e5148cee357c0"},
 ]
 
 [package.dependencies]
 llama-index-cli = {version = ">=0.5.0,<0.6", markers = "python_version > \"3.9\""}
-llama-index-core = ">=0.14.14,<0.15.0"
+llama-index-core = ">=0.14.15,<0.15.0"
 llama-index-embeddings-openai = ">=0.5.0,<0.6"
 llama-index-indices-managed-llama-cloud = ">=0.4.0"
 llama-index-llms-openai = ">=0.6.0,<0.7"
@@ -2928,20 +2928,20 @@ llama-index-llms-openai = ">=0.6.0,<0.7"
 
 [[package]]
 name = "llama-index-core"
-version = "0.14.14"
+version = "0.14.15"
 description = "Interface between LLMs and your data"
 optional = false
 python-versions = "<4.0,>=3.9"
 groups = ["main"]
 files = [
-    {file = "llama_index_core-0.14.14-py3-none-any.whl", hash = "sha256:b62512a4ba1911b50b30d25d721535b30c9242f5f2dd6a4d5a4a712cca7b570e"},
-    {file = "llama_index_core-0.14.14.tar.gz", hash = "sha256:505a252c7e357cb12fb9bef41498ae2be3f2baa07666a939f8107f3faef2823b"},
+    {file = "llama_index_core-0.14.15-py3-none-any.whl", hash = "sha256:e02b321c10673871a38aaefdc4a93d5ae8ec324cad4408683189e5a1aa1e3d52"},
+    {file = "llama_index_core-0.14.15.tar.gz", hash = "sha256:3766aeeb95921b3a2af8c2a51d844f75f404215336e1639098e3652db52c68ce"},
 ]
 
 [package.dependencies]
 aiohttp = ">=3.8.6,<4"
 aiosqlite = "*"
-banks = ">=2.2.0,<3"
+banks = ">=2.3.0,<3"
 dataclasses-json = "*"
 deprecated = ">=1.2.9.3"
 dirtyjson = ">=1.0.8,<2"
@@ -2962,6 +2962,7 @@ setuptools = ">=80.9.0"
 sqlalchemy = {version = ">=1.4.49", extras = ["asyncio"]}
 tenacity = ">=8.2.0,<8.4.0 || >8.4.0,<10.0.0"
 tiktoken = ">=0.7.0"
+tinytag = ">=2.2.0"
 tqdm = ">=4.66.1,<5"
 typing-extensions = ">=4.5.0"
 typing-inspect = ">=0.8.0"
@@ -6042,6 +6043,21 @@ doc = ["sphinx", "sphinx_rtd_theme"]
 test = ["pytest", "ruff"]
 
 [[package]]
+name = "tinytag"
+version = "2.2.0"
+description = "Read audio file metadata"
+optional = false
+python-versions = ">=3.7"
+groups = ["main"]
+files = [
+    {file = "tinytag-2.2.0-py3-none-any.whl", hash = "sha256:d2cf3ef8ee0f6c854663f77d9d5f8159ee1c834c70f5ea4f214ddc4af8148f79"},
+    {file = "tinytag-2.2.0.tar.gz", hash = "sha256:f15b082510f6e0fc717e597edc8759d6f2d3ff6194ac0f3bcd675a9a09d9b798"},
+]
+
+[package.extras]
+tests = ["coverage", "mypy", "mypy (<1.19.0) ; platform_python_implementation == \"PyPy\"", "pycodestyle", "pylint", "pyright"]
+
+[[package]]
 name = "toml"
 version = "0.10.2"
 description = "Python Library for Tom's Obvious, Minimal Language"
@@ -6865,4 +6881,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "16076ee40b6dc5883ad0eb9d9c9c16647d79e69968da345a9c9bbbadb1d9d4be"
+content-hash = "3e94b743293c9150e3be60541206096e5643635b5605bb751fd309e69498028f"
