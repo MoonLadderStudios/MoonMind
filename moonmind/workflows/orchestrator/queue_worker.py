@@ -141,11 +141,30 @@ class QueueApiClient:
         )
 
     async def heartbeat(
-        self, *, job_id: UUID, worker_id: str, lease_seconds: int
-    ) -> None:
-        await self._post_json(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        return await self._post_json(
             f"/api/queue/jobs/{job_id}/heartbeat",
             json={"workerId": worker_id, "leaseSeconds": lease_seconds},
+        )
+
+    async def ack_cancel(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"workerId": worker_id}
+        if message:
+            payload["message"] = message
+        return await self._post_json(
+            f"/api/queue/jobs/{job_id}/cancel/ack",
+            json=payload,
         )
 
     async def complete_job(
@@ -234,7 +253,24 @@ class OrchestratorQueueWorker:
                 await asyncio.sleep(self._config.poll_interval_ms / 1000.0)
                 continue
 
-            await self._process_job(claimed)
+            try:
+                await self._process_job(claimed)
+            except Exception:
+                logger.exception(
+                    "Unhandled exception while processing queue job %s",
+                    claimed.id,
+                )
+                try:
+                    await self._queue.fail_job(
+                        job_id=claimed.id,
+                        worker_id=self._config.worker_id,
+                        error_message="orchestrator worker failed while processing queue job",
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to fail orchestrator queue job %s after processing error",
+                        claimed.id,
+                    )
 
     async def _process_job(self, job: ClaimedJob) -> None:
         if job.type != ORCHESTRATOR_RUN_JOB_TYPE:
@@ -247,12 +283,13 @@ class OrchestratorQueueWorker:
 
         try:
             run_id, steps, include_rollback = self._parse_payload(job.payload)
-        except Exception as exc:
+        except Exception:
             await self._queue.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
-                error_message=f"invalid orchestrator payload: {exc}",
+                error_message="invalid orchestrator payload",
             )
+            logger.exception("Invalid payload on orchestrator queue job %s", job.id)
             return
 
         await self._queue.append_event(
@@ -268,13 +305,16 @@ class OrchestratorQueueWorker:
         )
 
         heartbeat_stop = asyncio.Event()
+        cancel_event = asyncio.Event()
         heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(job.id, heartbeat_stop)
+            self._heartbeat_loop(job.id, heartbeat_stop, cancel_event)
         )
         failure_message: str | None = None
 
         try:
             for step in steps:
+                if cancel_event.is_set():
+                    break
                 await self._queue.append_event(
                     job_id=job.id,
                     worker_id=self._config.worker_id,
@@ -319,6 +359,14 @@ class OrchestratorQueueWorker:
             heartbeat_stop.set()
             await heartbeat_task
 
+        if cancel_event.is_set():
+            await self._queue.ack_cancel(
+                job_id=job.id,
+                worker_id=self._config.worker_id,
+                message=f"orchestrator run {run_id} cancelled",
+            )
+            return
+
         if failure_message is not None:
             await self._queue.fail_job(
                 job_id=job.id,
@@ -333,24 +381,45 @@ class OrchestratorQueueWorker:
             result_summary=f"orchestrator run {run_id} completed",
         )
 
-    async def _heartbeat_loop(self, job_id: UUID, stop_event: asyncio.Event) -> None:
+    async def _heartbeat_loop(
+        self,
+        job_id: UUID,
+        stop_event: asyncio.Event,
+        cancel_event: asyncio.Event,
+    ) -> None:
         interval = max(1.0, self._config.lease_seconds / 3.0)
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
-                break
             except TimeoutError:
+                # Timeouts are expected while waiting for the heartbeat interval.
                 pass
+            else:
+                break
+
             try:
-                await self._queue.heartbeat(
+                heartbeat = await self._queue.heartbeat(
                     job_id=job_id,
                     worker_id=self._config.worker_id,
                     lease_seconds=self._config.lease_seconds,
                 )
+                if self._is_cancel_requested(heartbeat=heartbeat):
+                    cancel_event.set()
+                    stop_event.set()
             except Exception:
                 logger.exception(
                     "Failed to heartbeat orchestrator queue job %s", job_id
                 )
+
+    @staticmethod
+    def _is_cancel_requested(*, heartbeat: dict[str, Any]) -> bool:
+        job_payload = heartbeat.get("job")
+        if not isinstance(job_payload, dict):
+            return False
+        cancel_requested_at = job_payload.get("cancelRequestedAt")
+        if cancel_requested_at is None:
+            return False
+        return bool(str(cancel_requested_at).strip())
 
     @staticmethod
     def _parse_payload(

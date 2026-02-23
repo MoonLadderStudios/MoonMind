@@ -208,7 +208,6 @@ async def get_orchestrator_run(
     session: AsyncSession = Depends(get_async_session),
 ) -> OrchestratorRunDetailModel:
     repo = OrchestratorRepository(session)
-    queue_service = _queue_service(session)
     run = await repo.get_run(run_id, with_relations=True)
     if run is None:
         raise HTTPException(
@@ -287,6 +286,7 @@ async def provide_orchestrator_approval(
         expires_at=payload.expires_at,
     )
     await repo.commit()
+    queue_service = _queue_service(session)
 
     step_sequence = _extract_step_names(getattr(run.action_plan, "steps", None))
     if step_sequence:

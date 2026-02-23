@@ -173,6 +173,26 @@ services:
       - gemini_auth_volume:/var/lib/gemini-auth
     restart: "no"
 
+  codex-auth-init:
+    image: alpine:3.20
+    environment:
+      - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
+    command: >-
+      sh -lc "mkdir -p ${CODEX_HOME} && chown -R 1000:1000 ${CODEX_HOME} && chmod 0775 ${CODEX_HOME}"
+    volumes:
+      - codex_auth_volume:${CODEX_HOME:-/home/app/.codex}
+    restart: "no"
+
+  claude-auth-init:
+    image: alpine:3.20
+    environment:
+      - CLAUDE_HOME=${CLAUDE_HOME:-/home/app/.claude}
+    command: >-
+      sh -lc "mkdir -p ${CLAUDE_HOME} && chown -R 1000:1000 ${CLAUDE_HOME} && chmod 0775 ${CLAUDE_HOME}"
+    volumes:
+      - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
+    restart: "no"
+
   codex-worker:
     build:
       context: .
@@ -240,6 +260,10 @@ services:
         condition: service_started
       agent-workspaces-init:
         condition: service_completed_successfully
+      codex-auth-init:
+        condition: service_completed_successfully
+      claude-auth-init:
+        condition: service_completed_successfully
     networks:
       - local-network
       - docker-proxy-network
@@ -305,7 +329,6 @@ services:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
       - gemini_auth_volume:${GEMINI_HOME:-/var/lib/gemini-auth}
-      - gemini_auth_volume:${GEMINI_CLI_HOME:-${GEMINI_HOME:-/var/lib/gemini-auth}}
       - speckit_workspaces:/work/runs
       - ./var/artifacts:/workspace/var/artifacts
       - agent_workspaces:/work/agent_jobs
@@ -320,6 +343,10 @@ services:
       agent-workspaces-init:
         condition: service_completed_successfully
       gemini-auth-init:
+        condition: service_completed_successfully
+      codex-auth-init:
+        condition: service_completed_successfully
+      claude-auth-init:
         condition: service_completed_successfully
     networks:
       - local-network
@@ -395,6 +422,10 @@ services:
         condition: service_started
       agent-workspaces-init:
         condition: service_completed_successfully
+      codex-auth-init:
+        condition: service_completed_successfully
+      claude-auth-init:
+        condition: service_completed_successfully
     networks:
       - local-network
       - docker-proxy-network
@@ -454,6 +485,8 @@ services:
       docker-proxy:
         condition: service_started
       agent-workspaces-init:
+        condition: service_completed_successfully
+      codex-auth-init:
         condition: service_completed_successfully
     networks:
       - local-network
