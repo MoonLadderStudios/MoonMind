@@ -35,6 +35,17 @@ metrics_namespace = "spec_automation"
 # Provide to emit StatsD metrics (optional)
 metrics_host = ""
 metrics_port = 8125
+# Attachment + vision defaults stay aligned with SpecWorkflowSettings
+agent_job_attachment_enabled = true
+agent_job_attachment_max_count = 10
+agent_job_attachment_max_bytes = 10485760
+agent_job_attachment_total_bytes = 26214400
+agent_job_attachment_allowed_content_types = ["image/png", "image/jpeg", "image/webp"]
+moonmind_vision_context_enabled = true
+moonmind_vision_provider = "gemini"
+moonmind_vision_model = "models/gemini-2.5-flash"
+moonmind_vision_max_tokens = 512
+moonmind_vision_ocr_enabled = true
 
 [spec_workflow.self_heal]
 # Default self-heal budgets enforced by Codex workers (docs/WorkerSelfHealSystem.md §8)

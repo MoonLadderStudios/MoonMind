@@ -31,7 +31,7 @@ docker compose run --rm -it \
   -e CLAUDE_AUTH_ALLOW_INTERACTIVE=1 \
   -e CLAUDE_HOME="$CLAUDE_HOME" \
   -e CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
-  "${COMPOSE_NETWORK_ARGS[@]}" codex-worker \
+  "${COMPOSE_NETWORK_ARGS[@]}" claude-worker \
   bash -lc '
 set -e
 node - <<'"'"'EOF'"'"'
@@ -74,7 +74,7 @@ try {
   process.exit(1);
 }
 EOF
-echo "Launching Claude OAuth login inside codex-worker container."
+echo "Launching Claude OAuth login inside claude-worker container."
 echo "If prompted, keep auth in dark theme and complete the browser sign-in flow."
 claude auth login
 echo "Verifying Claude auth status."

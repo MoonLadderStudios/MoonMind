@@ -74,6 +74,16 @@ def _duration_ms(started_at: datetime | None, finished_at: datetime) -> float | 
     return max(elapsed, 0.0)
 
 
+def _resolve_current_task_id() -> str | None:
+    """Return Celery task id when running under Celery, else ``None``."""
+
+    try:
+        request = getattr(current_task, "request", None)
+    except Exception:
+        return None
+    return getattr(request, "id", None)
+
+
 def _artifact_root() -> Path:
     default_root = Path(settings.spec_workflow.artifacts_root)
     configured = os.getenv("ORCHESTRATOR_ARTIFACT_ROOT")
@@ -276,7 +286,7 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
         if run.action_plan is None:
             raise ValueError(f"Run {run_id} missing action plan")
 
-        task_id = getattr(getattr(current_task, "request", None), "id", None)
+        task_id = _resolve_current_task_id()
         started_at = _utcnow()
         await repo.upsert_plan_step_state(
             run_id=run.id,

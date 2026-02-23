@@ -267,19 +267,20 @@ fi
 
 retry_enabled="$(lower "${MOONMIND_WORKER_RETRY_ENABLED:-true}")"
 retry_seconds="${MOONMIND_WORKER_RETRY_SECONDS:-20}"
+worker_command="${MOONMIND_WORKER_COMMAND:-moonmind-codex-worker}"
 
 while true; do
   set +e
-  moonmind-codex-worker "$@"
+  "$worker_command" "$@"
   exit_code=$?
   set -e
   if [[ "$exit_code" -eq 0 ]]; then
     exit 0
   fi
   if [[ "$retry_enabled" != "true" ]]; then
-    log "moonmind-codex-worker exited with code $exit_code and retries are disabled."
+    log "$worker_command exited with code $exit_code and retries are disabled."
     exit "$exit_code"
   fi
-  log "moonmind-codex-worker exited with code $exit_code; retrying in ${retry_seconds}s."
+  log "$worker_command exited with code $exit_code; retrying in ${retry_seconds}s."
   sleep "$retry_seconds"
 done
