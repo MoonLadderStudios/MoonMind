@@ -48,8 +48,13 @@ llama-index-llms-anthropic = "~=0.10.8"
 httpx = "~=0.28.1"
 atlassian-python-api = "~=4.0.7"
 beautifulsoup4 = "~=4.14.3"
-html2text = "~=2024.2.26"
+<<<<<<< HEAD
+html2text = "~=2025.4.15"
 lxml = "~=6.0.2"
+=======
+html2text = "~=2025.4.15"
+lxml = "~=6.0.0"
+>>>>>>> 9f6ad9c (Bump html2text from 2024.2.26 to 2025.4.15)
 datasets = "~=3.6.0"
 pillow = ">=12.1.1,<13.0.0"
 pytesseract = "~=0.3.13"
