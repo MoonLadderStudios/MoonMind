@@ -167,8 +167,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             },
         },
         "system": {
-            "defaultQueue": settings.spec_workflow.codex_queue
-            or settings.celery.default_queue,
+            "defaultQueue": "agent_jobs",
             "defaultRepository": default_repository,
             "defaultTaskRuntime": default_task_runtime,
             "defaultTaskModel": default_task_model,
