@@ -10,9 +10,9 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
@@ -27,6 +27,7 @@ from moonmind.workflows.agent_queue.manifest_contract import (
     normalize_manifest_job_payload,
 )
 from moonmind.workflows.agent_queue.repositories import (
+    AgentArtifactNotFoundError,
     AgentJobStateError,
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
@@ -46,6 +47,13 @@ _DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
 _DEFAULT_CODEX_EFFORT = "high"
 _DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_ATTACHMENT_NAMESPACE = "inputs/"
+_ATTACHMENT_FILENAME_MAX_LENGTH = 120
+_ATTACHMENT_EXTENSION_MAP = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
 
 
 class AgentQueueValidationError(ValueError):
@@ -78,6 +86,29 @@ class ArtifactDownload:
 
     artifact: models.AgentJobArtifact
     file_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentUpload:
+    """In-memory representation of an uploaded attachment."""
+
+    filename: str
+    content_type: str | None
+    data: bytes
+    caption: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedAttachment:
+    """Validated attachment payload ready for persistence."""
+
+    original_filename: str
+    sanitized_filename: str
+    content_type: str
+    data: bytes
+    size_bytes: int
+    digest: str
+    caption: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +253,26 @@ class AgentQueueService:
             else settings.spec_workflow.agent_job_artifact_max_bytes
         )
         self._artifact_max_bytes = max(1, int(configured_limit))
+        self._attachments_enabled = bool(
+            settings.spec_workflow.agent_job_attachment_enabled
+        )
+        self._attachment_max_count = max(
+            0, int(settings.spec_workflow.agent_job_attachment_max_count)
+        )
+        self._attachment_max_bytes = max(
+            1, int(settings.spec_workflow.agent_job_attachment_max_bytes)
+        )
+        self._attachment_total_max_bytes = max(
+            1, int(settings.spec_workflow.agent_job_attachment_total_bytes)
+        )
+        allowed_types = tuple(
+            settings.spec_workflow.agent_job_attachment_allowed_content_types or ()
+        )
+        self._attachment_allowed_content_types = (
+            allowed_types
+            if allowed_types
+            else ("image/png", "image/jpeg", "image/webp")
+        )
         self._retry_backoff_base_seconds = max(1, int(retry_backoff_base_seconds))
         self._retry_backoff_max_seconds = max(
             self._retry_backoff_base_seconds,
@@ -304,6 +355,15 @@ class AgentQueueService:
             or default_runtime
         ).lower()
         runtime["mode"] = runtime_mode
+        if task_node is None and (
+            self._clean_optional_str(task.get("instructions")) is None
+            and self._clean_optional_str(task.get("instruction")) is None
+        ):
+            task["instructions"] = (
+                self._clean_optional_str(enriched.get("instructions"))
+                or self._clean_optional_str(enriched.get("instruction"))
+                or "Queue job"
+            )
         enriched["targetRuntime"] = runtime_mode
 
         if runtime_mode == "codex":
@@ -348,6 +408,31 @@ class AgentQueueService:
         max_attempts: int = 3,
     ) -> models.AgentJob:
         """Create and persist a new queued job."""
+
+        job = await self._create_job_record(
+            job_type=job_type,
+            payload=payload,
+            priority=priority,
+            created_by_user_id=created_by_user_id,
+            requested_by_user_id=requested_by_user_id,
+            affinity_key=affinity_key,
+            max_attempts=max_attempts,
+        )
+        await self._repository.commit()
+        return job
+
+    async def _create_job_record(
+        self,
+        *,
+        job_type: str,
+        payload: dict[str, Any],
+        priority: int,
+        created_by_user_id: Optional[UUID],
+        requested_by_user_id: Optional[UUID],
+        affinity_key: Optional[str],
+        max_attempts: int,
+    ) -> models.AgentJob:
+        """Create a job row and append queue events without committing."""
 
         candidate_type = job_type.strip()
         if not candidate_type:
@@ -417,8 +502,192 @@ class AgentQueueService:
                 job.id,
                 candidate_type,
             )
-        await self._repository.commit()
         return job
+
+    async def create_job_with_attachments(
+        self,
+        *,
+        job_type: str,
+        payload: dict[str, Any],
+        priority: int = 0,
+        created_by_user_id: Optional[UUID] = None,
+        requested_by_user_id: Optional[UUID] = None,
+        affinity_key: Optional[str] = None,
+        max_attempts: int = 3,
+        attachments: Sequence[AttachmentUpload],
+    ) -> tuple[models.AgentJob, list[models.AgentJobArtifact]]:
+        """Create a queued job and persist user-provided attachments before claim."""
+
+        if not self._attachments_enabled:
+            raise AgentQueueValidationError("attachments are currently disabled")
+        if job_type.strip() != CANONICAL_TASK_JOB_TYPE:
+            raise AgentQueueValidationError(
+                "attachments are only supported for task jobs"
+            )
+
+        uploads = list(attachments or [])
+        if not uploads:
+            raise AgentQueueValidationError(
+                "attachments must include at least one file"
+            )
+        if self._attachment_max_count and len(uploads) > self._attachment_max_count:
+            raise AgentQueueValidationError(
+                f"attachments exceed max count ({self._attachment_max_count})"
+            )
+
+        normalized_uploads: list[_NormalizedAttachment] = []
+        total_bytes = 0
+        for upload in uploads:
+            normalized = self._normalize_attachment_upload(upload)
+            normalized_uploads.append(normalized)
+            total_bytes += normalized.size_bytes
+
+        if total_bytes > self._attachment_total_max_bytes:
+            raise AgentQueueValidationError(
+                f"attachments exceed max total bytes ({self._attachment_total_max_bytes})"
+            )
+
+        job = await self._create_job_record(
+            job_type=job_type,
+            payload=payload,
+            priority=priority,
+            created_by_user_id=created_by_user_id,
+            requested_by_user_id=requested_by_user_id,
+            affinity_key=affinity_key,
+            max_attempts=max_attempts,
+        )
+        stored = await self._persist_attachments(
+            job_id=job.id, uploads=normalized_uploads
+        )
+        await self._repository.commit()
+        return job, stored
+
+    def _normalize_attachment_upload(
+        self,
+        upload: AttachmentUpload,
+    ) -> _NormalizedAttachment:
+        """Validate attachment payload and return normalized metadata."""
+
+        data = upload.data or b""
+        if not data:
+            raise AgentQueueValidationError("attachments must not be empty")
+        if len(data) > self._attachment_max_bytes:
+            raise AgentQueueValidationError(
+                f"attachment exceeds max bytes ({self._attachment_max_bytes})"
+            )
+
+        detected_type = self._sniff_attachment_content_type(data)
+        if detected_type is None:
+            raise AgentQueueValidationError(
+                "attachment content type must be PNG, JPEG, or WebP"
+            )
+        if detected_type not in self._attachment_allowed_content_types:
+            raise AgentQueueValidationError(
+                f"attachment content type '{detected_type}' is not allowed"
+            )
+
+        sanitized = self._sanitize_attachment_filename(
+            upload.filename or "",
+            detected_type,
+        )
+        digest = hashlib.sha256(data).hexdigest()
+        original_name = str(upload.filename or "").strip() or sanitized
+        caption = str(upload.caption or "").strip() or None
+        return _NormalizedAttachment(
+            original_filename=original_name,
+            sanitized_filename=sanitized,
+            content_type=detected_type,
+            data=data,
+            size_bytes=len(data),
+            digest=f"sha256:{digest}",
+            caption=caption,
+        )
+
+    async def _persist_attachments(
+        self,
+        *,
+        job_id: UUID,
+        uploads: Sequence[_NormalizedAttachment],
+    ) -> list[models.AgentJobArtifact]:
+        """Write attachment files to storage and persist metadata."""
+
+        stored: list[models.AgentJobArtifact] = []
+        for upload in uploads:
+            attachment_id = uuid4()
+            artifact_name = (
+                f"{_ATTACHMENT_NAMESPACE}{attachment_id}/{upload.sanitized_filename}"
+            )
+            storage_path: str | None = None
+            try:
+                _, storage_path = self._artifact_storage.write_artifact(
+                    job_id=job_id,
+                    artifact_name=artifact_name,
+                    data=upload.data,
+                )
+
+                artifact = await self._repository.create_artifact(
+                    job_id=job_id,
+                    name=artifact_name,
+                    content_type=upload.content_type,
+                    size_bytes=upload.size_bytes,
+                    digest=upload.digest,
+                    storage_path=storage_path,
+                )
+            except Exception:
+                if storage_path is not None:
+                    self._artifact_storage.resolve_storage_path(storage_path).unlink(
+                        missing_ok=True
+                    )
+                raise
+            stored.append(artifact)
+            await self._repository.append_event(
+                job_id=job_id,
+                level=models.AgentJobEventLevel.INFO,
+                message="Attachment uploaded",
+                payload={
+                    "name": artifact_name,
+                    "sizeBytes": upload.size_bytes,
+                    "contentType": upload.content_type,
+                    "caption": upload.caption,
+                },
+            )
+        return stored
+
+    def _sanitize_attachment_filename(
+        self,
+        filename: str,
+        content_type: str,
+    ) -> str:
+        """Sanitize attachment filenames to prevent traversal or unsafe chars."""
+
+        candidate = Path(filename or "").name
+        if not candidate:
+            candidate = "attachment"
+        safe_chars = []
+        for char in candidate:
+            if char.isalnum() or char in {"-", "_", "."}:
+                safe_chars.append(char)
+            else:
+                safe_chars.append("_")
+        sanitized = "".join(safe_chars).strip("._-") or "attachment"
+        path = Path(sanitized)
+        stem = path.stem or "attachment"
+        suffix = _ATTACHMENT_EXTENSION_MAP.get(content_type, path.suffix or "")
+        max_stem_len = max(1, _ATTACHMENT_FILENAME_MAX_LENGTH - len(suffix))
+        trimmed_stem = stem[:max_stem_len]
+        return f"{trimmed_stem}{suffix}"
+
+    @staticmethod
+    def _sniff_attachment_content_type(data: bytes) -> str | None:
+        """Best-effort magic-byte detection for supported attachment types."""
+
+        if len(data) >= 8 and data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if len(data) >= 3 and data[0] == 0xFF and data[1] == 0xD8:
+            return "image/jpeg"
+        if len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return None
 
     async def get_job(self, job_id: UUID) -> Optional[models.AgentJob]:
         """Fetch a single job by id."""
@@ -815,6 +1084,18 @@ class AgentQueueService:
         artifact_name = name.strip()
         if not artifact_name:
             raise AgentQueueValidationError("name must be a non-empty string")
+        try:
+            normalized_artifact_name = artifact_name.replace("\\", "/").strip()
+            while normalized_artifact_name.startswith("./"):
+                normalized_artifact_name = normalized_artifact_name[2:]
+            if not normalized_artifact_name:
+                raise ValueError
+        except Exception as exc:
+            raise AgentQueueValidationError("name must be a non-empty string") from exc
+        if normalized_artifact_name.startswith(_ATTACHMENT_NAMESPACE):
+            raise AgentQueueValidationError(
+                "artifact name may not use reserved 'inputs/' namespace"
+            )
         if not data:
             raise AgentQueueValidationError("file must not be empty")
         if len(data) > self._artifact_max_bytes:
@@ -827,21 +1108,16 @@ class AgentQueueService:
         job = await self._repository.require_job(job_id)
 
         if worker_id is not None:
-            worker = worker_id.strip()
-            if not worker:
-                raise AgentQueueValidationError("workerId must be a non-empty string")
-            if (
-                job.status is not models.AgentJobStatus.RUNNING
-                or job.claimed_by != worker
-            ):
-                raise AgentQueueAuthorizationError(
-                    f"worker '{worker}' does not own an active claim for job {job_id}"
-                )
+            await self._assert_job_worker_ownership(
+                job_id=job_id,
+                worker_id=worker_id,
+                job=job,
+            )
 
         try:
             _, storage_path = self._artifact_storage.write_artifact(
                 job_id=job_id,
-                artifact_name=artifact_name,
+                artifact_name=normalized_artifact_name,
                 data=data,
             )
         except ValueError as exc:
@@ -849,7 +1125,7 @@ class AgentQueueService:
 
         artifact = await self._repository.create_artifact(
             job_id=job_id,
-            name=artifact_name,
+            name=normalized_artifact_name,
             content_type=content_type.strip() if content_type else None,
             digest=digest.strip() if digest else None,
             size_bytes=len(data),
@@ -859,7 +1135,7 @@ class AgentQueueService:
             job_id=job_id,
             level=models.AgentJobEventLevel.INFO,
             message="Artifact uploaded",
-            payload={"name": artifact_name, "sizeBytes": len(data)},
+            payload={"name": normalized_artifact_name, "sizeBytes": len(data)},
         )
         await self._repository.commit()
         return artifact
@@ -899,6 +1175,131 @@ class AgentQueueService:
                 f"artifact file does not exist on disk: {artifact.storage_path}"
             )
         return ArtifactDownload(artifact=artifact, file_path=file_path)
+
+    async def list_attachments_for_user(
+        self,
+        *,
+        job_id: UUID,
+        actor_user_id: UUID | None,
+        limit: int = 50,
+    ) -> list[models.AgentJobArtifact]:
+        """List attachment metadata for a job scoped to the requesting user."""
+
+        if limit < 1 or limit > 500:
+            raise AgentQueueValidationError("limit must be between 1 and 500")
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=actor_user_id,
+        )
+        artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Attachments listed",
+            payload={
+                "actorUserId": str(actor_user_id) if actor_user_id else None,
+                "limit": limit,
+            },
+        )
+        await self._repository.commit()
+        return artifacts
+
+    async def list_attachments_for_worker(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        limit: int = 50,
+    ) -> list[models.AgentJobArtifact]:
+        """List attachment metadata for a job claimed by the worker."""
+
+        if limit < 1 or limit > 500:
+            raise AgentQueueValidationError("limit must be between 1 and 500")
+        await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker_id)
+        artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Attachments listed",
+            payload={"workerId": worker_id, "limit": limit},
+        )
+        await self._repository.commit()
+        return artifacts
+
+    async def get_attachment_download_for_user(
+        self,
+        *,
+        job_id: UUID,
+        attachment_id: UUID,
+        actor_user_id: UUID | None,
+    ) -> ArtifactDownload:
+        """Resolve an attachment download for an authorized user."""
+
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=actor_user_id,
+        )
+        download = await self._get_attachment_download(
+            job_id=job_id, attachment_id=attachment_id
+        )
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Attachment downloaded",
+            payload={
+                "actorUserId": str(actor_user_id) if actor_user_id else None,
+                "attachmentId": str(attachment_id),
+            },
+        )
+        await self._repository.commit()
+        return download
+
+    async def get_attachment_download_for_worker(
+        self,
+        *,
+        job_id: UUID,
+        attachment_id: UUID,
+        worker_id: str,
+    ) -> ArtifactDownload:
+        """Resolve an attachment download for the claiming worker."""
+
+        await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker_id)
+        download = await self._get_attachment_download(
+            job_id=job_id, attachment_id=attachment_id
+        )
+        await self._repository.append_event(
+            job_id=job_id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Attachment downloaded",
+            payload={"workerId": worker_id, "attachmentId": str(attachment_id)},
+        )
+        await self._repository.commit()
+        return download
+
+    async def _list_input_artifacts(
+        self,
+        *,
+        job_id: UUID,
+        limit: int,
+    ) -> list[models.AgentJobArtifact]:
+        return await self._repository.list_artifacts_with_prefix(
+            job_id=job_id,
+            prefix=_ATTACHMENT_NAMESPACE,
+            limit=limit,
+        )
+
+    async def _get_attachment_download(
+        self,
+        *,
+        job_id: UUID,
+        attachment_id: UUID,
+    ) -> ArtifactDownload:
+        download = await self.get_artifact_download(
+            job_id=job_id, artifact_id=attachment_id
+        )
+        if not download.artifact.name.startswith(_ATTACHMENT_NAMESPACE):
+            raise AgentArtifactNotFoundError(attachment_id)
+        return download
 
     async def append_event(
         self,
@@ -1734,6 +2135,28 @@ class AgentQueueService:
         raise AgentQueueAuthorizationError(
             f"worker '{worker_id}' does not own task run {task_run_id}"
         )
+
+    async def _assert_job_worker_ownership(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        job: models.AgentJob | None = None,
+    ) -> models.AgentJob:
+        """Require that the provided worker currently owns the job claim."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        job_ref = job or await self._repository.require_job(job_id)
+        if (
+            job_ref.status is not models.AgentJobStatus.RUNNING
+            or str(job_ref.claimed_by or "").strip() != worker
+        ):
+            raise AgentQueueAuthorizationError(
+                f"worker '{worker}' does not own an active claim for job {job_id}"
+            )
+        return job_ref
 
     async def _assert_task_run_user_access(
         self,

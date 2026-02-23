@@ -62,6 +62,17 @@ def test_default_model_fields_removed(app_settings_defaults):
     assert not hasattr(settings, "default_embed_model")
 
 
+class TestGoogleSettings:
+    def test_google_api_key_accepts_gemini_alias(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+        settings = GoogleSettings(_env_file=None)
+
+        assert settings.google_api_key == "gemini-key"
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+
 class TestAtlassianSettings:
     def test_atlassian_url_correction(self, monkeypatch):
         # Test case 1: URL with "https://https://"
@@ -228,6 +239,80 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_MAX_BYTES", raising=False)
+
+    def test_agent_job_attachment_defaults(self):
+        """Attachment-related settings should expose stable defaults."""
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.agent_job_attachment_enabled is True
+        assert settings.agent_job_attachment_max_count == 10
+        assert settings.agent_job_attachment_max_bytes == 10 * 1024 * 1024
+        assert settings.agent_job_attachment_total_bytes == 25 * 1024 * 1024
+        assert settings.agent_job_attachment_allowed_content_types == (
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+        )
+
+    def test_agent_job_attachment_env_overrides(self, monkeypatch):
+        """Attachment configuration should respect environment overrides."""
+
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_ENABLED", "0")
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_MAX_COUNT", "2")
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_MAX_BYTES", "1024")
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", "2048")
+        monkeypatch.setenv(
+            "AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
+            " image/png , image/jpeg ",
+        )
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.agent_job_attachment_enabled is False
+        assert settings.agent_job_attachment_max_count == 2
+        assert settings.agent_job_attachment_max_bytes == 1024
+        assert settings.agent_job_attachment_total_bytes == 2048
+        assert settings.agent_job_attachment_allowed_content_types == (
+            "image/png",
+            "image/jpeg",
+        )
+
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ENABLED", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_MAX_COUNT", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_MAX_BYTES", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES", raising=False)
+
+    def test_vision_defaults(self):
+        """Vision settings should expose stable defaults."""
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.vision_context_enabled is True
+        assert settings.vision_provider == "gemini"
+        assert settings.vision_model == "models/gemini-2.5-flash"
+        assert settings.vision_max_tokens == 512
+        assert settings.vision_ocr_enabled is True
+
+    def test_vision_env_overrides(self, monkeypatch):
+        """Vision configuration should respect environment overrides."""
+
+        monkeypatch.setenv("MOONMIND_VISION_CONTEXT_ENABLED", "0")
+        monkeypatch.setenv("MOONMIND_VISION_PROVIDER", "openai")
+        monkeypatch.setenv("MOONMIND_VISION_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("MOONMIND_VISION_MAX_TOKENS", "2048")
+        monkeypatch.setenv("MOONMIND_VISION_OCR_ENABLED", "false")
+
+        settings = SpecWorkflowSettings(_env_file=None)
+        assert settings.vision_context_enabled is False
+        assert settings.vision_provider == "openai"
+        assert settings.vision_model == "gpt-4o-mini"
+        assert settings.vision_max_tokens == 2048
+        assert settings.vision_ocr_enabled is False
+
+        monkeypatch.delenv("MOONMIND_VISION_CONTEXT_ENABLED", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_PROVIDER", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_MODEL", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_MAX_TOKENS", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_OCR_ENABLED", raising=False)
 
     def test_task_default_baselines(self):
         """Task defaults should provide stable queue execution baselines."""

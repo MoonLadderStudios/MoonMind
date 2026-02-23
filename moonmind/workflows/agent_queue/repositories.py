@@ -523,6 +523,37 @@ class AgentQueueRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_artifacts_with_prefix(
+        self,
+        *,
+        job_id: UUID,
+        prefix: str,
+        limit: int = 200,
+    ) -> list[models.AgentJobArtifact]:
+        """List artifacts filtered by name prefix."""
+
+        await self.require_job(job_id)
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        normalized_prefix = str(prefix or "").strip()
+        if not normalized_prefix:
+            raise ValueError("prefix must be a non-empty string")
+
+        like_pattern = f"{normalized_prefix}%"
+        stmt: Select[tuple[models.AgentJobArtifact]] = (
+            select(models.AgentJobArtifact)
+            .where(models.AgentJobArtifact.job_id == job_id)
+            .where(models.AgentJobArtifact.name.like(like_pattern))
+            .order_by(
+                models.AgentJobArtifact.created_at.desc(),
+                models.AgentJobArtifact.id.desc(),
+            )
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_artifact(self, artifact_id: UUID) -> models.AgentJobArtifact:
         """Return artifact by id or raise not found."""
 

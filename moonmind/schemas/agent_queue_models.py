@@ -256,6 +256,18 @@ class ArtifactListResponse(BaseModel):
     items: list[ArtifactModel] = Field(default_factory=list, alias="items")
 
 
+class JobWithAttachmentsResponse(BaseModel):
+    """Response payload for job creation with attachment metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    job: JobModel = Field(..., alias="job")
+    attachments: list[ArtifactModel] = Field(
+        default_factory=list,
+        alias="attachments",
+    )
+
+
 class JobEventModel(BaseModel):
     """Serialized queue event model."""
 
