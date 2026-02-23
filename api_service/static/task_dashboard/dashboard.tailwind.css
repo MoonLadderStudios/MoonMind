@@ -382,6 +382,12 @@ label {
   gap: 0.35rem;
 }
 
+label.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 input,
 select,
 textarea,
