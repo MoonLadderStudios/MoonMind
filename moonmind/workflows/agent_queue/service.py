@@ -355,6 +355,15 @@ class AgentQueueService:
             or default_runtime
         ).lower()
         runtime["mode"] = runtime_mode
+        if task_node is None and (
+            self._clean_optional_str(task.get("instructions")) is None
+            and self._clean_optional_str(task.get("instruction")) is None
+        ):
+            task["instructions"] = (
+                self._clean_optional_str(enriched.get("instructions"))
+                or self._clean_optional_str(enriched.get("instruction"))
+                or "Queue job"
+            )
         enriched["targetRuntime"] = runtime_mode
 
         if runtime_mode == "codex":
@@ -1077,8 +1086,12 @@ class AgentQueueService:
             raise AgentQueueValidationError("name must be a non-empty string")
         try:
             normalized_artifact_name = (
-                Path(artifact_name).as_posix().lstrip("./").strip("/")
+                artifact_name.replace("\\", "/").strip()
             )
+            while normalized_artifact_name.startswith("./"):
+                normalized_artifact_name = normalized_artifact_name[2:]
+            if not normalized_artifact_name:
+                raise ValueError
         except Exception as exc:
             raise AgentQueueValidationError("name must be a non-empty string") from exc
         if normalized_artifact_name.startswith(_ATTACHMENT_NAMESPACE):
