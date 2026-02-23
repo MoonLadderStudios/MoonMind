@@ -43,6 +43,29 @@ def _resolve_gemini_cli_auth_mode() -> str:
     return mode
 
 
+def _resolve_gemini_cli_home() -> str | None:
+    """Resolve Gemini CLI home and preserve explicit GEMINI_HOME values."""
+
+    gemini_cli_home_raw = os.environ.get("GEMINI_CLI_HOME")
+    gemini_home_raw = os.environ.get("GEMINI_HOME")
+
+    if gemini_cli_home_raw:
+        raw_home = gemini_cli_home_raw
+    elif gemini_home_raw:
+        raw_home = gemini_home_raw
+    else:
+        return None
+
+    gemini_home = raw_home.strip()
+    if not gemini_home:
+        return None
+
+    os.environ["GEMINI_CLI_HOME"] = gemini_home
+    if not (gemini_home_raw and gemini_home_raw.strip()):
+        os.environ["GEMINI_HOME"] = gemini_home
+    return gemini_home
+
+
 @celery_app.task(name="gemini_generate", queue=GEMINI_QUEUE)
 def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
     """Invoke Gemini CLI to generate content."""
@@ -77,9 +100,10 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
         if api_key:
             env["GEMINI_API_KEY"] = api_key
 
-    gemini_home = os.environ.get("GEMINI_HOME")
+    gemini_home = _resolve_gemini_cli_home()
     if gemini_home:
         env["GEMINI_HOME"] = gemini_home
+        env["GEMINI_CLI_HOME"] = gemini_home
 
     try:
         result = subprocess.run(

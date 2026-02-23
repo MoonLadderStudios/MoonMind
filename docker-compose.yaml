@@ -21,6 +21,8 @@ x-celery-worker-base: &celery-worker-base
     CODEX_TEMPLATE_PATH: /app/api_service/config.template.toml
     GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    GEMINI_HOME: ${GEMINI_HOME:-/var/lib/gemini-auth}
+    GEMINI_CLI_HOME: ${GEMINI_CLI_HOME:-${GEMINI_HOME:-/var/lib/gemini-auth}}
   env_file:
     - .env
   volumes:
@@ -243,6 +245,7 @@ services:
       <<: *celery-environment
       MOONMIND_WORKER_RUNTIME: gemini
       GEMINI_HOME: ${GEMINI_HOME:-/var/lib/gemini-auth}
+      GEMINI_CLI_HOME: ${GEMINI_CLI_HOME:-${GEMINI_HOME:-/var/lib/gemini-auth}}
     command: >-
       celery -A celery_worker.gemini_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
@@ -258,6 +261,7 @@ services:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - speckit_workspaces:/work/runs
       - gemini_auth_volume:${GEMINI_HOME:-/var/lib/gemini-auth}
+      - gemini_auth_volume:${GEMINI_CLI_HOME:-${GEMINI_HOME:-/var/lib/gemini-auth}}
 
   celery_claude_worker:
     <<: *celery-worker-base

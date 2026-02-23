@@ -640,7 +640,10 @@ def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
         ),
     )
 
-    with pytest.raises(RuntimeError, match="GEMINI_HOME is required"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"GEMINI_CLI_HOME \(or GEMINI_HOME fallback\) is required",
+    ):
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "gemini",
@@ -704,7 +707,10 @@ def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -
         lambda _path, _mode: False,
     )
 
-    with pytest.raises(RuntimeError, match="GEMINI_HOME must be writable"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"GEMINI_CLI_HOME \(or GEMINI_HOME fallback\) must be writable",
+    ):
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "gemini",

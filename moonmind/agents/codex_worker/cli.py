@@ -336,24 +336,27 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 format_invalid_gemini_cli_auth_mode_error(gemini_auth_mode_raw)
             )
 
+        gemini_home = source.get("GEMINI_CLI_HOME") or source.get("GEMINI_HOME")
         _gemini_home, gemini_home_issue = inspect_gemini_home_for_auth_mode(
             auth_mode=gemini_auth_mode,
-            gemini_home=source.get("GEMINI_HOME"),
+            gemini_home=gemini_home,
             isdir=os.path.isdir,
             access=os.access,
         )
         if gemini_home_issue == "missing_for_oauth":
             raise RuntimeError(
-                "GEMINI_HOME is required when MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
+                "GEMINI_CLI_HOME (or GEMINI_HOME fallback) is required when "
+                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
             )
         if gemini_home_issue == "not_directory":
             raise RuntimeError(
-                "GEMINI_HOME must point to an existing directory when "
+                "GEMINI_CLI_HOME (or GEMINI_HOME fallback) must point to an existing "
+                "directory when "
                 f"MOONMIND_GEMINI_CLI_AUTH_MODE={gemini_auth_mode}"
             )
         if gemini_home_issue == "not_writable_for_oauth":
             raise RuntimeError(
-                "GEMINI_HOME must be writable when "
+                "GEMINI_CLI_HOME (or GEMINI_HOME fallback) must be writable when "
                 "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
             )
         _run_checked_command(

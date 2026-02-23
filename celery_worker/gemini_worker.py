@@ -186,38 +186,92 @@ def _resolve_gemini_cli_auth_mode() -> str:
     return mode
 
 
-def _run_gemini_preflight_check(*, auth_mode: str) -> None:
+def _resolve_gemini_cli_home() -> str | None:
+    """Resolve Gemini CLI home for CLI cache/auth persistence."""
+
+    gemini_cli_home_raw = os.environ.get("GEMINI_CLI_HOME")
+    gemini_home_raw = os.environ.get("GEMINI_HOME")
+
+    if gemini_cli_home_raw:
+        gemini_cli_home = gemini_cli_home_raw
+    elif gemini_home_raw:
+        gemini_cli_home = gemini_home_raw
+    else:
+        return None
+
+    normalized_home = gemini_cli_home.strip()
+    if not normalized_home:
+        return None
+
+    os.environ["GEMINI_CLI_HOME"] = normalized_home
+    if not (gemini_home_raw and gemini_home_raw.strip()):
+        os.environ["GEMINI_HOME"] = normalized_home
+        resolved_source = "GEMINI_CLI_HOME" if gemini_cli_home_raw else "GEMINI_HOME"
+        logger.info(
+            "Gemini auth home variables synchronized for compatibility.",
+            extra={
+                "gemini_cli_home_set": True,
+                "gemini_home_set": True,
+                "gemini_home_synchronized": True,
+                "gemini_cli_home_source": resolved_source,
+            },
+        )
+    else:
+        logger.info(
+            "Gemini CLI home resolved from environment.",
+            extra={
+                "gemini_cli_home_set": True,
+                "gemini_home_set": True,
+                "gemini_home_synchronized": False,
+                "gemini_cli_home_source": "GEMINI_CLI_HOME",
+            },
+        )
+    return normalized_home
+
+
+def _run_gemini_preflight_check(*, auth_mode: str, gemini_cli_home: str | None) -> None:
     """Validate Gemini authentication before accepting Celery tasks."""
 
     gemini_home, validation_issue = inspect_gemini_home_for_auth_mode(
         auth_mode=auth_mode,
-        gemini_home=os.environ.get("GEMINI_HOME"),
+        gemini_home=gemini_cli_home,
     )
     if validation_issue == "not_directory":
         logger.critical(
-            "GEMINI_HOME is set to '%s' but it is not a directory.", gemini_home
-        )
-        raise RuntimeError(f"GEMINI_HOME directory does not exist: {gemini_home}")
-    if validation_issue == "not_writable_for_oauth":
-        logger.critical(
-            "GEMINI_HOME '%s' is not writable by the worker process.", gemini_home
+            "Gemini CLI auth home is set to '%s' but it is not a directory.",
+            gemini_home,
         )
         raise RuntimeError(
-            "GEMINI_HOME must be writable for OAuth Gemini CLI authentication. "
+            "Gemini CLI auth home directory does not exist "
+            f"(GEMINI_CLI_HOME/GEMINI_HOME): {gemini_home}"
+        )
+    if validation_issue == "not_writable_for_oauth":
+        logger.critical(
+            "Gemini CLI auth home '%s' is not writable by the worker process.",
+            gemini_home,
+        )
+        raise RuntimeError(
+            "GEMINI_CLI_HOME (or GEMINI_HOME fallback) must be writable for OAuth "
+            "Gemini CLI authentication. "
             "Mount the auth volume read-write and ensure UID/GID permissions match the worker user."
         )
     if gemini_home:
-        logger.info("Gemini pre-flight check: GEMINI_HOME=%s", gemini_home)
+        logger.info(
+            "Gemini pre-flight check home resolved.",
+            extra={"gemini_cli_home_set": True},
+        )
     elif validation_issue == "missing_for_oauth":
         logger.critical(
-            "GEMINI_HOME must be set to a writable directory when "
+            "GEMINI_CLI_HOME (or GEMINI_HOME fallback) must be set to a writable directory when "
             "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth."
         )
         raise RuntimeError(
-            "GEMINI_HOME is required for OAuth Gemini CLI authentication."
+            "GEMINI_CLI_HOME (or GEMINI_HOME fallback) is required for OAuth Gemini CLI authentication."
         )
     else:
-        logger.warning("GEMINI_HOME is not set; persistent config may not be active.")
+        logger.warning(
+            "GEMINI_CLI_HOME and GEMINI_HOME are not set; persistent Gemini CLI config may not be active."
+        )
 
     if auth_mode == "oauth":
         if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
@@ -265,6 +319,7 @@ app = celery_app
 
 _runtime_mode = _configure_worker_runtime()
 _gemini_auth_mode = _resolve_gemini_cli_auth_mode()
+_gemini_cli_home = _resolve_gemini_cli_home()
 _log_codex_cli_version()
 _log_gemini_cli_version()
 _log_claude_cli_version()
@@ -279,7 +334,10 @@ _log_queue_configuration()
 _validate_embedding_profile()
 _validate_shared_skills_profile()
 if _runtime_mode in {"gemini", "universal"}:
-    _run_gemini_preflight_check(auth_mode=_gemini_auth_mode)
+    _run_gemini_preflight_check(
+        auth_mode=_gemini_auth_mode,
+        gemini_cli_home=_gemini_cli_home,
+    )
 else:
     logger.info(
         "Skipping Gemini pre-flight check for runtime mode '%s'",
