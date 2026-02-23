@@ -173,7 +173,9 @@ def test_heartbeat_loop_marks_job_cancelled_when_api_reports_cancel_request(
 ) -> None:
     """Heartbeat responses with cancelRequestedAt should mark a cancellation request."""
 
-    async def _immediate_timeout(coro: object, *_args: object, **_kwargs: object) -> None:
+    async def _immediate_timeout(
+        coro: object, *_args: object, **_kwargs: object
+    ) -> None:
         if hasattr(coro, "close"):
             coro.close()
         raise asyncio.TimeoutError()
@@ -216,7 +218,6 @@ def test_process_job_acks_cancellation_after_step_execution(monkeypatch) -> None
     worker = OrchestratorQueueWorker(config=_worker_config(), queue_client=queue)
 
     from moonmind.workflows.orchestrator import queue_worker
-
 
     async def _fake_heartbeat_loop(
         job_id: UUID,
