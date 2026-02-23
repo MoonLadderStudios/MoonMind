@@ -555,14 +555,14 @@ button.secondary:hover {
 }
 
 .queue-submit-primary {
-  background: rgb(29 78 216);
-  color: rgb(var(--mm-ink));
-  box-shadow: 0 0 0 1px rgb(29 78 216 / 0.4), 0 14px 26px -18px rgb(29 78 216);
+  background: rgb(var(--mm-accent));
+  color: #fff;
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.4), 0 14px 26px -18px rgb(var(--mm-accent));
 }
 
 .queue-submit-primary:hover {
-  background: rgb(37 99 235);
-  box-shadow: 0 0 0 1px rgb(37 99 235 / 0.55), 0 18px 28px -20px rgb(37 99 235);
+  background: rgb(var(--mm-accent) / 0.92);
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.55), 0 18px 28px -20px rgb(var(--mm-accent));
 }
 
 .queue-submit-primary:focus-visible {
