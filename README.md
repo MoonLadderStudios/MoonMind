@@ -37,7 +37,9 @@ MoonMind exposes all of this through:
 2.  **Authenticate worker OAuth volumes (one-time per environment)** before running queue/Celery automation:
     ```bash
     ./tools/auth-codex-volume.sh
-    ./tools/auth-claude-volume.sh
+    ./tools/auth-claude-volume.sh           # interactive OAuth flow (default)
+    # or, if you already have a Claude OAuth access token:
+    # ./tools/auth-claude-volume.sh --token-value "<access-token>"
     ./tools/auth-gemini-volume.sh
     ```
     This persists Codex auth in `codex_auth_volume`, Claude auth in `claude_auth_volume`, and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
