@@ -1103,7 +1103,7 @@
   }
 
   function setView(title, subtitle, body, options = {}) {
-    const { showAutoRefreshControls = true } = options;
+    const { showAutoRefreshControls = false } = options;
     const normalizedSubtitle = String(subtitle || "").trim();
     root.innerHTML = `
       <div class="toolbar">
@@ -1639,6 +1639,7 @@
       "Queue Jobs",
       `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading queue jobs...</p>",
+      { showAutoRefreshControls: true },
     );
 
     const filterState = {
@@ -1796,6 +1797,7 @@
         "Queue Jobs",
         `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
         `${telemetryHtml}${renderQueueFilters()}${renderQueueLayouts(filteredRows)}`,
+        { showAutoRefreshControls: true },
       );
       attachFilterHandlers(rows);
     }
@@ -3499,6 +3501,7 @@
           </div>
         </div>
       `,
+      { showAutoRefreshControls: true },
     );
 
     const state = {
