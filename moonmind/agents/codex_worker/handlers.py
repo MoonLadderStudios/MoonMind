@@ -1037,11 +1037,11 @@ class CodexExecHandler:
     @staticmethod
     def _resolve_codex_sandbox_mode() -> str:
         configured = str(
-            os.environ.get("MOONMIND_CODEX_SANDBOX_MODE", "workspace-write")
+            os.environ.get("MOONMIND_CODEX_SANDBOX_MODE", "danger-full-access")
         ).strip()
         if configured in {"read-only", "workspace-write", "danger-full-access"}:
             return configured
-        return "workspace-write"
+        return "danger-full-access"
 
     def _redact_text(
         self,
