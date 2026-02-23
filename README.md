@@ -693,7 +693,7 @@ Key settings related to model providers include:
 
 *   **Google:**
     *   `GOOGLE_API_KEY`: Your Google API key for accessing Gemini models.
-    *   `GOOGLE_CHAT_MODEL` (optional, default: `"gemini-pro"`): Default Google chat model to use if not specified in a request.
+*   `GOOGLE_CHAT_MODEL` (optional, default: `"gemini-3.1-pro"`): Default Google chat model to use if not specified in a request.
 *   **OpenAI:**
     *   `OPENAI_API_KEY`: Your OpenAI API key.
     *   `OPENAI_CHAT_MODEL` (optional, default: `"gpt-3.5-turbo"`): Default OpenAI chat model.
@@ -702,7 +702,7 @@ The application will attempt to load these from environment variables. For local
 
 ```env
 GOOGLE_API_KEY="your_google_api_key_here"
-# GOOGLE_CHAT_MODEL="gemini-1.5-flash-latest" # Optional
+# GOOGLE_CHAT_MODEL="gemini-3.1-pro" # Optional
 
 OPENAI_API_KEY="your_openai_api_key_here"
 # OPENAI_CHAT_MODEL="gpt-4o" # Optional

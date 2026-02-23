@@ -602,7 +602,7 @@ async def handle_anthropic_request(
         id=f"cmpl-anthropic-{uuid4().hex}",
         object="chat.completion",
         created=int(time.time()),
-        model=model_to_use,  # This should be the specific model name like "claude-3-opus-20240229"
+        model=model_to_use,  # This should be the specific model name like "claude-sonnet-4-6"
         choices=[
             Choice(
                 index=0,

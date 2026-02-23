@@ -966,7 +966,7 @@ class GoogleSettings(BaseSettings):
             "google_api_key", "GOOGLE_API_KEY", "GEMINI_API_KEY"
         ),
     )
-    google_chat_model: str = Field("gemini-2.5-flash", env="GOOGLE_CHAT_MODEL")
+    google_chat_model: str = Field("gemini-3.1-pro", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
         "gemini-embedding-001", env="GOOGLE_EMBEDDING_MODEL"
     )
@@ -983,7 +983,7 @@ class AnthropicSettings(BaseSettings):
 
     anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY")
     anthropic_chat_model: str = Field(
-        "claude-3-opus-20240229", env="ANTHROPIC_CHAT_MODEL"
+        "claude-sonnet-4-6", env="ANTHROPIC_CHAT_MODEL"
     )
     anthropic_enabled: bool = Field(True, env="ANTHROPIC_ENABLED")
 
