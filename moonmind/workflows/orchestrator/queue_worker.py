@@ -228,6 +228,9 @@ class QueueApiClient:
 class OrchestratorQueueWorker:
     """Single-purpose worker that executes orchestrator runs from DB queue jobs."""
 
+    _INTERNAL_FAILURE_MESSAGE = "orchestrator run execution failed"
+    _CANCELLATION_MESSAGE = "orchestrator run cancelled"
+
     def __init__(
         self, *, config: QueueWorkerConfig, queue_client: QueueApiClient
     ) -> None:
@@ -261,11 +264,23 @@ class OrchestratorQueueWorker:
                     claimed.id,
                 )
                 try:
-                    await self._queue.fail_job(
+                    heartbeat = await self._queue.heartbeat(
                         job_id=claimed.id,
                         worker_id=self._config.worker_id,
-                        error_message="orchestrator worker failed while processing queue job",
+                        lease_seconds=self._config.lease_seconds,
                     )
+                    if self._is_cancel_requested(heartbeat=heartbeat):
+                        await self._queue.ack_cancel(
+                            job_id=claimed.id,
+                            worker_id=self._config.worker_id,
+                            message=self._CANCELLATION_MESSAGE,
+                        )
+                    else:
+                        await self._queue.fail_job(
+                            job_id=claimed.id,
+                            worker_id=self._config.worker_id,
+                            error_message=self._INTERNAL_FAILURE_MESSAGE,
+                        )
                 except Exception:
                     logger.exception(
                         "Failed to fail orchestrator queue job %s after processing error",
@@ -330,31 +345,32 @@ class OrchestratorQueueWorker:
                     message="Completed orchestrator step",
                     payload={"runId": str(run_id), "step": step.value},
                 )
-        except Exception as exc:
-            failure_message = f"orchestrator step failed: {exc}"
-            logger.exception(
-                "Orchestrator run %s failed while processing queue job", run_id
-            )
-            if include_rollback:
-                try:
-                    await self._queue.append_event(
-                        job_id=job.id,
-                        worker_id=self._config.worker_id,
-                        level="warn",
-                        message="Attempting rollback after orchestrator step failure",
-                        payload={"runId": str(run_id)},
-                    )
-                    await _execute_plan_step_async(
-                        run_id, db_models.OrchestratorPlanStep.ROLLBACK.value
-                    )
-                except Exception as rollback_exc:
-                    logger.exception(
-                        "Rollback failed for orchestrator run %s after queue failure",
-                        run_id,
-                    )
-                    failure_message = (
-                        f"{failure_message}; rollback failed: {rollback_exc}"
-                    )
+        except Exception:
+            if cancel_event.is_set():
+                logger.info("Orchestrator run %s cancelled before completion", run_id)
+            else:
+                logger.exception(
+                    "Orchestrator run %s failed while processing queue job", run_id
+                )
+                failure_message = self._INTERNAL_FAILURE_MESSAGE
+                if include_rollback:
+                    try:
+                        await self._queue.append_event(
+                            job_id=job.id,
+                            worker_id=self._config.worker_id,
+                            level="warn",
+                            message="Attempting rollback after orchestrator step failure",
+                            payload={"runId": str(run_id)},
+                        )
+                        await _execute_plan_step_async(
+                            run_id, db_models.OrchestratorPlanStep.ROLLBACK.value
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Rollback failed for orchestrator run %s after queue failure",
+                            run_id,
+                        )
+                        failure_message = self._INTERNAL_FAILURE_MESSAGE
         finally:
             heartbeat_stop.set()
             await heartbeat_task
@@ -363,7 +379,7 @@ class OrchestratorQueueWorker:
             await self._queue.ack_cancel(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
-                message=f"orchestrator run {run_id} cancelled",
+                message=self._CANCELLATION_MESSAGE,
             )
             return
 
@@ -413,10 +429,16 @@ class OrchestratorQueueWorker:
 
     @staticmethod
     def _is_cancel_requested(*, heartbeat: dict[str, Any]) -> bool:
-        job_payload = heartbeat.get("job")
-        if not isinstance(job_payload, dict):
+        if not isinstance(heartbeat, dict):
             return False
-        cancel_requested_at = job_payload.get("cancelRequestedAt")
+
+        job_payload = heartbeat.get("job")
+        if isinstance(job_payload, dict):
+            cancel_payload = job_payload
+        else:
+            cancel_payload = heartbeat
+
+        cancel_requested_at = cancel_payload.get("cancelRequestedAt")
         if cancel_requested_at is None:
             return False
         return bool(str(cancel_requested_at).strip())
@@ -471,7 +493,18 @@ async def _run(args: argparse.Namespace) -> int:
             )
             if claimed is None:
                 return 0
-            await worker._process_job(claimed)
+            try:
+                await worker._process_job(claimed)
+            except Exception:
+                logger.exception(
+                    "Unhandled exception while processing queue job %s in one-shot mode",
+                    claimed.id,
+                )
+                await client.fail_job(
+                    job_id=claimed.id,
+                    worker_id=config.worker_id,
+                    error_message=worker._INTERNAL_FAILURE_MESSAGE,
+                )
             return 0
         await worker.run_forever()
         return 0
