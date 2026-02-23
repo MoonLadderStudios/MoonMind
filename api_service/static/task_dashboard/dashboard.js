@@ -1575,6 +1575,7 @@
       "Active Tasks",
       `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading active runs...</p>",
+      { showAutoRefreshControls: true },
     );
 
     const loader = async () => {
@@ -1628,6 +1629,7 @@
         "Active Tasks",
         `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
         renderActivePageContent(rows, errors),
+        { showAutoRefreshControls: true },
       );
     };
 
@@ -1892,6 +1894,7 @@
       "Manifest Runs",
       "All manifest ingestion jobs (type=manifest).",
       "<p class='loading'>Loading manifest jobs...</p>",
+      { showAutoRefreshControls: true },
     );
 
     const load = async () => {
@@ -1910,6 +1913,7 @@
         "Manifest Runs",
         "All manifest ingestion jobs (type=manifest).",
         `<div class="actions"><a href="/tasks/manifests/new"><button type="button">New Manifest Run</button></a></div>${renderRowsTable(rows)}`,
+        { showAutoRefreshControls: true },
       );
     };
 
@@ -2098,6 +2102,7 @@
       "Orchestrator Runs",
       "Recent orchestrator runs.",
       "<p class='loading'>Loading orchestrator runs...</p>",
+      { showAutoRefreshControls: true },
     );
 
     const load = async () => {
@@ -2107,6 +2112,7 @@
         "Orchestrator Runs",
         "Recent orchestrator runs.",
         `<div class="actions"><a href="/tasks/orchestrator/new"><button type="button">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
+        { showAutoRefreshControls: true },
       );
     };
 
@@ -4627,6 +4633,7 @@
       "Orchestrator Run Detail",
       `Run ${runId}`,
       "<p class='loading'>Loading orchestrator run...</p>",
+      { showAutoRefreshControls: true },
     );
 
     const load = async () => {
@@ -4689,6 +4696,7 @@
               </section>
             </div>
           `,
+          { showAutoRefreshControls: true },
         );
       } catch (error) {
         console.error("orchestrator detail load failed", error);
@@ -4696,6 +4704,7 @@
           "Orchestrator Run Detail",
           `Run ${runId}`,
           "<div class='notice error'>Failed to load run detail.</div>",
+          { showAutoRefreshControls: true },
         );
       }
     };
@@ -4952,6 +4961,7 @@
         "Task Proposals",
         "Worker follow-up queue (promote to Task jobs).",
         `${noticeHtml}${renderFilters()}${renderTable()}`,
+        { showAutoRefreshControls: true },
       );
       attachHandlers();
     };
@@ -4988,6 +4998,7 @@
       "Task Proposals",
       "Worker follow-up queue (promote to Task jobs).",
       "<p class='loading'>Loading proposals...</p>",
+      { showAutoRefreshControls: true },
     );
     await load();
     startPolling(load, pollIntervals.list);
@@ -5459,6 +5470,7 @@
         "System Settings",
         "Pause or resume worker processing.",
         layout,
+        { showAutoRefreshControls: true },
       );
       attachHandlers();
       syncDynamicView();
@@ -5630,6 +5642,7 @@
       "System Settings",
       "Pause or resume worker processing.",
       "<p class='loading'>Loading system controls...</p>",
+      { showAutoRefreshControls: true },
     );
     await load();
     startPolling(() => load(true), workerPauseTransport.pollInterval);
