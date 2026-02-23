@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "pr_number": { "type": "integer" },
+    "pr_url": { "type": "string" },
+    "decision": {
+      "type": "string",
+      "description": "A summary of the actions taken (e.g., Fixed merge conflicts, Fixed CI failures)"
+    },
+    "merge_outcome": {
+      "type": "string",
+      "enum": ["merged", "skipped", "blocked", "failed"]
+    },
+    "reason": {
+      "type": "string",
+      "description": "Optional reason if skipped or blocked"
+    }
+  },
+  "required": ["decision", "merge_outcome"]
+}
