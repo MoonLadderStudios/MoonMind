@@ -189,10 +189,7 @@ def _resolve_gemini_cli_auth_mode() -> str:
 def _resolve_gemini_cli_home() -> str | None:
     """Resolve and synchronize Gemini CLI home for CLI cache/auth persistence."""
 
-    gemini_cli_home = (
-        os.environ.get("GEMINI_CLI_HOME")
-        or os.environ.get("GEMINI_HOME")
-    )
+    gemini_cli_home = os.environ.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_HOME")
     if gemini_cli_home is None:
         return None
 
