@@ -982,9 +982,7 @@ class AnthropicSettings(BaseSettings):
     """Anthropic API settings"""
 
     anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY")
-    anthropic_chat_model: str = Field(
-        "claude-sonnet-4-6", env="ANTHROPIC_CHAT_MODEL"
-    )
+    anthropic_chat_model: str = Field("claude-sonnet-4-6", env="ANTHROPIC_CHAT_MODEL")
     anthropic_enabled: bool = Field(True, env="ANTHROPIC_ENABLED")
 
     model_config = SettingsConfigDict(env_prefix="")
