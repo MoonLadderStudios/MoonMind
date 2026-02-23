@@ -316,7 +316,9 @@ class CodexWorkerConfig:
             or "permissive"
         )
         if skill_policy_mode not in {"permissive", "allowlist"}:
-            raise ValueError("WORKFLOW_SKILL_POLICY_MODE must be one of: permissive, allowlist")
+            raise ValueError(
+                "WORKFLOW_SKILL_POLICY_MODE must be one of: permissive, allowlist"
+            )
         allowed_skills_csv = str(
             source.get(
                 "WORKFLOW_ALLOWED_SKILLS",
