@@ -234,6 +234,7 @@ def generate_skill_action_plan(
             skill_args=skill_args,
         ),
         _build_verify_step(profile),
+        _build_rollback_step(profile),
     ]
     generated_at = datetime.now(tz=timezone.utc)
     return ActionPlan(

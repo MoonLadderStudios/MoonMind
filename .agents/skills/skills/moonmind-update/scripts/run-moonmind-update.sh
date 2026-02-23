@@ -8,7 +8,6 @@ Usage: run-moonmind-update.sh [options]
 Options:
   --repo <path>              Target repository path (default: current directory)
   --branch <name>            Branch to checkout before pulling (default: main)
-  --update-command <command> Override Moonmind update command
   --allow-dirty              Allow running with uncommitted git changes
   --no-compose-pull          Skip docker compose pull step
   --dry-run                  Print commands without executing them
@@ -37,18 +36,8 @@ run_cmd() {
   "$@"
 }
 
-run_shell_cmd() {
-  local cmd="$1"
-  if [[ "$DRY_RUN" == "true" ]]; then
-    printf '[dry-run] bash -lc %q\n' "$cmd"
-    return 0
-  fi
-  bash -lc "$cmd"
-}
-
 REPO_PATH="."
 BRANCH="main"
-UPDATE_COMMAND=""
 ALLOW_DIRTY="false"
 SKIP_COMPOSE_PULL="false"
 DRY_RUN="false"
@@ -63,11 +52,6 @@ while [[ $# -gt 0 ]]; do
     --branch)
       [[ $# -ge 2 ]] || die "--branch requires a value"
       BRANCH="$2"
-      shift 2
-      ;;
-    --update-command)
-      [[ $# -ge 2 ]] || die "--update-command requires a value"
-      UPDATE_COMMAND="$2"
       shift 2
       ;;
     --allow-dirty)
@@ -125,13 +109,6 @@ if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   run_cmd "${COMPOSE[@]}" pull
 fi
 
-if [[ -n "$UPDATE_COMMAND" ]]; then
-  say "Running custom update command"
-  run_shell_cmd "$UPDATE_COMMAND"
-  say "Workflow completed"
-  exit 0
-fi
-
 UPDATE_SCRIPT=""
 for candidate in \
   "./scripts/update-moonmind.sh" \
@@ -148,7 +125,7 @@ do
 done
 
 if [[ -z "$UPDATE_SCRIPT" ]]; then
-  die "No update script detected. Provide --update-command '<command>'."
+  die "No update script detected. Add one of the expected update script paths."
 fi
 
 say "Running detected update script: $UPDATE_SCRIPT"

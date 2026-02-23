@@ -34,6 +34,10 @@ from moonmind.workflows.orchestrator.policies import (
     validate_approval_token,
 )
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
+from moonmind.workflows.orchestrator.skill_executor import (
+    is_runnable_skill,
+    list_runnable_skill_names,
+)
 from moonmind.workflows.orchestrator.serializers import (
     serialize_artifacts,
     serialize_run_detail,
@@ -48,7 +52,6 @@ from moonmind.workflows.orchestrator.storage import (
     resolve_artifact_root,
 )
 from moonmind.workflows.orchestrator.tasks import enqueue_action_plan
-from moonmind.workflows.skills.resolver import list_available_skill_names
 
 router = APIRouter(prefix="/orchestrator", tags=["Orchestrator"])
 
@@ -110,14 +113,22 @@ async def create_orchestrator_run(
     try:
         requested_skill = (payload.skill_id or "").strip()
         if requested_skill:
+            if payload.target_service != "orchestrator":
+                raise ValueError(
+                    "Explicit skill runs are only supported for targetService=orchestrator."
+                )
             if requested_skill == "auto":
                 raise ValueError(
                     "Orchestrator skill runs require an explicit skill id, not 'auto'."
                 )
-            available_skills = set(list_available_skill_names())
+            available_skills = set(list_runnable_skill_names())
             if requested_skill not in available_skills:
                 raise ValueError(
-                    f"Selected skill '{requested_skill}' is not available from configured mirrors."
+                    f"Selected skill '{requested_skill}' is not runnable from configured mirrors."
+                )
+            if not is_runnable_skill(requested_skill):
+                raise ValueError(
+                    f"Selected skill '{requested_skill}' does not expose a runnable script."
                 )
             plan = generate_skill_action_plan(
                 payload.instruction,
