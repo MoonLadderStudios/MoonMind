@@ -3980,7 +3980,9 @@ class CodexWorker:
         proposal_output_path_for_skill.parent.mkdir(parents=True, exist_ok=True)
         proposal_output_path_for_skill.write_text("[]\n", encoding="utf-8")
         proposal_output_relative = str(proposal_output_path_for_skill)
-        task_context_path = str((prepared.artifacts_dir / "task_context.json").resolve())
+        task_context_path = str(
+            (prepared.artifacts_dir / "task_context.json").resolve()
+        )
         artifacts_path = str(prepared.artifacts_dir.resolve())
         cancel_event = getattr(self, "_active_cancel_event", None)
         (prepared.artifacts_dir / "codex_exec.log").unlink(missing_ok=True)
