@@ -9,7 +9,7 @@ Keys for model providers (e.g. Google and OpenAI) are read from this user's prof
 
 **Gemini CLI authentication**: Configure `MOONMIND_GEMINI_CLI_AUTH_MODE` for worker subprocesses.
 - `api_key` (default): requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
-- `oauth`: uses cached account login in `GEMINI_HOME` (`gemini_auth_volume`) and ignores API-key env vars for Gemini CLI calls.
+- `oauth`: uses cached account login in `GEMINI_CLI_HOME` (defaults to `GEMINI_HOME`) via `gemini_auth_volume` and ignores API-key env vars for Gemini CLI calls.
 Use `./tools/auth-gemini-volume.sh` once per environment to bootstrap OAuth credentials into the shared Gemini auth volume.
 
 ## Spec Workflow Celery Chain Operations

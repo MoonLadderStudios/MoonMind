@@ -21,6 +21,8 @@ x-celery-worker-base: &celery-worker-base
     CODEX_TEMPLATE_PATH: /app/api_service/config.template.toml
     GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    GEMINI_HOME: ${GEMINI_HOME:-/var/lib/gemini-auth}
+    GEMINI_CLI_HOME: ${GEMINI_CLI_HOME:-${GEMINI_HOME:-/var/lib/gemini-auth}}
   env_file:
     - .env
   volumes:

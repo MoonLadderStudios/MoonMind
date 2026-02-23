@@ -56,7 +56,7 @@ The **Gemini worker group** is a set of Celery worker processes bound exclusivel
 Workers are deployed as a dedicated service with:
 
 - A Celery app configured to listen only on the `gemini` queue.
-- The Gemini auth volume mounted at the configured `GEMINI_HOME` (e.g., `/home/app/.gemini`).
+- The Gemini auth volume mounted at the configured `GEMINI_HOME` (e.g., `/home/app/.gemini`), and the CLI reads from `GEMINI_CLI_HOME` (defaulting to `GEMINI_HOME`).
 - Gemini CLI present on `PATH` via the shared automation image.
 
 Scaling strategies:
@@ -93,8 +93,8 @@ MoonMind supports two explicit Gemini CLI auth modes for workers:
   - Startup preflight requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
   - Gemini subprocesses inherit API-key auth.
 - `MOONMIND_GEMINI_CLI_AUTH_MODE=oauth`:
-  - Startup preflight requires `GEMINI_HOME` to exist.
-  - Gemini subprocesses explicitly ignore `GEMINI_API_KEY` and `GOOGLE_API_KEY` so cached account auth in `GEMINI_HOME` is used.
+  - Startup preflight requires `GEMINI_CLI_HOME` (defaulting to `GEMINI_HOME`) to exist.
+  - Gemini subprocesses explicitly ignore `GEMINI_API_KEY` and `GOOGLE_API_KEY` so cached account auth in `GEMINI_CLI_HOME` is used.
 
 This design lets operators keep API keys available for non-CLI workflows (for example embedding services) while forcing the Gemini CLI runtime to use OAuth account auth.
 

@@ -202,10 +202,11 @@ During workflow execution, MoonMind materializes a per-run shared skill director
 The Gemini worker listens on the `gemini` queue and uses the `celery_worker.gemini_worker` entrypoint.
 
 - `GEMINI_CELERY_QUEUE` - Queue name for Gemini tasks (default: `gemini`).
-- `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration (default: `/var/lib/gemini-auth`).
+- `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration.
+- `GEMINI_CLI_HOME` - Path the Gemini CLI reads/writes auth state from. Defaults to `GEMINI_HOME` (for compatibility with existing setups).
 - `MOONMIND_GEMINI_CLI_AUTH_MODE` - Gemini CLI auth mode for worker subprocesses:
   - `api_key` (default): use `GEMINI_API_KEY` / `GOOGLE_API_KEY`.
-  - `oauth`: use cached login in `GEMINI_HOME`; worker subprocesses ignore API key env vars.
+  - `oauth`: use cached login in `GEMINI_CLI_HOME` (defaults to `GEMINI_HOME`); worker subprocesses ignore API key env vars.
 
 To bootstrap Gemini OAuth into the shared volume:
 

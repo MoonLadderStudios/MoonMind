@@ -186,12 +186,32 @@ def _resolve_gemini_cli_auth_mode() -> str:
     return mode
 
 
-def _run_gemini_preflight_check(*, auth_mode: str) -> None:
+def _resolve_gemini_cli_home() -> str | None:
+    """Resolve and synchronize Gemini CLI home for CLI cache/auth persistence."""
+
+    gemini_cli_home = (
+        os.environ.get("GEMINI_CLI_HOME")
+        or os.environ.get("GEMINI_HOME")
+    )
+    if gemini_cli_home is None:
+        return None
+
+    normalized_home = gemini_cli_home.strip()
+    if not normalized_home:
+        return None
+
+    os.environ["GEMINI_CLI_HOME"] = normalized_home
+    os.environ["GEMINI_HOME"] = normalized_home
+    logger.info("Gemini CLI home resolved: %s", normalized_home)
+    return normalized_home
+
+
+def _run_gemini_preflight_check(*, auth_mode: str, gemini_cli_home: str | None) -> None:
     """Validate Gemini authentication before accepting Celery tasks."""
 
     gemini_home, validation_issue = inspect_gemini_home_for_auth_mode(
         auth_mode=auth_mode,
-        gemini_home=os.environ.get("GEMINI_HOME"),
+        gemini_home=gemini_cli_home,
     )
     if validation_issue == "not_directory":
         logger.critical(
@@ -265,6 +285,7 @@ app = celery_app
 
 _runtime_mode = _configure_worker_runtime()
 _gemini_auth_mode = _resolve_gemini_cli_auth_mode()
+_gemini_cli_home = _resolve_gemini_cli_home()
 _log_codex_cli_version()
 _log_gemini_cli_version()
 _log_claude_cli_version()
@@ -279,7 +300,10 @@ _log_queue_configuration()
 _validate_embedding_profile()
 _validate_shared_skills_profile()
 if _runtime_mode in {"gemini", "universal"}:
-    _run_gemini_preflight_check(auth_mode=_gemini_auth_mode)
+    _run_gemini_preflight_check(
+        auth_mode=_gemini_auth_mode,
+        gemini_cli_home=_gemini_cli_home,
+    )
 else:
     logger.info(
         "Skipping Gemini pre-flight check for runtime mode '%s'",
