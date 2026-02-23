@@ -27,7 +27,7 @@ if [[ "$NO_DEPS" == "1" ]]; then
 fi
 
 if [[ "$ALLOW_INTERACTIVE" == "1" ]]; then
-  RUN_OPTS+=(--interactive)
+  RUN_OPTS+=(--interactive --tty)
 fi
 
 RUN_OPTS+=(
@@ -113,7 +113,14 @@ fi
 initialize_settings
 
 if [[ "${CLAUDE_AUTH_ALLOW_INTERACTIVE:-0}" == "1" ]]; then
-  claude auth login
+  login_args=()
+  if [[ -n "${CLAUDE_AUTH_EMAIL:-}" ]]; then
+    login_args+=(--email "$CLAUDE_AUTH_EMAIL")
+  fi
+  if [[ "${CLAUDE_AUTH_SSO:-0}" == "1" ]]; then
+    login_args+=(--sso)
+  fi
+  claude auth login "${login_args[@]}"
 else
   echo "Claude auth is not interactive in this run. Set CLAUDE_AUTH_ALLOW_INTERACTIVE=1 to open OAuth login."
   exit 1
