@@ -74,7 +74,9 @@ class QueueWorkerConfig:
             or "orchestrator"
         )
         worker_capabilities = tuple(
-            dict.fromkeys([item.strip() for item in caps_csv.split(",") if item.strip()])
+            dict.fromkeys(
+                [item.strip() for item in caps_csv.split(",") if item.strip()]
+            )
         )
         if "orchestrator" not in {item.lower() for item in worker_capabilities}:
             worker_capabilities = (*worker_capabilities, "orchestrator")
@@ -107,7 +109,9 @@ class QueueApiClient:
             "Accept": "application/json",
             "X-MoonMind-Worker-Token": worker_token,
         }
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=30.0, headers=headers)
+        self._client = httpx.AsyncClient(
+            base_url=base_url, timeout=30.0, headers=headers
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -136,7 +140,9 @@ class QueueApiClient:
             payload=dict(job_data.get("payload") or {}),
         )
 
-    async def heartbeat(self, *, job_id: UUID, worker_id: str, lease_seconds: int) -> None:
+    async def heartbeat(
+        self, *, job_id: UUID, worker_id: str, lease_seconds: int
+    ) -> None:
         await self._post_json(
             f"/api/queue/jobs/{job_id}/heartbeat",
             json={"workerId": worker_id, "leaseSeconds": lease_seconds},
@@ -203,7 +209,9 @@ class QueueApiClient:
 class OrchestratorQueueWorker:
     """Single-purpose worker that executes orchestrator runs from DB queue jobs."""
 
-    def __init__(self, *, config: QueueWorkerConfig, queue_client: QueueApiClient) -> None:
+    def __init__(
+        self, *, config: QueueWorkerConfig, queue_client: QueueApiClient
+    ) -> None:
         self._config = config
         self._queue = queue_client
 
@@ -260,7 +268,9 @@ class OrchestratorQueueWorker:
         )
 
         heartbeat_stop = asyncio.Event()
-        heartbeat_task = asyncio.create_task(self._heartbeat_loop(job.id, heartbeat_stop))
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(job.id, heartbeat_stop)
+        )
         failure_message: str | None = None
 
         try:
@@ -282,7 +292,9 @@ class OrchestratorQueueWorker:
                 )
         except Exception as exc:
             failure_message = f"orchestrator step failed: {exc}"
-            logger.exception("Orchestrator run %s failed while processing queue job", run_id)
+            logger.exception(
+                "Orchestrator run %s failed while processing queue job", run_id
+            )
             if include_rollback:
                 try:
                     await self._queue.append_event(
@@ -300,7 +312,9 @@ class OrchestratorQueueWorker:
                         "Rollback failed for orchestrator run %s after queue failure",
                         run_id,
                     )
-                    failure_message = f"{failure_message}; rollback failed: {rollback_exc}"
+                    failure_message = (
+                        f"{failure_message}; rollback failed: {rollback_exc}"
+                    )
         finally:
             heartbeat_stop.set()
             await heartbeat_task
@@ -334,7 +348,9 @@ class OrchestratorQueueWorker:
                     lease_seconds=self._config.lease_seconds,
                 )
             except Exception:
-                logger.exception("Failed to heartbeat orchestrator queue job %s", job_id)
+                logger.exception(
+                    "Failed to heartbeat orchestrator queue job %s", job_id
+                )
 
     @staticmethod
     def _parse_payload(
@@ -372,7 +388,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 async def _run(args: argparse.Namespace) -> int:
     config = QueueWorkerConfig.from_env()
-    client = QueueApiClient(base_url=config.moonmind_url, worker_token=config.worker_token)
+    client = QueueApiClient(
+        base_url=config.moonmind_url, worker_token=config.worker_token
+    )
     worker = OrchestratorQueueWorker(config=config, queue_client=client)
     try:
         if args.once:
@@ -399,10 +417,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(_run(args))
     except Exception as exc:
-        parser.exit(status=1, message=f"moonmind-orchestrator-queue-worker failed: {exc}\n")
+        parser.exit(
+            status=1, message=f"moonmind-orchestrator-queue-worker failed: {exc}\n"
+        )
     return 1
 
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-
