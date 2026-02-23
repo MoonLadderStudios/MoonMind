@@ -370,9 +370,18 @@ else:
         _runtime_mode,
         extra={"worker_runtime": _runtime_mode},
     )
-_log_codex_cli_version()
-_log_gemini_cli_version()
-_log_claude_cli_version()
+
+if _runtime_mode in {"codex", "universal"}:
+    _log_codex_cli_version()
+    _log_gemini_cli_version()
+    _log_claude_cli_version()
+elif _runtime_mode == "gemini":
+    _log_codex_cli_version()
+    _log_gemini_cli_version()
+    _log_claude_cli_version()
+elif _runtime_mode == "claude":
+    _log_claude_cli_version()
+
 if configured_stage_skills_require_speckit():
     _log_speckit_cli_version()
 else:
@@ -380,9 +389,19 @@ else:
         "Skipping Spec Kit CLI health check because configured stage skills do not require Speckit.",
         extra={"configured_stage_skills": configured_stage_skills()},
     )
+
 _log_queue_configuration()
-_validate_embedding_profile()
-_validate_shared_skills_profile()
+
+if _runtime_mode in {"codex", "universal", "gemini"}:
+    _validate_embedding_profile()
+    _validate_shared_skills_profile()
+else:
+    logger.info(
+        "Skipping embedding and shared-skills startup profile checks for runtime mode '%s'",
+        _runtime_mode,
+        extra={"worker_runtime": _runtime_mode},
+    )
+
 if _runtime_mode in {"codex", "universal"}:
     _run_codex_preflight_check()
 else:

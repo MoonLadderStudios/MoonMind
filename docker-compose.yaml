@@ -268,6 +268,8 @@ services:
     environment:
       <<: *celery-environment
       MOONMIND_WORKER_RUNTIME: claude
+      MOONMIND_WORKER_CAPABILITIES: ${MOONMIND_WORKER_CAPABILITIES_CLAUDE:-claude,git,gh}
+      MOONMIND_WORKER_ALLOWED_TYPES: task,codex_exec,codex_skill
     command: >-
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
