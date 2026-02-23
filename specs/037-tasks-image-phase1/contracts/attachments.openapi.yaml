@@ -1,0 +1,225 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Queue Attachments
+  version: 0.1.0
+  description: >-
+    Phase 1 contracts for submitting, listing, and downloading task image attachments
+    as described in docs/TasksImageSystem.md.
+servers:
+  - url: https://api.moonmind.local
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: moonmind_session
+    workerToken:
+      type: apiKey
+      in: header
+      name: X-MoonMind-Worker-Token
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Attachment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Must start with `inputs/`.
+        contentType:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        digest:
+          type: string
+        storagePath:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, jobId, name, sizeBytes, storagePath, createdAt]
+    Job:
+      type: object
+      description: Existing queue job schema (trimmed to required fields for brevity).
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          type: string
+        payload:
+          type: object
+      required: [id, type, status, payload]
+    JobWithAttachmentsResponse:
+      type: object
+      properties:
+        job:
+          $ref: '#/components/schemas/Job'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+      required: [job, attachments]
+    AttachmentListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+      required: [items]
+paths:
+  /api/queue/jobs/with-attachments:
+    post:
+      summary: Create a task job whose attachments are persisted atomically.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [request, files]
+              properties:
+                request:
+                  type: string
+                  description: JSON CreateJobRequest payload encoded as a string.
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  minItems: 1
+                  maxItems: 10
+                captions:
+                  type: string
+                  description: Optional JSON object keyed by filename.
+      responses:
+        '201':
+          description: Job plus attachment metadata persisted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobWithAttachmentsResponse'
+        '413':
+          description: Attachment exceeded configured byte limits.
+  /api/queue/jobs/{jobId}/attachments:
+    get:
+      summary: List sanitized attachment metadata for the job owner.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          schema:
+            type: string
+            format: uuid
+          required: true
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+          required: false
+      responses:
+        '200':
+          description: Attachment metadata limited to the `inputs/` namespace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentListResponse'
+        '403':
+          description: Requesting user is not the job owner.
+  /api/queue/jobs/{jobId}/attachments/{attachmentId}/download:
+    get:
+      summary: Download attachment bytes when the viewer owns the job.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - in: path
+          name: attachmentId
+          schema:
+            type: string
+            format: uuid
+          required: true
+      responses:
+        '200':
+          description: Raw file stream with attachment content-type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: Viewer lacks access.
+  /api/queue/jobs/{jobId}/attachments/worker:
+    get:
+      summary: List attachments for the worker currently claiming the job.
+      security:
+        - workerToken: []
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Attachment metadata scoped to worker claims.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentListResponse'
+        '401':
+          description: Missing or invalid worker token.
+        '403':
+          description: Worker does not currently own the claim.
+  /api/queue/jobs/{jobId}/attachments/{attachmentId}/download/worker:
+    get:
+      summary: Download attachment bytes for the claiming worker.
+      security:
+        - workerToken: []
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - in: path
+          name: attachmentId
+          schema:
+            type: string
+            format: uuid
+          required: true
+      responses:
+        '200':
+          description: Raw file stream when ownership check passes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: Worker does not own the claim.

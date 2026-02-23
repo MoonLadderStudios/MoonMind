@@ -227,6 +227,92 @@ def test_download_artifact_job_mismatch_maps_409(
     assert response.json()["detail"]["code"] == "artifact_job_mismatch"
 
 
+def test_list_job_attachments_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """User attachment list endpoint should proxy to service layer."""
+
+    test_client, service = client
+    job_id = uuid4()
+    artifact = _build_artifact(job_id=job_id)
+    service.list_attachments_for_user.return_value = [artifact]
+
+    response = test_client.get(f"/api/queue/jobs/{job_id}/attachments")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    service.list_attachments_for_user.assert_awaited_once()
+
+
+def test_download_job_attachment_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """User attachment download endpoint should stream bytes."""
+
+    test_client, service = client
+    job_id = uuid4()
+    artifact = _build_artifact(job_id=job_id)
+    with NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(b"attachment-bytes")
+        tmp_path = Path(tmp.name)
+
+    service.get_attachment_download_for_user.return_value = SimpleNamespace(
+        artifact=artifact,
+        file_path=tmp_path,
+    )
+
+    try:
+        response = test_client.get(
+            f"/api/queue/jobs/{job_id}/attachments/{artifact.id}/download"
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    assert response.status_code == 200
+    assert response.content == b"attachment-bytes"
+
+
+def test_list_job_attachments_worker_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Worker attachment list endpoint should proxy to service layer."""
+
+    test_client, service = client
+    job_id = uuid4()
+    artifact = _build_artifact(job_id=job_id)
+    service.list_attachments_for_worker.return_value = [artifact]
+
+    response = test_client.get(f"/api/queue/jobs/{job_id}/attachments/worker")
+
+    assert response.status_code == 200
+    service.list_attachments_for_worker.assert_awaited_once()
+
+
+def test_download_job_attachment_worker_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Worker attachment download endpoint should stream bytes."""
+
+    test_client, service = client
+    job_id = uuid4()
+    artifact = _build_artifact(job_id=job_id)
+    with NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(b"worker-attachment")
+        tmp_path = Path(tmp.name)
+
+    service.get_attachment_download_for_worker.return_value = SimpleNamespace(
+        artifact=artifact,
+        file_path=tmp_path,
+    )
+
+    try:
+        response = test_client.get(
+            f"/api/queue/jobs/{job_id}/attachments/{artifact.id}/download/worker"
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    assert response.status_code == 200
+    assert response.content == b"worker-attachment"
+
+
 def test_download_artifact_not_found_maps_404(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

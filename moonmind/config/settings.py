@@ -146,6 +146,68 @@ class SpecWorkflowSettings(BaseSettings):
         description="Maximum allowed artifact upload size in bytes for queue jobs.",
         gt=0,
     )
+    agent_job_attachment_enabled: bool = Field(
+        True,
+        env="AGENT_JOB_ATTACHMENT_ENABLED",
+        description="Toggle for allowing input image attachments during queue job creation.",
+    )
+    agent_job_attachment_max_count: int = Field(
+        10,
+        env="AGENT_JOB_ATTACHMENT_MAX_COUNT",
+        description="Maximum number of input attachments permitted per job.",
+        ge=0,
+    )
+    agent_job_attachment_max_bytes: int = Field(
+        10 * 1024 * 1024,
+        env="AGENT_JOB_ATTACHMENT_MAX_BYTES",
+        description="Maximum size (bytes) for a single input attachment.",
+        gt=0,
+    )
+    agent_job_attachment_total_bytes: int = Field(
+        25 * 1024 * 1024,
+        env="AGENT_JOB_ATTACHMENT_TOTAL_BYTES",
+        description="Maximum combined size (bytes) for all input attachments for a job.",
+        gt=0,
+    )
+    agent_job_attachment_allowed_content_types: Annotated[tuple[str, ...], NoDecode] = (
+        Field(
+            ("image/png", "image/jpeg", "image/webp"),
+            env="AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
+            validation_alias=AliasChoices("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES"),
+            description="Allowed MIME types for input attachments.",
+        )
+    )
+    vision_context_enabled: bool = Field(
+        True,
+        env="MOONMIND_VISION_CONTEXT_ENABLED",
+        validation_alias=AliasChoices("MOONMIND_VISION_CONTEXT_ENABLED"),
+        description="Enable attachment vision context generation during worker prepare stages.",
+    )
+    vision_provider: str = Field(
+        "gemini",
+        env="MOONMIND_VISION_PROVIDER",
+        validation_alias=AliasChoices("MOONMIND_VISION_PROVIDER"),
+        description="Vision provider identifier (gemini, openai, anthropic, off).",
+    )
+    vision_model: str = Field(
+        "models/gemini-2.5-flash",
+        env="MOONMIND_VISION_MODEL",
+        validation_alias=AliasChoices("MOONMIND_VISION_MODEL"),
+        description="Default caption/OCR model for the configured provider.",
+    )
+    vision_max_tokens: int = Field(
+        512,
+        env="MOONMIND_VISION_MAX_TOKENS",
+        validation_alias=AliasChoices("MOONMIND_VISION_MAX_TOKENS"),
+        ge=64,
+        description="Maximum token budget allocated per vision prompt batch.",
+    )
+    vision_ocr_enabled: bool = Field(
+        True,
+        env="MOONMIND_VISION_OCR_ENABLED",
+        validation_alias=AliasChoices("MOONMIND_VISION_OCR_ENABLED"),
+        description="Toggle OCR extraction when rendering image context.",
+    )
     agent_job_max_runtime_seconds: int = Field(
         4 * 3600,
         env="AGENT_JOB_MAX_RUNTIME_SECONDS",
@@ -741,6 +803,46 @@ class SpecWorkflowSettings(BaseSettings):
             return ()
         return tuple(dict.fromkeys(items))
 
+    @field_validator("agent_job_attachment_allowed_content_types", mode="before")
+    @classmethod
+    def _normalize_attachment_types(
+        cls, value: Optional[str | Sequence[str]]
+    ) -> tuple[str, ...]:
+        """Normalize attachment content-type configuration."""
+
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            raw_items = (value,)
+
+        normalized: list[str] = []
+        for item in raw_items:
+            text = str(item or "").strip()
+            if text:
+                normalized.append(text)
+        return tuple(dict.fromkeys(normalized))
+
+    @field_validator("vision_provider", mode="before")
+    @classmethod
+    def _normalize_vision_provider(cls, value: object) -> str:
+        candidate = str(value or "").strip().lower() or "gemini"
+        allowed = {"gemini", "openai", "anthropic", "off"}
+        if candidate not in allowed:
+            supported = ", ".join(sorted(allowed))
+            raise ValueError(f"MOONMIND_VISION_PROVIDER must be one of: {supported}")
+        return candidate
+
+    @field_validator("vision_model", mode="before")
+    @classmethod
+    def _normalize_vision_model(cls, value: object) -> str:
+        return str(value or "").strip() or "models/gemini-2.5-flash"
+
     @field_validator("skill_policy_mode", mode="before")
     @classmethod
     def _normalize_skill_policy_mode(cls, value: object) -> str:
@@ -858,7 +960,12 @@ class SecuritySettings(BaseSettings):
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
-    google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY")
+    google_api_key: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices(
+            "google_api_key", "GOOGLE_API_KEY", "GEMINI_API_KEY"
+        ),
+    )
     google_chat_model: str = Field("gemini-2.5-flash", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
         "gemini-embedding-001", env="GOOGLE_EMBEDDING_MODEL"
@@ -1345,6 +1452,89 @@ class AppSettings(BaseSettings):
         env="MOONMIND_UNREAL_UBT_VOLUME_NAME",
         exclude=True,
         description="Compatibility passthrough for UBT metadata volume in DooD workflows.",
+    )
+    workflow_git_user_name: Optional[str] = Field(
+        None,
+        env="WORKFLOW_GIT_USER_NAME",
+        validation_alias=AliasChoices(
+            "workflow_git_user_name", "WORKFLOW_GIT_USER_NAME"
+        ),
+        description="Compatibility passthrough for workflow git user display name.",
+        exclude=True,
+    )
+    workflow_git_user_email: Optional[str] = Field(
+        None,
+        env="WORKFLOW_GIT_USER_EMAIL",
+        validation_alias=AliasChoices(
+            "workflow_git_user_email", "WORKFLOW_GIT_USER_EMAIL"
+        ),
+        description="Compatibility passthrough for workflow git user email.",
+        exclude=True,
+    )
+    moonmind_git_user_name: Optional[str] = Field(
+        None,
+        env="MOONMIND_GIT_USER_NAME",
+        validation_alias=AliasChoices(
+            "moonmind_git_user_name", "MOONMIND_GIT_USER_NAME"
+        ),
+        description="Compatibility passthrough for legacy MoonMind git user display name.",
+        exclude=True,
+    )
+    moonmind_git_user_email: Optional[str] = Field(
+        None,
+        env="MOONMIND_GIT_USER_EMAIL",
+        validation_alias=AliasChoices(
+            "moonmind_git_user_email", "MOONMIND_GIT_USER_EMAIL"
+        ),
+        description="Compatibility passthrough for legacy MoonMind git user email.",
+        exclude=True,
+    )
+    moonmind_live_log_events_enabled: Optional[str] = Field(
+        None,
+        env="MOONMIND_LIVE_LOG_EVENTS_ENABLED",
+        validation_alias=AliasChoices(
+            "moonmind_live_log_events_enabled",
+            "MOONMIND_LIVE_LOG_EVENTS_ENABLED",
+        ),
+        description="Compatibility passthrough for legacy live log event setting.",
+        exclude=True,
+    )
+    moonmind_live_log_events_batch_bytes: Optional[int] = Field(
+        None,
+        env="MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES",
+        validation_alias=AliasChoices(
+            "moonmind_live_log_events_batch_bytes",
+            "MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES",
+        ),
+        description="Compatibility passthrough for legacy live log batch size setting.",
+        exclude=True,
+    )
+    moonmind_live_log_events_flush_interval_ms: Optional[int] = Field(
+        None,
+        env="MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS",
+        validation_alias=AliasChoices(
+            "moonmind_live_log_events_flush_interval_ms",
+            "MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS",
+        ),
+        description="Compatibility passthrough for legacy live log flush interval setting.",
+        exclude=True,
+    )
+    moonmind_gemini_cli_auth_mode: Optional[str] = Field(
+        None,
+        env="MOONMIND_GEMINI_CLI_AUTH_MODE",
+        validation_alias=AliasChoices(
+            "moonmind_gemini_cli_auth_mode",
+            "MOONMIND_GEMINI_CLI_AUTH_MODE",
+        ),
+        description="Compatibility passthrough for legacy Gemini CLI auth mode.",
+        exclude=True,
+    )
+    gemini_home: Optional[str] = Field(
+        None,
+        env="GEMINI_HOME",
+        validation_alias=AliasChoices("gemini_home", "GEMINI_HOME"),
+        description="Compatibility passthrough for legacy Gemini auth home.",
+        exclude=True,
     )
 
     # Default providers and models

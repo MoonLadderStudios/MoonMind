@@ -25,6 +25,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.schemas import QueueSystemMetadataModel
@@ -50,6 +51,7 @@ from moonmind.schemas.agent_queue_models import (
     JobEventModel,
     JobListResponse,
     JobModel,
+    JobWithAttachmentsResponse,
     MigrationTelemetryResponse,
     QueueSafeguardJobModel,
     QueueSafeguardResponse,
@@ -83,6 +85,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueJobAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
+    AttachmentUpload,
     LiveSessionNotFoundError,
     LiveSessionStateError,
     QueueMigrationTelemetry,
@@ -483,7 +486,21 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
         lowered = str(exc).lower()
-        if "exceeds max bytes" in lowered:
+        if "attachments exceed max count" in lowered:
+            code = "attachments_too_many"
+            message = "Too many attachments were provided."
+        elif "attachments exceed max total bytes" in lowered:
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            code = "attachment_total_too_large"
+            message = "Combined attachment size exceeds the maximum allowed total."
+        elif "attachment exceeds max bytes" in lowered:
+            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            code = "attachment_too_large"
+            message = "Attachment exceeds the maximum allowed size."
+        elif "attachment content type" in lowered:
+            code = "attachment_type_not_allowed"
+            message = "Attachment content type is not allowed."
+        elif "exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
             message = "Artifact exceeds the maximum allowed size."
@@ -534,6 +551,143 @@ async def create_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)
+
+
+@router.post(
+    "/jobs/with-attachments",
+    response_model=JobWithAttachmentsResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_job_with_attachments(
+    request_payload: str = Form(..., alias="request"),
+    files: list[UploadFile] = File(..., alias="files"),
+    captions_json: str | None = Form(None, alias="captions"),
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> JobWithAttachmentsResponse:
+    """Create a queued job that includes user-provided attachments."""
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "attachments_required",
+                "message": "At least one attachment must be provided.",
+            },
+        )
+
+    try:
+        create_request = CreateJobRequest.model_validate_json(request_payload)
+    except ValidationError as exc:
+        logger.info("Invalid attachment queue payload: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_queue_payload",
+                "message": "Queue request payload is invalid.",
+            },
+        ) from exc
+
+    captions: dict[str, str] = {}
+    if captions_json:
+        try:
+            parsed = json.loads(captions_json)
+        except json.JSONDecodeError as exc:  # pragma: no cover - invalid form payload
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_attachment_captions",
+                    "message": "Attachment captions must be valid JSON.",
+                },
+            ) from exc
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                caption_text = str(value or "").strip()
+                if caption_text:
+                    captions[str(key or "").strip()] = caption_text
+        elif parsed is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_attachment_captions",
+                    "message": "Attachment captions must be provided as a JSON object.",
+                },
+            )
+
+    max_count = max(1, int(settings.spec_workflow.agent_job_attachment_max_count))
+    if len(files) > max_count:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "attachments_too_many",
+                "message": "Too many attachments were provided.",
+            },
+        )
+
+    if captions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "attachment_captions_not_supported",
+                "message": "Attachment captions are not yet supported.",
+            },
+        )
+
+    per_file_limit = max(1, int(settings.spec_workflow.agent_job_attachment_max_bytes))
+    total_limit = max(1, int(settings.spec_workflow.agent_job_attachment_total_bytes))
+    attachments: list[AttachmentUpload] = []
+    total_bytes = 0
+
+    for upload in files:
+        try:
+            payload = await upload.read(per_file_limit + 1)
+        finally:
+            await upload.close()
+        if len(payload) > per_file_limit:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={
+                    "code": "attachment_too_large",
+                    "message": "Attachment exceeds the maximum allowed size.",
+                },
+            )
+        total_bytes += len(payload)
+        if total_bytes > total_limit:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={
+                    "code": "attachment_total_too_large",
+                    "message": "Combined attachment size exceeds the maximum allowed total.",
+                },
+            )
+        attachments.append(
+            AttachmentUpload(
+                filename=upload.filename or "",
+                content_type=upload.content_type,
+                data=payload,
+                caption=captions.get((upload.filename or "").strip()),
+            )
+        )
+
+    try:
+        user_id = getattr(user, "id", None)
+        job, stored = await service.create_job_with_attachments(
+            job_type=create_request.type,
+            payload=create_request.payload,
+            priority=create_request.priority,
+            created_by_user_id=user_id,
+            requested_by_user_id=user_id,
+            affinity_key=create_request.affinity_key,
+            max_attempts=create_request.max_attempts,
+            attachments=attachments,
+        )
+    except Exception as exc:  # pragma: no cover - service layer
+        raise _to_http_exception(exc) from exc
+
+    return JobWithAttachmentsResponse(
+        job=_serialize_job(job),
+        attachments=[_serialize_artifact(item) for item in stored],
+    )
 
 
 @router.get("/jobs", response_model=JobListResponse)
@@ -1044,6 +1198,123 @@ async def download_artifact(
         download = await service.get_artifact_download(
             job_id=job_id,
             artifact_id=artifact_id,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    return FileResponse(
+        path=download.file_path,
+        filename=download.artifact.name.split("/")[-1],
+        media_type=download.artifact.content_type or "application/octet-stream",
+    )
+
+
+@router.get("/jobs/{job_id}/attachments", response_model=ArtifactListResponse)
+async def list_job_attachments(
+    job_id: UUID,
+    *,
+    limit: int = Query(50, ge=1, le=500),
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> ArtifactListResponse:
+    """List attachment metadata for a queue job (user auth)."""
+
+    try:
+        attachments = await service.list_attachments_for_user(
+            job_id=job_id,
+            actor_user_id=getattr(user, "id", None),
+            limit=limit,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return ArtifactListResponse(
+        items=[_serialize_artifact(item) for item in attachments]
+    )
+
+
+@router.get("/jobs/{job_id}/attachments/{attachment_id}/download")
+async def download_job_attachment(
+    job_id: UUID,
+    attachment_id: UUID,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> FileResponse:
+    """Download attachment binary for a queue job (user auth)."""
+
+    try:
+        download = await service.get_attachment_download_for_user(
+            job_id=job_id,
+            attachment_id=attachment_id,
+            actor_user_id=getattr(user, "id", None),
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    return FileResponse(
+        path=download.file_path,
+        filename=download.artifact.name.split("/")[-1],
+        media_type=download.artifact.content_type or "application/octet-stream",
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/attachments/worker",
+    response_model=ArtifactListResponse,
+)
+async def list_job_attachments_worker(
+    job_id: UUID,
+    *,
+    limit: int = Query(50, ge=1, le=500),
+    service: AgentQueueService = Depends(_get_service),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> ArtifactListResponse:
+    """List attachment metadata for a queue job (worker auth)."""
+
+    worker_id = worker_auth.worker_id
+    if not worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_identity_required",
+                "message": "Worker identity is required for attachment access.",
+            },
+        )
+    try:
+        attachments = await service.list_attachments_for_worker(
+            job_id=job_id,
+            worker_id=worker_id,
+            limit=limit,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return ArtifactListResponse(
+        items=[_serialize_artifact(item) for item in attachments]
+    )
+
+
+@router.get("/jobs/{job_id}/attachments/{attachment_id}/download/worker")
+async def download_job_attachment_worker(
+    job_id: UUID,
+    attachment_id: UUID,
+    service: AgentQueueService = Depends(_get_service),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> FileResponse:
+    """Download attachment binary for a queue job (worker auth)."""
+
+    worker_id = worker_auth.worker_id
+    if not worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_identity_required",
+                "message": "Worker identity is required for attachment access.",
+            },
+        )
+    try:
+        download = await service.get_attachment_download_for_worker(
+            job_id=job_id,
+            attachment_id=attachment_id,
+            worker_id=worker_id,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc

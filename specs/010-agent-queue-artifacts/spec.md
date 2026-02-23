@@ -70,6 +70,7 @@ As a platform owner, I need upload paths and file sizes validated so workers can
 - **DOC-REQ-006** (Source: `docs/TaskQueueSystem.md:214`, `docs/TaskQueueSystem.md:217`, `docs/TaskQueueSystem.md:467`): API MUST expose list and download endpoints for job artifacts.
 - **DOC-REQ-007** (Source: `docs/TaskQueueSystem.md:219`, `docs/TaskQueueSystem.md:223`, `docs/TaskQueueSystem.md:468`): Artifact storage MUST enforce per-job roots, path traversal protections, and upload size limits.
 - **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md:224`, `docs/TaskQueueSystem.md:228`): Configuration MUST include dedicated artifact root setting `AGENT_JOB_ARTIFACT_ROOT` defaulting to `var/artifacts/agent_jobs`.
+- **DOC-REQ-009** (Source: `docs/TaskQueueSystem.md:120-140`): The reserved `inputs/` artifact namespace MUST be restricted to user-provided attachments; worker uploads attempting to use this prefix SHALL be rejected.
 
 ### Functional Requirements
 
@@ -78,6 +79,7 @@ As a platform owner, I need upload paths and file sizes validated so workers can
 - **FR-003** (`DOC-REQ-005`): The system MUST persist artifact metadata records linked to queue jobs, including storage path and optional content metadata.
 - **FR-004** (`DOC-REQ-006`): The system MUST provide artifact listing and artifact download endpoints scoped to a queue job.
 - **FR-005** (`DOC-REQ-007`): The system MUST reject traversal paths, cross-job artifact access, and uploads exceeding configured size limits.
+- **FR-007** (`DOC-REQ-009`): Worker uploads MUST fail validation when the artifact name begins with the reserved `inputs/` prefix so attachment storage cannot be spoofed.
 - **FR-006**: Runtime deliverables MUST include production code changes and validation tests; documentation-only changes are insufficient.
 
 ### Key Entities *(include if feature involves data)*
