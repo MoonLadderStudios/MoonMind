@@ -32,3 +32,10 @@ else
 fi
 
 "$PYTHON_BIN" -m pytest -q tests/unit
+
+if command -v node >/dev/null 2>&1; then
+    node tests/task_dashboard/test_queue_layouts.js
+else
+    echo "Error: node is required to run tests/task_dashboard/test_queue_layouts.js." >&2
+    exit 127
+fi

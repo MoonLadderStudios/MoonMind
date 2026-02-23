@@ -381,7 +381,8 @@ tbody tr:hover {
   gap: 0.5rem;
 }
 
-.queue-card-actions .button {
+.queue-card-actions .button,
+.button {
   flex: 1 1 auto;
   text-align: center;
 }
@@ -553,6 +554,76 @@ textarea {
   resize: vertical;
 }
 
+button {
+  width: fit-content;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.52rem 0.9rem;
+  font-weight: 700;
+  background: rgb(var(--mm-accent));
+  color: #fff;
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease;
+}
+
+button:hover {
+  background: rgb(var(--mm-accent) / 0.92);
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.45), 0 14px 26px -18px rgb(var(--mm-accent));
+  transform: translateY(-1px);
+}
+
+button:focus-visible {
+  outline: 2px solid rgb(var(--mm-accent-2));
+  outline-offset: 3px;
+}
+
+button.secondary {
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  border-color: rgb(var(--mm-border));
+}
+
+button.secondary:hover {
+  background: rgb(var(--mm-accent) / 0.08);
+  border-color: rgb(var(--mm-accent));
+}
+
+.button {
+  display: inline-block;
+  text-decoration: none;
+  width: fit-content;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.52rem 0.9rem;
+  font-weight: 700;
+  background: rgb(var(--mm-accent));
+  color: #fff;
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease;
+}
+
+.button:hover {
+  background: rgb(var(--mm-accent) / 0.92);
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.45), 0 14px 26px -18px rgb(var(--mm-accent));
+  transform: translateY(-1px);
+}
+
+.button:focus-visible {
+  outline: 2px solid rgb(var(--mm-accent-2));
+  outline-offset: 3px;
+}
+
+.button.secondary {
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  border-color: rgb(var(--mm-border));
+}
+
+.button.secondary:hover {
+  background: rgb(var(--mm-accent) / 0.08);
+  border-color: rgb(var(--mm-accent));
+}
+
 .queue-step-instructions {
   min-height: 120px;
 }
@@ -635,40 +706,6 @@ textarea {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-button {
-  width: fit-content;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0.52rem 0.9rem;
-  font-weight: 700;
-  background: rgb(var(--mm-accent));
-  color: #fff;
-  cursor: pointer;
-  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease;
-}
-
-button:hover {
-  background: rgb(var(--mm-accent) / 0.92);
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.45), 0 14px 26px -18px rgb(var(--mm-accent));
-  transform: translateY(-1px);
-}
-
-button:focus-visible {
-  outline: 2px solid rgb(var(--mm-accent-2));
-  outline-offset: 3px;
-}
-
-button.secondary {
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-border));
-}
-
-button.secondary:hover {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
 }
 
 .queue-submit-primary {

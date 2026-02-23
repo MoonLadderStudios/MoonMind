@@ -35,4 +35,13 @@ if command -v docker >/dev/null 2>&1; then
 fi
 
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build "$TEST_SERVICE"
-"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm "$TEST_SERVICE"
+"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm "$TEST_SERVICE" bash -lc '
+set -euo pipefail
+pytest -s /app/tests/${TEST_TYPE}
+if command -v node >/dev/null 2>&1; then
+  node /app/tests/task_dashboard/test_queue_layouts.js
+else
+  echo "Error: node is required to run /app/tests/task_dashboard/test_queue_layouts.js." >&2
+  exit 127
+fi
+'

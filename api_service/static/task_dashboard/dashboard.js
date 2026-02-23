@@ -1231,7 +1231,7 @@
               ${fieldItems}
             </dl>
             <div class="queue-card-actions">
-              <a href="${linkTarget}" class="button secondary">View details</a>
+              <a href="${linkTarget}" class="button secondary" role="button">View details</a>
             </div>
           </li>
         `;
@@ -1387,7 +1387,10 @@
     return rendered;
   }
 
-  if (typeof window !== "undefined") {
+  if (
+    typeof window !== "undefined"
+    && window.__MOONMIND_DASHBOARD_TEST
+  ) {
     window.__queueLayoutTest = {
       queueFieldDefinitions,
       renderQueueFieldValue,
@@ -1620,7 +1623,6 @@
         }
       });
 
-      const notices = errors
       root.querySelector(".panel")?.remove();
       setView(
         "Active Tasks",
