@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-
 _SKILL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
