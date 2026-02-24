@@ -144,6 +144,43 @@ mark_stale_services_for_restart() {
   done
 }
 
+mark_not_running_services_for_restart() {
+  local service container_id container_status
+  local -a container_ids=()
+  local all_running=true
+
+  for service in "${COMPOSE_SERVICES[@]}"; do
+    if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
+      continue
+    fi
+
+    case "$service" in
+      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init)
+        continue
+        ;;
+    esac
+
+    mapfile -t container_ids < <("${COMPOSE_CMD[@]}" ps -q "$service" 2>/dev/null || true)
+    if [[ ${#container_ids[@]} -eq 0 ]]; then
+      continue
+    fi
+
+    all_running=true
+    for container_id in "${container_ids[@]}"; do
+      container_status="$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || true)"
+      if [[ "$container_status" != "running" ]]; then
+        all_running=false
+        break
+      fi
+    done
+
+    if [[ "$all_running" == "false" ]]; then
+      say "Marking service '$service' for restart: service is not running."
+      add_target "$service"
+    fi
+  done
+}
+
 compose_cmd() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     echo docker compose
@@ -304,6 +341,7 @@ add_all_services() {
 if load_compose_service_images; then
   mark_stale_services_for_restart
 fi
+mark_not_running_services_for_restart
 
 for changed_file in "${CHANGED_FILES[@]}"; do
   case "$changed_file" in

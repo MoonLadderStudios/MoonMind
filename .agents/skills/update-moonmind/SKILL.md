@@ -24,4 +24,5 @@ description: Refresh MoonMind services from git by checking out a branch, pullin
    - `git pull --ff-only origin <branch>`
    - optionally `docker compose pull` (unless `noComposePull` is set)
    - detect files changed between pre-pull and post-pull commits and restart only those changed containers
+   - restart services with image drift or stopped service state so runtime stays healthy
 4. By default, do not restart the `orchestrator` container, even when it changed.
