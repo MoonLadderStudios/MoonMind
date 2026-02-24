@@ -3969,13 +3969,20 @@
       renderQueueSubmitPage(normalizedRuntime);
       return;
     }
-    renderOrchestratorSubmitPage();
+    renderOrchestratorSubmitPage(normalizedRuntime);
   }
 
-  function renderOrchestratorSubmitPage() {
+  function renderOrchestratorSubmitPage(presetRuntime) {
     const sanitizedOrchestratorDraft = submitDraftController.loadOrchestrator();
     const defaultOrchestratorDraftPriority = normalizeOrchestratorPriority(
       sanitizedOrchestratorDraft.priority || "normal",
+    );
+    const selectedOrchestratorRuntime = isWorkerSubmitRuntime(presetRuntime)
+      ? defaultTaskRuntime
+      : ORCHESTRATOR_RUNTIME;
+    const runtimeOptions = renderRuntimeOptions(
+      [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME],
+      selectedOrchestratorRuntime,
     );
 
     setView(
@@ -3983,6 +3990,11 @@
       "Queue an orchestrator action plan.",
       `
       <form id="orchestrator-submit-form">
+        <label>Runtime
+          <select name="runtime">
+            ${runtimeOptions}
+          </select>
+        </label>
         <label>Instruction
           <textarea name="instruction" required placeholder="Describe what should be changed and verified.">${escapeHtml(
             String(sanitizedOrchestratorDraft.instruction || "").trim(),
@@ -4061,6 +4073,24 @@
     );
     form.addEventListener("input", scheduleOrchestratorDraftPersist);
     form.addEventListener("change", scheduleOrchestratorDraftPersist);
+    const runtimeSelect = form.querySelector('select[name="runtime"]');
+    if (runtimeSelect) {
+      runtimeSelect.addEventListener("change", (event) => {
+        const normalizedRuntime = validateSubmitRuntime(
+          String(event.target.value || "").trim(),
+        );
+        if (normalizedRuntime === ORCHESTRATOR_RUNTIME) {
+          return;
+        }
+        if (!isWorkerSubmitRuntime(normalizedRuntime)) {
+          return;
+        }
+        persistOrchestratorDraft();
+        window.location.href = `/tasks/queue/new?runtime=${encodeURIComponent(
+          normalizedRuntime,
+        )}`;
+      });
+    }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
