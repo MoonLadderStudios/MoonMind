@@ -619,7 +619,9 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
 
-    def test_app_settings_accepts_workflow_github_repository(self, app_settings_defaults, monkeypatch):
+    def test_app_settings_accepts_workflow_github_repository(
+        self, app_settings_defaults, monkeypatch
+    ):
         """Legacy WORKFLOW_GITHUB_REPOSITORY should bootstrap without extra-field errors."""
 
         monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
