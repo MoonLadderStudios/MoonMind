@@ -161,9 +161,27 @@ const helpers = loadSubmitRuntimeHelpers();
     instruction: "Ship",
     targetService: "deploy",
     priority: "HIGH",
+    skillId: "speckit-orchestrate",
+    skillArgs: '{"feature":"drafts"}',
     approvalToken: " token-value ",
   });
   assert.strictEqual(valid.ok, true);
   assert.strictEqual(valid.value.priority, "high");
+  assert.strictEqual(valid.value.skillId, "speckit-orchestrate");
+  assert.strictEqual(JSON.stringify(valid.value.skillArgs), JSON.stringify({ feature: "drafts" }));
   assert.strictEqual(valid.value.approvalToken, "token-value");
+
+  const invalidSkillArgs = helpers.validateOrchestratorSubmission({
+    instruction: "Ship",
+    targetService: "deploy",
+    skillArgs: "[]",
+  });
+  assert.strictEqual(invalidSkillArgs.ok, false);
+  assert.ok(/Skill Args/i.test(invalidSkillArgs.error));
+})();
+
+(function testNormalizeOrchestratorPriority() {
+  assert.strictEqual(helpers.normalizeOrchestratorPriority("HIGH"), "high");
+  assert.strictEqual(helpers.normalizeOrchestratorPriority("low"), "normal");
+  assert.strictEqual(helpers.normalizeOrchestratorPriority(undefined), "normal");
 })();
