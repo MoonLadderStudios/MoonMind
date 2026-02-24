@@ -64,7 +64,7 @@ Runtime config currently injects:
 
 Default/fallback values in current code path:
 
-- Default task runtime: `codex` (unless configured runtime resolves to `gemini` or `claude`)
+- Default task runtime: first entry from supported runtime list (`codex`, `gemini`, and `claude` only when `ANTHROPIC_API_KEY` is configured)
 - Default codex model: `gpt-5.3-codex`
 - Default codex effort: `high`
 - Default repository fallback: `MoonLadderStudios/MoonMind`
@@ -177,7 +177,7 @@ Queue Task submit is fully typed and emits canonical queue create requests (`typ
 
 Current UI fields:
 
-- Runtime (`codex`/`gemini`/`claude`)
+- Runtime (`supported runtimes`, currently `codex`, `gemini`, and `claude` only when `ANTHROPIC_API_KEY` is configured)
 - Step editor (primary step plus optional additional steps)
 - Optional task preset/template controls
 - Model override
