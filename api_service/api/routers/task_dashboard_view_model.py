@@ -15,7 +15,6 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "universal")
-_SUPPORTED_TASK_RUNTIMES = ("codex", "gemini", "claude")
 _DEFAULT_TASK_RUNTIME = "codex"
 _DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
 _DEFAULT_CODEX_EFFORT = "high"
@@ -82,17 +81,30 @@ def status_maps() -> dict[str, dict[str, str]]:
     return deepcopy(_STATUS_MAPS)
 
 
+def _build_supported_task_runtimes() -> list[str]:
+    runtimes = ["codex", "gemini"]
+    if settings.claude_runtime_gate.enabled:
+        runtimes.append("claude")
+    return runtimes
+
+
 def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
 
+    supported_task_runtimes = _build_supported_task_runtimes()
     configured_runtime = (
         str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower()
     )
-    default_task_runtime = (
-        configured_runtime
-        if configured_runtime in _SUPPORTED_TASK_RUNTIMES
-        else _DEFAULT_TASK_RUNTIME
-    )
+    if configured_runtime in supported_task_runtimes:
+        default_task_runtime = configured_runtime
+    else:
+        configured_default = (
+            str(settings.spec_workflow.default_task_runtime or "").strip().lower()
+        )
+        if configured_default in supported_task_runtimes:
+            default_task_runtime = configured_default
+        else:
+            default_task_runtime = supported_task_runtimes[0]
     codex_default_model = (
         str(settings.spec_workflow.codex_model or "").strip() or _DEFAULT_CODEX_MODEL
     )
@@ -178,7 +190,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultProposeTasks": bool(settings.spec_workflow.enable_task_proposals),
             "queueEnv": "MOONMIND_QUEUE",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
-            "supportedTaskRuntimes": list(_SUPPORTED_TASK_RUNTIMES),
+            "supportedTaskRuntimes": supported_task_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
             "taskTemplateCatalog": {
                 "enabled": bool(settings.feature_flags.task_template_catalog_enabled),

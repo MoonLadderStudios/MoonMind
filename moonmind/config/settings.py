@@ -5,6 +5,11 @@ from typing import Annotated, Any, Optional, Sequence
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from moonmind.claude.runtime import (
+    CLAUDE_RUNTIME_DISABLED_MESSAGE,
+    build_runtime_gate_state,
+)
+
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
@@ -1723,6 +1728,16 @@ class AppSettings(BaseSettings):
             # Fallback to google if unknown provider
             return self.google.google_chat_model
 
+    @property
+    def claude_runtime_gate(self):
+        """Return reusable Claude gate state for API surfaces."""
+
+        return build_runtime_gate_state(
+            env=os.environ,
+            api_key=self.anthropic.anthropic_api_key,
+            error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+        )
+
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Populate derived Celery defaults after settings load."""
         super().model_post_init(__context)
@@ -1752,6 +1767,17 @@ class AppSettings(BaseSettings):
             self.spec_workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:
             self.spec_workflow.codex_effort = self.worker_codex_effort
+        configured_default = (
+            str(self.spec_workflow.default_task_runtime or "").strip().lower()
+        )
+        if configured_default == "claude":
+            default_runtime_gate = build_runtime_gate_state(
+                env=os.environ,
+                api_key=self.anthropic.anthropic_api_key,
+                error_message="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY to be configured",
+            )
+            if not default_runtime_gate.enabled:
+                raise ValueError(default_runtime_gate.error_message)
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import shlex
 import subprocess
 from typing import Mapping, Sequence
 
@@ -24,6 +23,10 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     QueueApiClient,
+)
+from moonmind.claude.runtime import (
+    CLAUDE_RUNTIME_DISABLED_MESSAGE,
+    build_runtime_gate_state,
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
@@ -118,6 +121,33 @@ def _configured_skills_require_speckit(source: Mapping[str, str]) -> bool:
     )
 
 
+def _worker_capabilities(source: Mapping[str, str]) -> tuple[str, ...]:
+    """Return normalized worker capability labels from env configuration."""
+
+    raw = str(source.get("MOONMIND_WORKER_CAPABILITIES", "")).strip()
+    if not raw:
+        return ()
+    normalized = []
+    for entry in raw.split(","):
+        token = entry.strip().lower()
+        if token:
+            normalized.append(token)
+    return tuple(dict.fromkeys(normalized))
+
+
+def _effective_worker_capabilities(
+    source: Mapping[str, str], runtime: str
+) -> tuple[str, ...]:
+    """Return capabilities using the same defaults as CodexWorkerConfig."""
+
+    configured = _worker_capabilities(source)
+    if configured:
+        return configured
+    if runtime == "universal":
+        return ("codex", "gemini", "claude", "git", "gh")
+    return (runtime, "git", "gh")
+
+
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
     redacted = text
     for secret in secrets:
@@ -204,99 +234,41 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     )
 
 
-def _is_cli_usage_error(message: str) -> bool:
-    """Return whether failure text looks like an unsupported-command error."""
-
-    lowered = message.strip().lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "unknown command",
-            "no such option",
-            "unrecognized option",
-            "invalid choice",
-        )
-    )
-
-
-def _run_claude_auth_status_check(
-    *,
-    claude_path: str,
-    source: Mapping[str, str],
-    redaction_values: Sequence[str] = (),
-) -> None:
-    """Validate Claude auth status with a configurable command + compatibility fallback."""
-
-    custom_raw = str(source.get("MOONMIND_CLAUDE_AUTH_STATUS_COMMAND", "")).strip()
-    if custom_raw:
-        custom_command = shlex.split(custom_raw)
-        if not custom_command:
-            raise RuntimeError(
-                "MOONMIND_CLAUDE_AUTH_STATUS_COMMAND cannot be empty when set"
-            )
-        _run_checked_command(
-            custom_command,
-            redaction_values=redaction_values,
-        )
-        return
-
-    first_error: RuntimeError | None = None
-    fallback_error: RuntimeError | None = None
-
-    try:
-        _run_checked_command(
-            [claude_path, "auth", "status"],
-            redaction_values=redaction_values,
-        )
-        return
-    except RuntimeError as exc:
-        first_error = exc
-        if not _is_cli_usage_error(str(exc)):
-            raise
-
-    try:
-        _run_checked_command(
-            [claude_path, "login", "status"],
-            redaction_values=redaction_values,
-        )
-        return
-    except RuntimeError as exc:
-        fallback_error = exc
-
-    raise RuntimeError(
-        "Claude authentication status check failed for both "
-        "`claude auth status` and `claude login status`. "
-        f"Primary error: {first_error}. Fallback error: {fallback_error}"
-    ) from fallback_error
-
-
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
+    capabilities = _effective_worker_capabilities(source, runtime)
+    claude_required = "claude" in capabilities
+
+    claude_path: str | None = None
+    if claude_required:
+        claude_gate = build_runtime_gate_state(
+            env=source,
+            error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+        )
+        if not claude_gate.enabled:
+            raise RuntimeError(claude_gate.error_message)
+        try:
+            claude_path = verify_cli_is_executable(
+                str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
+            )
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     codex_path: str | None = None
-    if runtime in {"codex", "universal"}:
+    if "codex" in capabilities:
         try:
             codex_path = verify_cli_is_executable("codex")
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
     gemini_path: str | None = None
-    if runtime in {"gemini", "universal"}:
+    if "gemini" in capabilities:
         try:
             gemini_path = verify_cli_is_executable(
                 str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
-            )
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
-
-    claude_path: str | None = None
-    if runtime in {"claude", "universal"}:
-        try:
-            claude_path = verify_cli_is_executable(
-                str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
             )
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
@@ -366,11 +338,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     if claude_path is not None:
         _run_checked_command(
             [claude_path, "--version"],
-            redaction_values=redaction_values,
-        )
-        _run_claude_auth_status_check(
-            claude_path=claude_path,
-            source=source,
             redaction_values=redaction_values,
         )
 
