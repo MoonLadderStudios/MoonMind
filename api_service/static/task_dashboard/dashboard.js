@@ -1464,10 +1464,126 @@
     return rendered;
   }
 
+  const cloneForTestHarness = (value) => {
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneForTestHarness(item));
+    }
+    const cloned = {};
+    Object.entries(value).forEach(([key, nested]) => {
+      if (key === "__proto__" || key === "prototype" || key === "constructor") {
+        return;
+      }
+      cloned[key] = cloneForTestHarness(nested);
+    });
+    return cloned;
+  };
+
+  const cloneStepStateEntries = (steps = []) => {
+    if (!Array.isArray(steps)) {
+      return [];
+    }
+    return steps.map((step) => {
+      if (!step || typeof step !== "object") {
+        return {};
+      }
+      return cloneForTestHarness(step);
+    });
+  };
+
+  const normalizeSubmissionDraftForTest = (draft = {}) =>
+    cloneForTestHarness(
+      draft && typeof draft === "object" && !Array.isArray(draft) ? draft : {},
+    );
+
+  const createSubmitDraftController = (queueDraft = {}, orchestratorDraft = {}) => {
+    let workerDraft = normalizeSubmissionDraftForTest(queueDraft);
+    if (!Array.isArray(workerDraft.steps)) {
+      workerDraft.steps = [];
+    }
+    workerDraft.steps = cloneStepStateEntries(workerDraft.steps);
+
+    let orchestratorDraftState = normalizeSubmissionDraftForTest(orchestratorDraft);
+
+    return {
+      saveWorker: (draft) => {
+        workerDraft = normalizeSubmissionDraftForTest(draft);
+        if (!Array.isArray(workerDraft.steps)) {
+          workerDraft.steps = [];
+        }
+        workerDraft.steps = cloneStepStateEntries(workerDraft.steps);
+      },
+      loadWorker: () => normalizeSubmissionDraftForTest(workerDraft),
+      saveOrchestrator: (draft) => {
+        orchestratorDraftState = normalizeSubmissionDraftForTest(draft);
+      },
+      loadOrchestrator: () => normalizeSubmissionDraftForTest(orchestratorDraftState),
+    };
+  };
+
+  const determineSubmitDestination = (runtimeMode, endpoints = {}) => {
+    const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
+    const queueEndpoint = String(endpoints.queue || "/api/queue/jobs").trim();
+    const orchestratorEndpoint = String(
+      endpoints.orchestrator || endpoints.orchestratorSubmit || "/orchestrator/runs",
+    ).trim();
+    if (normalizedMode === "orchestrator") {
+      return { mode: "orchestrator", endpoint: orchestratorEndpoint };
+    }
+    return { mode: "worker", endpoint: queueEndpoint };
+  };
+
+  const validateOrchestratorSubmission = (draft = {}) => {
+    if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
+      return {
+        ok: false,
+        error: "Instruction is required.",
+      };
+    }
+    const instruction = String(draft.instruction || "").trim();
+    if (!instruction) {
+      return {
+        ok: false,
+        error: "Instruction is required.",
+      };
+    }
+    const targetService = String(draft.targetService || "").trim();
+    if (!targetService) {
+      return {
+        ok: false,
+        error: "Target service is required.",
+      };
+    }
+    const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
+    const value = normalizeSubmissionDraftForTest(draft);
+    value.instruction = instruction;
+    value.targetService = targetService;
+    value.priority = ["normal", "high"].includes(normalizedPriority)
+      ? normalizedPriority
+      : "normal";
+    if (Object.prototype.hasOwnProperty.call(draft, "approvalToken")) {
+      const token = String(draft.approvalToken || "").trim();
+      if (token) {
+        value.approvalToken = token;
+      } else {
+        delete value.approvalToken;
+      }
+    }
+    return { ok: true, value };
+  };
+
   if (
     typeof window !== "undefined"
     && window.__MOONMIND_DASHBOARD_TEST
   ) {
+    window.__submitRuntimeTest = {
+      createSubmitDraftController,
+      determineSubmitDestination,
+      validateOrchestratorSubmission,
+      cloneStepStateEntries,
+    };
     window.__queueLayoutTest = {
       queueFieldDefinitions,
       renderQueueFieldValue,
