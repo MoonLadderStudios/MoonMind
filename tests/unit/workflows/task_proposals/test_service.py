@@ -471,3 +471,48 @@ async def test_snooze_and_unsnooze_proposal(monkeypatch) -> None:
 
     await service.unsnooze_proposal(proposal_id=proposal.id, user_id=uuid4())
     repo.unsnooze.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_worker_token_allows_legacy_task_worker() -> None:
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.resolve_worker_token = AsyncMock(
+        return_value=SimpleNamespace(
+            worker_id="codex-worker-1",
+            auth_source="worker_token",
+            token_id=uuid4(),
+            allowed_repositories=(),
+            allowed_job_types=("task", "codex_exec", "codex_skill"),
+            capabilities=("codex", "git", "gh", "docker"),
+        )
+    )
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+
+    policy = await service.resolve_worker_token("mmwt_legacy")
+
+    assert policy.worker_id == "codex-worker-1"
+    queue.resolve_worker_token.assert_awaited_once_with("mmwt_legacy")
+
+
+@pytest.mark.asyncio
+async def test_resolve_worker_token_rejects_without_required_capability() -> None:
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.resolve_worker_token = AsyncMock(
+        return_value=SimpleNamespace(
+            worker_id="restricted-worker",
+            auth_source="worker_token",
+            token_id=uuid4(),
+            allowed_repositories=(),
+            allowed_job_types=("task",),
+            capabilities=("git", "docker"),
+        )
+    )
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(
+        TaskProposalValidationError,
+        match="worker token is not authorized for proposal submission",
+    ):
+        await service.resolve_worker_token("mmwt_restricted")

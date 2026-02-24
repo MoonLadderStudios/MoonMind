@@ -5621,10 +5621,19 @@ class CodexWorker:
                         )
                         effective_policy.consume_project_slot()
                         submitted += 1
-                    except Exception:
+                    except Exception as exc:
                         logger.exception(
                             "Failed to submit project proposal derived from %s",
                             proposals_path,
+                        )
+                        await self._emit_event(
+                            job_id=job.id,
+                            level="warn",
+                            message="task.proposalSubmission.rejected",
+                            payload={
+                                "target": "project",
+                                "error": str(exc),
+                            },
                         )
 
             if effective_policy.has_moonmind_capacity():
@@ -5669,10 +5678,19 @@ class CodexWorker:
                         )
                         effective_policy.consume_moonmind_slot()
                         submitted += 1
-                    except Exception:
+                    except Exception as exc:
                         logger.exception(
                             "Failed to submit MoonMind proposal derived from %s",
                             proposals_path,
+                        )
+                        await self._emit_event(
+                            job_id=job.id,
+                            level="warn",
+                            message="task.proposalSubmission.rejected",
+                            payload={
+                                "target": "moonmind",
+                                "error": str(exc),
+                            },
                         )
         if submitted:
             logger.info(

@@ -32,6 +32,7 @@ from moonmind.workflows.task_proposals.repositories import (
 
 logger = logging.getLogger(__name__)
 _PROPOSALS_WRITE_CAPABILITY = "proposals_write"
+_LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES = frozenset({"codex", "gemini", "claude"})
 _NOTIFICATION_CATEGORIES = {"security", "tests"}
 _DEDUP_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 _MOONMIND_SIGNAL_TAGS = frozenset(
@@ -106,6 +107,24 @@ class TaskProposalService:
             .lower()
         )
 
+    @staticmethod
+    def _normalize_policy_tokens(values: Sequence[str] | None) -> set[str]:
+        normalized: set[str] = set()
+        for value in values or ():
+            token = str(value or "").strip().lower()
+            if token:
+                normalized.add(token)
+        return normalized
+
+    def _allows_legacy_worker_submission(self, policy: WorkerAuthPolicy) -> bool:
+        allowed_job_types = self._normalize_policy_tokens(policy.allowed_job_types)
+        capabilities = self._normalize_policy_tokens(policy.capabilities)
+        can_run_task_jobs = not allowed_job_types or "task" in allowed_job_types
+        has_task_runtime_capability = bool(
+            capabilities.intersection(_LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES)
+        )
+        return can_run_task_jobs and has_task_runtime_capability
+
     async def resolve_worker_token(self, raw_token: str | None) -> WorkerAuthPolicy:
         """Validate worker token capability for proposals_write."""
 
@@ -114,11 +133,19 @@ class TaskProposalService:
                 "worker token is required for worker-authenticated proposal submission"
             )
         policy = await self._queue_service.resolve_worker_token(raw_token)
-        if _PROPOSALS_WRITE_CAPABILITY not in policy.capabilities:
-            raise TaskProposalValidationError(
-                "worker token is not authorized for proposal submission"
+        capabilities = self._normalize_policy_tokens(policy.capabilities)
+        if _PROPOSALS_WRITE_CAPABILITY in capabilities:
+            return policy
+        if self._allows_legacy_worker_submission(policy):
+            logger.warning(
+                "Worker token for %s is missing proposals_write; "
+                "allowing legacy task-worker proposal submission.",
+                policy.worker_id,
             )
-        return policy
+            return policy
+        raise TaskProposalValidationError(
+            "worker token is not authorized for proposal submission"
+        )
 
     @staticmethod
     def _clean_str(value: object) -> str:
