@@ -270,6 +270,37 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     service.create_job.assert_awaited_once()
 
 
+def test_create_job_rejects_claude_runtime_without_api_key(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Claude runtime requests should map to HTTP 400 when API key is missing."""
+
+    test_client, service = client
+    service.create_job.side_effect = AgentQueueValidationError(
+        "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured"
+    )
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "claude",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    body = response.json()
+    assert body["detail"]["code"] == "claude_runtime_disabled"
+    assert (
+        body["detail"]["message"]
+        == "targetRuntime=claude is not available in the current server configuration"
+    )
+    service.create_job.assert_awaited_once()
+
+
 def test_create_job_with_attachments_success(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

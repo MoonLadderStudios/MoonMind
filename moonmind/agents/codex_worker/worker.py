@@ -2410,20 +2410,6 @@ class CodexWorker:
             return "[REDACTED]"
         return normalized
 
-    @classmethod
-    def _extract_instruction_title(cls, instructions: str | None) -> str | None:
-        """Return first sentence/line from task instructions for title fallback."""
-
-        if instructions is None:
-            return None
-        for raw_line in str(instructions).splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            sentence = re.split(r"(?<=[.!?])\s+", line, maxsplit=1)[0]
-            return cls._normalize_publish_text_line(sentence or line)
-        return None
-
     @staticmethod
     def _sanitize_pr_title(title: str, *, max_chars: int = 90) -> str:
         """Keep generated PR titles concise and avoid full UUID text."""
@@ -2443,20 +2429,12 @@ class CodexWorker:
         canonical_payload: Mapping[str, Any],
         resolved_steps: Sequence[ResolvedTaskStep],
     ) -> str:
-        """Derive PR title using documented fallback order."""
+        """Derive PR title using a conservative fallback order."""
 
         for step in resolved_steps:
             candidate = cls._normalize_publish_text_line(step.title)
             if candidate:
                 return cls._sanitize_pr_title(candidate)
-
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
-        instruction_candidate = cls._extract_instruction_title(
-            str(task.get("instructions") or "").strip() or None
-        )
-        if instruction_candidate:
-            return cls._sanitize_pr_title(instruction_candidate)
 
         return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
 

@@ -1,8 +1,8 @@
-# Specification Quality Checklist: OpenClaw Dedicated Integration
+# Specification Quality Checklist: Claude Runtime API-Key Gating
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-02-19  
-**Feature**: specs/028-openclaw-integration/spec.md
+**Purpose**: Validate specification completeness and quality before proceeding to planning
+**Created**: February 24, 2026
+**Feature**: specs/038-claude-runtime-gate/spec.md
 
 ## Content Quality
 
@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Review complete; ready for downstream planning.
+- Checklist completed after validating spec content; no outstanding issues.

@@ -493,6 +493,7 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
     """Missing runtime fields should use configured default task runtime."""
 
     monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -513,6 +514,33 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
     assert job.payload["targetRuntime"] == "claude"
     assert job.payload["task"]["runtime"]["mode"] == "claude"
     assert job.payload["requiredCapabilities"] == ["claude", "git"]
+
+
+async def test_create_task_job_rejects_claude_runtime_without_api_key(
+    tmp_path: Path,
+) -> None:
+    """Queue service should reject Claude runtime when API key is missing."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            with pytest.raises(
+                AgentQueueValidationError,
+                match="targetRuntime=claude requires ANTHROPIC_API_KEY",
+            ):
+                await service.create_job(
+                    job_type="task",
+                    payload={
+                        "repository": "Moon/Mind",
+                        "task": {
+                            "instructions": "Run task",
+                            "runtime": {"mode": "claude"},
+                            "git": {"startingBranch": None, "newBranch": None},
+                            "publish": {"mode": "none"},
+                        },
+                    },
+                )
 
 
 async def test_create_task_job_explicit_runtime_overrides_default_runtime(

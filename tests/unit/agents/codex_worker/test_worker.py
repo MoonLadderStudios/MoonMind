@@ -2827,56 +2827,29 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
     assert title == "Ship publish title defaults for queue tasks"
 
 
-async def test_derive_default_pr_title_falls_back_to_instruction_sentence_and_sanitizes_uuid(
+async def test_derive_default_pr_title_uses_short_correlation_fallback_without_step_titles(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
-    """Instruction fallback should use first sentence and remove full UUID tokens."""
+    """Missing step titles should fall back to short token title."""
 
     worker, _, _ = codex_worker_components
-    full_uuid = "123e4567-e89b-12d3-a456-426614174000"
+    job_id = uuid4()
     payload = {
         "task": {
-            "instructions": (
-                f"Fix publish behavior for {full_uuid}. Keep metadata stable.\n"
-                "Second line should not be used."
-            ),
+            "instructions": "Fix publish behavior for 123e4567-e89b-12d3-a456-426614174000.",
             "steps": [{"id": "step-1", "title": " "}],
         }
     }
 
     title = worker._derive_default_pr_title(
-        job_id=uuid4(),
+        job_id=job_id,
         canonical_payload=payload,
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == "Fix publish behavior for job."
-    assert full_uuid not in title
+    assert title == f"MoonMind task result [mm:{str(job_id)[:8]}]"
+    assert str(job_id) not in title
     assert len(title) <= 90
-
-
-async def test_derive_default_pr_title_sanitizes_uuidv7_tokens(
-    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
-) -> None:
-    """Derived titles should redact newer UUID versions such as UUIDv7."""
-
-    worker, _, _ = codex_worker_components
-    full_uuid_v7 = "01953fab-15c4-7f4e-8ac3-4f8442ddf2ac"
-    payload = {
-        "task": {
-            "instructions": f"Fix queue publish behavior for {full_uuid_v7}.",
-            "steps": [{"id": "step-1", "title": " "}],
-        }
-    }
-
-    title = worker._derive_default_pr_title(
-        job_id=uuid4(),
-        canonical_payload=payload,
-        resolved_steps=worker._resolve_task_steps(payload),
-    )
-
-    assert title == "Fix queue publish behavior for job."
-    assert full_uuid_v7 not in title
 
 
 async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
