@@ -1,0 +1,486 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Task Finish Summary API Contract
+  version: 0.1.0
+  description: |
+    Additive queue and proposals contracts for the Task Finish Summary System.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /api/queue/jobs:
+    get:
+      summary: List queue jobs with compact finish outcome metadata.
+      operationId: listQueueJobs
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        - in: query
+          name: type
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: summary
+          schema:
+            type: boolean
+            default: false
+          description: Return compact payload for list rows.
+      responses:
+        '200':
+          description: Queue jobs returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobListResponse'
+  /api/queue/jobs/{jobId}:
+    get:
+      summary: Get queue job detail including finish summary when available.
+      operationId: getQueueJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Queue job detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetail'
+        '404':
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/queue/jobs/{jobId}/finish-summary:
+    get:
+      summary: Fetch structured finish summary for one queue job.
+      operationId: getQueueJobFinishSummary
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Finish summary payload or empty object when unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/FinishSummary'
+                  - type: object
+                    maxProperties: 0
+        '404':
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/queue/jobs/{jobId}/complete:
+    post:
+      summary: Mark a running job as succeeded with optional finish metadata.
+      operationId: completeQueueJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteJobRequest'
+      responses:
+        '200':
+          description: Updated queue job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetail'
+  /api/queue/jobs/{jobId}/fail:
+    post:
+      summary: Mark a running job as failed with optional finish metadata.
+      operationId: failQueueJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailJobRequest'
+      responses:
+        '200':
+          description: Updated queue job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetail'
+  /api/queue/jobs/{jobId}/cancel/ack:
+    post:
+      summary: Worker acknowledges cancellation with optional finish metadata.
+      operationId: ackQueueJobCancel
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelJobAckRequest'
+      responses:
+        '200':
+          description: Updated queue job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetail'
+  /api/proposals:
+    get:
+      summary: List proposals with queue-origin filtering support.
+      operationId: listProposals
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            default: open
+        - in: query
+          name: originSource
+          schema:
+            type: string
+            enum: [queue, workflow, user, system]
+        - in: query
+          name: originId
+          schema:
+            type: string
+            format: uuid
+          description: Queue job id for deep-link filtering from queue detail.
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated proposal response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalListResponse'
+components:
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    JobListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobListItem'
+    JobListItem:
+      type: object
+      required: [id, type, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        resultSummary:
+          type: string
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        finishOutcomeCode:
+          $ref: '#/components/schemas/FinishOutcomeCode'
+          nullable: true
+        finishOutcomeStage:
+          $ref: '#/components/schemas/FinishOutcomeStage'
+          nullable: true
+        finishOutcomeReason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+    JobDetail:
+      allOf:
+        - $ref: '#/components/schemas/JobListItem'
+        - type: object
+          properties:
+            finishSummary:
+              $ref: '#/components/schemas/FinishSummary'
+              nullable: true
+    CompleteJobRequest:
+      type: object
+      required: [workerId]
+      properties:
+        workerId:
+          type: string
+        resultSummary:
+          type: string
+          nullable: true
+        finishOutcomeCode:
+          $ref: '#/components/schemas/FinishOutcomeCode'
+          nullable: true
+        finishOutcomeStage:
+          $ref: '#/components/schemas/FinishOutcomeStage'
+          nullable: true
+        finishOutcomeReason:
+          type: string
+          nullable: true
+        finishSummary:
+          $ref: '#/components/schemas/FinishSummary'
+          nullable: true
+    FailJobRequest:
+      type: object
+      required: [workerId, errorMessage]
+      properties:
+        workerId:
+          type: string
+        errorMessage:
+          type: string
+        retryable:
+          type: boolean
+          default: false
+        finishOutcomeCode:
+          $ref: '#/components/schemas/FinishOutcomeCode'
+          nullable: true
+        finishOutcomeStage:
+          $ref: '#/components/schemas/FinishOutcomeStage'
+          nullable: true
+        finishOutcomeReason:
+          type: string
+          nullable: true
+        finishSummary:
+          $ref: '#/components/schemas/FinishSummary'
+          nullable: true
+    CancelJobAckRequest:
+      type: object
+      required: [workerId]
+      properties:
+        workerId:
+          type: string
+        message:
+          type: string
+          nullable: true
+        finishOutcomeCode:
+          $ref: '#/components/schemas/FinishOutcomeCode'
+          nullable: true
+        finishOutcomeStage:
+          $ref: '#/components/schemas/FinishOutcomeStage'
+          nullable: true
+        finishOutcomeReason:
+          type: string
+          nullable: true
+        finishSummary:
+          $ref: '#/components/schemas/FinishSummary'
+          nullable: true
+    FinishSummary:
+      type: object
+      required:
+        - schemaVersion
+        - jobId
+        - jobType
+        - repository
+        - targetRuntime
+        - timestamps
+        - finishOutcome
+        - stages
+        - publish
+        - changes
+        - proposals
+      properties:
+        schemaVersion:
+          type: string
+          const: v1
+        jobId:
+          type: string
+          format: uuid
+        jobType:
+          type: string
+        repository:
+          type: string
+        targetRuntime:
+          type: string
+        timestamps:
+          type: object
+          required: [startedAt, finishedAt, durationMs]
+          properties:
+            startedAt:
+              type: string
+              format: date-time
+            finishedAt:
+              type: string
+              format: date-time
+            durationMs:
+              type: integer
+              minimum: 0
+        finishOutcome:
+          type: object
+          required: [code, stage, reason]
+          properties:
+            code:
+              $ref: '#/components/schemas/FinishOutcomeCode'
+            stage:
+              $ref: '#/components/schemas/FinishOutcomeStage'
+            reason:
+              type: string
+        stages:
+          type: object
+          required: [prepare, execute, publish, proposals, finalize]
+          properties:
+            prepare:
+              $ref: '#/components/schemas/StageResult'
+            execute:
+              $ref: '#/components/schemas/StageResult'
+            publish:
+              $ref: '#/components/schemas/StageResult'
+            proposals:
+              $ref: '#/components/schemas/StageResult'
+            finalize:
+              $ref: '#/components/schemas/StageResult'
+        publish:
+          type: object
+          required: [mode, status]
+          properties:
+            mode:
+              type: string
+            status:
+              type: string
+              enum: [published, skipped, failed, not_run]
+            reason:
+              type: string
+              nullable: true
+            workingBranch:
+              type: string
+              nullable: true
+            baseBranch:
+              type: string
+              nullable: true
+            prUrl:
+              type: string
+              format: uri
+              nullable: true
+        changes:
+          type: object
+          required: [hasChanges, patchArtifact]
+          properties:
+            hasChanges:
+              type: boolean
+            patchArtifact:
+              type: string
+        proposals:
+          type: object
+          required: [requested, hookSkills, generatedCount, submittedCount, errors]
+          properties:
+            requested:
+              type: boolean
+            hookSkills:
+              type: array
+              items:
+                type: string
+            generatedCount:
+              type: integer
+              minimum: 0
+            submittedCount:
+              type: integer
+              minimum: 0
+            errors:
+              type: array
+              items:
+                type: string
+    StageResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [succeeded, failed, skipped, not_run]
+        durationMs:
+          type: integer
+          minimum: 0
+    FinishOutcomeCode:
+      type: string
+      enum:
+        - PUBLISHED_PR
+        - PUBLISHED_BRANCH
+        - NO_CHANGES
+        - PUBLISH_DISABLED
+        - FAILED
+        - CANCELLED
+    FinishOutcomeStage:
+      type: string
+      enum: [prepare, execute, publish, proposals, finalize, unknown]
+    ProposalListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProposalListItem'
+        nextCursor:
+          type: string
+          nullable: true
+    ProposalListItem:
+      type: object
+      required: [id, title, status, origin, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+        origin:
+          type: object
+          required: [source]
+          properties:
+            source:
+              type: string
+            id:
+              type: string
+              format: uuid
+              nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string

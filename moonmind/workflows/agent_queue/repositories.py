@@ -358,6 +358,10 @@ class AgentQueueRepository:
         *,
         job_id: UUID,
         worker_id: str,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> tuple[models.AgentJob, str]:
         """Acknowledge cancellation for a running job owned by the worker."""
 
@@ -395,6 +399,10 @@ class AgentQueueRepository:
 
         job.status = models.AgentJobStatus.CANCELLED
         job.finished_at = now
+        job.finish_outcome_code = finish_outcome_code
+        job.finish_outcome_stage = finish_outcome_stage
+        job.finish_outcome_reason = finish_outcome_reason
+        job.finish_summary_json = finish_summary
         job.claimed_by = None
         job.lease_expires_at = None
         job.next_attempt_at = None
@@ -408,6 +416,10 @@ class AgentQueueRepository:
         job_id: UUID,
         worker_id: str,
         result_summary: Optional[str] = None,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> models.AgentJob:
         """Mark a running job as succeeded."""
 
@@ -415,6 +427,10 @@ class AgentQueueRepository:
         job = await self._require_running_owned_job(job_id=job_id, worker_id=worker_id)
         job.status = models.AgentJobStatus.SUCCEEDED
         job.result_summary = result_summary
+        job.finish_outcome_code = finish_outcome_code
+        job.finish_outcome_stage = finish_outcome_stage
+        job.finish_outcome_reason = finish_outcome_reason
+        job.finish_summary_json = finish_summary
         job.finished_at = now
         job.claimed_by = None
         job.lease_expires_at = None
@@ -431,6 +447,10 @@ class AgentQueueRepository:
         error_message: str,
         retryable: bool = False,
         retry_delay_seconds: Optional[int] = None,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> models.AgentJob:
         """Mark a running job as failed or requeue it if retryable."""
 
@@ -441,6 +461,10 @@ class AgentQueueRepository:
         if job.cancel_requested_at is not None:
             job.status = models.AgentJobStatus.CANCELLED
             job.finished_at = now
+            job.finish_outcome_code = finish_outcome_code
+            job.finish_outcome_stage = finish_outcome_stage
+            job.finish_outcome_reason = finish_outcome_reason
+            job.finish_summary_json = finish_summary
             job.claimed_by = None
             job.lease_expires_at = None
             job.next_attempt_at = None
@@ -457,6 +481,10 @@ class AgentQueueRepository:
             job.claimed_by = None
             job.lease_expires_at = None
             job.finished_at = None
+            job.finish_outcome_code = None
+            job.finish_outcome_stage = None
+            job.finish_outcome_reason = None
+            job.finish_summary_json = None
             job.next_attempt_at = now + timedelta(seconds=delay_seconds)
         else:
             job.status = (
@@ -465,6 +493,10 @@ class AgentQueueRepository:
                 else models.AgentJobStatus.FAILED
             )
             job.finished_at = now
+            job.finish_outcome_code = finish_outcome_code
+            job.finish_outcome_stage = finish_outcome_stage
+            job.finish_outcome_reason = finish_outcome_reason
+            job.finish_summary_json = finish_summary
             job.claimed_by = None
             job.lease_expires_at = None
             job.next_attempt_at = None

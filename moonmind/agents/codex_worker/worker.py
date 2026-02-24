@@ -98,6 +98,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 )
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
+_FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -827,6 +828,26 @@ class PreparedTaskWorkspace:
 
 
 @dataclass(frozen=True, slots=True)
+class ProposalSubmissionReport:
+    """Compact proposal-submission output used by task finish summaries."""
+
+    requested: bool
+    hook_skills: list[str]
+    generated_count: int
+    submitted_count: int
+    errors: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class FinishOutcome:
+    """Terminal finish outcome persisted with each queue job."""
+
+    code: str
+    stage: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class LiveSessionHandle:
     """Worker-owned live session context for active queue job execution."""
 
@@ -979,10 +1000,22 @@ class QueueApiClient:
         job_id: UUID,
         worker_id: str,
         message: str | None = None,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"workerId": worker_id}
         if message:
             payload["message"] = message
+        if finish_outcome_code:
+            payload["finishOutcomeCode"] = finish_outcome_code
+        if finish_outcome_stage:
+            payload["finishOutcomeStage"] = finish_outcome_stage
+        if finish_outcome_reason:
+            payload["finishOutcomeReason"] = finish_outcome_reason
+        if finish_summary:
+            payload["finishSummary"] = finish_summary
         return await self._post_json(
             f"/api/queue/jobs/{job_id}/cancel/ack",
             json=payload,
@@ -994,10 +1027,22 @@ class QueueApiClient:
         job_id: UUID,
         worker_id: str,
         result_summary: str | None,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> None:
         payload = {"workerId": worker_id}
         if result_summary:
             payload["resultSummary"] = result_summary
+        if finish_outcome_code:
+            payload["finishOutcomeCode"] = finish_outcome_code
+        if finish_outcome_stage:
+            payload["finishOutcomeStage"] = finish_outcome_stage
+        if finish_outcome_reason:
+            payload["finishOutcomeReason"] = finish_outcome_reason
+        if finish_summary:
+            payload["finishSummary"] = finish_summary
         await self._post_json(f"/api/queue/jobs/{job_id}/complete", json=payload)
 
     async def fail_job(
@@ -1007,14 +1052,27 @@ class QueueApiClient:
         worker_id: str,
         error_message: str,
         retryable: bool = False,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> None:
+        payload: dict[str, Any] = {
+            "workerId": worker_id,
+            "errorMessage": error_message,
+            "retryable": retryable,
+        }
+        if finish_outcome_code:
+            payload["finishOutcomeCode"] = finish_outcome_code
+        if finish_outcome_stage:
+            payload["finishOutcomeStage"] = finish_outcome_stage
+        if finish_outcome_reason:
+            payload["finishOutcomeReason"] = finish_outcome_reason
+        if finish_summary:
+            payload["finishSummary"] = finish_summary
         await self._post_json(
             f"/api/queue/jobs/{job_id}/fail",
-            json={
-                "workerId": worker_id,
-                "errorMessage": error_message,
-                "retryable": retryable,
-            },
+            json=payload,
         )
 
     async def append_event(
@@ -1501,6 +1559,200 @@ class CodexWorker:
                 return
             await _upload_new_artifacts(artifacts)
 
+        run_started_at = datetime.now(UTC)
+        stage_starts: dict[str, float] = {}
+        finish_stages = self._new_finish_stages()
+        prepared: PreparedTaskWorkspace | None = None
+        result: WorkerExecutionResult | None = None
+        failure_stage: str | None = None
+        failure_reason: str | None = None
+        proposal_report = ProposalSubmissionReport(
+            requested=proposal_workflow_enabled,
+            hook_skills=[],
+            generated_count=0,
+            submitted_count=0,
+            errors=[],
+        )
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = publish_node if isinstance(publish_node, Mapping) else {}
+        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
+        publish_status = "not_run"
+        publish_reason = "publish mode is none" if publish_mode == "none" else None
+        publish_pr_url: str | None = None
+        publish_base_branch: str | None = None
+        publish_working_branch: str | None = None
+
+        async def _finalize_and_transition(
+            *,
+            cancelled: bool,
+            cancel_message: str | None = None,
+            failure_stage_override: str | None = None,
+            failure_reason_override: str | None = None,
+        ) -> None:
+            nonlocal publish_status
+            nonlocal publish_reason
+            nonlocal publish_pr_url
+            nonlocal publish_base_branch
+            nonlocal publish_working_branch
+
+            publish_payload = self._read_publish_result(prepared=prepared)
+            if publish_payload:
+                if bool(publish_payload.get("skipped")):
+                    publish_status = "skipped"
+                    publish_reason = str(
+                        publish_payload.get("reason") or "no local changes"
+                    ).strip()
+                else:
+                    publish_status = "published"
+                publish_pr_url = (
+                    str(publish_payload.get("prUrl") or "").strip() or None
+                )
+                publish_base_branch = (
+                    str(publish_payload.get("baseBranch") or "").strip() or None
+                )
+                publish_working_branch = (
+                    str(publish_payload.get("branch") or "").strip() or None
+                )
+
+            resolved_failure_stage = failure_stage_override or failure_stage
+            resolved_failure_reason = failure_reason_override or failure_reason
+            if result is not None and not result.succeeded and not resolved_failure_reason:
+                resolved_failure_reason = (
+                    result.error_message or result.summary or "task execution failed"
+                )
+
+            finish_outcome = self._determine_finish_outcome(
+                succeeded=bool(result is not None and result.succeeded and not cancelled),
+                cancelled=cancelled,
+                cancel_reason=cancel_message,
+                failure_stage=resolved_failure_stage,
+                failure_reason=resolved_failure_reason,
+                publish_mode=publish_mode,
+                publish_status=publish_status,
+                publish_reason=publish_reason,
+                publish_pr_url=publish_pr_url,
+                publish_branch=publish_working_branch,
+            )
+
+            self._start_finish_stage(stage_starts, stage="finalize")
+            self._finish_stage(finish_stages, stage_starts, stage="finalize", status="succeeded")
+            finish_summary = self._build_finish_summary(
+                job=job,
+                canonical_payload=canonical_payload,
+                runtime_mode=runtime_mode,
+                started_at=run_started_at,
+                finished_at=datetime.now(UTC),
+                stages=finish_stages,
+                finish_outcome=finish_outcome,
+                prepared=prepared,
+                publish_mode=publish_mode,
+                publish_status=publish_status,
+                publish_reason=publish_reason,
+                publish_pr_url=publish_pr_url,
+                publish_base_branch=publish_base_branch,
+                publish_working_branch=publish_working_branch,
+                proposal_report=proposal_report,
+            )
+            artifacts_dir = (
+                prepared.artifacts_dir
+                if prepared is not None
+                else self._config.workdir / str(job.id) / "artifacts"
+            )
+            try:
+                staged_artifacts.extend(
+                    self._write_finish_reports(
+                        artifacts_dir=artifacts_dir,
+                        finish_summary=finish_summary,
+                        finish_outcome=finish_outcome,
+                    )
+                )
+                await _flush_staged_artifacts()
+            except Exception:
+                logger.warning(
+                    "Failed to persist finish summary reports for job %s",
+                    job.id,
+                    exc_info=True,
+                )
+                self._finish_stage(finish_stages, stage_starts, stage="finalize", status="failed")
+                finish_summary = self._build_finish_summary(
+                    job=job,
+                    canonical_payload=canonical_payload,
+                    runtime_mode=runtime_mode,
+                    started_at=run_started_at,
+                    finished_at=datetime.now(UTC),
+                    stages=finish_stages,
+                    finish_outcome=finish_outcome,
+                    prepared=prepared,
+                    publish_mode=publish_mode,
+                    publish_status=publish_status,
+                    publish_reason=publish_reason,
+                    publish_pr_url=publish_pr_url,
+                    publish_base_branch=publish_base_branch,
+                    publish_working_branch=publish_working_branch,
+                    proposal_report=proposal_report,
+                )
+
+            if cancelled:
+                await self._acknowledge_cancellation(
+                    job_id=job.id,
+                    message=cancel_message or "cancellation requested",
+                    finish_outcome=finish_outcome,
+                    finish_summary=finish_summary,
+                )
+                return
+
+            if result is not None and result.succeeded:
+                await self._queue_client.complete_job(
+                    job_id=job.id,
+                    worker_id=self._config.worker_id,
+                    result_summary=result.summary,
+                    finish_outcome_code=finish_outcome.code,
+                    finish_outcome_stage=finish_outcome.stage,
+                    finish_outcome_reason=finish_outcome.reason,
+                    finish_summary=finish_summary,
+                )
+                await self._emit_event(
+                    job_id=job.id,
+                    level="info",
+                    message="Job completed",
+                    payload={
+                        "summary": result.summary,
+                        "jobType": job.type,
+                        **skill_meta,
+                    },
+                )
+                return
+
+            terminal_error = self._redact_text(
+                (
+                    (result.error_message if result is not None else None)
+                    or resolved_failure_reason
+                    or "codex_exec failed"
+                )
+            )
+            await self._queue_client.fail_job(
+                job_id=job.id,
+                worker_id=self._config.worker_id,
+                error_message=terminal_error,
+                retryable=False,
+                finish_outcome_code=finish_outcome.code,
+                finish_outcome_stage=finish_outcome.stage,
+                finish_outcome_reason=finish_outcome.reason,
+                finish_summary=finish_summary,
+            )
+            await self._emit_event(
+                job_id=job.id,
+                level="error",
+                message="Job failed",
+                payload={
+                    "error": terminal_error,
+                    "jobType": job.type,
+                    **skill_meta,
+                },
+            )
+
         try:
             stage_plan = build_task_stage_plan(canonical_payload)
             await self._emit_event(
@@ -1516,14 +1768,28 @@ class CodexWorker:
                 cancel_event=cancel_requested_event,
             )
 
-            prepared = await self._run_prepare_stage(
-                job_id=job.id,
-                canonical_payload=canonical_payload,
-                source_payload=job.payload,
-                selected_skills=selected_skills,
-                job_type=job.type,
-                skill_meta=skill_meta,
+            self._start_finish_stage(stage_starts, stage="prepare")
+            try:
+                prepared = await self._run_prepare_stage(
+                    job_id=job.id,
+                    canonical_payload=canonical_payload,
+                    source_payload=job.payload,
+                    selected_skills=selected_skills,
+                    job_type=job.type,
+                    skill_meta=skill_meta,
+                )
+            except Exception as exc:
+                self._finish_stage(
+                    finish_stages, stage_starts, stage="prepare", status="failed"
+                )
+                failure_stage = "prepare"
+                failure_reason = str(exc)
+                raise
+            self._finish_stage(
+                finish_stages, stage_starts, stage="prepare", status="succeeded"
             )
+            publish_base_branch = prepared.starting_branch
+            publish_working_branch = prepared.working_branch
             staged_artifacts.extend(self._prepare_stage_artifacts(prepared))
             await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
             await self._wait_if_paused(
@@ -1532,21 +1798,30 @@ class CodexWorker:
                 cancel_event=cancel_requested_event,
             )
 
+            self._start_finish_stage(stage_starts, stage="execute")
             await self._emit_stage_event(
                 job_id=job.id,
                 stage="moonmind.task.execute",
                 status="started",
                 payload={"jobType": job.type, **skill_meta},
             )
-            result = await self._run_execute_stage(
-                job_id=job.id,
-                canonical_payload=canonical_payload,
-                source_payload=job.payload,
-                runtime_mode=runtime_mode,
-                resolved_steps=resolved_steps,
-                prepared=prepared,
-                artifact_callback=_handle_incremental_artifacts,
-            )
+            try:
+                result = await self._run_execute_stage(
+                    job_id=job.id,
+                    canonical_payload=canonical_payload,
+                    source_payload=job.payload,
+                    runtime_mode=runtime_mode,
+                    resolved_steps=resolved_steps,
+                    prepared=prepared,
+                    artifact_callback=_handle_incremental_artifacts,
+                )
+            except Exception as exc:
+                self._finish_stage(
+                    finish_stages, stage_starts, stage="execute", status="failed"
+                )
+                failure_stage = "execute"
+                failure_reason = str(exc)
+                raise
             execute_artifacts = self._normalize_execute_artifacts(
                 result_artifacts=result.artifacts,
                 execute_log_path=prepared.execute_log_path,
@@ -1558,6 +1833,15 @@ class CodexWorker:
                 status="finished" if result.succeeded else "failed",
                 payload={"jobType": job.type, "summary": result.summary, **skill_meta},
             )
+            self._finish_stage(
+                finish_stages,
+                stage_starts,
+                stage="execute",
+                status="succeeded" if result.succeeded else "failed",
+            )
+            if not result.succeeded:
+                failure_stage = "execute"
+                failure_reason = result.error_message or result.summary
             await self._raise_if_cancel_requested(cancel_event=cancel_requested_event)
             if result.succeeded:
                 await self._wait_if_paused(
@@ -1565,41 +1849,120 @@ class CodexWorker:
                     pause_event=pause_requested_event,
                     cancel_event=cancel_requested_event,
                 )
-                try:
-                    publish_note = await self._run_publish_stage(
+                if publish_mode == "none":
+                    publish_status = "not_run"
+                    publish_reason = "publish mode is none"
+                    await self._emit_event(
                         job_id=job.id,
-                        canonical_payload=canonical_payload,
-                        prepared=prepared,
-                        skill_meta=skill_meta,
-                        job_type=job.type,
-                        staged_artifacts=staged_artifacts,
-                    )
-                except CommandCancelledError:
-                    raise
-                except Exception as exc:
-                    logger.exception(
-                        "Publish stage failed for job %s", job.id, exc_info=exc
-                    )
-                    result = type(result)(
-                        succeeded=False,
-                        summary=result.summary,
-                        error_message=str(exc),
-                        artifacts=result.artifacts,
+                        level="info",
+                        message="moonmind.task.publish",
+                        payload={
+                            "status": "skipped",
+                            "reason": "publish mode is none",
+                            **dict(skill_meta),
+                        },
                     )
                 else:
-                    if publish_note:
-                        base_summary = result.summary or "task completed"
+                    self._start_finish_stage(stage_starts, stage="publish")
+                    try:
+                        publish_note = await self._run_publish_stage(
+                            job_id=job.id,
+                            canonical_payload=canonical_payload,
+                            prepared=prepared,
+                            skill_meta=skill_meta,
+                            job_type=job.type,
+                            staged_artifacts=staged_artifacts,
+                        )
+                    except CommandCancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.exception(
+                            "Publish stage failed for job %s", job.id, exc_info=exc
+                        )
+                        self._finish_stage(
+                            finish_stages,
+                            stage_starts,
+                            stage="publish",
+                            status="failed",
+                        )
+                        publish_status = "failed"
+                        publish_reason = str(exc)
+                        failure_stage = "publish"
+                        failure_reason = str(exc)
                         result = type(result)(
-                            succeeded=True,
-                            summary=f"{base_summary}; {publish_note}",
-                            error_message=None,
+                            succeeded=False,
+                            summary=result.summary,
+                            error_message=str(exc),
                             artifacts=result.artifacts,
                         )
+                    else:
+                        publish_payload = self._read_publish_result(prepared=prepared)
+                        if publish_payload and bool(publish_payload.get("skipped")):
+                            publish_status = "skipped"
+                            publish_reason = str(
+                                publish_payload.get("reason") or "no local changes"
+                            ).strip()
+                            self._finish_stage(
+                                finish_stages,
+                                stage_starts,
+                                stage="publish",
+                                status="skipped",
+                            )
+                        else:
+                            publish_status = "published"
+                            publish_reason = None
+                            self._finish_stage(
+                                finish_stages,
+                                stage_starts,
+                                stage="publish",
+                                status="succeeded",
+                            )
+                        if publish_payload:
+                            publish_pr_url = (
+                                str(publish_payload.get("prUrl") or "").strip() or None
+                            )
+                            publish_base_branch = (
+                                str(publish_payload.get("baseBranch") or "").strip()
+                                or publish_base_branch
+                            )
+                            publish_working_branch = (
+                                str(publish_payload.get("branch") or "").strip()
+                                or publish_working_branch
+                            )
+                        if publish_note:
+                            base_summary = result.summary or "task completed"
+                            result = type(result)(
+                                succeeded=True,
+                                summary=f"{base_summary}; {publish_note}",
+                                error_message=None,
+                                artifacts=result.artifacts,
+                            )
                 await self._raise_if_cancel_requested(
                     cancel_event=cancel_requested_event
                 )
 
             if proposal_workflow_enabled:
+                proposal_hook_skills = list(
+                    self._proposal_hook_skill_ids(
+                        include_continuation=bool(result and result.succeeded)
+                    )
+                )
+                if self._config.skill_policy_mode == "allowlist":
+                    allowed_skills = set(self._config.allowed_skills)
+                    proposal_hook_skills = [
+                        skill_id
+                        for skill_id in proposal_hook_skills
+                        if skill_id in allowed_skills
+                    ]
+                proposal_errors: list[str] = []
+                proposal_report = ProposalSubmissionReport(
+                    requested=True,
+                    hook_skills=proposal_hook_skills,
+                    generated_count=0,
+                    submitted_count=0,
+                    errors=[],
+                )
+                self._start_finish_stage(stage_starts, stage="proposals")
                 await self._raise_if_cancel_requested(
                     cancel_event=cancel_requested_event
                 )
@@ -1624,6 +1987,7 @@ class CodexWorker:
                     logger.exception(
                         "Post-task proposal skill execution failed for job %s", job.id
                     )
+                    proposal_errors.append("proposal skill execution failed")
                     proposal_artifacts = []
                 if proposal_artifacts:
                     staged_artifacts.extend(proposal_artifacts)
@@ -1632,9 +1996,19 @@ class CodexWorker:
                     cancel_event=cancel_requested_event
                 )
                 try:
-                    await self._maybe_submit_task_proposals(
+                    submission_report = await self._maybe_submit_task_proposals(
                         job=job,
                         prepared=prepared,
+                        requested=True,
+                        hook_skills=proposal_hook_skills,
+                    )
+                    proposal_errors.extend(submission_report.errors)
+                    proposal_report = ProposalSubmissionReport(
+                        requested=True,
+                        hook_skills=proposal_hook_skills,
+                        generated_count=submission_report.generated_count,
+                        submitted_count=submission_report.submitted_count,
+                        errors=proposal_errors,
                     )
                 except CommandCancelledError:
                     raise
@@ -1642,11 +2016,25 @@ class CodexWorker:
                     logger.exception(
                         "Failed submitting post-task proposals for job %s", job.id
                     )
+                    proposal_errors.append("proposal submission failed")
+                    proposal_report = ProposalSubmissionReport(
+                        requested=True,
+                        hook_skills=proposal_hook_skills,
+                        generated_count=0,
+                        submitted_count=0,
+                        errors=proposal_errors,
+                    )
                     await self._emit_event(
                         job_id=job.id,
                         level="warn",
                         message="task.proposalSubmission.failed",
                     )
+                self._finish_stage(
+                    finish_stages,
+                    stage_starts,
+                    stage="proposals",
+                    status="failed" if proposal_report.errors else "succeeded",
+                )
 
             await _flush_staged_artifacts()
             if optional_artifact_failures:
@@ -1670,48 +2058,14 @@ class CodexWorker:
                         error_message=None,
                         artifacts=result.artifacts,
                     )
-            if cancel_requested_event.is_set():
-                await self._acknowledge_cancellation(
-                    job_id=job.id,
-                    message="cancellation requested",
-                )
-                return "claimed"
-            if result.succeeded:
-                await self._queue_client.complete_job(
-                    job_id=job.id,
-                    worker_id=self._config.worker_id,
-                    result_summary=result.summary,
-                )
-                await self._emit_event(
-                    job_id=job.id,
-                    level="info",
-                    message="Job completed",
-                    payload={
-                        "summary": result.summary,
-                        "jobType": job.type,
-                        **skill_meta,
-                    },
-                )
-            else:
-                terminal_error = self._redact_text(
-                    result.error_message or "codex_exec failed"
-                )
-                await self._queue_client.fail_job(
-                    job_id=job.id,
-                    worker_id=self._config.worker_id,
-                    error_message=terminal_error,
-                    retryable=False,
-                )
-                await self._emit_event(
-                    job_id=job.id,
-                    level="error",
-                    message="Job failed",
-                    payload={
-                        "error": terminal_error,
-                        "jobType": job.type,
-                        **skill_meta,
-                    },
-                )
+            await _finalize_and_transition(
+                cancelled=cancel_requested_event.is_set(),
+                cancel_message=(
+                    "cancellation requested"
+                    if cancel_requested_event.is_set()
+                    else None
+                ),
+            )
         except Exception as exc:
             if staged_artifacts:
                 try:
@@ -1730,23 +2084,19 @@ class CodexWorker:
             if cancel_requested_event.is_set() or isinstance(
                 exc, (JobCancellationRequested, CommandCancelledError)
             ):
-                await self._acknowledge_cancellation(
-                    job_id=job.id,
-                    message=self._redact_text(str(exc) or "cancellation requested"),
+                await _finalize_and_transition(
+                    cancelled=True,
+                    cancel_message=self._redact_text(
+                        str(exc) or "cancellation requested"
+                    ),
+                    failure_stage_override=failure_stage or "unknown",
+                    failure_reason_override=failure_reason or str(exc),
                 )
                 return "claimed"
-            terminal_error = self._redact_text(str(exc))
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=terminal_error,
-                retryable=False,
-            )
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Worker exception while executing job",
-                payload={"error": terminal_error, "jobType": job.type, **skill_meta},
+            await _finalize_and_transition(
+                cancelled=False,
+                failure_stage_override=failure_stage or "unknown",
+                failure_reason_override=failure_reason or str(exc),
             )
         finally:
             self._active_cancel_event = None
@@ -1824,7 +2174,237 @@ class CodexWorker:
                 payload={"status": "resumed"},
             )
 
-    async def _acknowledge_cancellation(self, *, job_id: UUID, message: str) -> None:
+    @staticmethod
+    def _new_finish_stages() -> dict[str, dict[str, Any]]:
+        return {stage: {"status": "not_run"} for stage in _FINISH_STAGE_NAMES}
+
+    @staticmethod
+    def _start_finish_stage(
+        starts: dict[str, float],
+        *,
+        stage: str,
+    ) -> None:
+        starts[stage] = time.monotonic()
+
+    @staticmethod
+    def _finish_stage(
+        stages: dict[str, dict[str, Any]],
+        starts: dict[str, float],
+        *,
+        stage: str,
+        status: str,
+    ) -> None:
+        payload: dict[str, Any] = {"status": status}
+        started_at = starts.get(stage)
+        if started_at is not None:
+            payload["durationMs"] = max(
+                0, int((time.monotonic() - started_at) * 1000)
+            )
+        stages[stage] = payload
+
+    def _read_publish_result(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace | None,
+    ) -> dict[str, Any] | None:
+        if prepared is None:
+            return None
+        path = prepared.publish_result_path
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("publish_result.json is invalid at %s", path)
+            return None
+        return dict(payload) if isinstance(payload, Mapping) else None
+
+    def _determine_finish_outcome(
+        self,
+        *,
+        succeeded: bool,
+        cancelled: bool,
+        cancel_reason: str | None,
+        failure_stage: str | None,
+        failure_reason: str | None,
+        publish_mode: str,
+        publish_status: str,
+        publish_reason: str | None,
+        publish_pr_url: str | None,
+        publish_branch: str | None,
+    ) -> FinishOutcome:
+        if cancelled:
+            return FinishOutcome(
+                code="CANCELLED",
+                stage="unknown",
+                reason=self._redact_text(cancel_reason or "cancellation requested"),
+            )
+        if not succeeded:
+            stage = (failure_stage or "unknown").strip() or "unknown"
+            reason = self._redact_text(failure_reason or f"{stage} stage failed")
+            return FinishOutcome(code="FAILED", stage=stage, reason=reason)
+
+        if publish_mode == "none":
+            return FinishOutcome(
+                code="PUBLISH_DISABLED",
+                stage="publish",
+                reason="publish skipped: mode=none",
+            )
+
+        if publish_status == "skipped":
+            reason = publish_reason or "publish skipped: no local changes"
+            return FinishOutcome(code="NO_CHANGES", stage="publish", reason=reason)
+        if publish_status == "published" and publish_pr_url:
+            return FinishOutcome(
+                code="PUBLISHED_PR",
+                stage="publish",
+                reason="published pull request",
+            )
+        if publish_status == "published":
+            branch = str(publish_branch or "").strip()
+            reason = f"published branch {branch}" if branch else "published branch"
+            return FinishOutcome(
+                code="PUBLISHED_BRANCH",
+                stage="publish",
+                reason=reason,
+            )
+
+        return FinishOutcome(
+            code="PUBLISHED_BRANCH",
+            stage="publish",
+            reason="task completed",
+        )
+
+    def _build_finish_summary(
+        self,
+        *,
+        job: ClaimedJob,
+        canonical_payload: Mapping[str, Any],
+        runtime_mode: str,
+        started_at: datetime,
+        finished_at: datetime,
+        stages: dict[str, dict[str, Any]],
+        finish_outcome: FinishOutcome,
+        prepared: PreparedTaskWorkspace | None,
+        publish_mode: str,
+        publish_status: str,
+        publish_reason: str | None,
+        publish_pr_url: str | None,
+        publish_base_branch: str | None,
+        publish_working_branch: str | None,
+        proposal_report: ProposalSubmissionReport,
+    ) -> dict[str, Any]:
+        repository = str(canonical_payload.get("repository") or "").strip()
+        patch_path = "patches/changes.patch"
+        patch_exists = False
+        if prepared is not None:
+            patch_file = prepared.artifacts_dir / "changes.patch"
+            patch_exists = patch_file.exists() and patch_file.stat().st_size > 0
+
+        if publish_status == "skipped":
+            has_changes = False
+        elif publish_status in {"published", "failed"}:
+            has_changes = True
+        elif publish_mode == "none":
+            has_changes = patch_exists
+        else:
+            has_changes = patch_exists
+
+        duration_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
+        summary = {
+            "schemaVersion": "v1",
+            "jobId": str(job.id),
+            "jobType": str(job.type or "task"),
+            "repository": repository,
+            "targetRuntime": runtime_mode,
+            "timestamps": {
+                "startedAt": started_at.isoformat(),
+                "finishedAt": finished_at.isoformat(),
+                "durationMs": duration_ms,
+            },
+            "finishOutcome": {
+                "code": finish_outcome.code,
+                "stage": finish_outcome.stage,
+                "reason": finish_outcome.reason,
+            },
+            "stages": stages,
+            "publish": {
+                "mode": publish_mode,
+                "status": publish_status,
+                "reason": publish_reason,
+                "workingBranch": publish_working_branch,
+                "baseBranch": publish_base_branch,
+                "prUrl": publish_pr_url,
+            },
+            "changes": {
+                "hasChanges": has_changes,
+                "patchArtifact": patch_path,
+            },
+            "proposals": {
+                "requested": proposal_report.requested,
+                "hookSkills": proposal_report.hook_skills,
+                "generatedCount": proposal_report.generated_count,
+                "submittedCount": proposal_report.submitted_count,
+                "errors": proposal_report.errors,
+            },
+        }
+        redacted = self._redact_payload(summary)
+        return redacted if isinstance(redacted, dict) else summary
+
+    def _write_finish_reports(
+        self,
+        *,
+        artifacts_dir: Path,
+        finish_summary: dict[str, Any],
+        finish_outcome: FinishOutcome,
+    ) -> list[ArtifactUpload]:
+        reports_dir = artifacts_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        run_summary_path = reports_dir / "run_summary.json"
+        run_summary_path.write_text(
+            json.dumps(finish_summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        artifacts: list[ArtifactUpload] = [
+            ArtifactUpload(
+                path=run_summary_path,
+                name="reports/run_summary.json",
+                content_type="application/json",
+                required=False,
+            )
+        ]
+        if finish_outcome.code == "FAILED":
+            errors_path = reports_dir / "errors.json"
+            error_payload = {
+                "schemaVersion": "v1",
+                "jobId": finish_summary.get("jobId"),
+                "outcome": finish_outcome.code,
+                "stage": finish_outcome.stage,
+                "reason": finish_outcome.reason,
+            }
+            redacted = self._redact_payload(error_payload)
+            errors_path.write_text(
+                json.dumps(redacted, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            artifacts.append(
+                ArtifactUpload(
+                    path=errors_path,
+                    name="reports/errors.json",
+                    content_type="application/json",
+                    required=False,
+                )
+            )
+        return artifacts
+
+    async def _acknowledge_cancellation(
+        self,
+        *,
+        job_id: UUID,
+        message: str,
+        finish_outcome: FinishOutcome | None = None,
+        finish_summary: dict[str, Any] | None = None,
+    ) -> None:
         """Acknowledge cancellation and avoid terminal success/failure transitions."""
 
         await self._emit_event(
@@ -1838,6 +2418,16 @@ class CodexWorker:
                 job_id=job_id,
                 worker_id=self._config.worker_id,
                 message=message,
+                finish_outcome_code=(
+                    finish_outcome.code if finish_outcome is not None else None
+                ),
+                finish_outcome_stage=(
+                    finish_outcome.stage if finish_outcome is not None else None
+                ),
+                finish_outcome_reason=(
+                    finish_outcome.reason if finish_outcome is not None else None
+                ),
+                finish_summary=finish_summary,
             )
         except Exception:
             # Fallback to fail_job so ownership is still released on transient ack issues.
@@ -1846,6 +2436,16 @@ class CodexWorker:
                 worker_id=self._config.worker_id,
                 error_message="cancellation requested but cancel ack failed",
                 retryable=False,
+                finish_outcome_code=(
+                    finish_outcome.code if finish_outcome is not None else None
+                ),
+                finish_outcome_stage=(
+                    finish_outcome.stage if finish_outcome is not None else None
+                ),
+                finish_outcome_reason=(
+                    finish_outcome.reason if finish_outcome is not None else None
+                ),
+                finish_summary=finish_summary,
             )
 
     def _resolve_task_steps(
@@ -5496,8 +6096,15 @@ class CodexWorker:
         *,
         job: ClaimedJob,
         prepared: PreparedTaskWorkspace,
-    ) -> None:
+        requested: bool = True,
+        hook_skills: Sequence[str] | None = None,
+    ) -> ProposalSubmissionReport:
         """Read worker-generated proposals and submit them when enabled."""
+        resolved_hook_skills = [
+            str(skill).strip() for skill in (hook_skills or ()) if str(skill).strip()
+        ]
+        errors: list[str] = []
+        generated_count = 0
         task_context_path = prepared.task_context_path
         proposals_paths = [task_context_path / "task_proposals.json"]
         if task_context_path.suffix == ".json":
@@ -5515,7 +6122,13 @@ class CodexWorker:
                 job.id,
                 ", ".join(str(path) for path in proposals_paths),
             )
-            return
+            return ProposalSubmissionReport(
+                requested=requested,
+                hook_skills=resolved_hook_skills,
+                generated_count=0,
+                submitted_count=0,
+                errors=errors,
+            )
         try:
             raw_text = proposals_path.read_text(encoding="utf-8")
             parsed = json.loads(raw_text)
@@ -5524,8 +6137,16 @@ class CodexWorker:
                 "Task proposal file %s is missing or invalid JSON; skipping",
                 proposals_path,
             )
-            return
+            errors.append("task_proposals.json is invalid")
+            return ProposalSubmissionReport(
+                requested=requested,
+                hook_skills=resolved_hook_skills,
+                generated_count=0,
+                submitted_count=0,
+                errors=errors,
+            )
         proposals = parsed if isinstance(parsed, list) else [parsed]
+        generated_count = len([proposal for proposal in proposals if isinstance(proposal, dict)])
         canonical_payload = job.payload if isinstance(job.payload, Mapping) else {}
         project_repository = str(canonical_payload.get("repository") or "").strip()
         if not project_repository:
@@ -5533,7 +6154,14 @@ class CodexWorker:
                 "Skipping task proposal submission for job %s: canonical repository missing",
                 job.id,
             )
-            return
+            errors.append("canonical repository missing")
+            return ProposalSubmissionReport(
+                requested=requested,
+                hook_skills=resolved_hook_skills,
+                generated_count=generated_count,
+                submitted_count=0,
+                errors=errors,
+            )
 
         task_node = canonical_payload.get("task")
         policy_node = (
@@ -5599,6 +6227,7 @@ class CodexWorker:
                 logger.warning(
                     "Proposal entry in %s missing title; skipping", proposals_path
                 )
+                errors.append("proposal missing title")
                 continue
 
             if not isinstance(payload.get("taskCreateRequest"), Mapping):
@@ -5606,6 +6235,7 @@ class CodexWorker:
                     "Proposal entry in %s missing taskCreateRequest; skipping",
                     proposals_path,
                 )
+                errors.append("proposal missing taskCreateRequest")
                 continue
 
             if effective_policy.has_project_capacity():
@@ -5625,6 +6255,11 @@ class CodexWorker:
                         logger.exception(
                             "Failed to submit project proposal derived from %s",
                             proposals_path,
+                        )
+                        errors.append(
+                            self._redact_text(
+                                f"project submission failed: {str(exc).strip() or 'unknown'}"
+                            )
                         )
                         await self._emit_event(
                             job_id=job.id,
@@ -5683,6 +6318,11 @@ class CodexWorker:
                             "Failed to submit MoonMind proposal derived from %s",
                             proposals_path,
                         )
+                        errors.append(
+                            self._redact_text(
+                                f"moonmind submission failed: {str(exc).strip() or 'unknown'}"
+                            )
+                        )
                         await self._emit_event(
                             job_id=job.id,
                             level="warn",
@@ -5701,6 +6341,13 @@ class CodexWorker:
             )
             with suppress(Exception):
                 proposals_path.unlink()
+        return ProposalSubmissionReport(
+            requested=requested,
+            hook_skills=resolved_hook_skills,
+            generated_count=generated_count,
+            submitted_count=submitted,
+            errors=errors,
+        )
 
     async def _emit_event(
         self,

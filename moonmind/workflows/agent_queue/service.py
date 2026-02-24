@@ -916,6 +916,10 @@ class AgentQueueService:
         job_id: UUID,
         worker_id: str,
         result_summary: Optional[str] = None,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> models.AgentJob:
         """Mark a running job as completed."""
 
@@ -923,10 +927,17 @@ class AgentQueueService:
         if not worker:
             raise AgentQueueValidationError("workerId must be a non-empty string")
 
+        if finish_summary is not None and not isinstance(finish_summary, dict):
+            raise AgentQueueValidationError("finishSummary must be an object")
+
         job = await self._repository.complete_job(
             job_id=job_id,
             worker_id=worker,
             result_summary=result_summary.strip() if result_summary else None,
+            finish_outcome_code=self._clean_optional_str(finish_outcome_code),
+            finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
+            finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
+            finish_summary=(dict(finish_summary) if finish_summary is not None else None),
         )
         await self._repository.append_event(
             job_id=job_id,
@@ -944,6 +955,10 @@ class AgentQueueService:
         worker_id: str,
         error_message: str,
         retryable: bool = False,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> models.AgentJob:
         """Mark a running job as failed."""
 
@@ -953,6 +968,8 @@ class AgentQueueService:
         detail = error_message.strip()
         if not detail:
             raise AgentQueueValidationError("errorMessage must be a non-empty string")
+        if finish_summary is not None and not isinstance(finish_summary, dict):
+            raise AgentQueueValidationError("finishSummary must be an object")
 
         current_job = await self._repository.require_job(job_id)
         retry_delay_seconds = None
@@ -965,6 +982,10 @@ class AgentQueueService:
             error_message=detail,
             retryable=retryable,
             retry_delay_seconds=retry_delay_seconds,
+            finish_outcome_code=self._clean_optional_str(finish_outcome_code),
+            finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
+            finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
+            finish_summary=(dict(finish_summary) if finish_summary is not None else None),
         )
         if job.status is models.AgentJobStatus.CANCELLED:
             await self._repository.append_event(
@@ -1056,6 +1077,10 @@ class AgentQueueService:
         job_id: UUID,
         worker_id: str,
         message: str | None = None,
+        finish_outcome_code: str | None = None,
+        finish_outcome_stage: str | None = None,
+        finish_outcome_reason: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> models.AgentJob:
         """Acknowledge cancellation for a running job owned by worker."""
 
@@ -1065,8 +1090,17 @@ class AgentQueueService:
         detail = message.strip() if message else None
         if detail == "":
             detail = None
+        if finish_summary is not None and not isinstance(finish_summary, dict):
+            raise AgentQueueValidationError("finishSummary must be an object")
 
-        job, action = await self._repository.ack_cancel(job_id=job_id, worker_id=worker)
+        job, action = await self._repository.ack_cancel(
+            job_id=job_id,
+            worker_id=worker,
+            finish_outcome_code=self._clean_optional_str(finish_outcome_code),
+            finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
+            finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
+            finish_summary=(dict(finish_summary) if finish_summary is not None else None),
+        )
         if action == "acknowledged":
             await self._repository.append_event(
                 job_id=job_id,

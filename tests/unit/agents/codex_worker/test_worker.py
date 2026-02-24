@@ -48,8 +48,11 @@ class FakeQueueClient:
         self.live_session_heartbeats: list[str] = []
         self.live_session_state: dict[str, object] | None = None
         self.completed: list[tuple[str, str | None]] = []
+        self.completed_finish_payloads: list[dict[str, object]] = []
         self.failed: list[str] = []
+        self.failed_finish_payloads: list[dict[str, object]] = []
         self.cancel_acks: list[tuple[str, str | None]] = []
+        self.cancel_ack_finish_payloads: list[dict[str, object]] = []
         self.uploaded: list[str] = []
         self.events: list[dict[str, object]] = []
         self.cancel_requested_at: str | None = None
@@ -91,15 +94,70 @@ class FakeQueueClient:
         self.heartbeat_payloads.append(payload)
         return QueueHeartbeatResult(job=payload, system=self.system_status)
 
-    async def ack_cancel(self, *, job_id, worker_id, message=None):
+    async def ack_cancel(
+        self,
+        *,
+        job_id,
+        worker_id,
+        message=None,
+        finish_outcome_code=None,
+        finish_outcome_stage=None,
+        finish_outcome_reason=None,
+        finish_summary=None,
+    ):
         self.cancel_acks.append((str(job_id), message))
+        self.cancel_ack_finish_payloads.append(
+            {
+                "finishOutcomeCode": finish_outcome_code,
+                "finishOutcomeStage": finish_outcome_stage,
+                "finishOutcomeReason": finish_outcome_reason,
+                "finishSummary": finish_summary,
+            }
+        )
         return {"id": str(job_id), "status": "cancelled"}
 
-    async def complete_job(self, *, job_id, worker_id, result_summary):
+    async def complete_job(
+        self,
+        *,
+        job_id,
+        worker_id,
+        result_summary,
+        finish_outcome_code=None,
+        finish_outcome_stage=None,
+        finish_outcome_reason=None,
+        finish_summary=None,
+    ):
         self.completed.append((str(job_id), result_summary))
+        self.completed_finish_payloads.append(
+            {
+                "finishOutcomeCode": finish_outcome_code,
+                "finishOutcomeStage": finish_outcome_stage,
+                "finishOutcomeReason": finish_outcome_reason,
+                "finishSummary": finish_summary,
+            }
+        )
 
-    async def fail_job(self, *, job_id, worker_id, error_message, retryable=False):
+    async def fail_job(
+        self,
+        *,
+        job_id,
+        worker_id,
+        error_message,
+        retryable=False,
+        finish_outcome_code=None,
+        finish_outcome_stage=None,
+        finish_outcome_reason=None,
+        finish_summary=None,
+    ):
         self.failed.append(f"{job_id}:{error_message}")
+        self.failed_finish_payloads.append(
+            {
+                "finishOutcomeCode": finish_outcome_code,
+                "finishOutcomeStage": finish_outcome_stage,
+                "finishOutcomeReason": finish_outcome_reason,
+                "finishSummary": finish_summary,
+            }
+        )
 
     async def report_live_session(self, **payload):
         self.live_session_reports.append(dict(payload))
@@ -803,6 +861,13 @@ async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> 
     assert "ref" not in handler.exec_payloads[0]
     assert "logs/publish.log" in queue.uploaded
     assert "publish_result.json" in queue.uploaded
+    assert "reports/run_summary.json" in queue.uploaded
+    assert queue.completed_finish_payloads[0]["finishOutcomeCode"] == "NO_CHANGES"
+    assert queue.completed_finish_payloads[0]["finishOutcomeStage"] == "publish"
+    finish_summary = queue.completed_finish_payloads[0]["finishSummary"]
+    assert isinstance(finish_summary, dict)
+    assert finish_summary["finishOutcome"]["code"] == "NO_CHANGES"
+    assert finish_summary["publish"]["status"] == "skipped"
     assert any(event["message"] == "moonmind.task.prepare" for event in queue.events)
     assert any(event["message"] == "moonmind.task.execute" for event in queue.events)
     assert any(event["message"] == "moonmind.task.publish" for event in queue.events)
@@ -860,6 +925,11 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
     payload = publish_event["payload"]
     assert isinstance(payload, dict)
     assert payload["status"] == "skipped"
+    assert "reports/run_summary.json" in queue.uploaded
+    assert queue.completed_finish_payloads[0]["finishOutcomeCode"] == "PUBLISH_DISABLED"
+    finish_summary = queue.completed_finish_payloads[0]["finishSummary"]
+    assert isinstance(finish_summary, dict)
+    assert finish_summary["publish"]["status"] == "not_run"
 
 
 async def test_run_once_task_steps_execute_in_order_with_step_events(
@@ -1510,6 +1580,13 @@ async def test_run_once_task_steps_fail_fast_on_first_failed_step(
     assert queue.completed == []
     assert len(queue.failed) == 1
     assert "step2 failed" in queue.failed[0]
+    assert queue.failed_finish_payloads[0]["finishOutcomeCode"] == "FAILED"
+    assert queue.failed_finish_payloads[0]["finishOutcomeStage"] == "execute"
+    failure_summary = queue.failed_finish_payloads[0]["finishSummary"]
+    assert isinstance(failure_summary, dict)
+    assert failure_summary["finishOutcome"]["stage"] == "execute"
+    assert "reports/run_summary.json" in queue.uploaded
+    assert "reports/errors.json" in queue.uploaded
     assert handler.calls == ["codex_exec", "codex_exec"]
     assert not any(
         event["message"] == "moonmind.task.publish" for event in queue.events
@@ -2444,6 +2521,11 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
     assert queue.failed == []
     assert len(queue.cancel_acks) == 1
     assert queue.cancel_acks[0][0] == str(job.id)
+    assert queue.cancel_ack_finish_payloads[0]["finishOutcomeCode"] == "CANCELLED"
+    cancel_summary = queue.cancel_ack_finish_payloads[0]["finishSummary"]
+    assert isinstance(cancel_summary, dict)
+    assert cancel_summary["finishOutcome"]["code"] == "CANCELLED"
+    assert "reports/run_summary.json" in queue.uploaded
     assert any(
         event["message"] == "Job cancellation requested; stopping"
         for event in queue.events
