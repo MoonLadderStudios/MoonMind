@@ -217,6 +217,56 @@
     });
     return normalized;
   }
+
+  const TASK_RUNTIME_LABELS = {
+    codex: "Codex worker",
+    gemini: "Gemini worker",
+    claude: "Claude worker",
+    orchestrator: "Orchestrator",
+  };
+
+  const formatRuntimeLabel = (runtimeValue) => {
+    const normalized = String(runtimeValue || "").trim().toLowerCase();
+    if (!normalized) {
+      return "";
+    }
+
+    if (TASK_RUNTIME_LABELS[normalized]) {
+      return TASK_RUNTIME_LABELS[normalized];
+    }
+
+    const titleCased = normalized
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(" ")
+      .map((part) =>
+        part
+          ? part.charAt(0).toUpperCase() + part.slice(1)
+          : "",
+      )
+      .join(" ");
+
+    return titleCased || normalized;
+  };
+
+  const renderRuntimeOptions = (options, selectedRuntime) => {
+    const selected = String(selectedRuntime || "").trim().toLowerCase();
+    return options
+      .map((runtime) => {
+        const runtimeValue = String(runtime || "").trim().toLowerCase();
+        if (!runtimeValue) {
+          return "";
+        }
+        const label = formatRuntimeLabel(runtimeValue);
+        if (!label) {
+          return "";
+        }
+        return `<option value="${escapeHtml(runtimeValue)}" ${
+          runtimeValue === selected ? "selected" : ""
+        }>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+  };
   const isRuntimeCapabilitiesCacheFresh = () =>
     runtimeCapabilitiesCache.payload !== null &&
     runtimeCapabilitiesCache.expiresAtMs > Date.now();
@@ -2058,14 +2108,10 @@
     }
 
     function renderQueueFilters() {
-      const runtimeOptions = supportedTaskRuntimes
-        .map(
-          (runtime) =>
-            `<option value="${escapeHtml(runtime)}" ${
-              filterState.runtime === runtime ? "selected" : ""
-            }>${escapeHtml(runtime)}</option>`,
-        )
-        .join("");
+      const runtimeOptions = renderRuntimeOptions(
+        supportedTaskRuntimes,
+        filterState.runtime,
+      );
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -2521,14 +2567,10 @@
       ? sanitizedWorkerDraft.steps
       : [];
 
-    const runtimeOptions = supportedTaskRuntimes
-      .map(
-        (runtime) =>
-          `<option value="${escapeHtml(runtime)}" ${
-            runtime === selectedWorkerRuntime ? "selected" : ""
-          }>${escapeHtml(runtime)}</option>`,
-      )
-      .join("");
+    const runtimeOptions = renderRuntimeOptions(
+      [...supportedTaskRuntimes, "orchestrator"],
+      selectedWorkerRuntime,
+    );
     const repositoryFallback = queueDraftRepository || defaultRepository;
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`
@@ -2790,7 +2832,14 @@
     if (runtimeSelect) {
       applyRuntimeDefaults(runtimeSelect.value);
       runtimeSelect.addEventListener("change", (event) => {
-        const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
+        const selectedRuntime =
+          String(event.target.value || "").trim().toLowerCase();
+        if (selectedRuntime === "orchestrator") {
+          persistWorkerDraft();
+          window.location.href = "/tasks/queue/new?runtime=orchestrator";
+          return;
+        }
+        const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
         loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
         scheduleWorkerDraftPersist();
       });
