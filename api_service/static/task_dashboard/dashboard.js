@@ -217,6 +217,58 @@
     });
     return normalized;
   }
+
+  const ORCHESTRATOR_RUNTIME = "orchestrator";
+
+  const TASK_RUNTIME_LABELS = {
+    codex: "Codex worker",
+    gemini: "Gemini worker",
+    claude: "Claude worker",
+    [ORCHESTRATOR_RUNTIME]: "Orchestrator",
+  };
+
+  const formatRuntimeLabel = (runtimeValue) => {
+    const normalized = String(runtimeValue || "").trim().toLowerCase();
+    if (!normalized) {
+      return "";
+    }
+
+    if (TASK_RUNTIME_LABELS[normalized]) {
+      return TASK_RUNTIME_LABELS[normalized];
+    }
+
+    const titleCased = normalized
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(" ")
+      .map((part) =>
+        part
+          ? part.charAt(0).toUpperCase() + part.slice(1)
+          : "",
+      )
+      .join(" ");
+
+    return titleCased || normalized;
+  };
+
+  const renderRuntimeOptions = (options, selectedRuntime) => {
+    const selected = String(selectedRuntime || "").trim();
+    return options
+      .map((runtime) => {
+        const runtimeValue = String(runtime || "").trim();
+        if (!runtimeValue) {
+          return "";
+        }
+        const label = formatRuntimeLabel(runtimeValue);
+        if (!label) {
+          return "";
+        }
+        return `<option value="${escapeHtml(runtimeValue)}" ${
+          runtimeValue === selected ? "selected" : ""
+        }>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+  };
   const isRuntimeCapabilitiesCacheFresh = () =>
     runtimeCapabilitiesCache.payload !== null &&
     runtimeCapabilitiesCache.expiresAtMs > Date.now();
@@ -1666,8 +1718,8 @@
     if (!normalized) {
       return fallback;
     }
-    if (normalized === "orchestrator") {
-      return "orchestrator";
+    if (normalized === ORCHESTRATOR_RUNTIME) {
+      return ORCHESTRATOR_RUNTIME;
     }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
@@ -1680,8 +1732,8 @@
     if (!normalized) {
       return null;
     }
-    if (normalized === "orchestrator") {
-      return "orchestrator";
+    if (normalized === ORCHESTRATOR_RUNTIME) {
+      return ORCHESTRATOR_RUNTIME;
     }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
@@ -1700,7 +1752,7 @@
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
-    return normalized !== "orchestrator" && supportedTaskRuntimes.includes(normalized);
+    return normalized !== ORCHESTRATOR_RUNTIME && supportedTaskRuntimes.includes(normalized);
   };
 
   const submitDraftSeeds = (() => {
@@ -2058,14 +2110,10 @@
     }
 
     function renderQueueFilters() {
-      const runtimeOptions = supportedTaskRuntimes
-        .map(
-          (runtime) =>
-            `<option value="${escapeHtml(runtime)}" ${
-              filterState.runtime === runtime ? "selected" : ""
-            }>${escapeHtml(runtime)}</option>`,
-        )
-        .join("");
+      const runtimeOptions = renderRuntimeOptions(
+        supportedTaskRuntimes,
+        filterState.runtime,
+      );
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -2481,6 +2529,7 @@
       presetRuntime ?? sanitizedWorkerDraft.runtime,
       defaultTaskRuntime,
     );
+    let activeWorkerRuntime = selectedWorkerRuntime;
     const queueDraftModel = String(
       sanitizedWorkerDraft.model || defaultTaskModel,
     ).trim();
@@ -2521,14 +2570,10 @@
       ? sanitizedWorkerDraft.steps
       : [];
 
-    const runtimeOptions = supportedTaskRuntimes
-      .map(
-        (runtime) =>
-          `<option value="${escapeHtml(runtime)}" ${
-            runtime === selectedWorkerRuntime ? "selected" : ""
-          }>${escapeHtml(runtime)}</option>`,
-      )
-      .join("");
+    const runtimeOptions = renderRuntimeOptions(
+      [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME],
+      selectedWorkerRuntime,
+    );
     const repositoryFallback = queueDraftRepository || defaultRepository;
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`
@@ -2667,7 +2712,7 @@
       const priority = Number(formData.get("priority") || 0);
       const maxAttempts = Number(formData.get("maxAttempts") || 3);
       return {
-        runtime: runtime || selectedWorkerRuntime,
+        runtime: runtime || activeWorkerRuntime,
         instruction: String(stepState[0]?.instructions || "").trim(),
         repository: String(formData.get("repository") || "").trim(),
         startingBranch: String(formData.get("startingBranch") || "").trim() || null,
@@ -2790,7 +2835,16 @@
     if (runtimeSelect) {
       applyRuntimeDefaults(runtimeSelect.value);
       runtimeSelect.addEventListener("change", (event) => {
-        const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
+        const selectedRuntime =
+          String(event.target.value || "").trim().toLowerCase();
+        if (selectedRuntime === ORCHESTRATOR_RUNTIME) {
+          activeWorkerRuntime = selectedRuntime;
+          persistWorkerDraft();
+          window.location.href = `/tasks/queue/new?runtime=${ORCHESTRATOR_RUNTIME}`;
+          return;
+        }
+        const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
+        activeWorkerRuntime = nextRuntime || activeWorkerRuntime;
         loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
         scheduleWorkerDraftPersist();
       });
@@ -3906,7 +3960,7 @@
         `<div class="notice error">Unsupported runtime value: <code>${escapeHtml(
           String(presetRuntime),
         )}</code>. Use one of: <code>${escapeHtml(
-          [...supportedTaskRuntimes, "orchestrator"].join(", "),
+          [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME].join(", "),
         )}</code>.</div>`,
       );
       return;
