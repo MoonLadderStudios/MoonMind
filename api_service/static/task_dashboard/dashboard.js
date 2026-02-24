@@ -2389,7 +2389,7 @@
               </select>
             </label>
             <label>Approval Token
-              <input name="approvalToken" placeholder="optional" />
+              <input type="password" name="approvalToken" placeholder="optional" autocomplete="off" spellcheck="false" />
             </label>
           </div>
         </section>
@@ -2661,9 +2661,26 @@
       const orchestratorSelected = isOrchestratorRuntimeValue(activeRuntime);
       if (workerSection instanceof HTMLElement) {
         workerSection.classList.toggle("hidden", orchestratorSelected);
+        const workerControls = workerSection.querySelectorAll("input, select, textarea, button");
+        workerControls.forEach((control) => {
+          if (control instanceof HTMLElement) {
+            control.disabled = orchestratorSelected;
+          }
+        });
       }
       if (orchestratorSection instanceof HTMLElement) {
         orchestratorSection.classList.toggle("hidden", !orchestratorSelected);
+        const orchestratorControls = orchestratorSection.querySelectorAll(
+          "input, select, textarea, button",
+        );
+        orchestratorControls.forEach((control) => {
+          if (control instanceof HTMLElement) {
+            control.disabled = !orchestratorSelected;
+          }
+        });
+      }
+      if (orchestratorTargetInput instanceof HTMLInputElement) {
+        orchestratorTargetInput.required = orchestratorSelected;
       }
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.textContent = orchestratorSelected
@@ -2684,19 +2701,15 @@
           syncRuntimeSections();
           return;
         }
-        const runtimeGroupChanged =
-          isOrchestratorRuntimeValue(nextRuntime) !== isOrchestratorRuntimeValue(activeRuntime);
-        if (runtimeGroupChanged) {
-          syncDraftFromRuntime(activeRuntime);
-        }
+        syncDraftFromRuntime(activeRuntime);
         activeRuntime = nextRuntime;
         runtimeSelect.value = nextRuntime;
         if (!isOrchestratorRuntimeValue(nextRuntime)) {
           applyRuntimeDefaults(nextRuntime);
         }
-        if (runtimeGroupChanged || isOrchestratorRuntimeValue(nextRuntime)) {
-          applyDraftForRuntime(nextRuntime);
-        }
+        applyDraftForRuntime(nextRuntime);
+        message.textContent = "";
+        message.className = "small queue-submit-message";
         syncRuntimeSections();
       });
     }
@@ -3537,11 +3550,11 @@
           }
           window.location.href = `/tasks/orchestrator/${encodeURIComponent(runId)}`;
         } catch (error) {
-          console.error("orchestrator submit failed", error);
-          message.className = "notice error queue-submit-message";
-          message.textContent = String(
-            error?.message || "Failed to create orchestrator run.",
+          console.error(
+            `orchestrator submit failed: ${sanitizedErrorMessage(error)}`,
           );
+          message.className = "notice error queue-submit-message";
+          message.textContent = "Failed to create orchestrator run.";
         }
         return;
       }
