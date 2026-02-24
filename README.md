@@ -37,16 +37,19 @@ MoonMind exposes all of this through:
 2.  **Authenticate worker OAuth volumes (one-time per environment)** before running queue/Celery automation:
     ```bash
     ./tools/auth-codex-volume.sh
-    ./tools/auth-claude-volume.sh           # interactive OAuth flow (default)
-    # or, if you already have a Claude OAuth access token:
-    # ./tools/auth-claude-volume.sh --token-value "<access-token>"
     ./tools/auth-gemini-volume.sh
     ```
-    This persists Codex auth in `codex_auth_volume`, Claude auth in `claude_auth_volume`, and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
+    This persists Codex auth in `codex_auth_volume` and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
     By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If required runtime auth is missing, the worker stays idle and retries until runtime-specific preflight checks pass.
 3.  **Start the services** using the following command:
     ```bash
     docker-compose up -d
+    ```
+
+    Claude runtime is available only when `ANTHROPIC_API_KEY` is configured. To start the optional Claude worker, run:
+
+    ```bash
+    docker-compose --profile claude up -d claude-worker
     ```
     The `-d` flag runs the containers in detached mode, meaning they will run in the background.
     To force-refresh remote images first, run:
@@ -187,8 +190,7 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (legacy alias `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR`; default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
 - `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
-- `CLAUDE_VOLUME_NAME` – Docker volume that stores persistent Claude auth (default `claude_auth_volume`).
-- `CLAUDE_VOLUME_PATH` / `CLAUDE_HOME` – In-container Claude auth path (default `/home/app/.claude`).
+- `ANTHROPIC_API_KEY` – Claude API key (required for `claude` tasks).
 - `MOONMIND_DEFAULT_TASK_RUNTIME` – Fallback runtime for queue tasks that omit `targetRuntime` / `task.runtime.mode` (default `codex`).
 - `CODEX_ENV` and `CODEX_MODEL` – Required by credential validation before Codex phases execute.
 - `GITHUB_TOKEN` – Required for private repository clone/push/PR operations.
@@ -228,7 +230,7 @@ poetry run celery -A celery_worker.speckit_worker worker -Q speckit,codex --logl
 poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=info
 ```
 
-The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. Preflight checks are runtime-aware: `codex` validates Codex auth, `claude` validates Claude auth, and `universal` validates both.
+The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. Preflight checks are runtime-aware: `codex` validates Codex auth, `claude` validates Claude runtime requirements (including `ANTHROPIC_API_KEY`), and `universal` validates both as configured.
 
 ### Agent queue Codex worker
 
@@ -304,6 +306,14 @@ pre-commit run --all-files
 ```
 
 **Note:** All test scripts (`test-unit.ps1`, `test-integration.ps1`, `test-e2e.ps1`) automatically run pre-commit checks before executing tests.
+
+### Claude auth reference guard
+
+Run the following before documentation-heavy changes:
+
+```bash
+./tools/check-no-claude-oauth-refs.sh
+```
 
 ## Design Principles
 1. One-click deployment with smart defaults

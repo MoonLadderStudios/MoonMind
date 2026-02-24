@@ -44,7 +44,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T006 [US1] Remove `_run_claude_auth_status_check` and `MOONMIND_CLAUDE_AUTH_STATUS_COMMAND` handling from `moonmind/agents/codex_worker/cli.py`, replacing them with the shared gate helpers.
+- [X] T006 [US1] Remove `_run_claude_auth_status_check` and legacy auth-status handling from `moonmind/agents/codex_worker/cli.py`, replacing them with the shared gate helpers.
 - [X] T007 [P] [US1] Update `run_preflight()` in `moonmind/agents/codex_worker/cli.py` to compute `claude_required` (runtime == "claude" OR capabilities include `claude`), require `build_runtime_gate_state()` when true, and raise `RuntimeError` with the canonical message if disabled.
 - [X] T008 [P] [US1] Ensure `verify_cli_is_executable("claude")` + `claude --version` only execute when `claude_required` and the key is present, keeping existing Codex/Gemini checks untouched within `moonmind/agents/codex_worker/cli.py`.
 

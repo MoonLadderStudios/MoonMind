@@ -3,7 +3,7 @@
 **Feature Branch**: `038-claude-runtime-gate`  
 **Created**: February 24, 2026  
 **Status**: Draft  
-**Input**: User description: "Implement PR 1 from the Claude OAuth removal plan: replace legacy Claude OAuth checks with Anthropic API key gating across worker preflight, task queue validation/default runtime, and dashboard runtime options, including required unit tests and runtime behavior updates. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+**Input**: User description: "Implement PR 1 from the Claude API-key removal plan: replace legacy Claude auth checks with Anthropic API key gating across worker preflight, task queue validation/default runtime, and dashboard runtime options, including required unit tests and runtime behavior updates. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -18,7 +18,7 @@ As a platform operator starting a Claude-specialized or universal worker, I need
 **Acceptance Scenarios**:
 
 1. **Given** a worker launched with `MOONMIND_WORKER_RUNTIME=claude` and no `ANTHROPIC_API_KEY`, **When** preflight runs, **Then** it raises a descriptive error and aborts startup before any task polling begins.
-2. **Given** a universal worker whose capabilities include `claude` and `codex`, **When** `ANTHROPIC_API_KEY` is present, **Then** preflight runs `claude --version` verification exactly once and succeeds without invoking any OAuth helpers.
+2. **Given** a universal worker whose capabilities include `claude` and `codex`, **When** `ANTHROPIC_API_KEY` is present, **Then** preflight runs `claude --version` verification exactly once and succeeds without invoking any legacy auth helpers.
 3. **Given** a universal worker that only advertises `codex`, **When** no Anthropic key exists, **Then** preflight skips all Claude checks and still succeeds so the worker can process non-Claude work.
 
 ---
@@ -68,9 +68,9 @@ As a dashboard user selecting a runtime for manual task runs, I need the UI to s
 - **FR-001**: Worker preflight MUST detect when `MOONMIND_WORKER_RUNTIME="claude"` and fail with a clear error if neither `ANTHROPIC_API_KEY` nor `CLAUDE_API_KEY` contains a non-empty value.
 - **FR-002**: Worker preflight MUST require the same key gate whenever `MOONMIND_WORKER_CAPABILITIES` includes `claude`, even if the primary runtime differs.
 - **FR-003**: When the key requirement is satisfied, worker preflight MUST verify local Claude tooling by running `claude --version` exactly once; this check MUST NOT run when Claude is not required.
-- **FR-004**: Worker preflight MUST remove support for `MOONMIND_CLAUDE_AUTH_STATUS_COMMAND` and any other OAuth status hooks so no OAuth binaries are invoked.
+- **FR-004**: Worker preflight MUST remove support for legacy auth-status hooks so no legacy auth binaries are invoked.
 - **FR-005**: The queue normalization/enqueue service MUST reject any task whose resolved runtime is `claude` when the key requirement is not met, returning HTTP 400 with a descriptive message and leaving the queue unchanged.
-- **FR-006**: The queue service MUST accept Claude tasks when the key is present without needing any OAuth volume or command prerequisites.
+- **FR-006**: The queue service MUST accept Claude tasks when the key is present without needing any legacy auth volume or command prerequisites.
 - **FR-007**: Settings validation MUST raise a startup error if `MOONMIND_DEFAULT_TASK_RUNTIME` resolves to `claude` while no key is configured, preventing the API service from starting in an invalid state.
 - **FR-008**: Dashboard runtime config (`supportedTaskRuntimes`, `defaultTaskRuntime`) MUST dynamically include Claude only when the key exists and MUST otherwise expose only runtimes that pass the gate.
 - **FR-009**: When Claude is disabled, the dashboard MUST ensure the reported default runtime matches one of the supported runtimes, falling back deterministically (e.g., prioritize `codex`, then `gemini`).
@@ -96,6 +96,6 @@ As a dashboard user selecting a runtime for manual task runs, I need the UI to s
 
 - Either `ANTHROPIC_API_KEY` or `CLAUDE_API_KEY` satisfies the key requirement; the system normalizes both to a single gate flag.
 - Runtime capability strings use lowercase identifiers (`codex`, `claude`, `gemini`); matching is case-insensitive but stored in lowercase for consistency.
-- No additional OAuth artifacts (volumes, helper scripts) remain within the PR1 scope; their removal is handled in later PRs.
+- No additional legacy auth artifacts (volumes, helper scripts) remain within the PR1 scope; their removal is handled in later PRs.
 - Dashboard clients already honor the `supportedTaskRuntimes` contract; no frontend changes are necessary beyond consuming updated data.
 - CI relies exclusively on `./tools/test_unit.sh`; all new tests will be added under the existing unit test suites referenced in the plan.
