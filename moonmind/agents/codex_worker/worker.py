@@ -1606,9 +1606,7 @@ class CodexWorker:
                     ).strip()
                 else:
                     publish_status = "published"
-                publish_pr_url = (
-                    str(publish_payload.get("prUrl") or "").strip() or None
-                )
+                publish_pr_url = str(publish_payload.get("prUrl") or "").strip() or None
                 publish_base_branch = (
                     str(publish_payload.get("baseBranch") or "").strip() or None
                 )
@@ -1618,13 +1616,19 @@ class CodexWorker:
 
             resolved_failure_stage = failure_stage_override or failure_stage
             resolved_failure_reason = failure_reason_override or failure_reason
-            if result is not None and not result.succeeded and not resolved_failure_reason:
+            if (
+                result is not None
+                and not result.succeeded
+                and not resolved_failure_reason
+            ):
                 resolved_failure_reason = (
                     result.error_message or result.summary or "task execution failed"
                 )
 
             finish_outcome = self._determine_finish_outcome(
-                succeeded=bool(result is not None and result.succeeded and not cancelled),
+                succeeded=bool(
+                    result is not None and result.succeeded and not cancelled
+                ),
                 cancelled=cancelled,
                 cancel_reason=cancel_message,
                 failure_stage=resolved_failure_stage,
@@ -1637,7 +1641,9 @@ class CodexWorker:
             )
 
             self._start_finish_stage(stage_starts, stage="finalize")
-            self._finish_stage(finish_stages, stage_starts, stage="finalize", status="succeeded")
+            self._finish_stage(
+                finish_stages, stage_starts, stage="finalize", status="succeeded"
+            )
             finish_summary = self._build_finish_summary(
                 job=job,
                 canonical_payload=canonical_payload,
@@ -1675,7 +1681,9 @@ class CodexWorker:
                     job.id,
                     exc_info=True,
                 )
-                self._finish_stage(finish_stages, stage_starts, stage="finalize", status="failed")
+                self._finish_stage(
+                    finish_stages, stage_starts, stage="finalize", status="failed"
+                )
                 finish_summary = self._build_finish_summary(
                     job=job,
                     canonical_payload=canonical_payload,
@@ -2197,9 +2205,7 @@ class CodexWorker:
         payload: dict[str, Any] = {"status": status}
         started_at = starts.get(stage)
         if started_at is not None:
-            payload["durationMs"] = max(
-                0, int((time.monotonic() - started_at) * 1000)
-            )
+            payload["durationMs"] = max(0, int((time.monotonic() - started_at) * 1000))
         stages[stage] = payload
 
     def _read_publish_result(
@@ -6146,7 +6152,9 @@ class CodexWorker:
                 errors=errors,
             )
         proposals = parsed if isinstance(parsed, list) else [parsed]
-        generated_count = len([proposal for proposal in proposals if isinstance(proposal, dict)])
+        generated_count = len(
+            [proposal for proposal in proposals if isinstance(proposal, dict)]
+        )
         canonical_payload = job.payload if isinstance(job.payload, Mapping) else {}
         project_repository = str(canonical_payload.get("repository") or "").strip()
         if not project_repository:

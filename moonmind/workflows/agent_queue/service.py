@@ -937,7 +937,9 @@ class AgentQueueService:
             finish_outcome_code=self._clean_optional_str(finish_outcome_code),
             finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
             finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
-            finish_summary=(dict(finish_summary) if finish_summary is not None else None),
+            finish_summary=(
+                dict(finish_summary) if finish_summary is not None else None
+            ),
         )
         await self._repository.append_event(
             job_id=job_id,
@@ -985,7 +987,9 @@ class AgentQueueService:
             finish_outcome_code=self._clean_optional_str(finish_outcome_code),
             finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
             finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
-            finish_summary=(dict(finish_summary) if finish_summary is not None else None),
+            finish_summary=(
+                dict(finish_summary) if finish_summary is not None else None
+            ),
         )
         if job.status is models.AgentJobStatus.CANCELLED:
             await self._repository.append_event(
@@ -1099,7 +1103,9 @@ class AgentQueueService:
             finish_outcome_code=self._clean_optional_str(finish_outcome_code),
             finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
             finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
-            finish_summary=(dict(finish_summary) if finish_summary is not None else None),
+            finish_summary=(
+                dict(finish_summary) if finish_summary is not None else None
+            ),
         )
         if action == "acknowledged":
             await self._repository.append_event(
