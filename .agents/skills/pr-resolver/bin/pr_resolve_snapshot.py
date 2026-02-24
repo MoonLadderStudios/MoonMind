@@ -106,13 +106,9 @@ def summarize_comments(comments: list[dict]) -> dict:
     human_comments = [
         c for c in all_inline_comments if not is_bot_user(c.get("user") or "")
     ]
-    bot_comments = [
-        c for c in all_inline_comments if is_bot_user(c.get("user") or "")
-    ]
+    bot_comments = [c for c in all_inline_comments if is_bot_user(c.get("user") or "")]
 
-    actionable_comments = [
-        c for c in all_inline_comments if _is_comment_actionable(c)
-    ]
+    actionable_comments = [c for c in all_inline_comments if _is_comment_actionable(c)]
 
     return {
         "total": len(comments),
@@ -202,7 +198,9 @@ def main():
             file=sys.stderr,
         )
 
-    comments = comments_data.get("comments", []) if isinstance(comments_data, dict) else []
+    comments = (
+        comments_data.get("comments", []) if isinstance(comments_data, dict) else []
+    )
     if not isinstance(comments, list):
         comments = []
     comments_summary = summarize_comments(comments)
