@@ -2442,10 +2442,15 @@ class CodexWorker:
         return normalized
 
     @staticmethod
-    def _sanitize_pr_title(title: str, *, max_chars: int = 90) -> str:
-        """Keep generated PR titles concise and avoid full UUID text."""
+    def _sanitize_pr_title(
+        title: str, *, max_chars: int = 90, redact_uuids: bool = True
+    ) -> str:
+        """Keep generated PR titles concise and optionally redact UUID text."""
 
-        sanitized = _FULL_UUID_PATTERN.sub("job", title).strip()
+        sanitized = title
+        if redact_uuids:
+            sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
+        sanitized = sanitized.strip()
         if not sanitized:
             sanitized = "MoonMind task result"
         if len(sanitized) <= max_chars:
@@ -2465,10 +2470,10 @@ class CodexWorker:
         for step in resolved_steps:
             candidate = cls._normalize_publish_text_line(step.title)
             if cls._is_meaningful_step_title(candidate):
-                return cls._sanitize_pr_title(candidate)
+                return cls._sanitize_pr_title(candidate, redact_uuids=True)
         candidate = cls._extract_first_instructions_sentence(canonical_payload)
         if candidate:
-            return cls._sanitize_pr_title(candidate)
+            return cls._sanitize_pr_title(candidate, redact_uuids=False)
 
         return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
 
