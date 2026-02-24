@@ -20,7 +20,7 @@ def test_generate_skill_action_plan_includes_rollback_step() -> None:
     plan = generate_skill_action_plan(
         "run skill",
         profile,
-        skill_id="moonmind-update",
+        skill_id="update-moonmind",
         skill_args={"repo": "."},
     )
 

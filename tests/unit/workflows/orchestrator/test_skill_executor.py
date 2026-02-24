@@ -56,7 +56,7 @@ def test_resolve_skill_command_rejects_custom_command(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="skill_args.command"):
         skill_executor._resolve_skill_command(
             script_path=script_path,
-            skill_id="moonmind-update",
+            skill_id="update-moonmind",
             repo_path=tmp_path,
             skill_args={"command": "echo owned"},
         )

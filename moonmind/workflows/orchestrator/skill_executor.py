@@ -136,13 +136,11 @@ def _resolve_skill_command(
         )
 
     command = ["bash", str(script_path)]
-    is_moonmind_update = skill_id in {
-        "moonmind-update",
-        "moonmind-update-workflow",
-        "update-moonmind",
-    } or script_path.name in {"run-moonmind-update.sh", "run-update-moonmind.sh"}
+    is_update_moonmind = (
+        skill_id == "update-moonmind" or script_path.name == "run-update-moonmind.sh"
+    )
 
-    if is_moonmind_update or {"repo", "repo_path", "repository"} & set(skill_args):
+    if is_update_moonmind or {"repo", "repo_path", "repository"} & set(skill_args):
         _append_flag(command, "--repo", str(repo_path))
     if "branch" in skill_args:
         _append_flag(command, "--branch", skill_args.get("branch"))
@@ -150,15 +148,15 @@ def _resolve_skill_command(
         raise RuntimeError(
             "Custom update commands are not supported for orchestrator skill runs."
         )
-    if is_moonmind_update and bool(
+    if is_update_moonmind and bool(
         skill_args.get("allowDirty") or skill_args.get("allow_dirty")
     ):
         command.append("--allow-dirty")
-    if is_moonmind_update and bool(
+    if is_update_moonmind and bool(
         skill_args.get("noComposePull") or skill_args.get("no_compose_pull")
     ):
         command.append("--no-compose-pull")
-    if is_moonmind_update and bool(
+    if is_update_moonmind and bool(
         skill_args.get("dryRun") or skill_args.get("dry_run")
     ):
         command.append("--dry-run")
