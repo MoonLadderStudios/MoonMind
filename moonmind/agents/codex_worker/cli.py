@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import subprocess
 from typing import Mapping, Sequence
@@ -23,6 +24,7 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     QueueApiClient,
+    QueueClientError,
 )
 from moonmind.claude.runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
@@ -31,6 +33,8 @@ from moonmind.claude.runtime import (
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -240,43 +244,45 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
     capabilities = _effective_worker_capabilities(source, runtime)
-    claude_required = "claude" in capabilities
+    runtime_verification_order = ("codex", "gemini", "claude")
+    resolved_paths: dict[str, str | None] = {
+        "codex": None,
+        "gemini": None,
+        "claude": None,
+    }
 
-    claude_path: str | None = None
-    if claude_required:
-        claude_gate = build_runtime_gate_state(
-            env=source,
-            error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
-        )
-        if not claude_gate.enabled:
-            raise RuntimeError(claude_gate.error_message)
-        try:
-            claude_path = verify_cli_is_executable(
-                str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
+    for runtime_name in runtime_verification_order:
+        if runtime_name == "claude":
+            if runtime_name not in capabilities:
+                continue
+            gate = build_runtime_gate_state(
+                env=source,
+                error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
             )
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
+            if not gate.enabled:
+                raise RuntimeError(gate.error_message)
+            try:
+                resolved_paths["claude"] = verify_cli_is_executable(
+                    str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip()
+                    or "claude"
+                )
+            except CliVerificationError as exc:
+                raise RuntimeError(str(exc)) from exc
+            continue
 
-    codex_path: str | None = None
-    if "codex" in capabilities:
-        try:
-            codex_path = verify_cli_is_executable("codex")
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
-
-    gemini_path: str | None = None
-    if "gemini" in capabilities:
-        try:
-            gemini_path = verify_cli_is_executable(
+        if runtime_name == "codex":
+            if runtime_name not in capabilities:
+                continue
+            binary = "codex"
+        else:
+            if runtime_name not in capabilities:
+                continue
+            binary = (
                 str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
             )
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
 
-    speckit_path: str | None = None
-    if _configured_skills_require_speckit(source):
         try:
-            speckit_path = verify_cli_is_executable("speckit")
+            resolved_paths[runtime_name] = verify_cli_is_executable(binary)
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
@@ -289,17 +295,26 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
+    speckit_path: str | None = None
+    if _configured_skills_require_speckit(source):
+        try:
+            speckit_path = verify_cli_is_executable("speckit")
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
+
     if speckit_path is not None:
         _verify_speckit_cli(
             speckit_path,
             redaction_values=redaction_values,
         )
-    if codex_path is not None:
+
+    if resolved_paths["codex"] is not None:
         _run_checked_command(
-            [codex_path, "login", "status"],
+            [resolved_paths["codex"], "login", "status"],
             redaction_values=redaction_values,
         )
-    if gemini_path is not None:
+
+    if resolved_paths["gemini"] is not None:
         gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(
             env=source
         )
@@ -332,12 +347,13 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
             )
         _run_checked_command(
-            [gemini_path, "--version"],
+            [resolved_paths["gemini"], "--version"],
             redaction_values=redaction_values,
         )
-    if claude_path is not None:
+
+    if resolved_paths["claude"] is not None:
         _run_checked_command(
-            [claude_path, "--version"],
+            [resolved_paths["claude"], "--version"],
             redaction_values=redaction_values,
         )
 
@@ -396,6 +412,17 @@ async def _run(args: argparse.Namespace) -> None:
         base_url=config.moonmind_url,
         worker_token=config.worker_token,
     )
+    if config.worker_token:
+        try:
+            await queue_client.replace_worker_runtime_capabilities(
+                runtime_capabilities=config.build_runtime_capabilities(),
+            )
+        except QueueClientError as exc:
+            logger.warning(
+                "Worker could not sync runtime capabilities: %s",
+                exc,
+            )
+
     handler = CodexExecHandler(
         workdir_root=config.workdir,
         default_codex_model=config.default_codex_model,

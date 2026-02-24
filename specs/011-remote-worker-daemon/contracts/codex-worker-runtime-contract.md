@@ -98,6 +98,10 @@ Codex override precedence:
 2. Worker defaults (`MOONMIND_CODEX_MODEL`/`MOONMIND_CODEX_EFFORT`, falling back to `CODEX_MODEL`/`CODEX_MODEL_REASONING_EFFORT`)
 3. Codex CLI defaults
 
+Construction rule:
+
+- `payload.codex.model` and `payload.codex.effort` are inserted into `codex exec` arguments unchanged (no compatibility remap).
+
 Execution behavior:
 
 - `skillId=speckit` -> skills path (`executionPath=skill`)

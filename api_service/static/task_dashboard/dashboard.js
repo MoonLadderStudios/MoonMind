@@ -140,6 +140,17 @@
     sourceConfig.proposals && typeof sourceConfig.proposals === "object"
       ? sourceConfig.proposals
       : {};
+  const runtimeCapabilitiesEndpoint =
+    String(
+      queueSourceConfig.runtimeCapabilities ||
+        "/api/queue/workers/runtime-capabilities",
+    );
+  const runtimeCapabilitiesCacheTtlMs = 5 * 60 * 1000;
+  const runtimeCapabilitiesCache = {
+    payload: null,
+    expiresAtMs: 0,
+    inFlight: null,
+  };
   const manifestsSourceConfig =
     sourceConfig.manifests && typeof sourceConfig.manifests === "object"
       ? sourceConfig.manifests
@@ -190,6 +201,72 @@
     const value = defaultsByRuntime[runtimeKey];
     return value ? String(value).trim() : "";
   }
+  function normalizeRuntimeOptions(values) {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    const seen = new Set();
+    const normalized = [];
+    values.forEach((value) => {
+      const candidate = String(value || "").trim();
+      if (!candidate || seen.has(candidate)) {
+        return;
+      }
+      seen.add(candidate);
+      normalized.push(candidate);
+    });
+    return normalized;
+  }
+  const isRuntimeCapabilitiesCacheFresh = () =>
+    runtimeCapabilitiesCache.payload !== null &&
+    runtimeCapabilitiesCache.expiresAtMs > Date.now();
+  const parseRuntimeCapabilitiesResponse = (payload) => {
+    const rawItems = payload && typeof payload === "object" ? payload.items : null;
+    if (!rawItems || typeof rawItems !== "object") {
+      return {};
+    }
+    const normalizedItems = {};
+    Object.entries(rawItems).forEach(([runtime, entry]) => {
+      const runtimeKey = normalizeTaskRuntimeInput(runtime);
+      if (!runtimeKey) {
+        return;
+      }
+      const rawModels = entry && typeof entry === "object" ? entry.models : null;
+      const rawEfforts = entry && typeof entry === "object" ? entry.efforts : null;
+      normalizedItems[runtimeKey] = {
+        models: normalizeRuntimeOptions(rawModels),
+        efforts: normalizeRuntimeOptions(rawEfforts),
+      };
+    });
+    return normalizedItems;
+  };
+  const loadRuntimeCapabilitiesFromEndpoint = async () => {
+    const priorPayload = runtimeCapabilitiesCache.payload;
+    const stale = !isRuntimeCapabilitiesCacheFresh();
+    if (!stale && priorPayload !== null) {
+      return priorPayload;
+    }
+    if (runtimeCapabilitiesCache.inFlight) {
+      return runtimeCapabilitiesCache.inFlight;
+    }
+    runtimeCapabilitiesCache.inFlight = (async () => {
+      try {
+        const payload = await fetchJson(runtimeCapabilitiesEndpoint);
+        const normalizedPayload = parseRuntimeCapabilitiesResponse(payload);
+        runtimeCapabilitiesCache.payload = normalizedPayload;
+        runtimeCapabilitiesCache.expiresAtMs = Date.now() + runtimeCapabilitiesCacheTtlMs;
+        return normalizedPayload;
+      } catch (_error) {
+        if (priorPayload !== null) {
+          return priorPayload;
+        }
+        return {};
+      } finally {
+        runtimeCapabilitiesCache.inFlight = null;
+      }
+    })();
+    return runtimeCapabilitiesCache.inFlight;
+  };
   const codexDefaultTaskModel =
     resolveRuntimeDefault(configuredModelDefaults, "codex") ||
     String(systemConfig.defaultTaskModel || "").trim();
@@ -2173,15 +2250,29 @@
             ${runtimeOptions}
           </select>
         </label>
+        <datalist id="queue-model-options">
+        </datalist>
+        <datalist id="queue-effort-options">
+        </datalist>
         <datalist id="queue-skill-options">
           <option value="auto"></option>
         </datalist>
         <div class="grid-2">
           <label>Model
-            <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
+            <input
+              name="model"
+              value="${escapeHtml(defaultTaskModel)}"
+              list="queue-model-options"
+              placeholder="runtime default"
+            />
           </label>
           <label>Effort
-            <input name="effort" value="${escapeHtml(defaultTaskEffort)}" placeholder="runtime default" />
+            <input
+              name="effort"
+              value="${escapeHtml(defaultTaskEffort)}"
+              list="queue-effort-options"
+              placeholder="runtime default"
+            />
           </label>
         </div>
         <label>GitHub Repo
@@ -2234,6 +2325,8 @@
     const runtimeSelect = form.querySelector('select[name="runtime"]');
     const modelInputElement = form.querySelector('input[name="model"]');
     const effortInputElement = form.querySelector('input[name="effort"]');
+    const modelDatalistNode = form.querySelector("#queue-model-options");
+    const effortDatalistNode = form.querySelector("#queue-effort-options");
     const stepsList = document.getElementById("queue-steps-list");
     const runtimeModelDefaults = {
       ...configuredModelDefaults,
@@ -2243,17 +2336,61 @@
       ...configuredEffortDefaults,
       codex: codexDefaultTaskEffort,
     };
-    let activeDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, defaultTaskRuntime);
-    let activeDefaultEffort = resolveRuntimeDefault(
-      runtimeEffortDefaults,
-      defaultTaskRuntime,
-    );
+    const runtimeCapabilityByRuntime = {};
+    for (const runtime of supportedTaskRuntimes) {
+      const runtimeKey = normalizeTaskRuntimeInput(runtime);
+      if (runtimeKey) {
+        runtimeCapabilityByRuntime[runtimeKey] = { models: [], efforts: [] };
+      }
+    }
+    const resolveDefaultRuntimeChoice = (defaultsByRuntime, runtime, fallbackValues) => {
+      const configured = resolveRuntimeDefault(defaultsByRuntime, runtime);
+      if (configured) {
+        return configured;
+      }
+      const normalized = normalizeRuntimeOptions(fallbackValues);
+      return normalized.length > 0 ? normalized[0] : "";
+    };
+    const getRuntimeKey = (runtime) => normalizeTaskRuntimeInput(runtime) || defaultTaskRuntime;
+    const setDatalist = (datalistNode, values) => {
+      if (!(datalistNode instanceof HTMLDataListElement)) {
+        return;
+      }
+      const normalized = normalizeRuntimeOptions(values);
+      datalistNode.innerHTML = normalized
+        .map((value) => `<option value="${escapeHtml(value)}"></option>`)
+        .join("");
+    };
+    const getRuntimeCapabilities = (runtime) => {
+      const runtimeKey = getRuntimeKey(runtime);
+      return runtimeCapabilityByRuntime[runtimeKey] || { models: [], efforts: [] };
+    };
+    let activeDefaultModel = "";
+    let activeDefaultEffort = "";
     const applyRuntimeDefaults = (runtime) => {
       if (!modelInputElement || !effortInputElement) {
         return;
       }
-      const nextDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, runtime);
-      const nextDefaultEffort = resolveRuntimeDefault(runtimeEffortDefaults, runtime);
+      const runtimeKey = getRuntimeKey(runtime);
+      const runtimeCapabilities = getRuntimeCapabilities(runtimeKey);
+      const runtimeModelDefaultsWithFallback = resolveDefaultRuntimeChoice(
+        runtimeModelDefaults,
+        runtimeKey,
+        runtimeCapabilities.models,
+      );
+      const runtimeEffortDefaultsWithFallback = resolveDefaultRuntimeChoice(
+        runtimeEffortDefaults,
+        runtimeKey,
+        runtimeCapabilities.efforts,
+      );
+      setDatalist(modelDatalistNode, [
+        ...normalizeRuntimeOptions(runtimeCapabilities.models),
+      ]);
+      setDatalist(effortDatalistNode, [
+        ...normalizeRuntimeOptions(runtimeCapabilities.efforts),
+      ]);
+      const nextDefaultModel = runtimeModelDefaultsWithFallback;
+      const nextDefaultEffort = runtimeEffortDefaultsWithFallback;
       if (modelInputElement.value.trim() === activeDefaultModel) {
         modelInputElement.value = nextDefaultModel;
       }
@@ -2263,10 +2400,29 @@
       activeDefaultModel = nextDefaultModel;
       activeDefaultEffort = nextDefaultEffort;
     };
+    const loadRuntimeCapabilities = async (runtime) => {
+      try {
+        const payload = await loadRuntimeCapabilitiesFromEndpoint();
+        Object.entries(payload).forEach(([runtimeKey, capabilityEntry]) => {
+          runtimeCapabilityByRuntime[runtimeKey] = {
+            models: normalizeRuntimeOptions(capabilityEntry.models),
+            efforts: normalizeRuntimeOptions(capabilityEntry.efforts),
+          };
+        });
+      } catch (_error) {
+        console.warn(
+          "Runtime capability options could not be loaded from the dashboard source.",
+        );
+      } finally {
+        applyRuntimeDefaults(runtime || runtimeSelect?.value || defaultTaskRuntime);
+      }
+    };
+    loadRuntimeCapabilities();
     if (runtimeSelect) {
+      applyRuntimeDefaults(runtimeSelect.value);
       runtimeSelect.addEventListener("change", (event) => {
         const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
-        applyRuntimeDefaults(nextRuntime || defaultTaskRuntime);
+        loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
       });
     }
     const createStepStateEntry = (overrides = {}) => ({

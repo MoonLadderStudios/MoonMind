@@ -30,6 +30,12 @@
 - **Rationale**: Brings remote worker observability into parity with umbrella skills-first telemetry expectations.
 - **Alternative rejected**: Summary-only event text was rejected as insufficient for path diagnostics.
 
+## Decision 6: No silent model remapping in execution path
+
+- **Decision**: `codex_exec` and compatibility-mapped `codex_skill` flows must not rewrite `codex.model` or `codex.effort` values before invoking `codex exec`.
+- **Rationale**: Silent compatibility remapping can silently change model spend and behavior while appearing to honor caller intent.
+- **Alternative rejected**: Hidden alias compatibility was rejected because it makes model-selection regressions untraceable and can materially impact cost.
+
 ## Validation Notes
 
 - Scope validation helper script `.specify/scripts/bash/validate-implementation-scope.sh` is not present in this repository.

@@ -864,6 +864,7 @@ class AgentQueueRepository:
         allowed_repositories: Optional[list[str]] = None,
         allowed_job_types: Optional[list[str]] = None,
         capabilities: Optional[list[str]] = None,
+        runtime_capabilities: Optional[dict[str, Any]] = None,
     ) -> models.AgentWorkerToken:
         """Persist one worker token metadata row."""
 
@@ -875,9 +876,24 @@ class AgentQueueRepository:
             allowed_repositories=allowed_repositories,
             allowed_job_types=allowed_job_types,
             capabilities=capabilities,
+            runtime_capabilities=runtime_capabilities,
             is_active=True,
         )
         self._session.add(token)
+        await self._session.flush()
+        return token
+
+    async def replace_worker_token_runtime_capabilities(
+        self,
+        *,
+        token_id: UUID,
+        runtime_capabilities: Optional[dict[str, Any]],
+    ) -> models.AgentWorkerToken:
+        """Replace runtime capability metadata for a worker token."""
+
+        token = await self.get_worker_token(token_id)
+        token.runtime_capabilities = runtime_capabilities
+        token.updated_at = datetime.now(UTC)
         await self._session.flush()
         return token
 

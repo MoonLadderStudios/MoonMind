@@ -143,6 +143,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
                 "migrationTelemetry": "/api/queue/telemetry/migration",
                 "skills": "/api/tasks/skills",
+                "runtimeCapabilities": "/api/queue/workers/runtime-capabilities",
                 "liveSession": "/api/queue/jobs/{id}/live-session",
                 "liveSessionGrantWrite": "/api/queue/jobs/{id}/live-session/grant-write",
                 "liveSessionRevoke": "/api/queue/jobs/{id}/live-session/revoke",

@@ -677,8 +677,10 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="high"'
 
 
-async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None:
-    """Known model/effort aliases should normalize before codex execution."""
+async def test_handler_preserves_codex_model_and_effort(
+    tmp_path: Path,
+) -> None:
+    """Model and effort values should be preserved before codex execution."""
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[list[str]] = []
@@ -714,9 +716,11 @@ async def test_handler_normalizes_codex_override_aliases(tmp_path: Path) -> None
     assert result.succeeded is True
     codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
     assert "--model" in codex_cmd
-    assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5-codex"
+    assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5.3-codex-spark"
     assert "--config" in codex_cmd
-    assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="high"'
+    assert (
+        codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="xhigh"'
+    )
 
 
 async def test_handler_falls_back_to_worker_default_codex_settings(
