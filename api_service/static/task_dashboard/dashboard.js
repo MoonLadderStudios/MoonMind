@@ -2478,9 +2478,7 @@
   function renderQueueSubmitPage(presetRuntime) {
     const sanitizedWorkerDraft = submitDraftController.loadWorker();
     const selectedWorkerRuntime = resolveSubmitRuntime(
-      typeof presetRuntime === "undefined"
-        ? sanitizedWorkerDraft.runtime
-        : presetRuntime,
+      presetRuntime ?? sanitizedWorkerDraft.runtime,
       defaultTaskRuntime,
     );
     const queueDraftModel = String(
