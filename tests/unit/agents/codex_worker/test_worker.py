@@ -572,6 +572,47 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     assert not proposals_path.exists()
 
 
+async def test_task_proposal_request_uses_task_flag_with_config_gate(
+    tmp_path: Path,
+) -> None:
+    """Task-level proposeTasks should be interpreted, but still gated by config."""
+
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            enable_task_proposals=False,
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )
+
+    assert worker._task_proposals_requested(
+        canonical_payload={"repository": "moon/org", "task": {"proposeTasks": True}}
+    )
+    assert (
+        worker._task_proposals_requested(
+            canonical_payload={
+                "repository": "moon/org",
+                "task": {"proposeTasks": False},
+            }
+        )
+        is False
+    )
+    assert (
+        worker._task_proposals_requested(
+            canonical_payload={"repository": "moon/org", "task": {}}
+        )
+        is False
+    )
+
+
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
     tmp_path: Path,
 ) -> None:

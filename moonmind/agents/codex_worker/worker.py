@@ -2024,8 +2024,9 @@ class CodexWorker:
 
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
-        default_enabled = bool(settings.spec_workflow.enable_task_proposals)
-        return self._coerce_bool(task.get("proposeTasks"), default=default_enabled)
+        default_enabled = self._config.enable_task_proposals
+        requested_value = task.get("proposeTasks")
+        return self._coerce_bool(requested_value, default=default_enabled)
 
     @staticmethod
     def _safe_workdir_mode(source_payload: Mapping[str, Any]) -> str:
@@ -5497,9 +5498,6 @@ class CodexWorker:
         prepared: PreparedTaskWorkspace,
     ) -> None:
         """Read worker-generated proposals and submit them when enabled."""
-
-        if not self._config.enable_task_proposals:
-            return
         task_context_path = prepared.task_context_path
         proposals_paths = [task_context_path / "task_proposals.json"]
         if task_context_path.suffix == ".json":
