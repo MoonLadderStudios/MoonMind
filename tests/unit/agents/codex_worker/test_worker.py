@@ -2830,7 +2830,7 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
 async def test_derive_default_pr_title_uses_short_correlation_fallback_without_step_titles(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
-    """Missing step titles should fall back to short token title."""
+    """Missing step titles should fall back to task instructions when available."""
 
     worker, _, _ = codex_worker_components
     job_id = uuid4()
@@ -2847,7 +2847,31 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback_without_s
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == f"MoonMind task result [mm:{str(job_id)[:8]}]"
+    assert title == "Fix publish behavior for 123e4567-e89b-12d3-a456-426614174000."
+    assert str(job_id) not in title
+    assert len(title) <= 90
+
+
+async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is_numeric(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """Numeric-only step titles should not hide task instruction intent."""
+
+    worker, _, _ = codex_worker_components
+    payload = {
+        "task": {
+            "instructions": "Fix publish behavior without adding step titles.",
+            "steps": [{"id": "step-1", "title": "1"}],
+        }
+    }
+
+    title = worker._derive_default_pr_title(
+        job_id=uuid4(),
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+    )
+
+    assert title == "Fix publish behavior without adding step titles."
     assert str(job_id) not in title
     assert len(title) <= 90
 
