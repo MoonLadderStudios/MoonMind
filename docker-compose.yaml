@@ -352,7 +352,7 @@ services:
       - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_CONFIG_HOME:-/home/app/.codex}
       - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - MOONMIND_WORKER_ID=${MOONMIND_CLAUDE_WORKER_ID:-claude-worker-1}
       - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
