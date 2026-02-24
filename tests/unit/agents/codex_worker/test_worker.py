@@ -596,12 +596,21 @@ async def test_task_proposal_request_uses_task_flag_over_worker_default(
     assert worker._task_proposals_requested(
         canonical_payload={"repository": "moon/org", "task": {"proposeTasks": True}}
     )
-    assert worker._task_proposals_requested(
-        canonical_payload={"repository": "moon/org", "task": {"proposeTasks": False}}
-    ) is False
-    assert worker._task_proposals_requested(
-        canonical_payload={"repository": "moon/org", "task": {}}
-    ) is False
+    assert (
+        worker._task_proposals_requested(
+            canonical_payload={
+                "repository": "moon/org",
+                "task": {"proposeTasks": False},
+            }
+        )
+        is False
+    )
+    assert (
+        worker._task_proposals_requested(
+            canonical_payload={"repository": "moon/org", "task": {}}
+        )
+        is False
+    )
     assert worker._task_proposals_requested(
         canonical_payload={"repository": "moon/org", "task": {"propose_tasks": True}}
     )
