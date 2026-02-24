@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT_DEFAULT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 log() {
-  printf '[codex-worker] %s\n' "$*"
+  printf '[worker] %s\n' "$*"
 }
 
 lower() {

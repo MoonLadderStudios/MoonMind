@@ -240,7 +240,7 @@ services:
       - agent_workspaces:/work/agent_jobs
     working_dir: /workspace
     command: >-
-      /workspace/tools/start-codex-worker.sh
+      /workspace/tools/start-worker.sh
     depends_on:
       api:
         condition: service_started
@@ -318,7 +318,7 @@ services:
       - agent_workspaces:/work/agent_jobs
     working_dir: /workspace
     command: >-
-      /workspace/tools/start-codex-worker.sh
+      /workspace/tools/start-worker.sh
     depends_on:
       api:
         condition: service_started
@@ -396,7 +396,7 @@ services:
       - agent_workspaces:/work/agent_jobs
     working_dir: /workspace
     command: >-
-      /workspace/tools/start-codex-worker.sh
+      /workspace/tools/start-worker.sh
     depends_on:
       api:
         condition: service_started
@@ -418,7 +418,7 @@ services:
     image: ghcr.io/moonladderstudios/moonmind:latest
     user: app
     command: >-
-      /workspace/tools/start-codex-worker.sh -m moonmind.workflows.orchestrator.queue_worker
+      /workspace/tools/start-worker.sh -m moonmind.workflows.orchestrator.queue_worker
     env_file:
       - .env
     environment:

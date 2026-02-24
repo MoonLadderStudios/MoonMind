@@ -63,7 +63,7 @@
 ### Implementation for User Story 2
 
 - [X] T009 [US2] Extend worker preflight in `moonmind/agents/codex_worker/cli.py` to perform Claude auth status checks for `claude` and `universal` modes while preserving Codex behavior (`FR-004`, `FR-009`).
-- [X] T010 [US2] Update runtime/bootstrap env handling in `tools/start-codex-worker.sh` so default capability policy remains coherent when using multi-runtime worker modes (`FR-004`, `FR-008`, `FR-009`).
+- [X] T010 [US2] Update runtime/bootstrap env handling in `tools/start-worker.sh` so default capability policy remains coherent when using multi-runtime worker modes (`FR-004`, `FR-008`, `FR-009`).
 
 ### Validation for User Story 2
 

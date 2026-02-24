@@ -31,7 +31,7 @@
 - [X] T005 Implement repository primitives for live-session upsert, control-event append, and `payload.liveControl` updates in `moonmind/workflows/agent_queue/repositories.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-009)
 - [X] T006 Implement queue service flows for create/report/heartbeat/grant/revoke/control/message in `moonmind/workflows/agent_queue/service.py` (DOC-REQ-001, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-011)
 - [X] T007 Add task-runs router and app wiring in `api_service/api/routers/task_runs.py` and `api_service/main.py` (DOC-REQ-004, DOC-REQ-005, DOC-REQ-006)
-- [X] T008 [P] Add live-session runtime configuration plumbing in `moonmind/config/settings.py`, `.env-template`, `docker-compose.yaml`, and `tools/start-codex-worker.sh` (DOC-REQ-012)
+- [X] T008 [P] Add live-session runtime configuration plumbing in `moonmind/config/settings.py`, `.env-template`, `docker-compose.yaml`, and `tools/start-worker.sh` (DOC-REQ-012)
 
 **Checkpoint**: Shared live-session/control persistence and API wiring are available for story-level behavior.
 
