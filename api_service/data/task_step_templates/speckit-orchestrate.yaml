@@ -9,7 +9,6 @@ tags:
   - runtime
   - docs
 requiredCapabilities:
-  - codex
   - git
   - gh
 annotations:
@@ -54,8 +53,6 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Invoke speckit-specify
     instructions: |-
       Run speckit-specify with the canonical feature request.
@@ -65,8 +62,6 @@ steps:
     skill:
       id: speckit-specify
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Resolve clarify blockers
     instructions: |-
       Resolve any clarification blockers from speckit-specify before continuing.
@@ -74,8 +69,6 @@ steps:
     skill:
       id: speckit-clarify
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Run DOC-REQ pre-plan gate when doc-backed
     instructions: |-
       If DOC-REQ-* identifiers are present in spec.md or the request is doc-backed:
@@ -85,8 +78,6 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Invoke speckit-plan
     instructions: |-
       Run speckit-plan using the current feature artifacts.
@@ -94,8 +85,6 @@ steps:
     skill:
       id: speckit-plan
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Enforce requirements traceability contract
     instructions: |-
       If DOC-REQ-* exists, require contracts/requirements-traceability.md with one row per DOC-REQ-* and non-empty validation strategy.
@@ -103,16 +92,12 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Invoke speckit-tasks
     instructions: |-
       Run speckit-tasks and generate dependency-ordered tasks.md from the planned artifacts.
     skill:
       id: speckit-tasks
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Validate task implementation scope
     instructions: |-
       Run:
@@ -123,8 +108,6 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Validate DOC-REQ task coverage
     instructions: |-
       If DOC-REQ-* exists, verify tasks.md has at least one implementation task and one validation task for each DOC-REQ-*.
@@ -132,16 +115,12 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Invoke speckit-analyze
     instructions: |-
       Run speckit-analyze against spec.md, plan.md, and tasks.md.
     skill:
       id: speckit-analyze
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Prompt A remediation discovery
     instructions: |-
       Run Prompt A (Remediation Discovery) over spec.md, plan.md, tasks.md, and latest speckit-analyze output.
@@ -162,8 +141,6 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Prompt B remediation application
     instructions: |-
       Apply Prompt B (Remediation Application):
@@ -177,8 +154,6 @@ steps:
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Re-run analysis and remediation loop gate
     instructions: |-
       Re-run speckit-analyze once, then re-run Prompt A.
@@ -189,8 +164,6 @@ steps:
     skill:
       id: speckit-analyze
       args: {}
-      requiredCapabilities:
-        - codex
   - title: Invoke speckit-implement with auto-proceed gate
     instructions: |-
       Run speckit-implement with checklist gate mode set to auto-proceed.
@@ -201,7 +174,6 @@ steps:
       args:
         checklistGateMode: auto-proceed
       requiredCapabilities:
-        - codex
         - git
   - title: Validate completion coverage and implementation diff scope
     instructions: |-
@@ -215,7 +187,6 @@ steps:
       id: auto
       args: {}
       requiredCapabilities:
-        - codex
         - git
   - title: Commit, open PR, and return final report
     instructions: |-
@@ -237,6 +208,5 @@ steps:
       id: auto
       args: {}
       requiredCapabilities:
-        - codex
         - git
         - gh

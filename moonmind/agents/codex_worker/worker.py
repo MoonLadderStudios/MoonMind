@@ -70,6 +70,7 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+_UNHELPFUL_STEP_TITLE_PATTERN = re.compile(r"^\s*[\W_]*\d+(?:[\W_]+\d+)*[\W_]*\s*$")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
     r"""(?ix)
     (?:
@@ -2387,6 +2388,36 @@ class CodexWorker:
         return normalized or None
 
     @staticmethod
+    def _extract_first_instructions_sentence(
+        canonical_payload: Mapping[str, Any]
+    ) -> str | None:
+        """Extract first non-empty instruction sentence/line."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        task_instructions = str(task.get("instructions") or "")
+        for line in task_instructions.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            first_sentence = line
+            punctuation_match = re.search(r"[.!?]", line)
+            if punctuation_match:
+                first_sentence = line[: punctuation_match.end()]
+            return " ".join(first_sentence.split())
+        return None
+
+    @classmethod
+    def _is_meaningful_step_title(cls, candidate: str | None) -> bool:
+        """Skip placeholder/numeric step titles that produce uninformative PR names."""
+
+        if not candidate:
+            return False
+        if _UNHELPFUL_STEP_TITLE_PATTERN.fullmatch(candidate):
+            return False
+        return True
+
+    @staticmethod
     def _resolve_publish_text_override(value: Any) -> str | None:
         """Return explicit publish override verbatim when non-empty."""
 
@@ -2433,8 +2464,11 @@ class CodexWorker:
 
         for step in resolved_steps:
             candidate = cls._normalize_publish_text_line(step.title)
-            if candidate:
+            if cls._is_meaningful_step_title(candidate):
                 return cls._sanitize_pr_title(candidate)
+        candidate = cls._extract_first_instructions_sentence(canonical_payload)
+        if candidate:
+            return cls._sanitize_pr_title(candidate)
 
         return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
 
