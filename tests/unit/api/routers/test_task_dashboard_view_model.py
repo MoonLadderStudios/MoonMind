@@ -90,14 +90,14 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
-    assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini", "claude")
+    assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")
     assert config["system"]["defaultTaskModel"]
     assert config["system"]["defaultTaskEffort"]
     assert config["system"]["defaultTaskModelByRuntime"]["codex"]
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -114,6 +114,16 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
     assert config["system"]["defaultTaskRuntime"] == "gemini"
     assert config["system"]["defaultTaskModel"] == ""
     assert config["system"]["defaultTaskEffort"] == ""
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
+
+
+def test_build_runtime_config_falls_back_when_claude_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude")
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
+    assert config["system"]["defaultTaskRuntime"] == "codex"
+
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
@@ -130,3 +140,11 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
+
+
+def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> None:
+    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]

@@ -387,6 +387,13 @@ class AgentQueueService:
 
         normalized_payload = self._enrich_task_payload_defaults(dict(payload or {}))
         normalized_payload = compile_task_payload_templates(normalized_payload)
+        target_runtime = (
+            str(normalized_payload.get("targetRuntime") or "").strip().lower()
+        )
+        if target_runtime == "claude":
+            gate_state = settings.claude_runtime_gate
+            if not gate_state.enabled:
+                raise AgentQueueValidationError(gate_state.error_message)
         try:
             return normalize_queue_job_payload(
                 job_type=CANONICAL_TASK_JOB_TYPE,

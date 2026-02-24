@@ -215,6 +215,27 @@ class TestFeatureFlagsSettings:
 
 
 class TestSpecWorkflowSettings:
+    @pytest.fixture(autouse=True)
+    def _clear_spec_env(self, monkeypatch):
+        for key in (
+            "MOONMIND_CODEX_MODEL",
+            "MOONMIND_CODEX_EFFORT",
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_PUBLISH_MODE",
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
+            "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
+            "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
+            "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+            "SPEC_SKILLS_WORKSPACE_ROOT",
+            "WORKFLOW_REPO_ROOT",
+            "SPEC_WORKFLOW_REPO_ROOT",
+            "WORKFLOW_TASKS_ROOT",
+            "SPEC_WORKFLOW_TASKS_ROOT",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
     def test_agent_job_artifact_defaults(self):
         """Milestone 2 artifact settings should keep stable defaults."""
 
@@ -334,6 +355,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
         monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
         monkeypatch.setenv("MOONMIND_DEFAULT_PUBLISH_MODE", "branch")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
         monkeypatch.setenv("CLAUDE_VOLUME_NAME", "claude_auth_custom")
         monkeypatch.setenv("CLAUDE_VOLUME_PATH", "/runtime/claude-auth")
         monkeypatch.setenv("CLAUDE_HOME", "/runtime/claude-home")
@@ -358,6 +380,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
         monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
         monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("CLAUDE_VOLUME_NAME", raising=False)
         monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
         monkeypatch.delenv("CLAUDE_HOME", raising=False)
@@ -720,3 +743,40 @@ def test_celery_settings_accept_workflow_queue_aliases(monkeypatch) -> None:
     monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
     monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)
     monkeypatch.delenv("WORKFLOW_DEFAULT_ROUTING_KEY", raising=False)
+
+
+class TestAppSettingsRuntimeValidation:
+    def test_app_settings_rejects_claude_default_without_api_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["spec_workflow"] = {"default_task_runtime": "claude"}
+
+        with pytest.raises(
+            ValueError, match="default_task_runtime=claude requires ANTHROPIC_API_KEY"
+        ):
+            AppSettings(**defaults)
+
+    def test_app_settings_allows_claude_default_with_api_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["spec_workflow"] = {"default_task_runtime": "claude"}
+        defaults["anthropic"] = {"anthropic_api_key": "test-key"}
+
+        settings = AppSettings(**defaults)
+        assert settings.spec_workflow.default_task_runtime == "claude"

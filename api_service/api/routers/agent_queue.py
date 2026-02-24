@@ -486,6 +486,14 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
         lowered = str(exc).lower()
+        if "targetruntime=claude requires anthropic_api_key" in lowered:
+            return HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "claude_runtime_disabled",
+                    "message": "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured",
+                },
+            )
         if "attachments exceed max count" in lowered:
             code = "attachments_too_many"
             message = "Too many attachments were provided."
