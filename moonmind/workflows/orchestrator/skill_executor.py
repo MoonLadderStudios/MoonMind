@@ -137,8 +137,12 @@ def _resolve_skill_command(
 
     command = ["bash", str(script_path)]
     is_moonmind_update = (
-        skill_id in {"moonmind-update", "moonmind-update-workflow"}
-        or script_path.name == "run-moonmind-update.sh"
+        skill_id in {
+            "moonmind-update",
+            "moonmind-update-workflow",
+            "update-moonmind",
+        }
+        or script_path.name in {"run-moonmind-update.sh", "run-update-moonmind.sh"}
     )
 
     if is_moonmind_update or {"repo", "repo_path", "repository"} & set(skill_args):
