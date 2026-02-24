@@ -57,7 +57,7 @@ def infer_repo_from_pr_url(url: str | None) -> str | None:
     if len(parts) < 2:
         return None
     owner = parts[0]
-    repo = parts[1]
+    repo = parts[1].removesuffix(".git")
     if owner and repo:
         return f"{owner}/{repo}"
     return None

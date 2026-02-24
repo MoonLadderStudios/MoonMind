@@ -28,6 +28,10 @@ def eprint(message: str) -> None:
 
 
 def parse_repo_slug(slug: str) -> tuple[str, str]:
+    match = _parse_remote_url(slug)
+    if match:
+        return match
+
     match = re.match(r"^([^/\s]+)/([^/\s]+)$", slug.strip())
     if not match:
         raise ValueError(f"Invalid --repo value '{slug}'. Expected format: owner/repo")
