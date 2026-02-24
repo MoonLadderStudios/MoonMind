@@ -162,13 +162,33 @@
     systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
       : ["codex", "gemini", "claude", "universal"];
+
+  function normalizeTaskRuntimeList(values) {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    const seen = new Set();
+    const normalized = [];
+    values.forEach((value) => {
+      const candidate = normalizeTaskRuntimeInput(value);
+      if (!candidate || seen.has(candidate)) {
+        return;
+      }
+      seen.add(candidate);
+      normalized.push(candidate);
+    });
+    return normalized;
+  }
+
   const configuredTaskRuntimes =
     Array.isArray(systemConfig.supportedTaskRuntimes) &&
     systemConfig.supportedTaskRuntimes.length > 0
-      ? systemConfig.supportedTaskRuntimes
+      ? normalizeTaskRuntimeList(systemConfig.supportedTaskRuntimes)
       : [];
-  const inferredTaskRuntimes = supportedWorkerRuntimes.filter(
-    (runtime) => runtime !== "universal",
+  const inferredTaskRuntimes = normalizeTaskRuntimeList(
+    supportedWorkerRuntimes.filter(
+      (runtime) => String(runtime || "").trim().toLowerCase() !== "universal",
+    ),
   );
   const supportedTaskRuntimes =
     configuredTaskRuntimes.length > 0
@@ -176,8 +196,13 @@
       : inferredTaskRuntimes.length > 0
         ? inferredTaskRuntimes
         : ["codex", "gemini", "claude"];
+  const normalizedDefaultTaskRuntime = normalizeTaskRuntimeInput(
+    systemConfig.defaultTaskRuntime,
+  );
   const defaultTaskRuntime =
-    normalizeTaskRuntimeInput(systemConfig.defaultTaskRuntime) ||
+    (supportedTaskRuntimes.includes(normalizedDefaultTaskRuntime)
+      ? normalizedDefaultTaskRuntime
+      : null) ||
     (supportedTaskRuntimes.includes("codex")
       ? "codex"
       : supportedTaskRuntimes[0] || "codex");
@@ -219,6 +244,9 @@
   }
 
   const ORCHESTRATOR_RUNTIME = "orchestrator";
+
+  const listSubmitRuntimes = () =>
+    Array.from(new Set([...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME]));
 
   const TASK_RUNTIME_LABELS = {
     codex: "Codex worker",
@@ -2571,7 +2599,7 @@
       : [];
 
     const runtimeOptions = renderRuntimeOptions(
-      [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME],
+      listSubmitRuntimes(),
       selectedWorkerRuntime,
     );
     const repositoryFallback = queueDraftRepository || defaultRepository;
@@ -3960,7 +3988,7 @@
         `<div class="notice error">Unsupported runtime value: <code>${escapeHtml(
           String(presetRuntime),
         )}</code>. Use one of: <code>${escapeHtml(
-          [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME].join(", "),
+          listSubmitRuntimes().join(", "),
         )}</code>.</div>`,
       );
       return;
@@ -3969,19 +3997,17 @@
       renderQueueSubmitPage(normalizedRuntime);
       return;
     }
-    renderOrchestratorSubmitPage(normalizedRuntime);
+    renderOrchestratorSubmitPage();
   }
 
-  function renderOrchestratorSubmitPage(presetRuntime) {
+  function renderOrchestratorSubmitPage() {
     const sanitizedOrchestratorDraft = submitDraftController.loadOrchestrator();
     const defaultOrchestratorDraftPriority = normalizeOrchestratorPriority(
       sanitizedOrchestratorDraft.priority || "normal",
     );
-    const selectedOrchestratorRuntime = isWorkerSubmitRuntime(presetRuntime)
-      ? defaultTaskRuntime
-      : ORCHESTRATOR_RUNTIME;
+    const selectedOrchestratorRuntime = ORCHESTRATOR_RUNTIME;
     const runtimeOptions = renderRuntimeOptions(
-      [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME],
+      listSubmitRuntimes(),
       selectedOrchestratorRuntime,
     );
 
@@ -4076,13 +4102,23 @@
     const runtimeSelect = form.querySelector('select[name="runtime"]');
     if (runtimeSelect) {
       runtimeSelect.addEventListener("change", (event) => {
-        const normalizedRuntime = validateSubmitRuntime(
-          String(event.target.value || "").trim(),
-        );
+        const selectedRuntime = String(event.target.value || "").trim();
+        const normalizedRuntime = validateSubmitRuntime(selectedRuntime);
+        if (!normalizedRuntime) {
+          message.className = "notice error";
+          message.textContent = `Unsupported runtime selected: ${
+            selectedRuntime || "(empty)"
+          }.`;
+          runtimeSelect.value = ORCHESTRATOR_RUNTIME;
+          return;
+        }
         if (normalizedRuntime === ORCHESTRATOR_RUNTIME) {
           return;
         }
         if (!isWorkerSubmitRuntime(normalizedRuntime)) {
+          message.className = "notice error";
+          message.textContent = `Unsupported worker runtime selected: ${normalizedRuntime}.`;
+          runtimeSelect.value = ORCHESTRATOR_RUNTIME;
           return;
         }
         persistOrchestratorDraft();
