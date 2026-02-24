@@ -3891,7 +3891,7 @@
   }
 
   function renderSubmitWorkPage(presetRuntime) {
-    if (presetRuntime === null || typeof presetRuntime === "undefined") {
+    if (presetRuntime == null) {
       renderQueueSubmitPage();
       return;
     }
