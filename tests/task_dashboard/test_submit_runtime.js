@@ -167,3 +167,9 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(valid.value.priority, "high");
   assert.strictEqual(valid.value.approvalToken, "token-value");
 })();
+
+(function testNormalizeOrchestratorPriority() {
+  assert.strictEqual(helpers.normalizeOrchestratorPriority("HIGH"), "high");
+  assert.strictEqual(helpers.normalizeOrchestratorPriority("low"), "normal");
+  assert.strictEqual(helpers.normalizeOrchestratorPriority(undefined), "normal");
+})();
