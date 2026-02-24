@@ -2,19 +2,19 @@
 
 ---
 name: batch-pr-resolver
-description: Discover open PRs in a repository and enqueue one `pr-resolver` branch-publish task for each.
+description: Discover open PRs in a repository and enqueue one `pr-resolver` task for each.
 ---
 
 ## Purpose
 
-Create one queue task per open pull request so each PR branch can be resolved by `pr-resolver` on its existing branch.
+Create one queue task per open pull request so each PR branch can be resolved by `pr-resolver` on its existing branch. Fork PRs are skipped.
 
 ## Inputs (skill args)
 
 - `repo` (string, required): Target repository in `owner/repo` form.
-- `state` (string, optional): PR state filter for discovery. Default is `open`.
-- `includeForks` (boolean, optional): If `true`, include fork PRs. Default is `false`.
-- `skipExistingOnly` (boolean, optional): Legacy alias kept for compatibility. If set, skip PRs from fork repositories.
+- `state` (string, optional): PR state filter for discovery. Default is `open`. Using other states prints a warning.
+- `includeForks` (boolean, optional): Reserved for compatibility. Currently rejected because queued `pr-resolver` jobs cannot reliably check out fork-only head refs.
+- `skipExistingOnly` (boolean, optional): Legacy alias kept for compatibility. If set, skip PRs from fork repositories. **Note:** this name is counter-intuitive; `true` means forks are skipped.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
@@ -29,7 +29,6 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
   --repo <owner/repo> \
   --state <open|merged|closed> \
   --skip-existing-only \
-  --include-forks \
   --max-attempts 3 \
   --priority 0 \
   --merge-method squash \
@@ -40,19 +39,19 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - `repo` -> `--repo`
    - `state` -> `--state`
    - `skipExistingOnly` -> `--skip-existing-only`
-   - `includeForks` -> `--include-forks`
+   - `includeForks` -> `--include-forks` (currently rejected at runtime)
    - `maxAttempts` -> `--max-attempts`
    - `priority` -> `--priority`
    - `mergeMethod` -> `--merge-method`
    - `maxIterations` -> `--max-iterations`
 
 3. For each open PR in the target repo:
+   - Skip PRs whose head repository is not exactly the target repo.
    - Build a canonical queue task with:
      - `type: "task"`
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
-     - `payload.task.git.newBranch`: PR head branch (target branch for branch publish mode)
-     - `payload.task.publish.mode`: `branch`
+     - `payload.task.publish.mode`: `none`
      - `payload.task.skill.id`: `pr-resolver`
      - `payload.task.skill.args`: `{ repo, pr, branch, mergeMethod, maxIterations }`
    - Submit via internal queue service (`AgentQueueService`).
@@ -63,6 +62,6 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
 
 - Reject missing `repo` unless it can be inferred from `git remote origin` fallback.
 - Use `state=open` by default to avoid accidental non-open PR dispatch.
-- For branch-publish mode, use the existing PR head branch as both starting and target branch inputs.
-- Skip fork PRs unless `includeForks=true`.
+- `--include-forks` is rejected to avoid unreliable fork-branch checkout behavior in queued jobs.
+- Skip fork PRs by default.
 

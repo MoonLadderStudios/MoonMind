@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create branch-publish `pr-resolver` tasks for each open PR in a repository."""
+"""Create `pr-resolver` tasks for each open PR in a repository."""
 
 from __future__ import annotations
 
@@ -9,11 +9,20 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from api_service.db.base import get_async_session_context
 from moonmind.workflows import get_agent_queue_service
+
+
+@dataclass
+class JobSubmission:
+    queue_request: dict[str, Any]
+    pr_number: int | str
+    branch: str
 
 
 def _run_command(cmd: list[str]) -> str:
@@ -64,8 +73,11 @@ def _infer_repo_from_remote() -> str | None:
 
 
 def _resolve_repo(raw_repo: str | None) -> str:
-    if normalized := _normalize_repo(raw_repo):
-        return normalized
+    if raw_repo is not None:
+        normalized = _normalize_repo(raw_repo)
+        if normalized:
+            return normalized
+        raise RuntimeError("Invalid --repo value; expected owner/repo format.")
     for env_key in ("WORKFLOW_GITHUB_REPOSITORY", "GITHUB_REPOSITORY", "MOONMIND_REPO"):
         normalized = _normalize_repo(os.getenv(env_key, ""))
         if normalized:
@@ -85,6 +97,8 @@ def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
             state,
             "--json",
             "number,title,headRefName,headRepositoryOwner,headRepository",
+            "--limit",
+            "100000",
         ]
     )
     parsed = json.loads(raw or "[]")
@@ -93,18 +107,12 @@ def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
     return parsed
 
 
-def _is_local_head(pr: dict[str, Any], repo_owner: str) -> bool:
-    head_owner_node = pr.get("headRepositoryOwner")
-    if isinstance(head_owner_node, dict):
-        head_owner = str(head_owner_node.get("login") or "").strip().lower()
-        if head_owner:
-            return head_owner == repo_owner
-
+def _is_local_head(pr: dict[str, Any], repo: str) -> bool:
     head_repo = pr.get("headRepository")
     if isinstance(head_repo, dict):
         name_with_owner = str(head_repo.get("nameWithOwner") or "").strip().lower()
-        if "/" in name_with_owner:
-            return name_with_owner.split("/", 1)[0] == repo_owner
+        if name_with_owner:
+            return name_with_owner == repo.lower()
 
     return False
 
@@ -148,9 +156,8 @@ def _build_queue_request(
                 "runtime": {"mode": "codex"},
                 "git": {
                     "startingBranch": branch,
-                    "newBranch": branch,
                 },
-                "publish": {"mode": "branch"},
+                "publish": {"mode": "none"},
             },
         },
     }
@@ -195,13 +202,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def _submit_jobs(
-    queue_requests: list[dict[str, Any]],
+    queue_requests: list[JobSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     async with get_async_session_context() as session:
         service = get_agent_queue_service(session)
-        for request in queue_requests:
+        for submission in queue_requests:
+            request = submission.queue_request
             payload = request["payload"]
             queue_type = str(request["type"])
             priority = int(request.get("priority", 0))
@@ -215,16 +223,16 @@ async def _submit_jobs(
                 )
                 created.append(
                     {
-                        "pr": request["pr_number"],
-                        "branch": request["branch"],
+                        "pr": submission.pr_number,
+                        "branch": submission.branch,
                         "jobId": str(job.id),
                     }
                 )
             except Exception as exc:
                 errors.append(
                     {
-                        "pr": request["pr_number"],
-                        "branch": request["branch"],
+                        "pr": submission.pr_number,
+                        "branch": submission.branch,
                         "error": str(exc),
                     }
                 )
@@ -236,17 +244,23 @@ def _build_request_records(
     open_prs: list[dict[str, Any]],
     args: argparse.Namespace,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    repo_owner = repo.split("/", 1)[0].lower()
-    queue_requests: list[dict[str, Any]] = []
+    queue_requests: list[JobSubmission] = []
     skipped: list[dict[str, Any]] = []
-    include_forks = bool(args.include_forks)
-    if args.skip_existing_only:
-        include_forks = False
+
+    if args.include_forks and args.skip_existing_only:
+        raise RuntimeError(
+            "--include-forks conflicts with --skip-existing-only; choose only one."
+        )
+    if args.include_forks:
+        raise RuntimeError(
+            "--include-forks is not supported for queued pr-resolver jobs because fork "
+            "head branches are not reliably check-outable by the worker."
+        )
 
     for pr in open_prs:
         number = pr.get("number")
         branch = _extract_branch(pr)
-        if not include_forks and not _is_local_head(pr, repo_owner=repo_owner):
+        if not _is_local_head(pr, repo=repo):
             skipped.append({"pr": number, "branch": branch, "reason": "fork-pr"})
             continue
 
@@ -259,9 +273,9 @@ def _build_request_records(
             priority=args.priority,
             max_attempts=args.max_attempts,
         )
-        queue_request["pr_number"] = number
-        queue_request["branch"] = branch
-        queue_requests.append(queue_request)
+        queue_requests.append(
+            JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
+        )
 
     return queue_requests, skipped
 
@@ -284,6 +298,8 @@ async def main() -> int:
     created, errors = await _submit_jobs(queue_requests)
 
     payload = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "repository": repo,
         "state": args.state,
         "requested": len(open_prs),
@@ -303,10 +319,14 @@ async def main() -> int:
         f"queued={payload['created']} skipped={len(skipped)} errors={len(errors)} "
         f"repo={repo} state={args.state}"
     )
-    if payload["created"] == 0 and payload["requested"] > 0 and errors:
+    if errors:
         return 1
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except Exception:
+        print("error: batch-pr-resolver failed. See logs for details.", flush=True)
+        raise SystemExit(1)
