@@ -136,6 +136,10 @@
   const sourceConfig = config.sources || {};
   const queueSourceConfig =
     sourceConfig.queue && typeof sourceConfig.queue === "object" ? sourceConfig.queue : {};
+  const orchestratorSourceConfig =
+    sourceConfig.orchestrator && typeof sourceConfig.orchestrator === "object"
+      ? sourceConfig.orchestrator
+      : {};
   const proposalsSourceConfig =
     sourceConfig.proposals && typeof sourceConfig.proposals === "object"
       ? sourceConfig.proposals
@@ -931,6 +935,125 @@
     return Array.from(new Set(parts));
   }
 
+  function createStepStateEntry(overrides = {}) {
+    return {
+      id: "",
+      instructions: "",
+      skillId: "",
+      skillArgs: "",
+      skillRequiredCapabilities: "",
+      templateStepId: "",
+      templateInstructions: "",
+      ...overrides,
+    };
+  }
+
+  function cloneStepStateEntries(entries = []) {
+    const source = Array.isArray(entries) && entries.length > 0 ? entries : [createStepStateEntry()];
+    return source.map((entry) =>
+      createStepStateEntry({
+        id: String(entry?.id || ""),
+        instructions: String(entry?.instructions || ""),
+        skillId: String(entry?.skillId || ""),
+        skillArgs: String(entry?.skillArgs || ""),
+        skillRequiredCapabilities: String(entry?.skillRequiredCapabilities || ""),
+        templateStepId: String(entry?.templateStepId || ""),
+        templateInstructions: String(entry?.templateInstructions || ""),
+      }),
+    );
+  }
+
+  function cloneAppliedTemplateState(entries = []) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return [];
+    }
+    return entries.map((entry) => ({
+      slug: String(entry?.slug || "").trim(),
+      version: String(entry?.version || "").trim(),
+      inputs:
+        entry && typeof entry.inputs === "object" && !Array.isArray(entry.inputs)
+          ? { ...entry.inputs }
+          : {},
+      stepIds: Array.isArray(entry?.stepIds) ? [...entry.stepIds] : [],
+      appliedAt: String(entry?.appliedAt || "").trim(),
+      capabilities: Array.isArray(entry?.capabilities) ? [...entry.capabilities] : [],
+    }));
+  }
+
+  function cloneSubmitDraft(value) {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneSubmitDraft(item));
+    }
+    if (value && typeof value === "object") {
+      const next = {};
+      for (const [key, entry] of Object.entries(value)) {
+        next[key] = cloneSubmitDraft(entry);
+      }
+      return next;
+    }
+    return value;
+  }
+
+  function createSubmitDraftController(workerDefaults = {}, orchestratorDefaults = {}) {
+    let workerDraft = cloneSubmitDraft(workerDefaults);
+    let orchestratorDraft = cloneSubmitDraft(orchestratorDefaults);
+    return {
+      saveWorker(draft) {
+        workerDraft = cloneSubmitDraft(draft);
+      },
+      saveOrchestrator(draft) {
+        orchestratorDraft = cloneSubmitDraft(draft);
+      },
+      loadWorker() {
+        return cloneSubmitDraft(workerDraft);
+      },
+      loadOrchestrator() {
+        return cloneSubmitDraft(orchestratorDraft);
+      },
+    };
+  }
+
+  function isOrchestratorRuntimeValue(runtime) {
+    return String(runtime || "").trim().toLowerCase() === "orchestrator";
+  }
+
+  function normalizePriorityChoice(priorityValue) {
+    const normalized = String(priorityValue || "").trim().toLowerCase();
+    return normalized === "high" ? "high" : "normal";
+  }
+
+  function determineSubmitDestination(runtimeValue, endpoints = {}) {
+    const queueEndpoint =
+      String(endpoints.queue || "/api/queue/jobs").trim() || "/api/queue/jobs";
+    const orchestratorEndpoint =
+      String(endpoints.orchestrator || "/orchestrator/runs").trim() ||
+      "/orchestrator/runs";
+    if (isOrchestratorRuntimeValue(runtimeValue)) {
+      return { mode: "orchestrator", endpoint: orchestratorEndpoint };
+    }
+    return { mode: "worker", endpoint: queueEndpoint };
+  }
+
+  function validateOrchestratorSubmission(payload = {}) {
+    const instruction = String(payload.instruction || "").trim();
+    if (!instruction) {
+      return { ok: false, error: "Instruction is required for orchestrator runs." };
+    }
+    const targetService = String(payload.targetService || "").trim();
+    if (!targetService) {
+      return { ok: false, error: "Target service is required." };
+    }
+    const priority = normalizePriorityChoice(payload.priority);
+    const approvalToken = String(payload.approvalToken || "").trim();
+    const normalized = {
+      instruction,
+      targetService,
+      priority,
+      ...(approvalToken ? { approvalToken } : {}),
+    };
+    return { ok: true, value: normalized };
+  }
+
   async function loadAvailableSkillIds() {
     if (cachedAvailableSkillIds) {
       return cachedAvailableSkillIds;
@@ -1400,6 +1523,15 @@
       renderActivePageContent,
       renderRowsTable,
       toQueueRows,
+    };
+    window.__submitRuntimeTest = {
+      createSubmitDraftController,
+      cloneStepStateEntries,
+      cloneAppliedTemplateState,
+      determineSubmitDestination,
+      validateOrchestratorSubmission,
+      normalizePriorityChoice,
+      isOrchestratorRuntimeValue,
     };
   }
 
@@ -2119,14 +2251,33 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage() {
-    const runtimeOptions = supportedTaskRuntimes
-      .map(
-        (runtime) =>
-          `<option value="${escapeHtml(runtime)}" ${
-            runtime === defaultTaskRuntime ? "selected" : ""
-          }>${escapeHtml(runtime)}</option>`,
-      )
+  function renderSubmitWorkPage(presetRuntime) {
+    const orchestratorRuntimeValue = "orchestrator";
+    const runtimeCandidates = [...supportedTaskRuntimes];
+    if (!runtimeCandidates.includes(orchestratorRuntimeValue)) {
+      runtimeCandidates.push(orchestratorRuntimeValue);
+    }
+    const normalizePreset = (runtime) => {
+      if (String(runtime || "").trim().toLowerCase() === orchestratorRuntimeValue) {
+        return orchestratorRuntimeValue;
+      }
+      return normalizeTaskRuntimeInput(runtime) || "";
+    };
+    const initialRuntime =
+      normalizePreset(presetRuntime) ||
+      normalizeTaskRuntimeInput(defaultTaskRuntime) ||
+      supportedTaskRuntimes[0] ||
+      "codex";
+    const runtimeOptions = runtimeCandidates
+      .map((runtime) => {
+        const isOrchestrator = runtime === orchestratorRuntimeValue;
+        const label = isOrchestrator
+          ? "Orchestrator"
+          : `${runtime.charAt(0).toUpperCase() + runtime.slice(1)} worker`;
+        return `<option value="${escapeHtml(runtime)}" ${
+          runtime === initialRuntime ? "selected" : ""
+        }>${escapeHtml(label)}</option>`;
+      })
       .join("");
     const repositoryFallback = defaultRepository;
     const repositoryHint = repositoryFallback
@@ -2158,83 +2309,135 @@
         </div>
         `
       : "";
+    const workerSectionInitialClass =
+      initialRuntime === orchestratorRuntimeValue ? "hidden" : "";
+    const orchestratorSectionInitialClass =
+      initialRuntime === orchestratorRuntimeValue ? "" : "hidden";
 
     setView(
-      "Submit Queue Task",
-      "",
+      "Submit Work",
+      "Choose a runtime target and share instructions once.",
       `
-      <form id="queue-submit-form" class="queue-submit-form">
-        <section class="queue-steps-section stack">
-          <div id="queue-steps-list" class="stack"></div>
-        </section>
-        ${templateControlsHtml}
+      <form id="submit-work-form" class="queue-submit-form">
         <label>Runtime
-          <select name="runtime">
+          <select name="runtime" id="submit-runtime-select" data-submit-runtime>
             ${runtimeOptions}
           </select>
         </label>
-        <datalist id="queue-skill-options">
-          <option value="auto"></option>
-        </datalist>
-        <div class="grid-2">
-          <label>Model
-            <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
-          </label>
-          <label>Effort
-            <input name="effort" value="${escapeHtml(defaultTaskEffort)}" placeholder="runtime default" />
-          </label>
-        </div>
-        <label>GitHub Repo
-          <input name="repository" value="${escapeHtml(repositoryFallback)}" placeholder="owner/repo" />
-          <span class="small">${escapeHtml(repositoryHint)} Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or git@&lt;host&gt;:&lt;path&gt; (token-free).</span>
+        <label>Instructions / Objective
+          <textarea id="submit-instruction" name="instruction" required placeholder="Describe the task or action plan."></textarea>
         </label>
-        <div class="grid-2">
-          <label>Starting Branch (optional)
-            <input name="startingBranch" placeholder="repo default branch" />
+        <section class="stack ${workerSectionInitialClass}" data-submit-section="worker">
+          <section class="queue-steps-section stack">
+            <div id="queue-steps-list" class="stack"></div>
+          </section>
+          ${templateControlsHtml}
+          <datalist id="queue-skill-options">
+            <option value="auto"></option>
+          </datalist>
+          <div class="grid-2">
+            <label>Model
+              <input name="model" value="${escapeHtml(defaultTaskModel)}" placeholder="runtime default" />
+            </label>
+            <label>Effort
+              <input name="effort" value="${escapeHtml(defaultTaskEffort)}" placeholder="runtime default" />
+            </label>
+          </div>
+          <label>GitHub Repo
+            <input name="repository" value="${escapeHtml(repositoryFallback)}" placeholder="owner/repo" />
+            <span class="small">${escapeHtml(repositoryHint)} Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or git@&lt;host&gt;:&lt;path&gt; (token-free).</span>
           </label>
-          <label>Target Branch (optional)
-            <input name="newBranch" placeholder="auto-generated unless starting branch is non-default" />
+          <div class="grid-2">
+            <label>Starting Branch (optional)
+              <input name="startingBranch" placeholder="repo default branch" />
+            </label>
+            <label>Target Branch (optional)
+              <input name="newBranch" placeholder="auto-generated unless starting branch is non-default" />
+            </label>
+          </div>
+          <label>Publish Mode
+            <select name="publishMode">
+              <option value="pr" ${defaultPublishMode === "pr" ? "selected" : ""}>pr</option>
+              <option value="branch" ${defaultPublishMode === "branch" ? "selected" : ""}>branch</option>
+              <option value="none" ${defaultPublishMode === "none" ? "selected" : ""}>none</option>
+            </select>
           </label>
-        </div>
-        <label>Publish Mode
-          <select name="publishMode">
-            <option value="pr" ${defaultPublishMode === "pr" ? "selected" : ""}>pr</option>
-            <option value="branch" ${defaultPublishMode === "branch" ? "selected" : ""}>branch</option>
-            <option value="none" ${defaultPublishMode === "none" ? "selected" : ""}>none</option>
-          </select>
-        </label>
-        <div class="grid-2">
-          <label>Priority
-            <input type="number" name="priority" value="0" />
+          <div class="grid-2">
+            <label>Priority
+              <input type="number" name="workerPriority" value="0" />
+            </label>
+            <label>Max Attempts
+              <input type="number" min="1" name="maxAttempts" value="3" />
+            </label>
+          </div>
+          <label class="checkbox">
+            <input type="checkbox" name="proposeTasks" ${
+              defaultProposeTasks ? "checked" : ""
+            } />
+            Propose Tasks
           </label>
-          <label>Max Attempts
-            <input type="number" min="1" name="maxAttempts" value="3" />
+        </section>
+        <section class="stack ${orchestratorSectionInitialClass}" data-submit-section="orchestrator">
+          <label>Target Service
+            <input name="orchestratorTargetService" value="orchestrator" required placeholder="orchestrator" />
           </label>
-        </div>
-        <label class="checkbox">
-          <input type="checkbox" name="proposeTasks" ${
-            defaultProposeTasks ? "checked" : ""
-          } />
-          Propose Tasks
-        </label>
-        <div class="actions" role="group" aria-label="Queue submission actions">
-          <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <button type="submit" class="queue-submit-primary">Submit</button>
+          <div class="grid-2">
+            <label>Priority
+              <select name="orchestratorPriority">
+                <option value="normal">normal</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+            <label>Approval Token
+              <input name="approvalToken" placeholder="optional" />
+            </label>
+          </div>
+        </section>
+        <div class="actions" role="group" aria-label="Submit form actions">
+          <p class="small queue-submit-message" id="submit-work-message"></p>
+          <button type="submit" id="submit-work-button" class="queue-submit-primary">Submit</button>
         </div>
       </form>
       `,
       { showAutoRefreshControls: false },
     );
 
-    const form = document.getElementById("queue-submit-form");
-    const message = document.getElementById("queue-submit-message");
+    const form = document.getElementById("submit-work-form");
+    const message = document.getElementById("submit-work-message");
     if (!form || !message) {
       return;
     }
-    const runtimeSelect = form.querySelector('select[name="runtime"]');
+    const runtimeSelect = form.querySelector('[data-submit-runtime]');
+    const workerSection = form.querySelector('[data-submit-section="worker"]');
+    const orchestratorSection = form.querySelector(
+      '[data-submit-section="orchestrator"]',
+    );
+    const submitButton = document.getElementById("submit-work-button");
+    const objectiveField = document.getElementById("submit-instruction");
     const modelInputElement = form.querySelector('input[name="model"]');
     const effortInputElement = form.querySelector('input[name="effort"]');
     const stepsList = document.getElementById("queue-steps-list");
+    const stepState = [createStepStateEntry()];
+    let appliedTemplateState = [];
+    const repositoryInputElement = form.querySelector('input[name="repository"]');
+    const startingBranchInputElement = form.querySelector('input[name="startingBranch"]');
+    const targetBranchInputElement = form.querySelector('input[name="newBranch"]');
+    const publishModeSelect = form.querySelector('select[name="publishMode"]');
+    const workerPriorityInput = form.querySelector('input[name="workerPriority"]');
+    const maxAttemptsInput = form.querySelector('input[name="maxAttempts"]');
+    const proposeTasksInput = form.querySelector('input[name="proposeTasks"]');
+    const templateMessage = document.getElementById("queue-template-message");
+    const templateSelect = document.getElementById("queue-template-select");
+    const templateFeatureRequest = document.getElementById("queue-template-feature-request");
+    const templateApply = document.getElementById("queue-template-apply");
+    const templateSaveCurrent = document.getElementById("queue-template-save-current");
+    const orchestratorTargetInput = form.querySelector('input[name="orchestratorTargetService"]');
+    const orchestratorPrioritySelect = form.querySelector('select[name="orchestratorPriority"]');
+    const approvalTokenInput = form.querySelector('input[name="approvalToken"]');
+    const submitEndpointConfig = {
+      queue: queueSourceConfig.create,
+      orchestrator: orchestratorSourceConfig.create,
+    };
     const runtimeModelDefaults = {
       ...configuredModelDefaults,
       codex: codexDefaultTaskModel,
@@ -2243,12 +2446,196 @@
       ...configuredEffortDefaults,
       codex: codexDefaultTaskEffort,
     };
+    const createWorkerDraftDefaults = (overrides = {}) => ({
+      instruction: "",
+      steps: [createStepStateEntry()],
+      appliedTemplateState: [],
+      templateFeatureRequest: "",
+      model: defaultTaskModel,
+      effort: defaultTaskEffort,
+      repository: repositoryFallback,
+      startingBranch: "",
+      newBranch: "",
+      publishMode: defaultPublishMode,
+      workerPriority: "0",
+      maxAttempts: "3",
+      proposeTasks: defaultProposeTasks,
+      selectedTemplateKey: "",
+      ...overrides,
+    });
+    const createOrchestratorDraftDefaults = (overrides = {}) => ({
+      instruction: "",
+      targetService: "orchestrator",
+      priority: "normal",
+      approvalToken: "",
+      ...overrides,
+    });
+    const submitDraftController = createSubmitDraftController(
+      createWorkerDraftDefaults(),
+      createOrchestratorDraftDefaults(),
+    );
     let activeDefaultModel = resolveRuntimeDefault(runtimeModelDefaults, defaultTaskRuntime);
     let activeDefaultEffort = resolveRuntimeDefault(
       runtimeEffortDefaults,
       defaultTaskRuntime,
     );
+    let activeRuntime = initialRuntime;
+    const readWorkerFormState = () =>
+      createWorkerDraftDefaults({
+        instruction:
+          objectiveField instanceof HTMLTextAreaElement
+            ? String(objectiveField.value || "").trim()
+            : "",
+        steps: cloneStepStateEntries(stepState),
+        appliedTemplateState: cloneAppliedTemplateState(appliedTemplateState),
+        templateFeatureRequest:
+          templateFeatureRequest instanceof HTMLTextAreaElement
+            ? String(templateFeatureRequest.value || "").trim()
+            : "",
+        model:
+          modelInputElement instanceof HTMLInputElement
+            ? String(modelInputElement.value || "").trim()
+            : "",
+        effort:
+          effortInputElement instanceof HTMLInputElement
+            ? String(effortInputElement.value || "").trim()
+            : "",
+        repository:
+          repositoryInputElement instanceof HTMLInputElement
+            ? String(repositoryInputElement.value || "").trim()
+            : "",
+        startingBranch:
+          startingBranchInputElement instanceof HTMLInputElement
+            ? String(startingBranchInputElement.value || "").trim()
+            : "",
+        newBranch:
+          targetBranchInputElement instanceof HTMLInputElement
+            ? String(targetBranchInputElement.value || "").trim()
+            : "",
+        publishMode:
+          publishModeSelect instanceof HTMLSelectElement
+            ? String(publishModeSelect.value || defaultPublishMode).trim().toLowerCase() ||
+              defaultPublishMode
+            : defaultPublishMode,
+        workerPriority:
+          workerPriorityInput instanceof HTMLInputElement
+            ? String(workerPriorityInput.value || "0").trim() || "0"
+            : "0",
+        maxAttempts:
+          maxAttemptsInput instanceof HTMLInputElement
+            ? String(maxAttemptsInput.value || "3").trim() || "3"
+            : "3",
+        proposeTasks:
+          proposeTasksInput instanceof HTMLInputElement
+            ? Boolean(proposeTasksInput.checked)
+            : defaultProposeTasks,
+        selectedTemplateKey:
+          templateSelect instanceof HTMLSelectElement
+            ? String(templateSelect.value || "").trim()
+            : "",
+      });
+    const readOrchestratorFormState = () =>
+      createOrchestratorDraftDefaults({
+        instruction:
+          objectiveField instanceof HTMLTextAreaElement
+            ? String(objectiveField.value || "").trim()
+            : "",
+        targetService:
+          orchestratorTargetInput instanceof HTMLInputElement
+            ? String(orchestratorTargetInput.value || "").trim()
+            : "",
+        priority:
+          orchestratorPrioritySelect instanceof HTMLSelectElement
+            ? String(orchestratorPrioritySelect.value || "normal").trim()
+            : "normal",
+        approvalToken:
+          approvalTokenInput instanceof HTMLInputElement
+            ? String(approvalTokenInput.value || "").trim()
+            : "",
+      });
+    const applyWorkerFormState = (draft) => {
+      const normalized = createWorkerDraftDefaults(draft || {});
+      const nextSteps = cloneStepStateEntries(normalized.steps);
+      stepState.splice(
+        0,
+        stepState.length,
+        ...(nextSteps.length > 0 ? nextSteps : [createStepStateEntry()]),
+      );
+      appliedTemplateState = cloneAppliedTemplateState(normalized.appliedTemplateState);
+      if (objectiveField instanceof HTMLTextAreaElement) {
+        objectiveField.value = normalized.instruction;
+      }
+      if (stepState[0]) {
+        stepState[0].instructions = normalized.instruction;
+      }
+      if (modelInputElement instanceof HTMLInputElement) {
+        modelInputElement.value = normalized.model || "";
+      }
+      if (effortInputElement instanceof HTMLInputElement) {
+        effortInputElement.value = normalized.effort || "";
+      }
+      if (repositoryInputElement instanceof HTMLInputElement) {
+        repositoryInputElement.value = normalized.repository || "";
+      }
+      if (startingBranchInputElement instanceof HTMLInputElement) {
+        startingBranchInputElement.value = normalized.startingBranch || "";
+      }
+      if (targetBranchInputElement instanceof HTMLInputElement) {
+        targetBranchInputElement.value = normalized.newBranch || "";
+      }
+      if (publishModeSelect instanceof HTMLSelectElement) {
+        publishModeSelect.value = normalized.publishMode || defaultPublishMode;
+      }
+      if (workerPriorityInput instanceof HTMLInputElement) {
+        workerPriorityInput.value = normalized.workerPriority || "0";
+      }
+      if (maxAttemptsInput instanceof HTMLInputElement) {
+        maxAttemptsInput.value = normalized.maxAttempts || "3";
+      }
+      if (proposeTasksInput instanceof HTMLInputElement) {
+        proposeTasksInput.checked = Boolean(normalized.proposeTasks);
+      }
+      if (templateFeatureRequest instanceof HTMLTextAreaElement) {
+        templateFeatureRequest.value = normalized.templateFeatureRequest || "";
+      }
+      if (templateSelect instanceof HTMLSelectElement) {
+        templateSelect.value = normalized.selectedTemplateKey || "";
+      }
+      renderStepEditor();
+    };
+    const applyOrchestratorFormState = (draft) => {
+      const normalized = createOrchestratorDraftDefaults(draft || {});
+      if (objectiveField instanceof HTMLTextAreaElement) {
+        objectiveField.value = normalized.instruction;
+      }
+      if (orchestratorTargetInput instanceof HTMLInputElement) {
+        orchestratorTargetInput.value = normalized.targetService || "orchestrator";
+      }
+      if (orchestratorPrioritySelect instanceof HTMLSelectElement) {
+        orchestratorPrioritySelect.value = normalized.priority || "normal";
+      }
+      if (approvalTokenInput instanceof HTMLInputElement) {
+        approvalTokenInput.value = normalized.approvalToken || "";
+      }
+    };
+    const syncDraftFromRuntime = (runtime) => {
+      if (isOrchestratorRuntimeValue(runtime)) {
+        submitDraftController.saveOrchestrator(readOrchestratorFormState());
+      } else {
+        submitDraftController.saveWorker(readWorkerFormState());
+      }
+    };
+    const applyDraftForRuntime = (runtime) => {
+      if (isOrchestratorRuntimeValue(runtime)) {
+        applyOrchestratorFormState(submitDraftController.loadOrchestrator());
+      } else {
+        applyWorkerFormState(submitDraftController.loadWorker());
+      }
+    };
     const applyRuntimeDefaults = (runtime) => {
+      if (isOrchestratorRuntimeValue(runtime)) {
+        return;
+      }
       if (!modelInputElement || !effortInputElement) {
         return;
       }
@@ -2263,23 +2650,56 @@
       activeDefaultModel = nextDefaultModel;
       activeDefaultEffort = nextDefaultEffort;
     };
+    if (!isOrchestratorRuntimeValue(activeRuntime)) {
+      applyRuntimeDefaults(activeRuntime);
+    }
+    applyWorkerFormState(submitDraftController.loadWorker());
+    if (isOrchestratorRuntimeValue(activeRuntime)) {
+      applyOrchestratorFormState(submitDraftController.loadOrchestrator());
+    }
+    const syncRuntimeSections = () => {
+      const orchestratorSelected = isOrchestratorRuntimeValue(activeRuntime);
+      if (workerSection instanceof HTMLElement) {
+        workerSection.classList.toggle("hidden", orchestratorSelected);
+      }
+      if (orchestratorSection instanceof HTMLElement) {
+        orchestratorSection.classList.toggle("hidden", !orchestratorSelected);
+      }
+      if (submitButton instanceof HTMLButtonElement) {
+        submitButton.textContent = orchestratorSelected
+          ? "Submit Orchestrator Run"
+          : "Submit Queue Task";
+      }
+    };
+    syncRuntimeSections();
     if (runtimeSelect) {
       runtimeSelect.addEventListener("change", (event) => {
-        const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
-        applyRuntimeDefaults(nextRuntime || defaultTaskRuntime);
+        const rawSelection = String(event.target.value || "").trim().toLowerCase();
+        const nextRuntime =
+          rawSelection === orchestratorRuntimeValue
+            ? orchestratorRuntimeValue
+            : normalizeTaskRuntimeInput(rawSelection) || defaultTaskRuntime;
+        if (nextRuntime === activeRuntime) {
+          runtimeSelect.value = nextRuntime;
+          syncRuntimeSections();
+          return;
+        }
+        const runtimeGroupChanged =
+          isOrchestratorRuntimeValue(nextRuntime) !== isOrchestratorRuntimeValue(activeRuntime);
+        if (runtimeGroupChanged) {
+          syncDraftFromRuntime(activeRuntime);
+        }
+        activeRuntime = nextRuntime;
+        runtimeSelect.value = nextRuntime;
+        if (!isOrchestratorRuntimeValue(nextRuntime)) {
+          applyRuntimeDefaults(nextRuntime);
+        }
+        if (runtimeGroupChanged || isOrchestratorRuntimeValue(nextRuntime)) {
+          applyDraftForRuntime(nextRuntime);
+        }
+        syncRuntimeSections();
       });
     }
-    const createStepStateEntry = (overrides = {}) => ({
-      id: "",
-      instructions: "",
-      skillId: "",
-      skillArgs: "",
-      skillRequiredCapabilities: "",
-      templateStepId: "",
-      templateInstructions: "",
-      ...overrides,
-    });
-    const stepState = [createStepStateEntry()];
     const isDefaultSkillSelection = (value) => {
       const normalized = String(value || "").trim().toLowerCase();
       return normalized === "" || normalized === "auto";
@@ -2315,7 +2735,6 @@
         wrapper.classList.add("hidden");
       }
     };
-    let appliedTemplateState = [];
     const renderStepEditor = () => {
       if (!stepsList) {
         console.error("[dashboard] #queue-steps-list not found; step editor unavailable");
@@ -2430,6 +2849,15 @@
         </div>
       `;
       stepsList.innerHTML = rows + addStepButtonRow;
+      if (
+        !isOrchestratorRuntimeValue(activeRuntime) &&
+        objectiveField instanceof HTMLTextAreaElement
+      ) {
+        const primaryInstructions = String(stepState[0]?.instructions || "");
+        if (objectiveField.value !== primaryInstructions) {
+          objectiveField.value = primaryInstructions;
+        }
+      }
     };
     const readStepIndex = (target) => {
       if (!(target instanceof Element)) {
@@ -2445,6 +2873,23 @@
       }
       return index;
     };
+    if (objectiveField instanceof HTMLTextAreaElement) {
+      objectiveField.addEventListener("input", () => {
+        const nextValue = objectiveField.value || "";
+        if (isOrchestratorRuntimeValue(activeRuntime)) {
+          return;
+        }
+        if (stepState[0]) {
+          stepState[0].instructions = nextValue;
+        }
+        const primaryTextarea = stepsList?.querySelector(
+          '[data-step-field="instructions"][data-step-index="0"]',
+        );
+        if (primaryTextarea instanceof HTMLTextAreaElement) {
+          primaryTextarea.value = nextValue;
+        }
+      });
+    }
     if (stepsList) {
       stepsList.addEventListener("click", (event) => {
         const target = event.target;
@@ -2513,6 +2958,16 @@
         }
         if (
           field === "instructions" &&
+          index === 0 &&
+          !isOrchestratorRuntimeValue(activeRuntime) &&
+          objectiveField instanceof HTMLTextAreaElement
+        ) {
+          if (objectiveField.value !== fieldInput.value) {
+            objectiveField.value = fieldInput.value;
+          }
+        }
+        if (
+          field === "instructions" &&
           stepState[index].templateStepId &&
           stepState[index].id === stepState[index].templateStepId &&
           fieldInput.value !== stepState[index].templateInstructions
@@ -2526,11 +2981,6 @@
       populateSkillDatalist("queue-skill-options", skillIds);
     });
 
-    const templateMessage = document.getElementById("queue-template-message");
-    const templateSelect = document.getElementById("queue-template-select");
-    const templateFeatureRequest = document.getElementById("queue-template-feature-request");
-    const templateApply = document.getElementById("queue-template-apply");
-    const templateSaveCurrent = document.getElementById("queue-template-save-current");
     let templateItems = [];
     const templateInputMemory = {};
     const preferredTemplateSlug = "speckit-orchestrate";
@@ -3057,6 +3507,44 @@
       message.textContent = "Submitting...";
 
       const formData = new FormData(form);
+      const objectiveValue =
+        objectiveField instanceof HTMLTextAreaElement
+          ? String(objectiveField.value || "").trim()
+          : "";
+      const selectedRuntime = activeRuntime;
+      if (isOrchestratorRuntimeValue(selectedRuntime)) {
+        const validation = validateOrchestratorSubmission({
+          instruction: objectiveValue,
+          targetService: formData.get("orchestratorTargetService"),
+          priority: formData.get("orchestratorPriority"),
+          approvalToken: formData.get("approvalToken"),
+        });
+        if (!validation.ok) {
+          message.className = "notice error queue-submit-message";
+          message.textContent = validation.error;
+          return;
+        }
+        try {
+          const { endpoint } = determineSubmitDestination(selectedRuntime, submitEndpointConfig);
+          const created = await fetchJson(endpoint, {
+            method: "POST",
+            body: JSON.stringify(validation.value),
+          });
+          const runId =
+            String(created?.runId || created?.id || "").trim();
+          if (!runId) {
+            throw new Error("Missing run ID in response.");
+          }
+          window.location.href = `/tasks/orchestrator/${encodeURIComponent(runId)}`;
+        } catch (error) {
+          console.error("orchestrator submit failed", error);
+          message.className = "notice error queue-submit-message";
+          message.textContent = String(
+            error?.message || "Failed to create orchestrator run.",
+          );
+        }
+        return;
+      }
       const primaryStep = stepState[0] || null;
       if (!primaryStep) {
         message.className = "notice error queue-submit-message";
@@ -3106,7 +3594,7 @@
         return;
       }
 
-      const priority = Number(formData.get("priority") || 0);
+      const priority = Number(formData.get("workerPriority") || 0);
       if (!Number.isInteger(priority)) {
         message.className = "notice error queue-submit-message";
         message.textContent = "Priority must be an integer.";
@@ -3320,7 +3808,11 @@
       };
 
       try {
-        const created = await fetchJson("/api/queue/jobs", {
+        const { endpoint: queueEndpoint } = determineSubmitDestination(
+          selectedRuntime,
+          submitEndpointConfig,
+        );
+        const created = await fetchJson(queueEndpoint, {
           method: "POST",
           body: JSON.stringify(requestBody),
         });
@@ -3335,119 +3827,12 @@
     });
   }
 
+  function renderQueueSubmitPage() {
+    renderSubmitWorkPage(defaultTaskRuntime);
+  }
+
   function renderOrchestratorSubmitPage() {
-    setView(
-      "Submit Orchestrator Run",
-      "Queue an orchestrator action plan.",
-      `
-      <form id="orchestrator-submit-form">
-        <label>Instruction
-          <textarea name="instruction" required placeholder="Describe what should be changed and verified."></textarea>
-        </label>
-        <label>Target Service
-          <input name="targetService" required value="orchestrator" placeholder="orchestrator" />
-        </label>
-        <label>Skill (optional)
-          <input name="skillId" placeholder="moonmind-update" list="orchestrator-skill-options" />
-        </label>
-        <label>Skill Args (optional JSON object)
-          <textarea name="skillArgs" placeholder='{"repo":"/workspace","branch":"main"}'></textarea>
-        </label>
-        <div class="grid-2">
-          <label>Priority
-            <select name="priority">
-              <option value="normal">normal</option>
-              <option value="high">high</option>
-            </select>
-          </label>
-          <label>Approval Token
-            <input name="approvalToken" placeholder="optional" />
-          </label>
-        </div>
-        <div class="actions">
-          <button type="submit">Create Orchestrator Run</button>
-          <a href="/tasks/orchestrator"><button class="secondary" type="button">Cancel</button></a>
-        </div>
-        <p class="small" id="orchestrator-submit-message"></p>
-      </form>
-      <datalist id="orchestrator-skill-options"></datalist>
-      `,
-    );
-
-    loadAvailableSkillIds().then((skillIds) => {
-      const explicitSkills = skillIds.filter((skillId) => skillId !== "auto");
-      const node = document.getElementById("orchestrator-skill-options");
-      if (!node) {
-        return;
-      }
-      node.innerHTML = explicitSkills
-        .map(
-          (skillId) => `<option value="${escapeHtml(skillId)}"></option>`,
-        )
-        .join("");
-    });
-
-    const form = document.getElementById("orchestrator-submit-form");
-    const message = document.getElementById("orchestrator-submit-message");
-    if (!form || !message) {
-      return;
-    }
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      message.className = "small";
-      message.textContent = "Submitting...";
-
-      const formData = new FormData(form);
-      const body = {
-        instruction: String(formData.get("instruction") || "").trim(),
-        targetService: String(formData.get("targetService") || "").trim(),
-        priority: String(formData.get("priority") || "normal").trim() || "normal",
-      };
-      const skillId = String(formData.get("skillId") || "").trim();
-      const skillArgsRaw = String(formData.get("skillArgs") || "").trim();
-      const token = String(formData.get("approvalToken") || "").trim();
-
-      if (skillId) {
-        body.skillId = skillId;
-      }
-      if (skillArgsRaw) {
-        try {
-          const parsedArgs = JSON.parse(skillArgsRaw);
-          if (
-            !parsedArgs ||
-            typeof parsedArgs !== "object" ||
-            Array.isArray(parsedArgs)
-          ) {
-            throw new Error("Skill args must be a JSON object.");
-          }
-          body.skillArgs = parsedArgs;
-        } catch (error) {
-          message.className = "notice error";
-          message.textContent = String(
-            error?.message || "Skill args must be valid JSON object.",
-          );
-          return;
-        }
-      }
-      if (token) {
-        body.approvalToken = token;
-      }
-
-      try {
-        const created = await fetchJson("/orchestrator/runs", {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-        window.location.href = `/tasks/orchestrator/${encodeURIComponent(
-          created.runId,
-        )}`;
-      } catch (error) {
-        console.error("orchestrator submit failed", error);
-        message.className = "notice error";
-        message.textContent = "Failed to create orchestrator run.";
-      }
-    });
+    renderSubmitWorkPage("orchestrator");
   }
 
   async function renderQueueDetailPage(jobId) {
