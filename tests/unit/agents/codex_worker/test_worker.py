@@ -572,10 +572,10 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     assert not proposals_path.exists()
 
 
-async def test_task_proposal_request_uses_task_flag_over_worker_default(
+async def test_task_proposal_request_uses_task_flag_with_config_gate(
     tmp_path: Path,
 ) -> None:
-    """Task-level proposeTasks should override worker default flag."""
+    """Task-level proposeTasks should be interpreted, but still gated by config."""
 
     worker = CodexWorker(
         config=CodexWorkerConfig(
@@ -611,10 +611,6 @@ async def test_task_proposal_request_uses_task_flag_over_worker_default(
         )
         is False
     )
-    assert worker._task_proposals_requested(
-        canonical_payload={"repository": "moon/org", "task": {"propose_tasks": True}}
-    )
-
 
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
     tmp_path: Path,

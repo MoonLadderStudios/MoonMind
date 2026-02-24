@@ -1409,7 +1409,9 @@ class CodexWorker:
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
         task_proposals_requested = self._task_proposals_requested(canonical_payload)
-        proposal_workflow_enabled = task_proposals_requested
+        proposal_workflow_enabled = (
+            self._config.enable_task_proposals and task_proposals_requested
+        )
         await self._emit_event(
             job_id=job.id,
             level="info",
@@ -2024,8 +2026,6 @@ class CodexWorker:
         task = task_node if isinstance(task_node, Mapping) else {}
         default_enabled = self._config.enable_task_proposals
         requested_value = task.get("proposeTasks")
-        if requested_value is None:
-            requested_value = task.get("propose_tasks")
         return self._coerce_bool(requested_value, default=default_enabled)
 
     @staticmethod
