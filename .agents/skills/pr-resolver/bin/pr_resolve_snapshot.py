@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def run_command(
@@ -46,6 +47,22 @@ def run_command(
             sys.exit(1)
 
 
+def infer_repo_from_pr_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc == "":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    owner = parts[0]
+    repo = parts[1].removesuffix(".git")
+    if owner and repo:
+        return f"{owner}/{repo}"
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Snapshot PR state for pr-resolver skill"
@@ -67,6 +84,14 @@ def main():
     pr_data = run_command(
         pr_cmd, "Ensure gh is authenticated and the branch has an open PR."
     )
+    pr_repo = infer_repo_from_pr_url(pr_data.get("url"))
+    if not pr_repo:
+        pr_repo_data = run_command(
+            ["gh", "repo", "view", "--json", "nameWithOwner"],
+            "Unable to resolve repository for comment fetch. Install/update gh and authenticate.",
+        )
+        if isinstance(pr_repo_data, dict):
+            pr_repo = pr_repo_data.get("nameWithOwner")
 
     # 2. Evaluate CI Status
     ci_is_running = False
@@ -103,6 +128,8 @@ def main():
     comments_data = {}
     if comments_script.exists():
         comments_cmd = [sys.executable, str(comments_script), "--compact"]
+        if pr_repo:
+            comments_cmd.extend(["--repo", pr_repo])
         if args.pr:
             comments_cmd.extend(["--pr", args.pr])
         comments_data = run_command(comments_cmd, "Failed to retrieve PR comments.")

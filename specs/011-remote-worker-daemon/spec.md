@@ -37,7 +37,7 @@ As a queue operator, I want remote jobs to support skills-based execution semant
 2. **Given** a `codex_skill` job with `skillId=speckit`, **When** worker executes it, **Then** it uses the skills path and records `executionPath=skill`.
 3. **Given** a `codex_skill` job with an allowlisted non-Speckit skill, **When** worker executes it, **Then** it runs through compatibility fallback and records `executionPath=direct_fallback`.
 4. **Given** a `codex_skill` job with a non-allowlisted skill, **When** claim processing runs, **Then** worker fails the job without invoking handler execution.
-5. **Given** task payload `codex.model` and/or `codex.effort` values are present, **When** execution starts, **Then** worker applies those settings to `codex exec` for that task.
+5. **Given** task payload `codex.model` and/or `codex.effort` values are present, **When** execution starts, **Then** worker applies those settings to `codex exec` for that task without rewriting either field.
 6. **Given** task payload omits `codex.model` and/or `codex.effort`, **When** execution starts, **Then** worker falls back to worker-default model/effort settings.
 
 ---
@@ -80,6 +80,7 @@ As a platform owner, I want heartbeats, artifact upload, and terminal status han
 - **FR-008**: Worker MUST preserve heartbeat cadence and terminal status behavior for crash/reclaim compatibility.
 - **FR-009**: Runtime deliverables MUST include production code and validation tests; docs-only updates are insufficient.
 - **FR-010**: Worker MUST support per-task Codex runtime overrides via payload `codex.model` and `codex.effort` for `codex_exec`/`codex_skill`, with precedence `task override -> worker default -> Codex CLI default`.
+- **FR-011**: Worker MUST preserve requested `codex.model` and `codex.effort` strings when building the `codex exec` command (no alias remapping).
 
 ### Key Entities *(include if feature involves data)*
 

@@ -286,6 +286,11 @@ class AgentWorkerToken(Base):
         nullable=True,
         default=None,
     )
+    runtime_capabilities: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(),
+        nullable=True,
+        default=None,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -127,10 +127,11 @@ node - <<'"'"'EOF'"'"'
 const fs = require("fs");
 const path = require("path");
 
-const claudeHome = process.env.CLAUDE_HOME || "/home/app/.claude";
-const tokenPath = path.join(claudeHome, ".credentials.json");
-const settingsPath = path.join(claudeHome, "settings.json");
-const token = process.env.TOKEN || "";
+  const claudeHome = process.env.CLAUDE_HOME || "/home/app/.claude";
+  const tokenPath = path.join(claudeHome, ".credentials.json");
+  const settingsPath = path.join(claudeHome, "settings.json");
+  const cliConfigPath = path.join(path.resolve(claudeHome, ".."), ".claude.json");
+  const token = process.env.TOKEN || "";
 
 if (!token) {
   console.error("No token value provided for /tmp/claude-access-token.txt");
@@ -154,11 +155,57 @@ try {
   }
 
   const existing = creds.claudeAiOauth || {};
-  existing.accessToken = token;
-  creds.claudeAiOauth = existing;
+  const scopes = Array.isArray(existing.scopes) && existing.scopes.length > 0
+    ? existing.scopes
+    : [];
+  if (!scopes.includes("user:inference")) {
+    scopes.push("user:inference");
+  }
+  const existingConfigPath = process.env.CLAUDE_CODE_CONFIG_FILE || cliConfigPath;
+  creds.claudeAiOauth = {
+    ...existing,
+    accessToken: token,
+    refreshToken: existing.refreshToken || null,
+    expiresAt: existing.expiresAt || null,
+    scopes,
+  };
   fs.writeFileSync(tokenPath, JSON.stringify(creds, null, 2));
   try {
     fs.chmodSync(tokenPath, 0o600);
+  } catch (_) {}
+
+  const configDefaults = {
+    firstStartTime: new Date().toISOString(),
+    hasCompletedAuthFlow: true,
+    hasCompletedOnboarding: true,
+    hasCompletedClaudeInChromeOnboarding: true,
+    hasCompletedProjectOnboarding: true,
+    hasCompletedResults: true,
+    theme: "dark",
+  };
+  try {
+    let config = {};
+    if (fs.existsSync(existingConfigPath)) {
+      try {
+        const rawConfig = fs.readFileSync(existingConfigPath, "utf8");
+        const parsedConfig = rawConfig ? JSON.parse(rawConfig) : {};
+        if (
+          typeof parsedConfig === "object" &&
+          parsedConfig !== null &&
+          !Array.isArray(parsedConfig)
+        ) {
+          config = parsedConfig;
+        }
+      } catch (_) {}
+    }
+    const mergedConfig = { ...configDefaults, ...config };
+    if (!mergedConfig.firstStartTime) {
+      mergedConfig.firstStartTime = configDefaults.firstStartTime;
+    }
+    fs.writeFileSync(existingConfigPath, JSON.stringify(mergedConfig, null, 2));
+    try {
+      fs.chmodSync(existingConfigPath, 0o600);
+    } catch (_) {}
   } catch (_) {}
 
   if (process.env.FORCE_DARK_THEME === "1") {

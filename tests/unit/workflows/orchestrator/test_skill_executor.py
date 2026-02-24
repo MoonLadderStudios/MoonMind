@@ -9,6 +9,22 @@ import pytest
 from moonmind.workflows.orchestrator import skill_executor
 
 
+@pytest.fixture(autouse=True)
+def _clear_skill_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
+        "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
+        "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
+        "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+        "SPEC_SKILLS_WORKSPACE_ROOT",
+        "WORKFLOW_REPO_ROOT",
+        "SPEC_WORKFLOW_REPO_ROOT",
+        "WORKSPACE_ROOT",
+        "CODEX_HOME",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 def _write_skill(root: Path, name: str, script_name: str = "run.sh") -> Path:
     skill_path = root / name
     scripts_path = skill_path / "scripts"

@@ -10,7 +10,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -54,6 +54,7 @@ _ATTACHMENT_EXTENSION_MAP = {
     "image/jpeg": ".jpg",
     "image/webp": ".webp",
 }
+_RUNTIME_CAPABILITY_RUNTIMES = {"codex", "gemini", "claude"}
 
 
 class AgentQueueValidationError(ValueError):
@@ -387,6 +388,13 @@ class AgentQueueService:
 
         normalized_payload = self._enrich_task_payload_defaults(dict(payload or {}))
         normalized_payload = compile_task_payload_templates(normalized_payload)
+        target_runtime = (
+            str(normalized_payload.get("targetRuntime") or "").strip().lower()
+        )
+        if target_runtime == "claude":
+            gate_state = settings.claude_runtime_gate
+            if not gate_state.enabled:
+                raise AgentQueueValidationError(gate_state.error_message)
         try:
             return normalize_queue_job_payload(
                 job_type=CANONICAL_TASK_JOB_TYPE,
@@ -1859,6 +1867,7 @@ class AgentQueueService:
         allowed_repositories: Optional[list[str]] = None,
         allowed_job_types: Optional[list[str]] = None,
         capabilities: Optional[list[str]] = None,
+        runtime_capabilities: Optional[dict[str, Mapping[str, Any]]] = None,
     ) -> WorkerTokenIssueResult:
         """Create a worker token and return one-time raw token value."""
 
@@ -1876,6 +1885,9 @@ class AgentQueueService:
             or None,
             allowed_job_types=list(self._normalize_str_list(allowed_job_types)) or None,
             capabilities=list(self._normalize_str_list(capabilities)) or None,
+            runtime_capabilities=self._normalize_runtime_capabilities(
+                runtime_capabilities
+            ),
         )
         await self._repository.commit()
         return WorkerTokenIssueResult(token_record=token_record, raw_token=raw_token)
@@ -2014,6 +2026,25 @@ class AgentQueueService:
         except AgentWorkerTokenNotFoundError as exc:
             raise AgentQueueValidationError(str(exc)) from exc
 
+    async def replace_worker_runtime_capabilities(
+        self,
+        *,
+        token_id: UUID,
+        runtime_capabilities: Optional[dict[str, Mapping[str, Any]]] = None,
+    ) -> models.AgentWorkerToken:
+        """Replace worker runtime capabilities metadata for an existing token."""
+
+        normalized = self._normalize_runtime_capabilities(runtime_capabilities)
+        try:
+            token = await self._repository.replace_worker_token_runtime_capabilities(
+                token_id=token_id,
+                runtime_capabilities=normalized,
+            )
+        except AgentWorkerTokenNotFoundError as exc:
+            raise AgentQueueValidationError(str(exc)) from exc
+        await self._repository.commit()
+        return token
+
     def _compute_retry_delay_seconds(self, attempt: int) -> int:
         """Compute exponential backoff delay for the next retry."""
 
@@ -2031,6 +2062,72 @@ class AgentQueueService:
             if item:
                 normalized.append(item)
         return tuple(dict.fromkeys(normalized))
+
+    @staticmethod
+    def _normalize_runtime_capability_values(
+        runtime: str,
+        payload: Mapping[str, Any],
+        field_name: str,
+    ) -> tuple[str, ...]:
+        raw_values = payload.get(field_name)
+        if raw_values is None:
+            return ()
+        if not isinstance(raw_values, list):
+            raise AgentQueueValidationError(
+                f"runtimeCapabilities.{runtime}.{field_name} must be a list of strings"
+            )
+        normalized = []
+        for raw_value in raw_values:
+            value = str(raw_value).strip()
+            if value:
+                normalized.append(value)
+        return tuple(dict.fromkeys(normalized))
+
+    @classmethod
+    def _normalize_runtime_capabilities(
+        cls,
+        runtime_capabilities: Optional[dict[str, Mapping[str, Any]]],
+    ) -> dict[str, Any] | None:
+        if runtime_capabilities is None:
+            return None
+        if not isinstance(runtime_capabilities, Mapping):
+            raise AgentQueueValidationError("runtimeCapabilities must be an object")
+
+        normalized: dict[str, dict[str, list[str]]] = {}
+        for raw_runtime, raw_payload in runtime_capabilities.items():
+            runtime = str(raw_runtime).strip().lower()
+            if not runtime:
+                continue
+            if runtime not in _RUNTIME_CAPABILITY_RUNTIMES:
+                raise AgentQueueValidationError(
+                    f"runtime '{runtime}' is not supported for runtime capabilities"
+                )
+            if hasattr(raw_payload, "model_dump"):
+                normalized_payload = raw_payload.model_dump()
+            elif isinstance(raw_payload, Mapping):
+                normalized_payload = raw_payload
+            else:
+                raise AgentQueueValidationError(
+                    f"runtimeCapabilities.{runtime} must be an object"
+                )
+            normalized_models = cls._normalize_runtime_capability_values(
+                runtime=runtime,
+                payload=normalized_payload,
+                field_name="models",
+            )
+            normalized_efforts = cls._normalize_runtime_capability_values(
+                runtime=runtime,
+                payload=normalized_payload,
+                field_name="efforts",
+            )
+            if not normalized_models and not normalized_efforts:
+                normalized[runtime] = {"models": [], "efforts": []}
+            else:
+                normalized[runtime] = {
+                    "models": list(normalized_models),
+                    "efforts": list(normalized_efforts),
+                }
+        return normalized or None
 
     async def _load_system_metadata(self) -> QueueSystemMetadata:
         """Load the latest worker pause metadata snapshot."""

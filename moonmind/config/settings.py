@@ -1,13 +1,21 @@
 import os
+import re
 from pathlib import Path
 from typing import Annotated, Any, Optional, Sequence
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from moonmind.claude.runtime import (
+    CLAUDE_RUNTIME_DISABLED_MESSAGE,
+    build_runtime_gate_state,
+)
+
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
+_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class DatabaseSettings(BaseSettings):
@@ -973,6 +981,31 @@ class SpecWorkflowSettings(BaseSettings):
             raise ValueError("live_session_provider must be one of: tmate")
         return normalized
 
+    @field_validator("github_repository", mode="before")
+    @classmethod
+    def _normalize_github_repository(cls, value: object) -> str:
+        """Normalize default workflow repository and reject unsafe references."""
+
+        normalized = str(value or "").strip() or "MoonLadderStudios/MoonMind"
+        if _OWNER_REPO_PATTERN.fullmatch(normalized):
+            return normalized
+        if normalized.startswith("http://") or normalized.startswith("https://"):
+            parsed = urlsplit(normalized)
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError(
+                    "github_repository URL must not include embedded credentials"
+                )
+            if not parsed.netloc or not parsed.path or parsed.path == "/":
+                raise ValueError(
+                    "github_repository URL must include a host and repository path"
+                )
+            return normalized
+        if normalized.startswith("git@"):
+            return normalized
+        raise ValueError(
+            "github_repository must be owner/repo, https://<host>/<path>, or git@<host>:<path>"
+        )
+
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Validate agent backend selections after settings load."""
 
@@ -1026,8 +1059,19 @@ class SpecWorkflowSettings(BaseSettings):
                 f"Allowed values: {allowed_display or '<none>'}"
             )
 
-        # Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
-        # ``AppSettings.model_post_init`` to populate sensible defaults.
+
+# Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
+# ``AppSettings.model_post_init`` to populate sensible defaults.
+
+
+class AppSpecWorkflowSettings(SpecWorkflowSettings):
+    """App-level variant used by `AppSettings` to avoid legacy alias overrides."""
+
+    github_repository: Optional[str] = Field(
+        "MoonLadderStudios/MoonMind",
+        env=("SPEC_WORKFLOW_GITHUB_REPOSITORY",),
+        validation_alias=AliasChoices("SPEC_WORKFLOW_GITHUB_REPOSITORY"),
+    )
 
 
 class SecuritySettings(BaseSettings):
@@ -1448,7 +1492,9 @@ class AppSettings(BaseSettings):
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
-    spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
+    spec_workflow: AppSpecWorkflowSettings = Field(
+        default_factory=AppSpecWorkflowSettings
+    )
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
@@ -1546,6 +1592,20 @@ class AppSettings(BaseSettings):
             "workflow_git_user_name", "WORKFLOW_GIT_USER_NAME"
         ),
         description="Compatibility passthrough for workflow git user display name.",
+        exclude=True,
+    )
+    workflow_github_repository: Optional[str] = Field(
+        None,
+        env=(
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        ),
+        validation_alias=AliasChoices(
+            "workflow_github_repository",
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        ),
+        description="Compatibility passthrough for workflow repository override.",
         exclude=True,
     )
     workflow_git_user_email: Optional[str] = Field(
@@ -1723,6 +1783,16 @@ class AppSettings(BaseSettings):
             # Fallback to google if unknown provider
             return self.google.google_chat_model
 
+    @property
+    def claude_runtime_gate(self):
+        """Return reusable Claude gate state for API surfaces."""
+
+        return build_runtime_gate_state(
+            env=os.environ,
+            api_key=self.anthropic.anthropic_api_key,
+            error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+        )
+
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Populate derived Celery defaults after settings load."""
         super().model_post_init(__context)
@@ -1752,6 +1822,28 @@ class AppSettings(BaseSettings):
             self.spec_workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:
             self.spec_workflow.codex_effort = self.worker_codex_effort
+        if (
+            "spec_workflow" not in self.__pydantic_fields_set__
+            and self.workflow_github_repository is not None
+        ):
+            repo = self.workflow_github_repository.strip()
+            if repo:
+                self.spec_workflow = AppSpecWorkflowSettings(
+                    _env_file=None,
+                    **self.spec_workflow.model_dump(exclude={"github_repository"}),
+                    github_repository=repo,
+                )
+        configured_default = (
+            str(self.spec_workflow.default_task_runtime or "").strip().lower()
+        )
+        if configured_default == "claude":
+            default_runtime_gate = build_runtime_gate_state(
+                env=os.environ,
+                api_key=self.anthropic.anthropic_api_key,
+                error_message="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY to be configured",
+            )
+            if not default_runtime_gate.enabled:
+                raise ValueError(default_runtime_gate.error_message)
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),

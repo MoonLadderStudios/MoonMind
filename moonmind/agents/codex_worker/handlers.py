@@ -1082,30 +1082,21 @@ def _clean_optional_string(
     return cleaned or None
 
 
-def _normalize_codex_model_alias(model: str | None) -> str | None:
-    """Map known compatibility aliases onto supported Codex model ids."""
+def _normalize_codex_model(model: str | None) -> str | None:
+    """Keep model identifiers as provided.
 
-    if model is None:
-        return None
-    aliases = {
-        "gpt-5.3-codex-spark": "gpt-5-codex",
-        "gpt-5.3-codex": "gpt-5-codex",
-    }
-    return aliases.get(model, model)
+    This preserves caller-selected values and avoids silent downgrade behavior.
+    """
+
+    return model
 
 
-def _normalize_codex_effort_alias(effort: str | None) -> str | None:
-    """Normalize reasoning-effort aliases to CLI-compatible values."""
+def _normalize_codex_effort(effort: str | None) -> str | None:
+    """Preserve effort as provided."""
 
     if effort is None:
         return None
-    normalized = effort.lower()
-    aliases = {
-        "xlow": "low",
-        "xmedium": "medium",
-        "xhigh": "high",
-    }
-    return aliases.get(normalized, normalized)
+    return effort.strip()
 
 
 def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str | None]:
@@ -1118,8 +1109,8 @@ def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str 
         raise CodexWorkerHandlerError(
             "codex field must be an object containing optional model/effort"
         )
-    model = _normalize_codex_model_alias(_clean_optional_string(raw.get("model")))
-    effort = _normalize_codex_effort_alias(_clean_optional_string(raw.get("effort")))
+    model = _normalize_codex_model(_clean_optional_string(raw.get("model")))
+    effort = _normalize_codex_effort(_clean_optional_string(raw.get("effort")))
     return (model, effort)
 
 

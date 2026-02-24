@@ -28,10 +28,47 @@ def eprint(message: str) -> None:
 
 
 def parse_repo_slug(slug: str) -> tuple[str, str]:
+    match = _parse_remote_url(slug)
+    if match:
+        return match
+
     match = re.match(r"^([^/\s]+)/([^/\s]+)$", slug.strip())
     if not match:
         raise ValueError(f"Invalid --repo value '{slug}'. Expected format: owner/repo")
     return match.group(1), match.group(2)
+
+
+def _split_owner_repo_path(path: str) -> tuple[str, str] | None:
+    trimmed = path.strip().strip("/")
+    if not trimmed:
+        return None
+
+    parts = [part for part in trimmed.split("/") if part]
+    if len(parts) < 2:
+        return None
+
+    owner = parts[0].strip()
+    repo = parts[1].strip().removesuffix(".git")
+    if not owner or not repo:
+        return None
+    return owner, repo
+
+
+def _parse_remote_url(remote_url: str) -> tuple[str, str] | None:
+    candidate = remote_url.strip()
+    if not candidate:
+        return None
+
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme and parsed.netloc:
+        return _split_owner_repo_path(parsed.path)
+
+    # SSH/scp-style syntax: git@host:owner/repo.git
+    scp_match = re.match(r"^(?:[^@/\s]+@)?[^:/\s]+:(.+)$", candidate)
+    if scp_match:
+        return _split_owner_repo_path(scp_match.group(1))
+
+    return None
 
 
 def detect_repo_from_git() -> tuple[str, str] | None:
@@ -44,11 +81,7 @@ def detect_repo_from_git() -> tuple[str, str] | None:
         return None
 
     remote_url = remote_bytes.decode("utf-8").strip()
-    match = re.search(r"(?:[:/])([^/]+)/(.+?)(?:\.git)?$", remote_url)
-    if not match:
-        return None
-
-    return match.group(1), match.group(2)
+    return _parse_remote_url(remote_url)
 
 
 def resolve_token(cli_token: str | None) -> str | None:

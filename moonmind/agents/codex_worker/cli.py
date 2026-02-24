@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
-import shlex
 import subprocess
 from typing import Mapping, Sequence
 
@@ -24,10 +24,17 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     QueueApiClient,
+    QueueClientError,
+)
+from moonmind.claude.runtime import (
+    CLAUDE_RUNTIME_DISABLED_MESSAGE,
+    build_runtime_gate_state,
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -118,6 +125,33 @@ def _configured_skills_require_speckit(source: Mapping[str, str]) -> bool:
     )
 
 
+def _worker_capabilities(source: Mapping[str, str]) -> tuple[str, ...]:
+    """Return normalized worker capability labels from env configuration."""
+
+    raw = str(source.get("MOONMIND_WORKER_CAPABILITIES", "")).strip()
+    if not raw:
+        return ()
+    normalized = []
+    for entry in raw.split(","):
+        token = entry.strip().lower()
+        if token:
+            normalized.append(token)
+    return tuple(dict.fromkeys(normalized))
+
+
+def _effective_worker_capabilities(
+    source: Mapping[str, str], runtime: str
+) -> tuple[str, ...]:
+    """Return capabilities using the same defaults as CodexWorkerConfig."""
+
+    configured = _worker_capabilities(source)
+    if configured:
+        return configured
+    if runtime == "universal":
+        return ("codex", "gemini", "claude", "git", "gh")
+    return (runtime, "git", "gh")
+
+
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
     redacted = text
     for secret in secrets:
@@ -204,107 +238,51 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     )
 
 
-def _is_cli_usage_error(message: str) -> bool:
-    """Return whether failure text looks like an unsupported-command error."""
-
-    lowered = message.strip().lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "unknown command",
-            "no such option",
-            "unrecognized option",
-            "invalid choice",
-        )
-    )
-
-
-def _run_claude_auth_status_check(
-    *,
-    claude_path: str,
-    source: Mapping[str, str],
-    redaction_values: Sequence[str] = (),
-) -> None:
-    """Validate Claude auth status with a configurable command + compatibility fallback."""
-
-    custom_raw = str(source.get("MOONMIND_CLAUDE_AUTH_STATUS_COMMAND", "")).strip()
-    if custom_raw:
-        custom_command = shlex.split(custom_raw)
-        if not custom_command:
-            raise RuntimeError(
-                "MOONMIND_CLAUDE_AUTH_STATUS_COMMAND cannot be empty when set"
-            )
-        _run_checked_command(
-            custom_command,
-            redaction_values=redaction_values,
-        )
-        return
-
-    first_error: RuntimeError | None = None
-    fallback_error: RuntimeError | None = None
-
-    try:
-        _run_checked_command(
-            [claude_path, "auth", "status"],
-            redaction_values=redaction_values,
-        )
-        return
-    except RuntimeError as exc:
-        first_error = exc
-        if not _is_cli_usage_error(str(exc)):
-            raise
-
-    try:
-        _run_checked_command(
-            [claude_path, "login", "status"],
-            redaction_values=redaction_values,
-        )
-        return
-    except RuntimeError as exc:
-        fallback_error = exc
-
-    raise RuntimeError(
-        "Claude authentication status check failed for both "
-        "`claude auth status` and `claude login status`. "
-        f"Primary error: {first_error}. Fallback error: {fallback_error}"
-    ) from fallback_error
-
-
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
+    capabilities = _effective_worker_capabilities(source, runtime)
+    runtime_verification_order = ("codex", "gemini", "claude")
+    resolved_paths: dict[str, str | None] = {
+        "codex": None,
+        "gemini": None,
+        "claude": None,
+    }
 
-    codex_path: str | None = None
-    if runtime in {"codex", "universal"}:
-        try:
-            codex_path = verify_cli_is_executable("codex")
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
+    for runtime_name in runtime_verification_order:
+        if runtime_name == "claude":
+            if runtime_name not in capabilities:
+                continue
+            gate = build_runtime_gate_state(
+                env=source,
+                error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+            )
+            if not gate.enabled:
+                raise RuntimeError(gate.error_message)
+            try:
+                resolved_paths["claude"] = verify_cli_is_executable(
+                    str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip()
+                    or "claude"
+                )
+            except CliVerificationError as exc:
+                raise RuntimeError(str(exc)) from exc
+            continue
 
-    gemini_path: str | None = None
-    if runtime in {"gemini", "universal"}:
-        try:
-            gemini_path = verify_cli_is_executable(
+        if runtime_name == "codex":
+            if runtime_name not in capabilities:
+                continue
+            binary = "codex"
+        else:
+            if runtime_name not in capabilities:
+                continue
+            binary = (
                 str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
             )
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
 
-    claude_path: str | None = None
-    if runtime in {"claude", "universal"}:
         try:
-            claude_path = verify_cli_is_executable(
-                str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
-            )
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
-
-    speckit_path: str | None = None
-    if _configured_skills_require_speckit(source):
-        try:
-            speckit_path = verify_cli_is_executable("speckit")
+            resolved_paths[runtime_name] = verify_cli_is_executable(binary)
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
@@ -317,17 +295,26 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
+    speckit_path: str | None = None
+    if _configured_skills_require_speckit(source):
+        try:
+            speckit_path = verify_cli_is_executable("speckit")
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
+
     if speckit_path is not None:
         _verify_speckit_cli(
             speckit_path,
             redaction_values=redaction_values,
         )
-    if codex_path is not None:
+
+    if resolved_paths["codex"] is not None:
         _run_checked_command(
-            [codex_path, "login", "status"],
+            [resolved_paths["codex"], "login", "status"],
             redaction_values=redaction_values,
         )
-    if gemini_path is not None:
+
+    if resolved_paths["gemini"] is not None:
         gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(
             env=source
         )
@@ -360,17 +347,13 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
             )
         _run_checked_command(
-            [gemini_path, "--version"],
+            [resolved_paths["gemini"], "--version"],
             redaction_values=redaction_values,
         )
-    if claude_path is not None:
+
+    if resolved_paths["claude"] is not None:
         _run_checked_command(
-            [claude_path, "--version"],
-            redaction_values=redaction_values,
-        )
-        _run_claude_auth_status_check(
-            claude_path=claude_path,
-            source=source,
+            [resolved_paths["claude"], "--version"],
             redaction_values=redaction_values,
         )
 
@@ -429,6 +412,17 @@ async def _run(args: argparse.Namespace) -> None:
         base_url=config.moonmind_url,
         worker_token=config.worker_token,
     )
+    if config.worker_token:
+        try:
+            await queue_client.replace_worker_runtime_capabilities(
+                runtime_capabilities=config.build_runtime_capabilities(),
+            )
+        except QueueClientError as exc:
+            logger.warning(
+                "Worker could not sync runtime capabilities: %s",
+                exc,
+            )
+
     handler = CodexExecHandler(
         workdir_root=config.workdir,
         default_codex_model=config.default_codex_model,
