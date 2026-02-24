@@ -34,6 +34,11 @@ _STATIC_PATHS = {
     "settings",
 }
 
+_PATH_ALIASES = {
+    "new": "queue/new",
+    "create": "queue/new",
+}
+
 
 class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
@@ -75,6 +80,11 @@ def _is_allowed_path(path: str) -> bool:
         _is_dynamic_detail(path, source)
         for source in ("queue", "orchestrator", "proposals", "manifests")
     )
+
+
+def _normalize_dashboard_path(path: str) -> str:
+    normalized = path.strip("/")
+    return _PATH_ALIASES.get(normalized, normalized)
 
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
@@ -130,13 +140,13 @@ async def task_dashboard_route(
 ) -> HTMLResponse:
     """Serve dashboard sub-routes from one HTML shell."""
 
-    normalized = dashboard_path.strip("/")
+    normalized = _normalize_dashboard_path(dashboard_path)
     if not _is_allowed_path(normalized):
         raise HTTPException(
             status_code=404,
             detail={
                 "code": "dashboard_route_not_found",
-                "message": "Dashboard route was not found. Use /tasks/queue, /tasks/orchestrator, /tasks/proposals, /tasks/manifests, or /tasks/settings.",
+                "message": "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, /tasks/orchestrator, /tasks/orchestrator/new, /tasks/proposals, /tasks/manifests, /tasks/manifests/new, /tasks/create, /tasks/new, or /tasks/settings.",
             },
         )
 

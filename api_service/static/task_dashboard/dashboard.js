@@ -6192,49 +6192,56 @@
   }
 
   async function renderForPath(pathname) {
+    const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+    const normalizedRoute =
+      normalizedPath === "/tasks/new" || normalizedPath === "/tasks/create"
+        ? "/tasks/queue/new"
+        : normalizedPath;
     stopPolling();
-    activateNav(pathname);
+    const navRoute =
+      normalizedRoute === "/tasks/queue/new" ? "/tasks/create" : normalizedRoute;
+    activateNav(navRoute);
 
-    const queueDetailMatch = pathname.match(/^\/tasks\/queue\/([^/]+)$/);
-    const orchestratorDetailMatch = pathname.match(
+    const queueDetailMatch = normalizedRoute.match(/^\/tasks\/queue\/([^/]+)$/);
+    const orchestratorDetailMatch = normalizedRoute.match(
       /^\/tasks\/orchestrator\/([^/]+)$/,
     );
-    const proposalDetailMatch = pathname.match(/^\/tasks\/proposals\/([^/]+)$/);
+    const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
 
-    if (pathname === "/tasks") {
+    if (normalizedRoute === "/tasks") {
       await renderActivePage();
       return;
     }
-    if (pathname === "/tasks/queue") {
+    if (normalizedRoute === "/tasks/queue") {
       await renderQueueListPage();
       return;
     }
-    if (pathname === "/tasks/orchestrator") {
+    if (normalizedRoute === "/tasks/orchestrator") {
       await renderOrchestratorListPage();
       return;
     }
-    if (pathname === "/tasks/manifests") {
+    if (normalizedRoute === "/tasks/manifests") {
       await renderManifestListPage();
       return;
     }
-    if (pathname === "/tasks/manifests/new") {
+    if (normalizedRoute === "/tasks/manifests/new") {
       renderManifestSubmitPage();
       return;
     }
-    if (pathname === "/tasks/proposals") {
+    if (normalizedRoute === "/tasks/proposals") {
       await renderProposalsListPage();
       return;
     }
-    if (pathname === "/tasks/settings") {
+    if (normalizedRoute === "/tasks/settings") {
       await renderSystemSettingsPage();
       return;
     }
 
-    if (pathname === "/tasks/queue/new") {
+    if (normalizedRoute === "/tasks/queue/new") {
       renderQueueSubmitPage();
       return;
     }
-    if (pathname === "/tasks/orchestrator/new") {
+    if (normalizedRoute === "/tasks/orchestrator/new") {
       renderOrchestratorSubmitPage();
       return;
     }
