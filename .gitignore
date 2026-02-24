@@ -43,6 +43,7 @@ agent_jobs/
 
 # Local saved artifacts
 /Saved/
+artifacts/
 
 # Local-only worker skills mirror
 .agents/skills/local/
