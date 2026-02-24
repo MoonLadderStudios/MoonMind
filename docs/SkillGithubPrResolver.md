@@ -105,11 +105,11 @@ Implement `bin/pr_resolve_snapshot.py` to emit a unified snapshot, computing:
 The resolver always re-evaluates from the top after each applied fix (bounded by `maxIterations`).
 
 1. **Preflight stop conditions:** PR not found, PR is draft, or PR already merged/closed.
-2. **Merge conflicts:** If `mergeable` indicates conflict → Delegate to `fix-merge-conflicts` skill.
+2. **Merge conflicts:** If `mergeable` indicates conflict (`false`, `CONFLICTING`, or `DIRTY`) **or** `mergeStateStatus` is not `CLEAN` → Delegate to `fix-merge-conflicts` skill.
 3. **CI failures:** If `ci.hasFailures == true` → Delegate to `fix-ci` skill (or fallback to manual diagnosis if skill missing).
 4. **Review comments:** If `reviewDecision` requests changes or comments are actionable → Delegate to `fix-comments` skill.
-5. **Merge:** If clean, no CI running, and reviews satisfied → Execute `gh pr merge`.
-6. **Blocked:** If CI is running without failures → Exit with `blocked_by_ci_running`.
+5. **Merge:** If `mergeable` is clean, `mergeStateStatus` is `CLEAN`, no CI running, and reviews satisfied → Execute `gh pr merge`.
+6. **Blocked:** If CI is running without failures and merge state is clean (`mergeable` clean and `mergeStateStatus` is `CLEAN`) → Exit with `blocked_by_ci_running`.
 
 ---
 
@@ -221,11 +221,11 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
 1. Run `bin/pr_resolve_snapshot.py` to generate `artifacts/pr_resolver_snapshot.json`.
 2. Inspect the snapshot output.
 3. Apply fixes in this strict priority order:
-   - **Merge Conflicts:** If `mergeable` is false or dirty, you MUST read `.agents/skills/fix-merge-conflicts/SKILL.md`. Follow its procedure exactly to resolve the conflict.
+   - **Merge Conflicts:** If `mergeable` indicates conflict (`false`, `CONFLICTING`, or `DIRTY`) **or** `mergeStateStatus` is not `CLEAN`, you MUST read `.agents/skills/fix-merge-conflicts/SKILL.md`. Follow its procedure exactly to resolve the conflict.
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
    - **Review Comments:** If `reviewDecision` indicates changes requested, read `.agents/skills/fix-comments/SKILL.md` and follow its procedure.
-   - **Merge:** If all green, `mergeable` is clean, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
-   - **Blocked:** If CI is running but no failures, exit and state the PR is blocked waiting for CI.
+   - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `CLEAN`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
+   - **Blocked:** If CI is running but no failures and merge state is clean (`mergeable` clean and `mergeStateStatus` is `CLEAN`), exit and state the PR is blocked waiting for CI.
 4. After applying ANY fix (conflict, CI, or review), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`.
 5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
 
