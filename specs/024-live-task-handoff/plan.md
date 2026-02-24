@@ -67,7 +67,7 @@ runtime/
 ├── docker-compose.yaml
 ├── .env-template
 ├── api_service/Dockerfile
-└── tools/start-codex-worker.sh
+└── tools/start-worker.sh
 
 tests/
 ├── unit/api/routers/test_task_runs.py
