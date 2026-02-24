@@ -3875,26 +3875,14 @@
       };
 
       try {
-        await fetchJson("/api/queue/jobs", {
+        const created = await fetchJson("/api/queue/jobs", {
           method: "POST",
           body: JSON.stringify(requestBody),
         });
-        submitDraftController.saveWorker({
-          runtime: defaultTaskRuntime,
-          model: "",
-          effort: "",
-          repository: "",
-          startingBranch: "",
-          newBranch: "",
-          publishMode: defaultPublishMode,
-          priority: 0,
-          maxAttempts: 3,
-          proposeTasks: defaultProposeTasks,
-          templateFeatureRequest: "",
-          steps: [],
-        });
-        persistSubmitDraftsToStorage();
-        renderQueueSubmitPage();
+        if (!created || typeof created.id !== "string" || !created.id.trim()) {
+          throw new Error("queue creation response missing job id");
+        }
+        window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
