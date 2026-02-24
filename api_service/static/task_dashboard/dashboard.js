@@ -2727,7 +2727,13 @@
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <button type="submit" class="queue-submit-primary">Create</button>
+          <button
+            type="submit"
+            class="queue-submit-primary"
+            style="background: rgb(var(--mm-ok)); box-shadow: 0 0 0 1px rgb(var(--mm-ok) / 0.4), 0 14px 26px -18px rgb(var(--mm-ok));"
+          >
+            Create
+          </button>
         </div>
       </form>
       `,

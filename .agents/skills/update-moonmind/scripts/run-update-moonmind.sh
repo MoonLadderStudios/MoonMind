@@ -393,14 +393,16 @@ readarray -t SERVICES_TO_RESTART < <(
 
 if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
   say "No restartable services detected after filtering."
-  exit 0
+else
+  if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
+    say "Restarting changed services: ${SERVICES_TO_RESTART[*]}"
+  else
+    say "Restarting changed services (excluding orchestrator): ${SERVICES_TO_RESTART[*]}"
+  fi
+  run_cmd "${COMPOSE_CMD[@]}" up -d --remove-orphans --no-deps --force-recreate "${SERVICES_TO_RESTART[@]}"
 fi
 
-if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
-  say "Restarting changed services: ${SERVICES_TO_RESTART[*]}"
-else
-  say "Restarting changed services (excluding orchestrator): ${SERVICES_TO_RESTART[*]}"
-fi
-run_cmd "${COMPOSE_CMD[@]}" up -d --remove-orphans --no-deps --force-recreate "${SERVICES_TO_RESTART[@]}"
+say "Ensuring all default (non-profile) compose services are running."
+run_cmd "${COMPOSE_CMD[@]}" up -d
 
 say "MoonMind update complete"
