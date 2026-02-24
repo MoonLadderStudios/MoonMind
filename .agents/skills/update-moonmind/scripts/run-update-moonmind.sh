@@ -11,6 +11,7 @@ Options:
   --allow-dirty              Allow running with uncommitted git changes
   --no-compose-pull          Skip docker compose pull step
   --dry-run                  Print commands without executing them
+  --restart-orchestrator     Include orchestrator in service restart list
   -h, --help                 Show this help
 EOF
 }
@@ -100,6 +101,7 @@ BRANCH="main"
 ALLOW_DIRTY="false"
 SKIP_COMPOSE_PULL="false"
 DRY_RUN="false"
+RESTART_ORCHESTRATOR="false"
 
 validate_branch() {
   local branch="$1"
@@ -133,6 +135,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN="true"
+      shift
+      ;;
+    --restart-orchestrator)
+      RESTART_ORCHESTRATOR="true"
       shift
       ;;
     -h|--help)
@@ -211,7 +217,7 @@ add_target() {
   if [[ -z "$service" ]]; then
     return
   fi
-  if [[ "$service" == "orchestrator" ]]; then
+  if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
     return
   fi
   if [[ -v available_services["$service"] ]]; then
@@ -219,9 +225,12 @@ add_target() {
   fi
 }
 
-add_all_non_orchestrator_services() {
+add_all_services() {
   for service in "${COMPOSE_SERVICES[@]}"; do
-    if [[ "$service" != "orchestrator" ]]; then
+    if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
+      continue
+    fi
+    if [[ -v available_services["$service"] ]]; then
       target_services["$service"]=1
     fi
   done
@@ -230,7 +239,7 @@ add_all_non_orchestrator_services() {
 for changed_file in "${CHANGED_FILES[@]}"; do
   case "$changed_file" in
     docker-compose*.y*ml | .env* | AGENTS.md | .env-template* | .env.vllm-template* | .gitmodules )
-      add_all_non_orchestrator_services
+      add_all_services
       ;;
     services/*)
       service="${changed_file#services/}"
@@ -238,10 +247,10 @@ for changed_file in "${CHANGED_FILES[@]}"; do
       add_target "$service"
       ;;
     moonmind/*|tools/*|.agents/*|.gemini/*|specs/*|.specify/*|docs/*|README*|LICENSE|.gitignore )
-      add_all_non_orchestrator_services
+      add_all_services
       ;;
     api_service/*)
-      add_all_non_orchestrator_services
+      add_all_services
       ;;
     init_db/*)
       add_target "init-db"
@@ -257,7 +266,7 @@ for changed_file in "${CHANGED_FILES[@]}"; do
       add_target "keycloak-db"
       ;;
     *)
-      add_all_non_orchestrator_services
+      add_all_services
       ;;
   esac
 done
@@ -280,7 +289,11 @@ if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
   exit 0
 fi
 
-say "Restarting changed services (excluding orchestrator): ${SERVICES_TO_RESTART[*]}"
+if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
+  say "Restarting changed services: ${SERVICES_TO_RESTART[*]}"
+else
+  say "Restarting changed services (excluding orchestrator): ${SERVICES_TO_RESTART[*]}"
+fi
 run_cmd "${COMPOSE_CMD[@]}" up -d --remove-orphans --no-deps --force-recreate "${SERVICES_TO_RESTART[@]}"
 
 say "MoonMind update complete"
