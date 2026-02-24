@@ -1563,6 +1563,32 @@
     value.priority = ["normal", "high"].includes(normalizedPriority)
       ? normalizedPriority
       : "normal";
+    const skillId = String(draft.skillId || "").trim();
+    const skillArgsRaw = String(draft.skillArgs || "").trim();
+    if (skillId) {
+      value.skillId = skillId;
+    } else {
+      delete value.skillId;
+    }
+    if (skillArgsRaw) {
+      try {
+        const parsed = JSON.parse(skillArgsRaw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return {
+            ok: false,
+            error: "Skill Args must be valid JSON object text.",
+          };
+        }
+        value.skillArgs = parsed;
+      } catch (_error) {
+        return {
+          ok: false,
+          error: "Skill Args must be valid JSON object text.",
+        };
+      }
+    } else {
+      delete value.skillArgs;
+    }
     if (Object.prototype.hasOwnProperty.call(draft, "approvalToken")) {
       const token = String(draft.approvalToken || "").trim();
       if (token) {
@@ -1589,16 +1615,17 @@
         return null;
       }
       return parsed;
-    } catch (_error) {
+    } catch (error) {
+      console.warn("Unable to read submit drafts from localStorage.", error);
       return null;
     }
   };
 
   const writeSubmitDraftStorage = (payload) => {
-    if (!window.localStorage || typeof window.localStorage.setItem !== "function") {
-      return;
-    }
     try {
+      if (!window.localStorage || typeof window.localStorage.setItem !== "function") {
+        return;
+      }
       const rawPayload =
         payload && typeof payload === "object" && !Array.isArray(payload)
           ? payload
@@ -1607,9 +1634,22 @@
         SUBMIT_DRAFT_STORAGE_KEY,
         JSON.stringify(rawPayload),
       );
-    } catch (_error) {
-      // Ignore quota or policy errors from persistence environments.
+    } catch (error) {
+      console.warn("Unable to persist submit drafts to localStorage.", error);
     }
+  };
+
+  const createDraftPersistenceScheduler = (persistFn, delayMs = 250) => {
+    let timeoutId = null;
+    return () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        persistFn();
+      }, delayMs);
+    };
   };
 
   const normalizeOrchestratorPriority = (value) => {
@@ -1643,13 +1683,11 @@
     }
     return {
       worker:
-        stored && typeof stored.worker === "object" && !Array.isArray(stored.worker)
+        typeof stored.worker === "object" && !Array.isArray(stored.worker)
           ? stored.worker
           : {},
       orchestrator:
-        stored &&
-        typeof stored.orchestrator === "object" &&
-        !Array.isArray(stored.orchestrator)
+        typeof stored.orchestrator === "object" && !Array.isArray(stored.orchestrator)
           ? stored.orchestrator
           : {},
     };
@@ -2411,13 +2449,7 @@
   }
 
   function renderQueueSubmitPage() {
-    const workerDraftState = submitDraftController.loadWorker();
-    const sanitizedWorkerDraft =
-      workerDraftState &&
-      typeof workerDraftState === "object" &&
-      !Array.isArray(workerDraftState)
-        ? workerDraftState
-        : {};
+    const sanitizedWorkerDraft = submitDraftController.loadWorker();
     const selectedWorkerRuntime = resolveSubmitRuntime(
       sanitizedWorkerDraft.runtime,
       defaultTaskRuntime,
@@ -2447,7 +2479,7 @@
     const queueDraftMaxAttempts = Number.isInteger(
       Number(sanitizedWorkerDraft.maxAttempts),
     )
-      ? Number(sanitizedWorkerDraft.maxAttempts)
+      ? Math.max(1, Number(sanitizedWorkerDraft.maxAttempts))
       : 3;
     const queueDraftProposeTasks = Object.prototype.hasOwnProperty.call(
       sanitizedWorkerDraft,
@@ -2629,6 +2661,9 @@
       submitDraftController.saveWorker(collectWorkerDraftFromForm());
       persistSubmitDraftsToStorage();
     };
+    const scheduleWorkerDraftPersist = createDraftPersistenceScheduler(
+      persistWorkerDraft,
+    );
     const runtimeSelect = form.querySelector('select[name="runtime"]');
     const modelInputElement = form.querySelector('input[name="model"]');
     const effortInputElement = form.querySelector('input[name="effort"]');
@@ -2730,11 +2765,11 @@
       runtimeSelect.addEventListener("change", (event) => {
         const nextRuntime = normalizeTaskRuntimeInput(event.target.value);
         loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
-        persistWorkerDraft();
+        scheduleWorkerDraftPersist();
       });
     }
-    form.addEventListener("input", persistWorkerDraft);
-    form.addEventListener("change", persistWorkerDraft);
+    form.addEventListener("input", scheduleWorkerDraftPersist);
+    form.addEventListener("change", scheduleWorkerDraftPersist);
     const createStepStateEntry = (overrides = {}) => ({
       id: "",
       instructions: "",
@@ -2950,7 +2985,7 @@
         if (action === "add") {
           stepState.push(createStepStateEntry());
           renderStepEditor();
-          persistWorkerDraft();
+          scheduleWorkerDraftPersist();
           return;
         }
         const index = readStepIndex(actionButton);
@@ -2960,7 +2995,7 @@
         if (action === "remove") {
           stepState.splice(index, 1);
           renderStepEditor();
-          persistWorkerDraft();
+          scheduleWorkerDraftPersist();
           return;
         }
         if (action === "up" && index > 0) {
@@ -2968,7 +3003,7 @@
           stepState[index] = stepState[index - 1];
           stepState[index - 1] = current;
           renderStepEditor();
-          persistWorkerDraft();
+          scheduleWorkerDraftPersist();
           return;
         }
         if (action === "down" && index < stepState.length - 1) {
@@ -2976,7 +3011,7 @@
           stepState[index] = stepState[index + 1];
           stepState[index + 1] = current;
           renderStepEditor();
-          persistWorkerDraft();
+          scheduleWorkerDraftPersist();
         }
       });
       stepsList.addEventListener("input", (event) => {
@@ -3008,7 +3043,7 @@
         ) {
           stepState[index].id = "";
         }
-        persistWorkerDraft();
+        scheduleWorkerDraftPersist();
       });
     }
     renderStepEditor();
@@ -3414,7 +3449,7 @@
           });
         }
         renderStepEditor();
-        persistWorkerDraft();
+        scheduleWorkerDraftPersist();
         const autoFillSuffix =
           assumptions.length > 0
             ? ` Auto-filled ${assumptions.length} input(s): ${assumptions.join(", ")}.`
@@ -3829,13 +3864,7 @@
   }
 
   function renderOrchestratorSubmitPage() {
-    const orchestratorDraftState = submitDraftController.loadOrchestrator();
-    const sanitizedOrchestratorDraft =
-      orchestratorDraftState &&
-      typeof orchestratorDraftState === "object" &&
-      !Array.isArray(orchestratorDraftState)
-        ? orchestratorDraftState
-        : {};
+    const sanitizedOrchestratorDraft = submitDraftController.loadOrchestrator();
     const defaultOrchestratorDraftPriority = normalizeOrchestratorPriority(
       sanitizedOrchestratorDraft.priority || "normal",
     );
@@ -3865,13 +3894,23 @@
           <label>Approval Token
             <input
               name="approvalToken"
-              value="${escapeHtml(
-                String(sanitizedOrchestratorDraft.approvalToken || "").trim(),
-              )}"
+              value=""
               placeholder="optional"
             />
           </label>
         </div>
+        <label>Skill (optional)
+          <input
+            name="skillId"
+            value="${escapeHtml(String(sanitizedOrchestratorDraft.skillId || "").trim())}"
+            placeholder="auto"
+          />
+        </label>
+        <label>Skill Args (optional JSON object)
+          <textarea name="skillArgs" placeholder='{"notes":"optional context"}'>${escapeHtml(
+            String(sanitizedOrchestratorDraft.skillArgs || "").trim(),
+          )}</textarea>
+        </label>
         <div class="actions">
           <button type="submit">Create Orchestrator Run</button>
           <a href="/tasks/orchestrator"><button class="secondary" type="button">Cancel</button></a>
@@ -3892,22 +3931,34 @@
         instruction: String(formData.get("instruction") || "").trim(),
         targetService: String(formData.get("targetService") || "orchestrator").trim(),
         priority: normalizeOrchestratorPriority(formData.get("priority") || "normal"),
-        approvalToken: String(formData.get("approvalToken") || "").trim(),
+        skillId: String(formData.get("skillId") || "").trim(),
+        skillArgs: String(formData.get("skillArgs") || "").trim(),
+      };
+    };
+    const collectOrchestratorSubmissionFromForm = () => {
+      const draft = collectOrchestratorDraftFromForm();
+      const approvalToken = String(new FormData(form).get("approvalToken") || "").trim();
+      return {
+        ...draft,
+        ...(approvalToken ? { approvalToken } : {}),
       };
     };
     const persistOrchestratorDraft = () => {
       submitDraftController.saveOrchestrator(collectOrchestratorDraftFromForm());
       persistSubmitDraftsToStorage();
     };
-    form.addEventListener("input", persistOrchestratorDraft);
-    form.addEventListener("change", persistOrchestratorDraft);
+    const scheduleOrchestratorDraftPersist = createDraftPersistenceScheduler(
+      persistOrchestratorDraft,
+    );
+    form.addEventListener("input", scheduleOrchestratorDraftPersist);
+    form.addEventListener("change", scheduleOrchestratorDraftPersist);
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       message.className = "small";
       message.textContent = "Submitting...";
 
-      const draft = collectOrchestratorDraftFromForm();
+      const draft = collectOrchestratorSubmissionFromForm();
       const validation = validateOrchestratorSubmission(draft);
       if (!validation.ok) {
         message.className = "notice error";
@@ -3915,7 +3966,7 @@
         return;
       }
       const body = validation.value;
-      submitDraftController.saveOrchestrator(body);
+      submitDraftController.saveOrchestrator(collectOrchestratorDraftFromForm());
       persistSubmitDraftsToStorage();
 
       try {
