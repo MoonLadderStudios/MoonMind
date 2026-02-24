@@ -123,7 +123,7 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude")
-    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
+    monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
 
     config = build_runtime_config("/tasks")
 
@@ -148,7 +148,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
 
 
 def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> None:
-    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "enabled")
 
     config = build_runtime_config("/tasks")
 
