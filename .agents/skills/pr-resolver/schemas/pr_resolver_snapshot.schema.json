@@ -25,10 +25,33 @@
       },
       "required": ["isRunning", "hasFailures", "failedChecks"]
     },
+    "commentsSummary": {
+      "type": "object",
+      "properties": {
+        "total": { "type": "integer" },
+        "reviewCommentCount": { "type": "integer" },
+        "issueCommentCount": { "type": "integer" },
+        "reviewBodyCount": { "type": "integer" },
+        "actionableCommentCount": { "type": "integer" },
+        "humanCommentCount": { "type": "integer" },
+        "botCommentCount": { "type": "integer" },
+        "hasActionableComments": { "type": "boolean" }
+      },
+      "required": [
+        "total",
+        "reviewCommentCount",
+        "issueCommentCount",
+        "reviewBodyCount",
+        "actionableCommentCount",
+        "humanCommentCount",
+        "botCommentCount",
+        "hasActionableComments"
+      ]
+    },
     "comments": {
       "type": "array",
       "items": { "type": "object" }
     }
   },
-  "required": ["pr", "ci", "comments"]
+  "required": ["pr", "ci", "comments", "commentsSummary"]
 }

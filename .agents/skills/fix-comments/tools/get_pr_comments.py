@@ -169,6 +169,152 @@ def api_get_json(
     raise RuntimeError(f"Failed to fetch {url} after {max_attempts} attempts")
 
 
+def api_post_json(
+    url: str,
+    payload: dict[str, Any],
+    token: str | None,
+    max_attempts: int = 3,
+    initial_delay_seconds: float = 1.0,
+    max_delay_seconds: float = 8.0,
+) -> Any:
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "tactics-get-pr-comments",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read().decode("utf-8")
+                return json.loads(body)
+        except urllib.error.HTTPError as exc:
+            if attempt < max_attempts and is_retryable_http_status(exc.code):
+                delay = min(
+                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                )
+                eprint(
+                    f"Retryable API response on attempt {attempt}/{max_attempts}: "
+                    f"{exc.code} {exc.reason}. Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
+
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8", "replace")
+            except Exception as read_exc:
+                eprint(
+                    f"Warning: Failed to read GitHub API error response body: {read_exc}"
+                )
+            raise RuntimeError(
+                f"GitHub API POST failed ({exc.code} {exc.reason}) for {url}\n{error_body or 'No error body available.'}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            if attempt < max_attempts:
+                delay = min(
+                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                )
+                eprint(
+                    f"Retryable network error on attempt {attempt}/{max_attempts} for {url}: "
+                    f"{exc.reason}. Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
+            raise RuntimeError(
+                f"Network error while calling {url}: {exc.reason}"
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON returned from {url}: {exc}") from exc
+
+    raise RuntimeError(f"Failed to POST {url} after {max_attempts} attempts")
+
+
+def fetch_review_thread_status(
+    owner: str, repo: str, pr_number: int, token: str | None
+) -> dict[int, dict[str, bool]]:
+    """Fetch isResolved/isOutdated for each review thread comment via GraphQL.
+
+    Returns a mapping of comment database ID to {isResolved, isOutdated}.
+    Returns {} on any failure so callers gracefully fall back.
+    """
+    if not token:
+        return {}
+
+    query = """
+    query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              isResolved
+              isOutdated
+              comments(first: 100) {
+                nodes { databaseId }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    result: dict[int, dict[str, bool]] = {}
+    cursor: str | None = None
+
+    try:
+        while True:
+            variables: dict[str, Any] = {
+                "owner": owner,
+                "repo": repo,
+                "pr": pr_number,
+            }
+            if cursor:
+                variables["cursor"] = cursor
+
+            response = api_post_json(
+                "https://api.github.com/graphql",
+                {"query": query, "variables": variables},
+                token,
+            )
+
+            threads_data = (
+                response.get("data", {})
+                .get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+            )
+            nodes = threads_data.get("nodes", [])
+
+            for thread in nodes:
+                is_resolved = thread.get("isResolved", False)
+                is_outdated = thread.get("isOutdated", False)
+                for comment in thread.get("comments", {}).get("nodes", []):
+                    db_id = comment.get("databaseId")
+                    if db_id is not None:
+                        result[db_id] = {
+                            "isResolved": is_resolved,
+                            "isOutdated": is_outdated,
+                        }
+
+            page_info = threads_data.get("pageInfo", {})
+            if page_info.get("hasNextPage"):
+                cursor = page_info.get("endCursor")
+            else:
+                break
+
+    except Exception as exc:
+        eprint(f"Warning: GraphQL thread status fetch failed: {exc}")
+        return {}
+
+    return result
+
+
 def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     page = 1
@@ -201,8 +347,11 @@ def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_review_comment(comment: dict[str, Any]) -> dict[str, Any]:
-    return {
+def normalize_review_comment(
+    comment: dict[str, Any],
+    thread_status: dict[int, dict[str, bool]] | None = None,
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {
         "type": "review_comment",
         "id": comment.get("id"),
         "user": (comment.get("user") or {}).get("login"),
@@ -216,6 +365,13 @@ def normalize_review_comment(comment: dict[str, Any]) -> dict[str, Any]:
         "line": comment.get("line"),
         "side": comment.get("side"),
     }
+    if thread_status is not None:
+        comment_id = comment.get("id")
+        status = thread_status.get(comment_id) if comment_id else None
+        if status:
+            normalized["thread_resolved"] = status["isResolved"]
+            normalized["thread_outdated"] = status["isOutdated"]
+    return normalized
 
 
 def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
@@ -288,9 +444,13 @@ def main() -> None:
     issue_comments_raw = fetch_paginated(f"{base}/issues/{pr_number}/comments", token)
     review_comments_raw = fetch_paginated(f"{base}/pulls/{pr_number}/comments", token)
 
+    thread_status = fetch_review_thread_status(owner, repo, pr_number, token)
+
     comments: list[dict[str, Any]] = []
     comments.extend(normalize_issue_comment(c) for c in issue_comments_raw)
-    comments.extend(normalize_review_comment(c) for c in review_comments_raw)
+    comments.extend(
+        normalize_review_comment(c, thread_status) for c in review_comments_raw
+    )
 
     if not args.exclude_reviews:
         reviews_raw = fetch_paginated(f"{base}/pulls/{pr_number}/reviews", token)

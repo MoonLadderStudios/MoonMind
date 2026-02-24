@@ -63,6 +63,69 @@ def infer_repo_from_pr_url(url: str | None) -> str | None:
     return None
 
 
+def normalize_user(login: str | None) -> str:
+    return (login or "").lower().strip()
+
+
+def is_bot_user(login: str | None) -> bool:
+    user = normalize_user(login)
+    return user.endswith("[bot]") or user == "github-actions[bot]"
+
+
+def _is_comment_actionable(comment: dict) -> bool:
+    """Determine whether a comment requires action.
+
+    - Must have non-empty body text (baseline).
+    - review_comment: NOT actionable if thread_resolved or thread_outdated.
+      Falls back to actionable if thread status keys are absent (GraphQL failed).
+    - issue_comment: NOT actionable if from a bot user.
+    """
+    if not (comment.get("body") or "").strip():
+        return False
+
+    comment_type = comment.get("type")
+
+    if comment_type == "review_comment":
+        if "thread_resolved" in comment:
+            if comment["thread_resolved"] or comment.get("thread_outdated", False):
+                return False
+
+    if comment_type == "issue_comment":
+        if is_bot_user(comment.get("user") or ""):
+            return False
+
+    return True
+
+
+def summarize_comments(comments: list[dict]) -> dict:
+    review_comments = [c for c in comments if c.get("type") == "review_comment"]
+    issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
+    review_bodies = [c for c in comments if c.get("type") == "review"]
+
+    all_inline_comments = review_comments + issue_comments
+    human_comments = [
+        c for c in all_inline_comments if not is_bot_user(c.get("user") or "")
+    ]
+    bot_comments = [
+        c for c in all_inline_comments if is_bot_user(c.get("user") or "")
+    ]
+
+    actionable_comments = [
+        c for c in all_inline_comments if _is_comment_actionable(c)
+    ]
+
+    return {
+        "total": len(comments),
+        "reviewCommentCount": len(review_comments),
+        "issueCommentCount": len(issue_comments),
+        "reviewBodyCount": len(review_bodies),
+        "actionableCommentCount": len(actionable_comments),
+        "humanCommentCount": len(human_comments),
+        "botCommentCount": len(bot_comments),
+        "hasActionableComments": len(actionable_comments) > 0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Snapshot PR state for pr-resolver skill"
@@ -139,6 +202,11 @@ def main():
             file=sys.stderr,
         )
 
+    comments = comments_data.get("comments", []) if isinstance(comments_data, dict) else []
+    if not isinstance(comments, list):
+        comments = []
+    comments_summary = summarize_comments(comments)
+
     # 4. Construct Snapshot
     snapshot = {
         "pr": pr_data,
@@ -147,7 +215,8 @@ def main():
             "hasFailures": ci_has_failures,
             "failedChecks": failed_checks,
         },
-        "comments": comments_data.get("comments", []),
+        "comments": comments,
+        "commentsSummary": comments_summary,
     }
 
     # Save to artifacts/pr_resolver_snapshot.json
@@ -166,6 +235,7 @@ def main():
         "reviewDecision": pr_data.get("reviewDecision"),
         "ci": snapshot["ci"],
         "comment_count": len(snapshot["comments"]),
+        "actionable_comment_count": comments_summary.get("actionableCommentCount", 0),
     }
     print(json.dumps(summary, indent=2))
 
