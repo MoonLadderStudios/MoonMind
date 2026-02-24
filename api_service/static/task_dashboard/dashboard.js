@@ -2640,7 +2640,7 @@
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <button type="submit" class="queue-submit-primary">Submit</button>
+          <button type="submit" class="queue-submit-primary">Create</button>
         </div>
       </form>
       `,
@@ -3875,11 +3875,26 @@
       };
 
       try {
-        const created = await fetchJson("/api/queue/jobs", {
+        await fetchJson("/api/queue/jobs", {
           method: "POST",
           body: JSON.stringify(requestBody),
         });
-        window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
+        submitDraftController.saveWorker({
+          runtime: defaultTaskRuntime,
+          model: "",
+          effort: "",
+          repository: "",
+          startingBranch: "",
+          newBranch: "",
+          publishMode: defaultPublishMode,
+          priority: 0,
+          maxAttempts: 3,
+          proposeTasks: defaultProposeTasks,
+          templateFeatureRequest: "",
+          steps: [],
+        });
+        persistSubmitDraftsToStorage();
+        renderQueueSubmitPage();
       } catch (error) {
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
