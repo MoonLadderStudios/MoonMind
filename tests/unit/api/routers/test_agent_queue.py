@@ -296,7 +296,7 @@ def test_create_job_rejects_claude_runtime_without_api_key(
     assert body["detail"]["code"] == "claude_runtime_disabled"
     assert (
         body["detail"]["message"]
-        == "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured"
+        == "targetRuntime=claude is not available in the current server configuration"
     )
     service.create_job.assert_awaited_once()
 

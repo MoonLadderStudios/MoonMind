@@ -553,12 +553,34 @@ def test_run_preflight_universal_with_claude_capability_requires_key(
 ) -> None:
     """Universal runtime with claude capability should require API key."""
 
+    monkeypatch.setattr(
+        cli, "verify_cli_is_executable", lambda name: f"/usr/bin/{name}"
+    )
+
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "universal",
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
                 "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini",
+            }
+        )
+
+
+def test_run_preflight_universal_without_capabilities_requires_claude_key(
+    monkeypatch,
+) -> None:
+    """Universal runtime defaults to Claude-capable when capabilities are unset."""
+
+    monkeypatch.setattr(
+        cli, "verify_cli_is_executable", lambda name: f"/usr/bin/{name}"
+    )
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "universal",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
 

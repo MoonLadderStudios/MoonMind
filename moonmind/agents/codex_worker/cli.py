@@ -135,6 +135,19 @@ def _worker_capabilities(source: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(normalized))
 
 
+def _effective_worker_capabilities(
+    source: Mapping[str, str], runtime: str
+) -> tuple[str, ...]:
+    """Return capabilities using the same defaults as CodexWorkerConfig."""
+
+    configured = _worker_capabilities(source)
+    if configured:
+        return configured
+    if runtime == "universal":
+        return ("codex", "gemini", "claude", "git", "gh")
+    return (runtime, "git", "gh")
+
+
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
     redacted = text
     for secret in secrets:
@@ -226,24 +239,8 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
 
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
-    capabilities = _worker_capabilities(source)
-    claude_required = runtime == "claude" or "claude" in capabilities
-
-    codex_path: str | None = None
-    if runtime in {"codex", "universal"}:
-        try:
-            codex_path = verify_cli_is_executable("codex")
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
-
-    gemini_path: str | None = None
-    if runtime in {"gemini", "universal"}:
-        try:
-            gemini_path = verify_cli_is_executable(
-                str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
-            )
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
+    capabilities = _effective_worker_capabilities(source, runtime)
+    claude_required = "claude" in capabilities
 
     claude_path: str | None = None
     if claude_required:
@@ -256,6 +253,22 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         try:
             claude_path = verify_cli_is_executable(
                 str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
+            )
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    codex_path: str | None = None
+    if "codex" in capabilities:
+        try:
+            codex_path = verify_cli_is_executable("codex")
+        except CliVerificationError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    gemini_path: str | None = None
+    if "gemini" in capabilities:
+        try:
+            gemini_path = verify_cli_is_executable(
+                str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
             )
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc

@@ -761,7 +761,8 @@ class TestAppSettingsRuntimeValidation:
         defaults["spec_workflow"] = {"default_task_runtime": "claude"}
 
         with pytest.raises(
-            ValueError, match="default_task_runtime=claude requires ANTHROPIC_API_KEY"
+            ValueError,
+            match="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY",
         ):
             AppSettings(**defaults)
 
@@ -777,6 +778,23 @@ class TestAppSettingsRuntimeValidation:
         defaults = dict(app_settings_defaults)
         defaults["spec_workflow"] = {"default_task_runtime": "claude"}
         defaults["anthropic"] = {"anthropic_api_key": "test-key"}
+
+        settings = AppSettings(**defaults)
+        assert settings.spec_workflow.default_task_runtime == "claude"
+
+    def test_app_settings_allows_claude_default_with_claude_alias_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "ANTHROPIC_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("CLAUDE_API_KEY", "alias-key")
+        defaults = dict(app_settings_defaults)
+        defaults["spec_workflow"] = {"default_task_runtime": "claude"}
 
         settings = AppSettings(**defaults)
         assert settings.spec_workflow.default_task_runtime == "claude"

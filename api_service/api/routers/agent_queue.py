@@ -491,7 +491,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "code": "claude_runtime_disabled",
-                    "message": "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured",
+                    "message": "targetRuntime=claude is not available in the current server configuration",
                 },
             )
         if "attachments exceed max count" in lowered:

@@ -1733,6 +1733,7 @@ class AppSettings(BaseSettings):
         """Return reusable Claude gate state for API surfaces."""
 
         return build_runtime_gate_state(
+            env=os.environ,
             api_key=self.anthropic.anthropic_api_key,
             error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
         )
@@ -1771,8 +1772,9 @@ class AppSettings(BaseSettings):
         )
         if configured_default == "claude":
             default_runtime_gate = build_runtime_gate_state(
+                env=os.environ,
                 api_key=self.anthropic.anthropic_api_key,
-                error_message="default_task_runtime=claude requires ANTHROPIC_API_KEY to be configured",
+                error_message="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY to be configured",
             )
             if not default_runtime_gate.enabled:
                 raise ValueError(default_runtime_gate.error_message)
