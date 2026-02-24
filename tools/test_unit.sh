@@ -18,6 +18,18 @@ fi
 
 export MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP=1
 
+# Clear worker-specific overrides so SpecWorkflowSettings-based tests use
+# repository defaults instead of container env hints.
+unset WORKFLOW_GITHUB_REPOSITORY
+unset WORKFLOW_REPO_ROOT
+unset SPEC_WORKFLOW_REPO_ROOT
+unset WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT
+unset WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT
+unset SPEC_SKILLS_LOCAL_MIRROR_ROOT
+unset SPEC_SKILLS_LEGACY_MIRROR_ROOT
+unset MOONMIND_CODEX_MODEL
+unset MOONMIND_CODEX_EFFORT
+
 # Run only unit tests locally.
 # Prefer repository-local virtualenv when present to avoid system Python drift.
 if [[ -x ".venv/bin/python" ]]; then
@@ -34,8 +46,13 @@ fi
 "$PYTHON_BIN" -m pytest -q tests/unit
 
 if command -v node >/dev/null 2>&1; then
-    node tests/task_dashboard/test_queue_layouts.js
+    for test_file in \
+        tests/task_dashboard/test_queue_layouts.js \
+        tests/task_dashboard/test_submit_runtime.js
+    do
+        node "$test_file"
+    done
 else
-    echo "Error: node is required to run tests/task_dashboard/test_queue_layouts.js." >&2
+    echo "Error: node is required to run dashboard runtime tests." >&2
     exit 127
 fi

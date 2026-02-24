@@ -105,7 +105,7 @@ def main():
             status = check.get("status", "").upper()
             conclusion = check.get("conclusion", "").upper()
 
-            combined_state = state or status or conclusion
+            combined_state = state or conclusion or status
 
             if combined_state in {"IN_PROGRESS", "QUEUED", "PENDING"}:
                 ci_is_running = True
