@@ -97,7 +97,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -117,12 +117,12 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
     monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
 
 
-def test_build_runtime_config_falls_back_when_claude_disabled(monkeypatch) -> None:
+def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude")
     config = build_runtime_config("/tasks")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
-    assert config["system"]["defaultTaskRuntime"] == "codex"
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
+    assert config["system"]["defaultTaskRuntime"] == "claude"
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:

@@ -218,11 +218,13 @@
     return normalized;
   }
 
+  const ORCHESTRATOR_RUNTIME = "orchestrator";
+
   const TASK_RUNTIME_LABELS = {
     codex: "Codex worker",
     gemini: "Gemini worker",
     claude: "Claude worker",
-    orchestrator: "Orchestrator",
+    [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 
   const formatRuntimeLabel = (runtimeValue) => {
@@ -250,10 +252,10 @@
   };
 
   const renderRuntimeOptions = (options, selectedRuntime) => {
-    const selected = String(selectedRuntime || "").trim().toLowerCase();
+    const selected = String(selectedRuntime || "").trim();
     return options
       .map((runtime) => {
-        const runtimeValue = String(runtime || "").trim().toLowerCase();
+        const runtimeValue = String(runtime || "").trim();
         if (!runtimeValue) {
           return "";
         }
@@ -1716,8 +1718,8 @@
     if (!normalized) {
       return fallback;
     }
-    if (normalized === "orchestrator") {
-      return "orchestrator";
+    if (normalized === ORCHESTRATOR_RUNTIME) {
+      return ORCHESTRATOR_RUNTIME;
     }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
@@ -1730,8 +1732,8 @@
     if (!normalized) {
       return null;
     }
-    if (normalized === "orchestrator") {
-      return "orchestrator";
+    if (normalized === ORCHESTRATOR_RUNTIME) {
+      return ORCHESTRATOR_RUNTIME;
     }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
@@ -1750,7 +1752,7 @@
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
-    return normalized !== "orchestrator" && supportedTaskRuntimes.includes(normalized);
+    return normalized !== ORCHESTRATOR_RUNTIME && supportedTaskRuntimes.includes(normalized);
   };
 
   const submitDraftSeeds = (() => {
@@ -2527,6 +2529,7 @@
       presetRuntime ?? sanitizedWorkerDraft.runtime,
       defaultTaskRuntime,
     );
+    let activeWorkerRuntime = selectedWorkerRuntime;
     const queueDraftModel = String(
       sanitizedWorkerDraft.model || defaultTaskModel,
     ).trim();
@@ -2568,7 +2571,7 @@
       : [];
 
     const runtimeOptions = renderRuntimeOptions(
-      [...supportedTaskRuntimes, "orchestrator"],
+      [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME],
       selectedWorkerRuntime,
     );
     const repositoryFallback = queueDraftRepository || defaultRepository;
@@ -2709,7 +2712,7 @@
       const priority = Number(formData.get("priority") || 0);
       const maxAttempts = Number(formData.get("maxAttempts") || 3);
       return {
-        runtime: runtime || selectedWorkerRuntime,
+        runtime: runtime || activeWorkerRuntime,
         instruction: String(stepState[0]?.instructions || "").trim(),
         repository: String(formData.get("repository") || "").trim(),
         startingBranch: String(formData.get("startingBranch") || "").trim() || null,
@@ -2834,12 +2837,14 @@
       runtimeSelect.addEventListener("change", (event) => {
         const selectedRuntime =
           String(event.target.value || "").trim().toLowerCase();
-        if (selectedRuntime === "orchestrator") {
+        if (selectedRuntime === ORCHESTRATOR_RUNTIME) {
+          activeWorkerRuntime = selectedRuntime;
           persistWorkerDraft();
-          window.location.href = "/tasks/queue/new?runtime=orchestrator";
+          window.location.href = `/tasks/queue/new?runtime=${ORCHESTRATOR_RUNTIME}`;
           return;
         }
         const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
+        activeWorkerRuntime = nextRuntime || activeWorkerRuntime;
         loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
         scheduleWorkerDraftPersist();
       });
@@ -3952,7 +3957,7 @@
         `<div class="notice error">Unsupported runtime value: <code>${escapeHtml(
           String(presetRuntime),
         )}</code>. Use one of: <code>${escapeHtml(
-          [...supportedTaskRuntimes, "orchestrator"].join(", "),
+          [...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME].join(", "),
         )}</code>.</div>`,
       );
       return;
