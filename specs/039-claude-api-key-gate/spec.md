@@ -1,6 +1,6 @@
 # Feature Specification: Claude Runtime Enabled by API Key
 
-**Feature Branch**: `027-claude-api-key-gate`  
+**Feature Branch**: `039-claude-api-key-gate`  
 **Created**: February 24, 2026  
 **Status**: Active  
 

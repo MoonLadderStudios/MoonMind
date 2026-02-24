@@ -2858,6 +2858,7 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
     """Numeric-only step titles should not hide task instruction intent."""
 
     worker, _, _ = codex_worker_components
+    job_id = uuid4()
     payload = {
         "task": {
             "instructions": "Fix publish behavior without adding step titles.",
@@ -2866,7 +2867,7 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
     }
 
     title = worker._derive_default_pr_title(
-        job_id=uuid4(),
+        job_id=job_id,
         canonical_payload=payload,
         resolved_steps=worker._resolve_task_steps(payload),
     )

@@ -17,13 +17,21 @@ SEARCH_PATHS=(
   "$ROOT_DIR/docs"
   "$ROOT_DIR/specs"
   "$ROOT_DIR/tools"
+  "$ROOT_DIR/.env-template"
+  "$ROOT_DIR/docker-compose.yaml"
+  "$ROOT_DIR/docker-compose.yml"
+  "$ROOT_DIR/docker-compose.override.yaml"
+  "$ROOT_DIR/docker-compose.override.yml"
+  "$ROOT_DIR/docker-compose.test.yaml"
+  "$ROOT_DIR/docker-compose.test.yml"
 )
 failed=0
 
 for pattern in "${PATTERNS[@]}"; do
   matches="$(grep -RIn --include='*.md' --include='*.sh' \
+    --include='*.yml' --include='*.yaml' --include='.env-template' \
     --exclude-dir='.git' --exclude-dir='.venv' --exclude-dir='node_modules' \
-    --exclude="check-no-claude-oauth-refs.sh" "$pattern" "${SEARCH_PATHS[@]}" 2>/dev/null || true)"
+    --exclude="${BASH_SOURCE[0]##*/}" "$pattern" "${SEARCH_PATHS[@]}" 2>/dev/null || true)"
 
   if [[ -n "${matches}" ]]; then
     failed=1

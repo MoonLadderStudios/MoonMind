@@ -2,7 +2,7 @@
 
 ## Inputs
 
-- `specs/027-claude-api-key-gate/spec.md`
+- `specs/039-claude-api-key-gate/spec.md`
 
 ## Scope
 

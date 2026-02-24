@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Configure `ANTHROPIC_API_KEY` in `.env` if you want Claude tasks.
-- Add compose profile `claude` only when key is present.
+- Use the `claude` compose profile only when the key is present.
 
 ## Typical flow
 

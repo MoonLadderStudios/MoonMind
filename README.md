@@ -46,7 +46,7 @@ MoonMind exposes all of this through:
     docker-compose up -d
     ```
 
-    Claude runtime is available only when `ANTHROPIC_API_KEY` is configured. To start the optional Claude worker, run:
+    Claude runtime is available only when `ANTHROPIC_API_KEY` (or legacy alias `CLAUDE_API_KEY`) is configured. To start the optional Claude worker, run:
 
     ```bash
     docker-compose --profile claude up -d claude-worker
@@ -190,7 +190,7 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (legacy alias `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR`; default `false`).
 - `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
 - `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
-- `ANTHROPIC_API_KEY` – Claude API key (required for `claude` tasks).
+- `ANTHROPIC_API_KEY` (or legacy alias `CLAUDE_API_KEY`) – Claude API key required for `claude` tasks.
 - `MOONMIND_DEFAULT_TASK_RUNTIME` – Fallback runtime for queue tasks that omit `targetRuntime` / `task.runtime.mode` (default `codex`).
 - `CODEX_ENV` and `CODEX_MODEL` – Required by credential validation before Codex phases execute.
 - `GITHUB_TOKEN` – Required for private repository clone/push/PR operations.
