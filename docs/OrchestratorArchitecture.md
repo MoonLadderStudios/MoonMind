@@ -280,7 +280,7 @@ Compose-managed services.
 3. **Watch progress** – tail `celery-worker`/`orchestrator` logs for `analyze → patch → build → restart → verify`; poll
    `GET /orchestrator/runs/{run_id}` for step timestamps and artifact paths.
 4. **Retrieve artifacts** – download `patch.diff`, `build.log`, `restart.log`, `verify.log`, and `rollback.log` from
-   `GET /orchestrator/runs/{run_id}/artifacts`; files are stored on-disk under `var/artifacts/spec_workflows/<run_id>/` for easy
+   `GET /orchestrator/runs/{run_id}/artifacts`; files are stored on-disk under `var/artifacts/workflow_runs/<run_id>/` for easy
    rsync/scp.
 5. **Clean up** – stop services with `docker compose down` or prune old artifact directories per retention policy.
 

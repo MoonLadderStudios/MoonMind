@@ -11,7 +11,7 @@ Implement the mm-orchestrator service inside the MoonMind docker-compose stack s
 
 **Language/Version**: Python 3.11 runtime inside the orchestrator container plus POSIX shell for invoking Docker Compose.
 **Primary Dependencies**: Docker CLI + Compose plugin, Celery 5.4 task runner, RabbitMQ 3.x broker, PostgreSQL result backend, StatsD-compatible metrics sink.
-**Storage**: Local spec workflow artifacts under `var/artifacts/spec_workflows/<run_id>` and PostgreSQL tables (`spec_workflow_runs`, `spec_workflow_task_states`) for run/step status.
+**Storage**: Local spec workflow artifacts under `var/artifacts/workflow_runs/<run_id>` and PostgreSQL tables (`workflow_runs`, `workflow_task_states`) for run/step status.
 **Testing**: Compose-based integration tests that spin up RabbitMQ, Celery worker, API, and orchestrator containers plus focused unit tests for ActionPlan logic (per Phase 0 research).
 **Target Platform**: Single Linux host (or small pool) running Docker with docker-compose, using Docker-outside-of-Docker via mounted `/var/run/docker.sock`.
 **Project Type**: Backend automation service added to the existing MoonMind services stack plus supporting Celery workers.
@@ -55,7 +55,7 @@ tests/
 ├── integration/
 │   └── orchestrator/             # <-- new compose-driven verification suites
 └── unit/
-var/artifacts/spec_workflows/     # Run-scoped artifact storage mount
+var/artifacts/workflow_runs/     # Run-scoped artifact storage mount
 ```
 
 **Structure Decision**: Extend the compose stack with a dedicated `services/orchestrator/` build context that mounts the repo into `/workspace`, add a Python package (e.g., `moonmind.workflows.orchestrator`) for ActionPlan logic plus Celery tasks, and introduce an integration test directory under `tests/integration/orchestrator` to exercise patch/build/relaunch flows using the standard compose stack.

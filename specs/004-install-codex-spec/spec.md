@@ -72,7 +72,7 @@ Operations staff need Codex automation to run without approval prompts so unatte
 
 - **Automation Runtime Image**: The container image used by the api_service and Celery workers; it now encapsulates Codex CLI, Spec Kit CLI, and their metadata so every worker is consistent.
 - **Codex CLI Configuration Profile**: The `.codex/config.toml` stored in the worker user’s home directory; it defines automation policies such as `approval_policy = "never"` that keep runs non-interactive.
-- **Spec Workflow Task**: A Celery-executed step (discover, submit, publish) that depends on both CLIs; it relies on the runtime image and config profile to complete unattended.
+- **Workflow Task**: A Celery-executed step (discover, submit, publish) that depends on both CLIs; it relies on the runtime image and config profile to complete unattended.
 
 ## Assumptions
 

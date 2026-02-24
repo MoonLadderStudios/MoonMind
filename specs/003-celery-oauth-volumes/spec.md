@@ -75,7 +75,7 @@ Operations staff need a lightweight process to provision, audit, and recover Cod
 
 - **Codex Auth Volume**: Persistent storage that holds ChatGPT OAuth artifacts for a single Codex worker; uniquely named and reused across runs.
 - **Codex Worker**: A Celery worker instance bound to the Codex queue and its corresponding auth volume; responsible for executing Codex phases of Spec runs.
-- **Spec Automation Run**: A recorded automation execution that now references the Codex queue and volume used for its submission phase to support traceability.
+- **Workflow Run**: A recorded automation execution that now references the Codex queue and volume used for its submission phase to support traceability.
 
 ## Assumptions
 

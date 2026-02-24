@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Skills-First Spec Automation Pipeline
+# Specification Quality Checklist: Skills-First Workflow Pipeline
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-02-14  
-**Feature**: [Skills-First Spec Automation Pipeline](../spec.md)
+**Feature**: [Skills-First Workflow Pipeline](../spec.md)
 
 ## Content Quality
 

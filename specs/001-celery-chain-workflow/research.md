@@ -6,7 +6,7 @@
 - Alternatives considered: Scaling immediately to dozens of concurrent chains or enabling quorum queues, but that would require broker clustering work explicitly deferred in the spec.
 
 ## Celery 5.4 Chain Design Practices
-- Decision: Compose the workflow with `chain` + `link_error` callbacks, use immutable signatures to prevent argument mutation, enable `acks_late` with retries, and persist chain IDs inside `SpecWorkflowRun`.
+- Decision: Compose the workflow with `chain` + `link_error` callbacks, use immutable signatures to prevent argument mutation, enable `acks_late` with retries, and persist chain IDs inside `WorkflowRun`.
 - Rationale: This matches Celery’s documented approach for deterministic sequencing and recovering after worker restarts; immutability avoids accidental parameter overrides when retrying tasks.
 - Alternatives considered: Using `group` or `chord` primitives, but the workflow is strictly sequential so `chain` keeps state handling simpler.
 
@@ -16,7 +16,7 @@
 - Alternatives considered: Continuing sharded `codex-{n}` queues, but the product decision is to consolidate onto one queue.
 
 ## PostgreSQL Result Backend Usage
-- Decision: Continue using PostgreSQL for Celery backend plus dedicated tables `spec_workflow_runs` and `spec_workflow_task_states`, wrapping each task update in a transaction and storing artifacts under `var/artifacts/spec_workflows/<run_id>` with DB references.
+- Decision: Continue using PostgreSQL for Celery backend plus dedicated tables `workflow_runs` and `workflow_task_states`, wrapping each task update in a transaction and storing artifacts under `var/artifacts/workflow_runs/<run_id>` with DB references.
 - Rationale: Matches existing MoonMind persistence pattern and satisfies FR-007 traceability requirements without introducing new storage tech.
 - Alternatives considered: Moving to Redis or S3 for artifacts, but that increases operational load and is outside the current scope.
 
@@ -36,7 +36,7 @@
 - Alternatives considered: Adding a new service entrypoint or CLI command, but operators trigger runs via the MoonMind UI/API so FastAPI is the correct surface.
 
 ## API → Celery Integration Pattern
-- Decision: Use application-level helper in `moonmind/workflows/speckit_celery` to build the Celery signature (chain) and enqueue via the shared Celery app, capturing the returned async result ID in `SpecWorkflowRun`.
+- Decision: Use application-level helper in `moonmind/workflows/speckit_celery` to build the Celery signature (chain) and enqueue via the shared Celery app, capturing the returned async result ID in `WorkflowRun`.
 - Rationale: Centralizes queue names, serialization, and auditing to a single module and makes retries/resumes reuse the same orchestration helper.
 - Alternatives considered: Directly instantiating Celery tasks per API call, but that would duplicate routing logic and hinder retries.
 

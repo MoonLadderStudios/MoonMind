@@ -481,7 +481,7 @@ Manifests can be **submitted** for queued execution using the `speckit_celery` a
 **Operational knobs**
 
 * Queue name, retries/backoff, worker concurrency; configurable via settings in `moonmind/workflows/speckit_celery/__init__.py`.
-* Use `SpecWorkflowRepository` to query and display run state/history.
+* Use `WorkflowRepository` to query and display run state/history.
 
 ---
 

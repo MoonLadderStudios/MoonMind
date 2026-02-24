@@ -1,8 +1,8 @@
-# Quickstart: Skills-First Spec Automation
+# Quickstart: Skills-First Workflow
 
 ## Goal
 
-Run Spec Automation with umbrella-015 aligned defaults:
+Run Workflow with umbrella-015 aligned defaults:
 
 - Codex auth persisted on a shared volume
 - Speckit capability verified on worker startup
@@ -65,10 +65,10 @@ google
 gemini-embedding-001
 ```
 
-## 5) Verify Spec Automation API telemetry shape
+## 5) Verify Workflow API telemetry shape
 
 ```bash
-curl http://localhost:5000/api/spec-automation/runs/<run_id>
+curl http://localhost:5000/api/workflows/runs/<run_id>
 ```
 
 Each phase entry now includes skills metadata fields:

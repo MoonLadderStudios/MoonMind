@@ -1,4 +1,4 @@
-# Data Model: Skills-First Spec Automation Pipeline
+# Data Model: Skills-First Workflow Pipeline
 
 ## Entity Overview
 
@@ -14,7 +14,7 @@
 - `id` (UUID), `external_ref` (optional correlation key), `repository`, `base_branch`
 - `status`: `queued | in_progress | succeeded | failed | no_changes`
 - `branch_name`, `pull_request_url`, `result_summary`
-- `requested_spec_input`, `started_at`, `completed_at`, `worker_hostname`, `job_container_id`
+- `requested_workflow_input`, `started_at`, `completed_at`, `worker_hostname`, `job_container_id`
 
 No schema changes are required for 015 alignment.
 

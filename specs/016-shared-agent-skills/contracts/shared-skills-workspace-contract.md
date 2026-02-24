@@ -41,6 +41,6 @@ If any check fails, run must stop before CLI invocation.
 
 ## Compatibility Contract
 
-- Existing stage routing still uses workflow policy controls (`SPEC_WORKFLOW_ALLOWED_SKILLS`, stage overrides).
+- Existing stage routing still uses workflow policy controls (`WORKFLOW_ALLOWED_SKILLS`, stage overrides).
 - Legacy `.codex/skills` assumptions are deprecated for run-scoped execution.
 - Codex and Gemini discovery behavior is normalized through adapter symlink layout, not global per-user installs.

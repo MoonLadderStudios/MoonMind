@@ -17,7 +17,7 @@ Queue workers must deterministically detect stuck steps, bound retries, and reco
 **Project Type**: Backend automation stack (Celery worker + FastAPI API + static dashboard) with shared Python packages and a small TypeScript UI bundle.  
 **Performance Goals**: Detect wall-clock overruns at 900 s and idle gaps at 300 s per attempt, resolve ≥95 % of transient/stuck failures within `step_max_attempts=3`, rebuild resume-from-step workspaces in <5 minutes for ≤10 completed steps, and emit StatsD counters/timers for every attempt/duration/timeout.  
 **Constraints**: Enforce documented budgets (max 3 attempts, 2 no-progress repeats, 1 hard reset per job), scrub secrets before persisting failure signatures/artifacts, ship minimal retry prompts (objective + failure summary + diff hash), respect cancel/pause/takeover fencing, and keep operator controls/metrics backward compatible.  
-**Scale/Scope**: Applies to all queue task jobs (typically 3–10 ordered steps) processed by a handful of Codex workers concurrently; must coordinate with server-side live-control payloads and queue-level retries without regressing existing Spec Automation or dashboard flows.
+**Scale/Scope**: Applies to all queue task jobs (typically 3–10 ordered steps) processed by a handful of Codex workers concurrently; must coordinate with server-side live-control payloads and queue-level retries without regressing existing Workflow or dashboard flows.
 
 ## Constitution Check
 

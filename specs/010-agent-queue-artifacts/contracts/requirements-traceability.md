@@ -13,3 +13,4 @@
 | `DOC-REQ-006` | `FR-004` | `GET /artifacts` and `GET /artifacts/{artifactId}/download` endpoints | API unit tests validate list/download happy path and error paths |
 | `DOC-REQ-007` | `FR-005` | Traversal + max-size validations in storage/service | Unit tests for traversal rejection and size-limit failures |
 | `DOC-REQ-008` | `FR-002` | Settings fields `AGENT_JOB_ARTIFACT_ROOT` and `AGENT_JOB_ARTIFACT_MAX_BYTES` for queue artifact constraints | `tests/unit/config/test_settings.py` verifies default and env override behavior |
+| `DOC-REQ-009` | `FR-007` | Upload validation in queue router + worker artifact handling | API tests assert reserved `inputs/` names return `400/422` and no write is attempted; unit tests verify prefix filtering and reserved-namespace error path |

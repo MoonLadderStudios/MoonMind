@@ -3,7 +3,7 @@
 ## 1. Prerequisites
 - Docker Engine + Docker Compose v2 installed with access to `/var/run/docker.sock`.
 - ChatGPT account with permission to authenticate Codex CLI.
-- SPEC_AUTOMATION_JOB_IMAGE pushed or available locally (default `moonmind/spec-automation-job:latest`).
+- WORKFLOW_JOB_IMAGE pushed or available locally (default `moonmind/workflow-job:latest`).
 - Git repository synced to branch `001-celery-oauth-volumes`.
 
 ## 2. Prepare Codex Auth Volumes
@@ -15,7 +15,7 @@
    ```
 2. Authenticate each volume once using a browser-enabled environment:
    ```bash
-   export JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-moonmind/spec-automation-job:latest}
+   export JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-moonmind/workflow-job:latest}
    for shard in 0 1 2; do
      docker run --rm -it \
        -v codex_auth_${shard}:/home/app/.codex \
@@ -49,12 +49,12 @@
 ## 5. Monitor & Remediate
 - Poll shard health without shelling into containers:
   ```bash
-  curl -s https://api.moonmind.local/api/workflows/speckit/codex/shards \
+  curl -s https://api.moonmind.local/api/workflows/codex/shards \
        -H 'Authorization: Bearer <token>' | jq '.shards[] | {queueName, volumeName, volumeStatus, latestPreflightStatus}'
   ```
 - If logs or the API report `latestPreflightStatus` as `failed`, trigger the pre-flight endpoint for the affected run:
   ```bash
-  curl -s -X POST https://api.moonmind.local/api/workflows/speckit/runs/<run_id>/codex/preflight \
+  curl -s -X POST https://api.moonmind.local/api/workflows/runs/<run_id>/codex/preflight \
        -H 'Authorization: Bearer <token>' \
        -H 'Content-Type: application/json' \
        -d '{}'

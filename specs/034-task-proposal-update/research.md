@@ -3,7 +3,7 @@
 ## Decision 1: Where to store global proposal target defaults
 - **Rationale**: Centralize configuration inside `moonmind/config/settings.py` so both the API service and Codex worker share the same defaults without bespoke env parsing. Adding `proposal_targets_default` (`project|moonmind|both`) and `moonmind_ci_repository` fields to `TaskProposalSettings` lets us pull the values anywhere via `settings.task_proposals`.
 - **Alternatives Considered**:
-  - *SpecWorkflowSettings only*: rejected because non-worker surfaces (API router, dashboard) would lack direct access.
+  - *WorkflowSettings only*: rejected because non-worker surfaces (API router, dashboard) would lack direct access.
   - *New ad-hoc env parsing in worker/router*: rejected to avoid drift and duplicated validation.
 
 ## Decision 2: ProposalPolicy representation inside canonical task payloads

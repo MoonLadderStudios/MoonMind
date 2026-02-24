@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Spec Automation API
+  title: Workflow API
   version: '0.1.0'
   description: >
     Endpoints for triggering and monitoring skills-first automation runs that
@@ -9,10 +9,10 @@ info:
 servers:
   - url: https://moonmind.example.com/api
 paths:
-  /api/spec-automation/runs:
+  /api/workflows/runs:
     post:
       summary: Trigger a new Spec Kit automation run
-      tags: [SpecAutomationRuns]
+      tags: [WorkflowRuns]
       requestBody:
         required: true
         content:
@@ -30,10 +30,10 @@ paths:
           description: Invalid request payload
         '401':
           description: Missing or invalid credentials
-  /api/spec-automation/runs/{run_id}:
+  /api/workflows/runs/{run_id}:
     get:
       summary: Fetch status and metadata for a run
-      tags: [SpecAutomationRuns]
+      tags: [WorkflowRuns]
       parameters:
         - name: run_id
           in: path
@@ -50,10 +50,10 @@ paths:
                 $ref: '#/components/schemas/RunDetail'
         '404':
           description: Run not found
-  /api/spec-automation/runs/{run_id}/artifacts/{artifact_id}:
+  /api/workflows/runs/{run_id}/artifacts/{artifact_id}:
     get:
       summary: Retrieve artifact metadata and download link
-      tags: [SpecAutomationArtifacts]
+      tags: [WorkflowArtifacts]
       parameters:
         - name: run_id
           in: path
@@ -76,10 +76,10 @@ paths:
                 $ref: '#/components/schemas/ArtifactDetail'
         '404':
           description: Artifact not found
-  /api/spec-automation/runs/{run_id}/artifacts/{artifact_id}/download:
+  /api/workflows/runs/{run_id}/artifacts/{artifact_id}/download:
     get:
       summary: Download artifact content by run/artifact identifier
-      tags: [SpecAutomationArtifacts]
+      tags: [WorkflowArtifacts]
       parameters:
         - name: run_id
           in: path

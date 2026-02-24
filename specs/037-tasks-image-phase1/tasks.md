@@ -105,7 +105,7 @@
 
 - [ ] T035 Update `docs/TasksImageSystem.md` and `specs/037-tasks-image-phase1/quickstart.md` with the final API routes, worker prepare expectations, and dashboard UX cues (DOC-REQ-001, DOC-REQ-005, DOC-REQ-008).
 - [ ] T036 [P] Add attachment/vision metric references to `moonmind/agents/codex_worker/metrics.py` docs or `docs/observability.md`, ensuring operators know the new `task.attachments.*` counters (DOC-REQ-010).
-- [ ] T037 Run `./tools/test_unit.sh tests/unit/api/routers/test_agent_queue.py tests/unit/workflows/agent_queue/test_service_attachments.py tests/unit/agents/codex_worker/test_worker.py tests/unit/task_dashboard/test_dashboard_attachments.py` and capture results under `var/artifacts/spec_workflows/` (DOC-REQ-011).
+- [ ] T037 Run `./tools/test_unit.sh tests/unit/api/routers/test_agent_queue.py tests/unit/workflows/agent_queue/test_service_attachments.py tests/unit/agents/codex_worker/test_worker.py tests/unit/task_dashboard/test_dashboard_attachments.py` and capture results under `var/artifacts/workflow_runs/` (DOC-REQ-011).
 - [ ] T038 Run `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` to validate the end-to-end queue → worker → dashboard attachment flow (DOC-REQ-011).
 
 ---

@@ -3,8 +3,8 @@
 ## 1. Prerequisites
 1. Install Docker + docker-compose plugin on the host.
 2. Export required secrets (Codex, GitHub, StatsD) into `.env` or secret store consumed by compose.
-3. Ensure PostgreSQL migrations for `spec_workflow_runs` and `spec_workflow_task_states` are up to date (existing Spec Workflow requirement).
-4. Bring up RabbitMQ, Celery worker, and API as noted in the Spec Workflow Verification Checklist:
+3. Ensure PostgreSQL migrations for `workflow_runs` and `workflow_task_states` are up to date (existing Workflow requirement).
+4. Bring up RabbitMQ, Celery worker, and API as noted in the Workflow Verification Checklist:
    ```bash
    docker compose up rabbitmq celery-worker api -d
    ```
@@ -28,7 +28,7 @@
      -d '{"instruction": "Fix missing dependency for api", "target_service": "api"}'
    ```
 2. Observe Celery worker logs for step-level updates (`analyze → patch → build → restart → verify`).
-3. Verify artifacts are written under `var/artifacts/spec_workflows/<run_id>/`.
+3. Verify artifacts are written under `var/artifacts/workflow_runs/<run_id>/`.
 
 ## 4. Approvals and retries
 1. If the target service requires approval, the run status will move to `awaiting_approval`. Provide approval:

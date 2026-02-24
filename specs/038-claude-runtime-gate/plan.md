@@ -92,7 +92,7 @@ No constitution violations anticipated; additional abstractions (e.g., `moonmind
 
 1. In `_enrich_task_payload_defaults` / `normalize_task_job_payload`, after runtime resolution but before `normalize_queue_job_payload`, call `is_claude_runtime_enabled` using the Anthropic settings value. If disabled and runtime is `claude`, raise `AgentQueueValidationError("targetRuntime=claude requires ANTHROPIC_API_KEY to be configured")`.  
 2. Keep error propagation so `api_service/api/routers/agent_queue.py` inspects the exception text and maps it to HTTP 400 (`code=claude_runtime_disabled`).  
-3. Update `moonmind/config/settings.py` `model_post_init` to raise a `ValueError` during startup whenever `spec_workflow.default_task_runtime == "claude"` but no key exists (this already occurs; ensure message matches queue validation).  
+3. Update `moonmind/config/settings.py` `model_post_init` to raise a `ValueError` during startup whenever `workflow.default_task_runtime == "claude"` but no key exists (this already occurs; ensure message matches queue validation).  
 4. Unit tests: 
    - `tests/unit/workflows/agent_queue/test_service_hardening.py` should cover both acceptance and rejection paths for `targetRuntime=claude`.  
    - `tests/unit/api/routers/test_agent_queue.py` ensures HTTP 400 mapping remains intact.  
@@ -101,7 +101,7 @@ No constitution violations anticipated; additional abstractions (e.g., `moonmind
 ### 4. Dashboard runtime config gating (`api_service/api/routers/task_dashboard_view_model.py`)
 
 1. Replace the static `_SUPPORTED_TASK_RUNTIMES` tuple with a dynamic builder that always exposes `["codex", "gemini"]` and appends `claude` only when `is_claude_runtime_enabled(...)` is true.  
-2. In `build_runtime_config`, ensure `defaultTaskRuntime` never returns `claude` when it is not in the supported list by falling back to the first available runtime (codex -> gemini). Honor `MOONMIND_WORKER_RUNTIME` and `settings.spec_workflow.default_task_runtime` only when those values appear in `supported_task_runtimes`.  
+2. In `build_runtime_config`, ensure `defaultTaskRuntime` never returns `claude` when it is not in the supported list by falling back to the first available runtime (codex -> gemini). Honor `MOONMIND_WORKER_RUNTIME` and `settings.workflow.default_task_runtime` only when those values appear in `supported_task_runtimes`.  
 3. Tests (`tests/unit/api/routers/test_task_dashboard_view_model.py`) should cover: 
    - Default environment (no key) -> `supportedTaskRuntimes == ["codex", "gemini"]` and fallback default is `codex`.  
    - Inject Anthropic key -> list becomes `["codex", "gemini", "claude"]`.  

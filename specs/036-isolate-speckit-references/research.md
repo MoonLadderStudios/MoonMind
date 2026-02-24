@@ -18,7 +18,7 @@
 
 ## Decision 3: Introduce canonical workflow routes while keeping deprecated aliases
 
-- **Decision**: Expose canonical workflow routes (`/api/workflows/runs/*`) and keep `/api/workflows/speckit/*` as deprecated aliases.
+- **Decision**: Expose canonical workflow routes (`/api/workflows/runs/*`) and keep `/api/workflows/*` as deprecated aliases.
 - **Rationale**: Canonical naming reduces long-term coupling, while alias support avoids breaking existing clients.
 - **Alternatives considered**:
   - Rename routes in place without aliases: rejected due to immediate API breakage.

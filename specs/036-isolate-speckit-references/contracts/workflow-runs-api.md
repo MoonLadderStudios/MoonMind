@@ -13,14 +13,14 @@
 
 ## Legacy Compatibility Routes (Deprecated)
 
-- Existing `/api/workflows/speckit/*` routes remain available with identical request/response payload contracts.
+- Existing `/api/workflows/*` routes remain available with identical request/response payload contracts.
 
 ## Deprecation Behavior
 
-For legacy `/api/workflows/speckit/*` requests, responses include:
+For legacy `/api/workflows/*` requests, responses include:
 
 - `Deprecation: true`
-- `X-MoonMind-Deprecated-Route: /api/workflows/speckit`
+- `X-MoonMind-Deprecated-Route: /api/workflows`
 - `X-MoonMind-Canonical-Route: /api/workflows/...`
 
 and the server logs a structured alias-usage event.

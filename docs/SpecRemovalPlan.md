@@ -34,7 +34,7 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 3. API contract and schema assets identified for this pass:
 
-`specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml`
+`specs/002-document-speckit-automation/contracts/workflow.openapi.yaml`
 
 `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`
 
@@ -80,11 +80,11 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 1. Replace every `SPEC_WORKFLOW_METRICS_*` with `WORKFLOW_METRICS_*` and deprecate `spec_automation.*` references where they appear.
 
 2. API contract surface
-1. Replace legacy `Spec Automation` route family with canonical workflow routes in API docs.
+1. Replace legacy `Workflow` route family with canonical workflow routes in API docs.
 1. Replace `/api/spec-automation/*` endpoint references with `/api/workflows/*`.
 1. Replace `/api/workflows/speckit/*` endpoint references with canonical `/api/workflows/*`.
 1. Rename contract schema names where they currently include `SpecWorkflow*` to `Workflow*`.
-1. Update operation IDs from `createSpecWorkflowRun`, `listSpecWorkflowRuns`, etc. to canonical workflow equivalents.
+1. Update operation IDs from `createWorkflowRun`, `listWorkflowRuns`, etc. to canonical workflow equivalents.
 
 3. Data model and schema surface
 1. Replace `spec_workflow_runs` and `spec_workflow_task_states` mentions with canonical workflow equivalents in docs and plans.
@@ -150,7 +150,7 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 `specs/002-document-speckit-automation/tasks.md`
 
-`specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml`
+`specs/002-document-speckit-automation/contracts/workflow.openapi.yaml`
 
 ### `specs/003-celery-oauth-volumes`
 
@@ -322,3 +322,15 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 3. All `SPEC_WORKFLOW_*` and `spec_workflow*` naming in docs/specs is replaced according to the canonical mapping, except for historical trace sections.
 4. The plan includes a complete list of any intentionally retained legacy mentions for later execution work.
 
+## Verification report (2026-02-24)
+
+### Legacy-token verification
+
+- Executed scan command:
+  - `rg -l "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" docs specs --glob '*.md' --glob '*.yaml' --glob '*.yml'`
+- Result: only `docs/SpecRemovalPlan.md` now contains legacy-token references intentionally retained as migration instructions.
+- Result count in non-plan docs/specs: `0`.
+
+### Historical references retained
+
+- `docs/SpecRemovalPlan.md` (sections: Legacy footprint, canonical target map, required canonical updates, and acceptance criteria) retains legacy terms solely as migration context and cannot be interpreted as runtime contract expectations.

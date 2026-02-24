@@ -38,7 +38,7 @@
 ### Tests for User Story 1
 
 - [ ] T011 [P] [US1] Add worker entrypoint startup validation tests for Speckit presence, Codex preflight enforcement, and actionable failures in `tests/unit/workflows/test_worker_entrypoints.py`.
-- [ ] T012 [P] [US1] Add runtime config tests for embedding provider/model resolution and missing credential failures in `tests/unit/workflows/test_spec_automation_env.py`.
+- [ ] T012 [P] [US1] Add runtime config tests for embedding provider/model resolution and missing credential failures in `tests/unit/workflows/test_workflow_env.py`.
 
 ### Implementation for User Story 1
 

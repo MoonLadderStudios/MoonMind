@@ -84,7 +84,7 @@ Guarantee:
 
 ## 4. Artifact Contract (Required Handoff)
 
-For issue `ABC-123`, `jira-fetch` MUST write artifacts under the configured workflow artifact root (for example `settings.spec_workflow.artifacts_root`) using a Jira namespace:
+For issue `ABC-123`, `jira-fetch` MUST write artifacts under the configured workflow artifact root (for example `settings.workflow.artifacts_root`) using a Jira namespace:
 
 1. `<artifacts_root>/jira/ABC-123/issue.raw.json`
 2. `<artifacts_root>/jira/ABC-123/issue.normalized.json`

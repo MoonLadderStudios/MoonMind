@@ -51,14 +51,14 @@ As a release owner, I want Codex workers to scale while preserving existing queu
 
 1. **Given** `celery_codex_worker` is scaled, **When** tasks are queued, **Then** workers continue consuming the configured `speckit` and `codex` queues.
 2. **Given** Codex preflight fails on a run, **When** submission stage executes, **Then** the run fails quickly with persisted remediation context.
-3. **Given** existing API consumers for `/api/workflows/speckit`, **When** skills metadata is emitted in task payloads, **Then** previous response fields remain available.
+3. **Given** existing API consumers for `/api/workflows`, **When** skills metadata is emitted in task payloads, **Then** previous response fields remain available.
 
 ### Edge Cases
 
 - Codex auth volume is missing or mounted at the wrong path.
 - `DEFAULT_EMBEDDING_PROVIDER=google` but neither `GOOGLE_API_KEY` nor `GEMINI_API_KEY` is set.
 - Speckit CLI is missing in one worker image.
-- Skill override requests an identifier outside `SPEC_WORKFLOW_ALLOWED_SKILLS`.
+- Skill override requests an identifier outside `WORKFLOW_ALLOWED_SKILLS`.
 - Multiple codex workers read from shared queue bindings while a run is retried from failed stage state.
 
 ## Requirements *(mandatory)*
@@ -95,6 +95,6 @@ As a release owner, I want Codex workers to scale while preserving existing queu
 
 ## Assumptions
 
-- Existing `/api/workflows/speckit` API paths remain stable during umbrella migration.
+- Existing `/api/workflows` API paths remain stable during umbrella migration.
 - Speckit remains installed in worker images and mirrored in skill directories.
 - RabbitMQ remains the Celery broker for workflow tasks in this deployment profile.

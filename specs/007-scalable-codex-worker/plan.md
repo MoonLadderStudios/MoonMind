@@ -11,12 +11,12 @@ Align Codex worker runtime behavior to the 015 umbrella by keeping Speckit alway
 
 **Language/Version**: Python 3.11  
 **Primary Dependencies**: Celery 5.4, RabbitMQ 3.x, PostgreSQL result backend, Codex CLI, Speckit CLI, Gemini CLI, Pydantic settings  
-**Storage**: Docker volumes (`codex_auth_volume`, `gemini_auth_volume`), workflow artifacts under `var/artifacts/spec_workflows/<run_id>`  
+**Storage**: Docker volumes (`codex_auth_volume`, `gemini_auth_volume`), workflow artifacts under `var/artifacts/workflow_runs/<run_id>`  
 **Testing**: Unit tests via `./tools/test_unit.sh`  
 **Target Platform**: Docker Compose (API + Celery workers)  
 **Project Type**: Backend worker runtime + workflow orchestration compatibility + spec artifacts  
 **Performance Goals**: Preserve startup latency while ensuring fail-fast diagnostics for missing prerequisites  
-**Constraints**: Maintain queue/API compatibility (`speckit`, `codex`, `gemini`; `/api/workflows/speckit/*`) and non-interactive execution  
+**Constraints**: Maintain queue/API compatibility (`speckit`, `codex`, `gemini`; `/api/workflows/*`) and non-interactive execution  
 **Scale/Scope**: Worker startup checks, skills metadata compatibility, compose/quickstart contract alignment
 
 ## Constitution Check

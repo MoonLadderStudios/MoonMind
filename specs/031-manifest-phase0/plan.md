@@ -74,7 +74,7 @@ tests/
 
 ### 2. Manifest Payload Contract & Secret Enforcement
 - Keep `normalize_manifest_job_payload()` as the single entry point for manifest validation:
-  - Enforce `manifest.name == metadata.name`, limit `manifest.source.kind` to `inline|registry` (guarded `path` enabled behind `settings.spec_workflow.allow_manifest_path_source`), and fail fast on unsupported adapters/actions (FR-002/FR-014/FR-015).
+  - Enforce `manifest.name == metadata.name`, limit `manifest.source.kind` to `inline|registry` (guarded `path` enabled behind `settings.workflow.allow_manifest_path_source`), and fail fast on unsupported adapters/actions (FR-002/FR-014/FR-015).
   - Restrict queue overrides to `dryRun|forceFull|maxDocs`; merge them into `effectiveRunConfig` to maintain deterministic runtime config snapshots.
   - Compute `manifestHash` (`sha256:<digest>`) and `manifestVersion` (Phase 0 accepts only `"v0"`), then derive `requiredCapabilities` by walking embeddings/vectorStore/dataSources (FR-005, User Story 3).
 - Run `detect_manifest_secret_leaks()` against manifest YAML + overrides to block raw secrets, only allowing `${ENV}`, `profile://`, or `vault://` references (FR-007/DOC-REQ-004/008).

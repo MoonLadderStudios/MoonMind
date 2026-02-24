@@ -28,17 +28,17 @@
 
 ### Celery 5.4 task runner
 - **Decision**: Model each orchestrator step (analyze, patch, build, restart, verify, rollback) as dedicated Celery tasks chained via signatures so MoonMind UI can observe per-step states.
-- **Rationale**: Aligns with current Spec Workflow architecture (Celery Chains) and allows retries/resumes at the failing step, matching requirements for transparency and auditability.
+- **Rationale**: Aligns with current Workflow architecture (Celery Chains) and allows retries/resumes at the failing step, matching requirements for transparency and auditability.
 - **Alternatives considered**: A monolithic long-running task was rejected because it hides intermediate progress and complicates retries.
 
 ### StatsD metrics emission
-- **Decision**: Wrap run lifecycle events in a thin instrumentation layer that emits counters/timers when `STATSD_HOST/PORT` or `SPEC_WORKFLOW_METRICS_*` are configured, and degrade gracefully (log-only) when unset.
+- **Decision**: Wrap run lifecycle events in a thin instrumentation layer that emits counters/timers when `STATSD_HOST/PORT` or `WORKFLOW_METRICS_*` are configured, and degrade gracefully (log-only) when unset.
 - **Rationale**: Keeps instrumentation optional yet consistent; ensures no runs fail due to missing StatsD while still collecting MTTR metrics when available.
 - **Alternatives considered**: Mandatory metrics configuration—rejected to avoid blocking local development; ignoring metrics entirely—rejected because success criteria depend on operational insight.
 
 ### Artifact storage (filesystem/object store)
-- **Decision**: Use the established `var/artifacts/spec_workflows/<run_id>` directory mounted into the orchestrator container, with file naming conventions (`patch.diff`, `build.log`, `verify.log`, `rollback.log`) and checksum recording in the run metadata.
-- **Rationale**: Reuses the path referenced in existing Spec Workflow tooling and keeps artifacts colocated with other runs for easier operator access and retention policies.
+- **Decision**: Use the established `var/artifacts/workflow_runs/<run_id>` directory mounted into the orchestrator container, with file naming conventions (`patch.diff`, `build.log`, `verify.log`, `rollback.log`) and checksum recording in the run metadata.
+- **Rationale**: Reuses the path referenced in existing Workflow tooling and keeps artifacts colocated with other runs for easier operator access and retention policies.
 - **Alternatives considered**: Introducing a new object store bucket now—rejected as unnecessary initial complexity; storing artifacts only in the database—rejected due to log size.
 
 ---
@@ -51,9 +51,9 @@
 - **Alternatives considered**: Provisioning a separate broker—rejected for initial scope; using Redis as a broker—rejected because the stack standardizes on RabbitMQ.
 
 ### PostgreSQL result backend
-- **Decision**: Persist run/step state in the existing `spec_workflow_runs` and `spec_workflow_task_states` tables, adding orchestrator-specific fields (approval id, artifact paths, rollback outcome) as needed.
+- **Decision**: Persist run/step state in the existing `workflow_runs` and `workflow_task_states` tables, adding orchestrator-specific fields (approval id, artifact paths, rollback outcome) as needed.
 - **Rationale**: Satisfies the requirement to surface orchestrator progress inside the MoonMind UI and avoids duplicating persistence layers.
-- **Alternatives considered**: Creating new tables just for orchestrator—rejected because Spec Workflow history already tracks similar data; writing only to the filesystem—rejected because structured status queries are required.
+- **Alternatives considered**: Creating new tables just for orchestrator—rejected because Workflow history already tracks similar data; writing only to the filesystem—rejected because structured status queries are required.
 
 ### MoonMind API + approvals
 - **Decision**: Extend the API so operators can submit instructions, provide approvals, and fetch run artifacts; the orchestrator will call back into the API to update run states and honor approval tokens before editing files.

@@ -95,7 +95,7 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 
 ### Key Entities *(include if feature involves data)*
 
-- **SpecWorkflowRun**: Represents a single MoonMind invocation; stores feature identifier, Celery chain ID, task status map, artifact locations, and timestamps.
+- **WorkflowRun**: Represents a single MoonMind invocation; stores feature identifier, Celery chain ID, task status map, artifact locations, and timestamps.
 - **CeleryTaskState**: Captures per-task execution metadata including task name, current state, start/end timestamps, log references, and structured payload.
 - **WorkflowCredentialAudit**: References the secret bundle used during execution, including validation timestamp and any detected issues.
 - **WorkflowArtifact**: Describes generated outputs by type (e.g., `codex_logs`, `codex_patch`) with paths to stored files or signed URLs for operator access.
@@ -121,7 +121,7 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - Network egress from the execution environment to Codex Cloud and GitHub APIs is permitted within organizational policy.
 - Governance for branch naming conventions and PR review routing remains managed by existing MoonMind policies; this feature does not alter approval flows.
 - Speckit skill definitions are exposed through run-local shared adapters at `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` remains optional compatibility fallback).
-- The initial skills-first implementation keeps existing `/api/workflows/speckit/*` API naming for compatibility, even when stage orchestration is generalized.
+- The initial skills-first implementation keeps existing `/api/workflows/*` API naming for compatibility, even when stage orchestration is generalized.
 - The fastest deployment profile uses Google Gemini embeddings (`gemini-embedding-001`) and authenticated Codex CLI volumes.
 
 ### Scope Boundaries

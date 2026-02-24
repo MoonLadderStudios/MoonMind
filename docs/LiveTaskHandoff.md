@@ -117,7 +117,7 @@ Install `tmate`, `tmux` (optional because tmate embeds tmux), `openssh-client` (
 
 ### 8.2 Directory Layout
 
-Each run keeps live-session artifacts under the workflow artifact root (`var/artifacts/spec_workflows/<run_id>/` by default, or the configured artifact directory), including:
+Each run keeps live-session artifacts under the workflow artifact root (`var/artifacts/workflow_runs/<run_id>/` by default, or the configured artifact directory), including:
 
 - `operator_inbox.jsonl` — append-only JSON lines for dashboard messages.
 - `transcript.log` — optional tmux transcript capture.

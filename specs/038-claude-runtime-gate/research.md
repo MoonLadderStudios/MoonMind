@@ -16,6 +16,6 @@
 - **Alternatives Considered**: Adding validation inside the FastAPI router alone was rejected because other code paths (e.g., orchestrator-generated jobs) bypass HTTP and would still enqueue invalid payloads.
 
 ## Decision: Settings + dashboard gating
-- **Decision**: Validate `settings.spec_workflow.default_task_runtime` during `AppSettings.model_post_init` and compute dashboard `supportedTaskRuntimes` via a helper that appends `claude` only when the gate passes.
+- **Decision**: Validate `settings.workflow.default_task_runtime` during `AppSettings.model_post_init` and compute dashboard `supportedTaskRuntimes` via a helper that appends `claude` only when the gate passes.
 - **Rationale**: Startup validation prevents operators from silently defaulting to a broken runtime, and the dashboard already reads from settings + env, so we can reuse the same helper for both supported list and default fallback.
 - **Alternatives Considered**: Hard-coding `("codex", "gemini", "claude")` and relying on the UI to hide unsupported entries was rejected because it would duplicate logic and still let unsupported runtimes leak into the JSON payload.

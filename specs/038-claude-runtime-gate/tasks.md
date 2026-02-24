@@ -67,7 +67,7 @@
 
 - [X] T012 [US2] Enforce the gate inside `moonmind/workflows/agent_queue/service.py` after runtime resolution by calling `build_runtime_gate_state()`, raising `AgentQueueValidationError` with `CLAUDE_RUNTIME_DISABLED_MESSAGE` whenever runtime=claude and `enabled` is False.
 - [X] T013 [P] [US2] Ensure `api_service/api/routers/agent_queue.py` catches the new validation error path and returns the contract-specified payload `{code: "claude_runtime_disabled", message: ...}`.
-- [X] T014 [US2] Add startup validation in `moonmind/config/settings.py` to raise `ValueError` (or `ConfigurationError`) when `spec_workflow.default_task_runtime` or `MOONMIND_DEFAULT_TASK_RUNTIME` resolve to claude but the gate state is disabled.
+- [X] T014 [US2] Add startup validation in `moonmind/config/settings.py` to raise `ValueError` (or `ConfigurationError`) when `workflow.default_task_runtime` or `MOONMIND_DEFAULT_TASK_RUNTIME` resolve to claude but the gate state is disabled.
 
 **Checkpoint**: Invalid Claude jobs are rejected synchronously, and API boot fails when claude defaults are unusable.
 

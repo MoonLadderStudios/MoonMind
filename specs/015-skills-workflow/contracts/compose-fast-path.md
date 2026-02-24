@@ -17,7 +17,7 @@
 
 ## Queue Contract
 
-- `celery_codex_worker` consumes `${CELERY_DEFAULT_QUEUE:-speckit},${SPEC_WORKFLOW_CODEX_QUEUE:-codex}`.
+- `celery_codex_worker` consumes `${CELERY_DEFAULT_QUEUE:-speckit},${WORKFLOW_CODEX_QUEUE:-codex}`.
 - `celery_gemini_worker` consumes `${GEMINI_CELERY_QUEUE:-gemini}`.
 - Queue names remain backward compatible during skills-first migration.
 

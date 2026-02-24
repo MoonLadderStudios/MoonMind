@@ -11,7 +11,7 @@ Adopt a skills-first workflow architecture where workers always include Speckit 
 
 **Language/Version**: Python 3.11  
 **Primary Dependencies**: Celery 5.4, RabbitMQ 3.x, PostgreSQL, Pydantic settings, Codex CLI, Spec Kit CLI (`speckit`), Gemini CLI, existing MoonMind workflow modules  
-**Storage**: Existing workflow persistence tables and artifact roots (`var/artifacts/spec_workflows`, optional `var/artifacts/agent_jobs`)  
+**Storage**: Existing workflow persistence tables and artifact roots (`var/artifacts/workflow_runs`, optional `var/artifacts/agent_jobs`)  
 **Testing**: Unit tests via `./tools/test_unit.sh`; targeted integration/smoke verification via Docker Compose service startup checks  
 **Target Platform**: Linux Docker Compose runtime for API + Celery workers  
 **Project Type**: Backend workflow orchestration and worker runtime evolution with documentation/runbook updates  
@@ -82,7 +82,7 @@ docker-compose.yaml
 
 tests/unit/workflows/
 ├── test_tasks.py
-├── test_spec_automation_env.py
+├── test_workflow_env.py
 ├── test_worker_entrypoints.py    # new
 └── test_skills_runner.py          # new
 

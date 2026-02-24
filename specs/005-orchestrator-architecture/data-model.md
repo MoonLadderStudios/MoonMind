@@ -16,7 +16,7 @@
   - `approval_gate_id` (nullable FK → ApprovalGate).
   - `approval_token` (nullable text) – evidence of granted approval.
   - `metrics_snapshot` (JSON) – StatsD counters/timers cached for UI.
-  - `artifact_root` (text) – path under `var/artifacts/spec_workflows/<run_id>`.
+  - `artifact_root` (text) – path under `var/artifacts/workflow_runs/<run_id>`.
 - **Validation**:
   - `target_service` must exist in `docker-compose.yaml`.
   - `approval_token` required when `target_service` is tagged as protected.
@@ -84,7 +84,7 @@
 - **Relationship**:
   - `ApprovalGate` is referenced by OrchestratorRun (single active policy per service) and by MoonMind API when issuing tokens.
 
-## 5. TaskState (aligns with `spec_workflow_task_states`)
+## 5. TaskState (aligns with `workflow_task_states`)
 - **Description**: Persists Celery task lifecycle for each plan step to power the MoonMind UI timelines.
 - **Key Fields**:
   - `task_state_id` (UUID).
