@@ -259,6 +259,16 @@
     [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 
+  const buildSubmitRuntimeOptions = (workerRuntimes = []) => {
+    const normalized = normalizeRuntimeOptions(workerRuntimes);
+    if (!normalized.includes(ORCHESTRATOR_RUNTIME)) {
+      normalized.push(ORCHESTRATOR_RUNTIME);
+    }
+    return normalized;
+  };
+
+  const submitRuntimeOptions = buildSubmitRuntimeOptions(supportedTaskRuntimes);
+
   const formatRuntimeLabel = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
     if (!normalized) {
@@ -2547,7 +2557,7 @@
       setView(
         "Orchestrator Runs",
         "Recent orchestrator runs.",
-        `<div class="actions"><a href="/tasks/new?runtime=orchestrator"><button type="button">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
+        `<div class="actions"><a href="/tasks/new?runtime=orchestrator"><button type="button" class="queue-submit-primary">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
         { showAutoRefreshControls: true },
       );
     };
@@ -2603,7 +2613,7 @@
       : [];
 
     const runtimeOptions = renderRuntimeOptions(
-      listSubmitRuntimes(),
+      submitRuntimeOptions,
       selectedWorkerRuntime,
     );
     const repositoryFallback = queueDraftRepository || defaultRepository;
@@ -3992,7 +4002,7 @@
         `<div class="notice error">Unsupported runtime value: <code>${escapeHtml(
           String(presetRuntime),
         )}</code>. Use one of: <code>${escapeHtml(
-          listSubmitRuntimes().join(", "),
+          submitRuntimeOptions.join(", "),
         )}</code>.</div>`,
       );
       return;
@@ -4063,7 +4073,7 @@
           )}</textarea>
         </label>
         <div class="actions">
-          <button type="submit">Create Orchestrator Run</button>
+          <button type="submit" class="queue-submit-primary">Create Orchestrator Run</button>
           <a href="/tasks/orchestrator"><button class="secondary" type="button">Cancel</button></a>
         </div>
         <p class="small" id="orchestrator-submit-message"></p>

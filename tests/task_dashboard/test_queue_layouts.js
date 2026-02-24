@@ -144,6 +144,15 @@ const {
   assert(html.includes("status-running"));
 })();
 
+
+(function testRenderQueueTableEscapesTitleLabel() {
+  const html = renderQueueTable([
+    createQueueRow({ title: '<img src=x onerror=alert(1)>' }),
+  ]);
+  assert(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+  assert(!html.includes('<img src=x onerror=alert(1)>'));
+})();
+
 (function testQueueDefinitionOrderMatchesTableHeaders() {
   const html = renderQueueTable([createQueueRow()]);
   const headerOrder = Array.from(html.matchAll(/<th data-field="([^"]+)"/g)).map(
