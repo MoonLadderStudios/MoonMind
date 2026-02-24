@@ -115,7 +115,7 @@ Keep proposal generation and submission behavior, but record the results in the 
 * `finalize`
 * `unknown`
 
-`finishOutcome.reason` is a short string intended for list views.
+`finishOutcome.reason` is a short string intended for list views and MUST be persisted as `finish_outcome_reason` so list endpoints do not depend on `finishSummary` payload inclusion.
 
 ### 5.2 JSON Shape
 
@@ -177,7 +177,7 @@ Finish summaries MUST NOT contain:
 * Raw env var dumps
 * Full command lines containing secret arguments
 
-All text fields written into `finishSummaryJson` MUST be passed through the existing redaction mechanism.
+All text fields written into `finishSummary` / `finish_summary_json` MUST be passed through the existing redaction mechanism.
 
 ---
 
@@ -189,6 +189,7 @@ Add additive columns to `agent_jobs`:
 
 * `finish_outcome_code` (nullable string, ~64 chars)
 * `finish_outcome_stage` (nullable string, ~32 chars)
+* `finish_outcome_reason` (nullable string, ~256 chars)
 * `finish_summary_json` (nullable JSONB)
 
 Rationale:
@@ -202,20 +203,20 @@ Update `moonmind/schemas/agent_queue_models.py`:
 
 * `JobModel` adds:
 
-  * `finishOutcomeCode` / `finishOutcomeStage`
+  * `finishOutcomeCode` / `finishOutcomeStage` / `finishOutcomeReason`
   * `finishSummary` (optional; omitted in list responses unless explicitly requested)
 
 Add optional finish metadata to worker mutation requests:
 
-* `CompleteJobRequest` accepts optional `finishOutcomeCode`, `finishOutcomeStage`, `finishSummary`.
-* `FailJobRequest` accepts optional `finishOutcomeCode`, `finishOutcomeStage`, `finishSummary`.
-* `CancelJobAckRequest` accepts optional `finishOutcomeCode`, `finishOutcomeStage`, `finishSummary`.
+* `CompleteJobRequest` accepts optional `finishOutcomeCode`, `finishOutcomeStage`, `finishOutcomeReason`, `finishSummary`.
+* `FailJobRequest` accepts optional `finishOutcomeCode`, `finishOutcomeStage`, `finishOutcomeReason`, `finishSummary`.
+* `CancelJobAckRequest` accepts optional `finishOutcomeCode`, `finishOutcomeStage`, `finishOutcomeReason`, `finishSummary`.
 
 ### 6.3 API Behavior
 
 * `GET /api/queue/jobs` (list):
 
-  * include `finishOutcomeCode` and `finishOutcomeStage`
+  * include `finishOutcomeCode`, `finishOutcomeStage`, and `finishOutcomeReason`
   * by default **omit** `finishSummary` to keep responses small
 * `GET /api/queue/jobs/{id}` (detail):
 
@@ -236,8 +237,8 @@ In `moonmind/agents/codex_worker/worker.py`:
 * Build `finishSummary` at the end (even on failure/cancel, best-effort)
 * Write:
 
-  * `artifacts/reports/run_summary.json` (always, best-effort)
-  * `artifacts/reports/errors.json` (only when failed; optional)
+  * artifact name `reports/run_summary.json` (always, best-effort)
+  * artifact name `reports/errors.json` (only when failed; optional)
 
 ### 7.2 Determine Publish Outcome Reliably
 
@@ -250,9 +251,13 @@ Use `publish_result.json` when present to populate:
 
 If `publish.mode=none`:
 
-* `finishOutcome.code = PUBLISH_DISABLED`
+* `finishOutcome.code = PUBLISH_DISABLED` **only when prepare/execute completed successfully and publish was intentionally skipped**
 * `publish.status = not_run`
 * `finishOutcome.stage = publish`
+
+If `publish.mode=none` and any earlier stage failed:
+
+* keep `finishOutcome.code = FAILED` and the failing stage
 
 If `publish_result.json` says `skipped: true` + reason `no local changes`:
 
@@ -274,6 +279,7 @@ Update `_maybe_submit_task_proposals()` to return a small report:
 @dataclass
 class ProposalSubmissionReport:
     requested: bool
+    hook_skills: list[str]
     generated_count: int
     submitted_count: int
     errors: list[str]
@@ -289,9 +295,9 @@ Populate finish summary `proposals` from this report.
 
 Extend queue client calls so the terminal transition sends finish metadata:
 
-* On success: `complete_job(..., finishOutcomeCode, finishOutcomeStage, finishSummary)`
-* On failure: `fail_job(..., finishOutcomeCode="FAILED", finishOutcomeStage=<stage>, finishSummary)`
-* On cancellation ack: `ack_cancel(..., finishOutcomeCode="CANCELLED", finishOutcomeStage="unknown", finishSummary)`
+* On success: `complete_job(..., finishOutcomeCode, finishOutcomeStage, finishOutcomeReason, finishSummary)`
+* On failure: `fail_job(..., finishOutcomeCode="FAILED", finishOutcomeStage=<stage>, finishOutcomeReason, finishSummary)`
+* On cancellation ack: `ack_cancel(..., finishOutcomeCode="CANCELLED", finishOutcomeStage="unknown", finishOutcomeReason, finishSummary)`
 
 Also upload `reports/run_summary.json` before sending completion/failure, best-effort.
 
@@ -306,7 +312,7 @@ Add one queue field definition:
 * **Outcome**:
 
   * shows `finishOutcomeCode` as a badge (with a friendly label)
-  * tooltip shows `finishOutcomeStage` + `finishOutcomeReason` (derived from `resultSummary` / `errorMessage` or embedded in `finishSummary` if present)
+  * tooltip shows `finishOutcomeStage` + `finishOutcomeReason` from the list payload
 
 Also add optional columns/fields (depending on layout constraints):
 
@@ -406,5 +412,5 @@ Extend the proposals list API and dashboard UI to support filtering by job id:
 
 * Queue job API model already has `resultSummary` and `errorMessage` fields available to surface in UI: 
 * Task system already defines required artifacts including `publish_result.json` (good input for finish summary): 
-* Manifest system already uses `reports/run_summary.json` (we mirror the artifact pattern for tasks): 
+* Spec workflow Celery tasks already emit `run_summary.json` at artifact root (task finisher adopts `reports/run_summary.json` as a task-specific convention): 
 * Proposals list endpoint currently filters by `originSource` but not `originId` (we add it):
