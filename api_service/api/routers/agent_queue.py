@@ -58,15 +58,15 @@ from moonmind.schemas.agent_queue_models import (
     RecoverJobRequest,
     RecoverJobResponse,
     RevokeTaskRunLiveSessionRequest,
+    RuntimeCapabilities,
     TaskRunControlEventModel,
     TaskRunControlRequest,
     TaskRunLiveSessionModel,
     TaskRunLiveSessionResponse,
     TaskRunLiveSessionWriteGrantResponse,
     TaskRunOperatorMessageRequest,
-    RuntimeCapabilities,
-    WorkerRuntimeCapabilitiesResponse,
     WorkerRuntimeCapabilitiesRequest,
+    WorkerRuntimeCapabilitiesResponse,
     WorkerTokenCreateResponse,
     WorkerTokenListResponse,
     WorkerTokenModel,
@@ -1653,7 +1653,9 @@ async def list_worker_runtime_capabilities(
 
     return WorkerRuntimeCapabilitiesResponse(
         items={
-            runtime: RuntimeCapabilities(models=payload["models"], efforts=payload["efforts"])
+            runtime: RuntimeCapabilities(
+                models=payload["models"], efforts=payload["efforts"]
+            )
             for runtime, payload in runtime_capabilities.items()
         },
     )

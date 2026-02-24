@@ -6,9 +6,9 @@ import argparse
 import asyncio
 import logging
 import os
-import shlex
 import subprocess
 from typing import Mapping, Sequence
+
 from celery_worker.runtime_mode import (
     format_invalid_gemini_cli_auth_mode_error,
     inspect_gemini_home_for_auth_mode,
@@ -23,8 +23,8 @@ from moonmind.agents.codex_worker.utils import (
 from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
-    QueueClientError,
     QueueApiClient,
+    QueueClientError,
 )
 from moonmind.claude.runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
@@ -33,7 +33,6 @@ from moonmind.claude.runtime import (
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
-
 
 logger = logging.getLogger(__name__)
 

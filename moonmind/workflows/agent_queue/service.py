@@ -1885,7 +1885,9 @@ class AgentQueueService:
             or None,
             allowed_job_types=list(self._normalize_str_list(allowed_job_types)) or None,
             capabilities=list(self._normalize_str_list(capabilities)) or None,
-            runtime_capabilities=self._normalize_runtime_capabilities(runtime_capabilities),
+            runtime_capabilities=self._normalize_runtime_capabilities(
+                runtime_capabilities
+            ),
         )
         await self._repository.commit()
         return WorkerTokenIssueResult(token_record=token_record, raw_token=raw_token)

@@ -718,7 +718,9 @@ async def test_handler_preserves_codex_model_and_effort(
     assert "--model" in codex_cmd
     assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5.3-codex-spark"
     assert "--config" in codex_cmd
-    assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="xhigh"'
+    assert (
+        codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="xhigh"'
+    )
 
 
 async def test_handler_falls_back_to_worker_default_codex_settings(
