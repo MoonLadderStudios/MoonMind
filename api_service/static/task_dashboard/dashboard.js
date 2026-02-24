@@ -163,6 +163,10 @@
       ? systemConfig.supportedWorkerRuntimes
       : ["codex", "gemini", "claude", "universal"];
 
+  function normalizeRuntimeIdentifier(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
   function normalizeTaskRuntimeList(values) {
     if (!Array.isArray(values)) {
       return [];
@@ -170,7 +174,7 @@
     const seen = new Set();
     const normalized = [];
     values.forEach((value) => {
-      const candidate = normalizeTaskRuntimeInput(value);
+      const candidate = normalizeRuntimeIdentifier(value);
       if (!candidate || seen.has(candidate)) {
         return;
       }
@@ -187,7 +191,7 @@
       : [];
   const inferredTaskRuntimes = normalizeTaskRuntimeList(
     supportedWorkerRuntimes.filter(
-      (runtime) => String(runtime || "").trim().toLowerCase() !== "universal",
+      (runtime) => normalizeRuntimeIdentifier(runtime) !== "universal",
     ),
   );
   const supportedTaskRuntimes =
@@ -196,7 +200,7 @@
       : inferredTaskRuntimes.length > 0
         ? inferredTaskRuntimes
         : ["codex", "gemini", "claude"];
-  const normalizedDefaultTaskRuntime = normalizeTaskRuntimeInput(
+  const normalizedDefaultTaskRuntime = normalizeRuntimeIdentifier(
     systemConfig.defaultTaskRuntime,
   );
   const defaultTaskRuntime =
@@ -1047,7 +1051,7 @@
   }
 
   function normalizeTaskRuntimeInput(value) {
-    const normalized = String(value || "").trim().toLowerCase();
+    const normalized = normalizeRuntimeIdentifier(value);
     if (!normalized) {
       return "";
     }
