@@ -704,10 +704,14 @@
   }
 
   function activateNav(pathname) {
+    const activePath =
+      pathname === "/tasks/queue/new" || pathname === "/tasks/create" || pathname === "/tasks/orchestrator/new"
+        ? "/tasks/create"
+        : pathname;
     const links = document.querySelectorAll("a[data-nav]");
     links.forEach((link) => {
       const href = link.getAttribute("href") || "";
-      if (href === pathname) {
+      if (href === activePath) {
         link.classList.add("active");
       } else {
         link.classList.remove("active");
@@ -1671,6 +1675,29 @@
     return fallback;
   };
 
+  const validateSubmitRuntime = (runtimeValue) => {
+    const normalized = String(runtimeValue || "").trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    if (normalized === "orchestrator") {
+      return "orchestrator";
+    }
+    if (supportedTaskRuntimes.includes(normalized)) {
+      return normalized;
+    }
+    return null;
+  };
+
+  const parseRuntimeSearchParam = (searchParams) => {
+    const runtimeValue = searchParams?.get("runtime");
+    if (runtimeValue === null) {
+      return { provided: false, runtime: undefined, rawValue: "" };
+    }
+    const runtime = validateSubmitRuntime(runtimeValue);
+    return { provided: true, runtime, rawValue: runtimeValue };
+  };
+
   const isWorkerSubmitRuntime = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
     return normalized !== "orchestrator" && supportedTaskRuntimes.includes(normalized);
@@ -2440,7 +2467,7 @@
       setView(
         "Orchestrator Runs",
         "Recent orchestrator runs.",
-        `<div class="actions"><a href="/tasks/orchestrator/new"><button type="button">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
+        `<div class="actions"><a href="/tasks/new?runtime=orchestrator"><button type="button">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
         { showAutoRefreshControls: true },
       );
     };
@@ -2448,10 +2475,10 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage() {
+  function renderQueueSubmitPage(presetRuntime) {
     const sanitizedWorkerDraft = submitDraftController.loadWorker();
     const selectedWorkerRuntime = resolveSubmitRuntime(
-      sanitizedWorkerDraft.runtime,
+      presetRuntime ?? sanitizedWorkerDraft.runtime,
       defaultTaskRuntime,
     );
     const queueDraftModel = String(
@@ -3861,6 +3888,31 @@
           String(error?.message || "request failed");
       }
     });
+  }
+
+  function renderSubmitWorkPage(presetRuntime) {
+    if (presetRuntime == null) {
+      renderQueueSubmitPage();
+      return;
+    }
+    const normalizedRuntime = validateSubmitRuntime(presetRuntime);
+    if (!normalizedRuntime) {
+      setView(
+        "Invalid Runtime",
+        "Unsupported runtime query parameter.",
+        `<div class="notice error">Unsupported runtime value: <code>${escapeHtml(
+          String(presetRuntime),
+        )}</code>. Use one of: <code>${escapeHtml(
+          [...supportedTaskRuntimes, "orchestrator"].join(", "),
+        )}</code>.</div>`,
+      );
+      return;
+    }
+    if (isWorkerSubmitRuntime(normalizedRuntime)) {
+      renderQueueSubmitPage(normalizedRuntime);
+      return;
+    }
+    renderOrchestratorSubmitPage();
   }
 
   function renderOrchestratorSubmitPage() {
@@ -6191,7 +6243,7 @@
     );
   }
 
-  async function renderForPath(pathname) {
+  async function renderForPath(pathname, searchParams) {
     const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
     const normalizedRoute =
       normalizedPath === "/tasks/new" || normalizedPath === "/tasks/create"
@@ -6238,11 +6290,16 @@
     }
 
     if (normalizedRoute === "/tasks/queue/new") {
-      renderQueueSubmitPage();
+      const runtimeParam = parseRuntimeSearchParam(searchParams);
+      if (runtimeParam.provided && !runtimeParam.runtime) {
+        renderSubmitWorkPage(runtimeParam.rawValue);
+        return;
+      }
+      renderSubmitWorkPage(runtimeParam.runtime);
       return;
     }
     if (normalizedRoute === "/tasks/orchestrator/new") {
-      renderOrchestratorSubmitPage();
+      renderSubmitWorkPage("orchestrator");
       return;
     }
 
@@ -6287,7 +6344,11 @@
   );
 
   if (!skipInitialRender) {
-    renderForPath(window.location.pathname).catch((error) => {
+    const currentLocation = new URL(window.location.href);
+    renderForPath(
+      window.location.pathname,
+      currentLocation.searchParams,
+    ).catch((error) => {
       console.error("dashboard render failed", error);
       setView(
         "Dashboard Error",

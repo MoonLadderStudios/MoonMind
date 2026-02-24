@@ -26,6 +26,7 @@ _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _STATIC_PATHS = {
     "queue",
     "queue/new",
+    "new",
     "orchestrator",
     "orchestrator/new",
     "proposals",
@@ -146,7 +147,12 @@ async def task_dashboard_route(
             status_code=404,
             detail={
                 "code": "dashboard_route_not_found",
-                "message": "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, /tasks/orchestrator, /tasks/orchestrator/new, /tasks/proposals, /tasks/manifests, /tasks/manifests/new, /tasks/create, /tasks/new, or /tasks/settings.",
+                "message": (
+                    "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
+                    "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
+                    "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+                    "or /tasks/settings."
+                ),
             },
         )
 

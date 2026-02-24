@@ -37,6 +37,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
     assert _is_allowed_path("orchestrator/run-1")
+    assert _is_allowed_path("new")
     assert _is_allowed_path("manifests")
     assert _is_allowed_path("manifests/new")
     assert _is_allowed_path("settings")
@@ -66,11 +67,11 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         "/tasks/queue",
+        "/tasks/new",
         "/tasks/queue/new",
         "/tasks/create",
         "/tasks/orchestrator",
         "/tasks/orchestrator/new",
-        "/tasks/new",
         "/tasks/manifests",
         "/tasks/manifests/new",
         "/tasks/settings",
@@ -110,8 +111,8 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
         "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
-        "/tasks/orchestrator, /tasks/orchestrator/new, /tasks/proposals, "
-        "/tasks/manifests, /tasks/manifests/new, /tasks/create, /tasks/new, "
+        "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
+        "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "or /tasks/settings."
     )
 

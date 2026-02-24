@@ -79,10 +79,11 @@ Current dashboard routes rendered by `dashboard.js`:
 | --- | --- |
 | `/tasks` | Unified active view across queue + orchestrator running/queued workloads |
 | `/tasks/queue` | Queue job list with runtime/skill/status/publish filters |
-| `/tasks/queue/new` | Typed queue Task submit form (`type="task"`) |
+| `/tasks/new` | Unified submit page (worker runtimes + orchestrator; defaults to queue runtime) |
+| `/tasks/queue/new` | Alias to `/tasks/new` with worker default runtime |
 | `/tasks/queue/:jobId` | Queue job detail (summary, events, live output, artifacts, controls) |
 | `/tasks/orchestrator` | Orchestrator run list |
-| `/tasks/orchestrator/new` | Orchestrator submit form |
+| `/tasks/orchestrator/new` | Alias to `/tasks/new?runtime=orchestrator` |
 | `/tasks/orchestrator/:runId` | Orchestrator run detail |
 | `/tasks/manifests` | Manifest run list (queue jobs filtered by `type=manifest`) |
 | `/tasks/manifests/new` | Manifest submit flow (inline or registry-backed) |

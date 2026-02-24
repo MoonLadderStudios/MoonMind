@@ -2866,6 +2866,7 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
         }
     }
 
+    job_id = uuid4()
     title = worker._derive_default_pr_title(
         job_id=job_id,
         canonical_payload=payload,
