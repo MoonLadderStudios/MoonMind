@@ -80,7 +80,7 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 1. Replace every `SPEC_WORKFLOW_METRICS_*` with `WORKFLOW_METRICS_*` and deprecate `spec_automation.*` references where they appear.
 
 2. API contract surface
-1. Replace legacy `Workflow` route family with canonical workflow routes in API docs.
+1. Replace legacy route families with canonical workflow routes in API docs.
 1. Replace `/api/spec-automation/*` endpoint references with `/api/workflows/*`.
 1. Replace `/api/workflows/speckit/*` endpoint references with canonical `/api/workflows/*`.
 1. Rename contract schema names where they currently include `SpecWorkflow*` to `Workflow*`.
@@ -327,10 +327,11 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 ### Legacy-token verification
 
 - Executed scan command:
-  - `rg -l "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" docs specs --glob '*.md' --glob '*.yaml' --glob '*.yml'`
-- Result: only `docs/SpecRemovalPlan.md` now contains legacy-token references intentionally retained as migration instructions.
-- Result count in non-plan docs/specs: `0`.
+  - `rg -l "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" docs specs --glob '*.md' --glob '*.yaml' --glob '*.yml' -g '!specs/040-spec-removal/**'`
+- Result: intentional legacy-token references remain in `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/*` as migration context.
+- Result count outside intentional exception files: `0`.
 
 ### Historical references retained
 
 - `docs/SpecRemovalPlan.md` (sections: Legacy footprint, canonical target map, required canonical updates, and acceptance criteria) retains legacy terms solely as migration context and cannot be interpreted as runtime contract expectations.
+- `specs/040-spec-removal/*` retains legacy terms intentionally to describe source/target mappings, acceptance checks, and traceability for this migration feature.

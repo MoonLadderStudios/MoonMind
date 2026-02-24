@@ -260,7 +260,8 @@ class SpecWorkflowSettings(BaseSettings):
     )
     job_image: str = Field(
         "ghcr.io/moonladderstudios/moonmind:latest",
-        env="SPEC_AUTOMATION_JOB_IMAGE",
+        env=("WORKFLOW_JOB_IMAGE", "SPEC_AUTOMATION_JOB_IMAGE"),
+        validation_alias=AliasChoices("WORKFLOW_JOB_IMAGE", "SPEC_AUTOMATION_JOB_IMAGE"),
         description="Container image used for Spec Automation job executions.",
     )
     workspace_root: str = Field(

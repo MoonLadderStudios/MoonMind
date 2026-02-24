@@ -19,7 +19,7 @@
 
 - [x] T001 [P] Add Spec workflow queue + artifact defaults to `.env-template`, `.env.vllm-template`, and `config.toml` so operators can set `WORKFLOW_CODEX_QUEUE`, `WORKFLOW_ARTIFACT_ROOT`, and Celery broker URLs.
 - [x] T002 Wire the new settings into `moonmind/config/settings.py` and `api_service/config.template.toml` so API services and workers can read queue + artifact paths.
-- [x] T003 [P] Update `docker-compose.yaml` and `docker-compose.job.yaml` Celery worker definitions to bind the `codex` queue and mount `var/artifacts/workflow_runs` for Codex log persistence.
+- [x] T003 [P] Update `docker-compose.yaml` and `docker-compose.job.yaml` Celery worker definitions to bind the `codex` queue and mount `var/artifacts/spec_workflows` for Codex log persistence.
 
 ---
 
@@ -30,7 +30,7 @@
 - [x] T005 Update ORM models in `api_service/db/models.py` so SQLAlchemy knows about the new tables, FKs, and relationships.
 - [x] T006 Implement persistence helpers in `moonmind/workflows/speckit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
 - [x] T007 Expand Pydantic schemas in `moonmind/schemas/workflow_models.py` and serializers in `moonmind/workflows/speckit_celery/serializers.py` to match the contract outputs.
-- [x] T008 Add artifact storage utilities in `moonmind/workflows/speckit_celery/storage.py` (new file) that normalize `var/artifacts/workflow_runs/<run_id>` paths, file metadata, and digests.
+- [x] T008 Add artifact storage utilities in `moonmind/workflows/speckit_celery/storage.py` (new file) that normalize `var/artifacts/spec_workflows/<run_id>` paths, file metadata, and digests.
 - [x] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/speckit_celery/celeryconfig.py` and ensure `celery_worker/speckit_worker.py` consumes those settings on startup.
 
 **Checkpoint**: Database + serialization + Celery plumbing ready for user stories.

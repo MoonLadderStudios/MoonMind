@@ -51,7 +51,7 @@ Key responsibilities (unchanged in spirit):
 - Emits StatsD metrics when enabled.
 
 2.2 Job Container
-- Image from WORKFLOW_JOB_IMAGE (default ghcr.io/moonladderstudios/moonmind:latest).
+- Image from `WORKFLOW_JOB_IMAGE` (default `ghcr.io/moonladderstudios/moonmind:latest`, legacy alias `SPEC_AUTOMATION_JOB_IMAGE`).
 - Starts sleep infinity; Celery drives it via docker exec.
 - Environment includes:
   - HOME=/work/runs/{run_id}/home (unchanged).
@@ -124,7 +124,7 @@ Monitor the Celery chain from two angles:
 - **API polling** – `/api/workflows/runs/{run_id}` returns the run plus the latest task snapshot; `/runs/{run_id}/tasks`
   exposes the full timeline including `status`, `message`, `startedAt`/`finishedAt`, and any `artifactPaths` emitted by the task
   (Codex logs, patch diffs, apply output, PR payload). `/runs/{run_id}/artifacts` lists the same paths for download.
-  Legacy `/api/workflows/*` aliases remain available for compatibility and return deprecation headers.
+  Legacy `/api/workflows/speckit/*` aliases remain available for compatibility and return deprecation headers; `/api/workflows/*` is the canonical surface.
 - **Worker logs** – every phase logs `Spec workflow task <name> started/succeeded/failed` with attempt numbers and shard/volume
   details. You should see a `Codex preflight` line before submission and `apply_and_publish` summary lines once the PR payload is
   written. Missing updates in the task list usually correlate with Celery errors in these logs.
@@ -288,7 +288,7 @@ Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
 -from docker.types import Mount
 +from docker.types import Mount
 +import os
- 
+
  class JobContainerManager:
      def start(self, run_id: str, environment: dict) -> Container:
          home = f"/work/runs/{run_id}/home"
@@ -306,7 +306,7 @@ Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
 +                    read_only=False,
 +                )
 +            )
- 
+
          container = self._client.containers.run(
              image=os.getenv("WORKFLOW_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
              command=["sleep", "infinity"],

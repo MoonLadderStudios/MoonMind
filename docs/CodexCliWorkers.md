@@ -79,7 +79,7 @@ Scaling strategies:
 
 Compose highlights:
 
-- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${CELERY_DEFAULT_QUEUE:-speckit},${WORKFLOW_CODEX_QUEUE:-${WORKFLOW_CODEX_QUEUE:-codex}}` so discovery and Codex phases can execute on the same worker.
+- `celery_codex_worker` runs `celery -A celery_worker.speckit_worker worker --queues=${CELERY_DEFAULT_QUEUE:-speckit},${WORKFLOW_CODEX_QUEUE:-codex}` so discovery and Codex phases can execute on the same worker.
 - The worker inherits the shared Celery image and mounts the Codex auth volume at `${CODEX_VOLUME_PATH:-/home/app/.codex}` via `CODEX_VOLUME_NAME`.
 - The managed Codex config template lives at `/app/api_service/config.template.toml` and is exposed through `CODEX_TEMPLATE_PATH` for non-interactive runs.
 

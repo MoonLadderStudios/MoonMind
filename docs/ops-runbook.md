@@ -18,9 +18,9 @@ Use `./tools/auth-gemini-volume.sh` once per environment to bootstrap OAuth cred
 - **Queue setup**: Confirm the Codex worker is bound to both Workflow queues: `${CELERY_DEFAULT_QUEUE:-speckit}` for discovery and `${WORKFLOW_CODEX_QUEUE:-codex}` for Codex phases.
 - **Codex auth volume**: Keep `CODEX_VOLUME_NAME`/`CODEX_VOLUME_PATH` aligned with the worker defaults (`codex_auth_volume` mounted at `/home/app/.codex`) and authenticate once with `codex login --device-auth` before launching production runs.
 - **Metrics**: The worker emits StatsD-compatible counters and timers (prefix `moonmind.workflow`). Point `STATSD_HOST`/`STATSD_PORT` or `WORKFLOW_METRICS_HOST`/`WORKFLOW_METRICS_PORT` at your collector before triggering runs to capture observability data.
-- **Log review**: Look for `Spec workflow task …` entries in the worker logs to confirm each stage transitions through `running`, `success`, or `failure` with summarized payloads.
+- **Log review**: Look for `Workflow task …` entries in the worker logs to confirm each stage transitions through `running`, `success`, or `failure` with summarized payloads.
 - **Credential validation**: Failed runs often stem from missing Codex or GitHub credentials. The first task attempt records audit notes; resolve secrets and retry via `/api/workflows/runs/{id}/retry`.
-- **Artifact locations**: Patches, JSONL logs, and GitHub API responses are stored under `var/artifacts/workflow_runs/<run_id>/`. Mount this directory when running the worker locally to inspect failures. The retry endpoint reuses these artifacts when resuming failed publish tasks.
+- **Artifact locations**: Patches, JSONL logs, and GitHub API responses are stored under `var/artifacts/spec_workflows/<run_id>/`. Mount this directory when running the worker locally to inspect failures. The retry endpoint reuses these artifacts when resuming failed publish tasks.
 
 ### Codex routing observability
 
@@ -28,7 +28,7 @@ Use `./tools/auth-gemini-volume.sh` once per environment to bootstrap OAuth cred
   - `task_start` / `task_success` / `task_failure` counters for each task transition.
   - `task_duration` timer reported when a task succeeds or fails.
   Tags always include `task=<celery task name>` and `attempt=<n>`; status tags are `status=running|success|failure` with `retry=true|false` on start events. Use these to graph Codex queue throughput and alert on elevated retry rates.
-- **Codex queue logging**: Every Codex shard task (`submit_codex_job`, `apply_and_publish`, etc.) logs a `Spec workflow task …` line with sanitized `details=` metadata. Expect to see keys such as `codex_queue`, `codex_volume`, and `codex_shard_index` in the start log and a matching `summary=` payload on success. These fields come from the workflow context and confirm which queue/volume pair executed the run.
+- **Codex queue logging**: Every Codex shard task (`submit_codex_job`, `apply_and_publish`, etc.) logs a `Workflow task …` line with sanitized `details=` metadata. Expect to see keys such as `codex_queue`, `codex_volume`, and `codex_shard_index` in the start log and a matching `summary=` payload on success. These fields come from the workflow context and confirm which queue/volume pair executed the run.
 - **Pre-flight visibility**: The Docker-based login probe emits `Codex pre-flight check passed/failed` log lines that include `codex_volume`, the Docker exit code, and the condensed CLI output. Use these messages to pinpoint shards that need re-authentication before rerunning the workflow.
 - **Structured extras**: Failures propagate structured `details=` entries (for example `codex_task_id`, `codex_preflight_status`, `codex_queue`). Forward worker logs to a JSON-aware sink so these extras remain queryable when triaging routing or credential issues.
 - **Retry procedure**: When a run fails, POST `/api/workflows/runs/{id}/retry` with `{"mode": "resume_failed_task"}` to re-enter the chain at the failed step. If credentials were corrected, the resumed task will reuse prior Codex logs and patch paths; otherwise the logs will immediately surface the credential error with the same run_id for continuity.
