@@ -69,6 +69,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/queue",
         "/tasks/new",
         "/tasks/queue/new",
+        "/tasks/create",
         "/tasks/orchestrator",
         "/tasks/orchestrator/new",
         "/tasks/manifests",
@@ -109,8 +110,10 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     detail = response.json()["detail"]
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
-        "Dashboard route was not found. Use /tasks/new, /tasks/queue, /tasks/orchestrator, "
-        "/tasks/proposals, /tasks/manifests, or /tasks/settings."
+        "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
+        "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
+        "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+        "or /tasks/settings."
     )
 
 
