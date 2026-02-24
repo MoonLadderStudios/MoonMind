@@ -1548,6 +1548,20 @@ class AppSettings(BaseSettings):
         description="Compatibility passthrough for workflow git user display name.",
         exclude=True,
     )
+    workflow_github_repository: Optional[str] = Field(
+        None,
+        env=(
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        ),
+        validation_alias=AliasChoices(
+            "workflow_github_repository",
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+        ),
+        description="Compatibility passthrough for workflow repository override.",
+        exclude=True,
+    )
     workflow_git_user_email: Optional[str] = Field(
         None,
         env="WORKFLOW_GIT_USER_EMAIL",
@@ -1752,6 +1766,10 @@ class AppSettings(BaseSettings):
             self.spec_workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:
             self.spec_workflow.codex_effort = self.worker_codex_effort
+        if self.workflow_github_repository is not None:
+            repo = self.workflow_github_repository.strip()
+            if repo:
+                self.spec_workflow.github_repository = repo
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
