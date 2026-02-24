@@ -56,13 +56,17 @@ def build_runtime_gate_state(
 
     candidate = _clean_value(api_key)
     if candidate:
-        return RuntimeGateState(enabled=True, source_env="argument", error_message=error_message)
+        return RuntimeGateState(
+            enabled=True, source_env="argument", error_message=error_message
+        )
 
     source = env if env is not None else os.environ
     for key in CLAUDE_API_KEY_ENV_ALIASES:
         candidate = _clean_value(source.get(key))  # type: ignore[arg-type]
         if candidate:
-            return RuntimeGateState(enabled=True, source_env=key, error_message=error_message)
+            return RuntimeGateState(
+                enabled=True, source_env=key, error_message=error_message
+            )
 
     return RuntimeGateState(enabled=False, source_env=None, error_message=error_message)
 

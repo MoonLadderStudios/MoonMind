@@ -4,6 +4,7 @@ from typing import Annotated, Any, Optional, Sequence
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
 from moonmind.claude.runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state,
@@ -1765,7 +1766,9 @@ class AppSettings(BaseSettings):
             self.spec_workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:
             self.spec_workflow.codex_effort = self.worker_codex_effort
-        configured_default = str(self.spec_workflow.default_task_runtime or "").strip().lower()
+        configured_default = (
+            str(self.spec_workflow.default_task_runtime or "").strip().lower()
+        )
         if configured_default == "claude":
             default_runtime_gate = build_runtime_gate_state(
                 api_key=self.anthropic.anthropic_api_key,

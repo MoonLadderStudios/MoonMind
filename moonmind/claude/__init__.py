@@ -5,8 +5,8 @@ from .runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
     RuntimeGateState,
     build_runtime_gate_state,
-    resolve_anthropic_api_key,
     is_claude_runtime_enabled,
+    resolve_anthropic_api_key,
 )
 
 __all__ = [

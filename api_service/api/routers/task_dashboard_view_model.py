@@ -105,7 +105,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             default_task_runtime = configured_default
         else:
             default_task_runtime = (
-                supported_task_runtimes[0] if supported_task_runtimes else _DEFAULT_TASK_RUNTIME
+                supported_task_runtimes[0]
+                if supported_task_runtimes
+                else _DEFAULT_TASK_RUNTIME
             )
     codex_default_model = (
         str(settings.spec_workflow.codex_model or "").strip() or _DEFAULT_CODEX_MODEL

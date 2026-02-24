@@ -548,7 +548,9 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
     ]
 
 
-def test_run_preflight_universal_with_claude_capability_requires_key(monkeypatch) -> None:
+def test_run_preflight_universal_with_claude_capability_requires_key(
+    monkeypatch,
+) -> None:
     """Universal runtime with claude capability should require API key."""
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
@@ -561,7 +563,9 @@ def test_run_preflight_universal_with_claude_capability_requires_key(monkeypatch
         )
 
 
-def test_run_preflight_universal_with_claude_capability_runs_checks(monkeypatch) -> None:
+def test_run_preflight_universal_with_claude_capability_runs_checks(
+    monkeypatch,
+) -> None:
     """Universal runtime with claude capability should verify all CLIs when key exists."""
 
     calls: list[list[str]] = []

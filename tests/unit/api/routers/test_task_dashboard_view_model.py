@@ -125,7 +125,6 @@ def test_build_runtime_config_falls_back_when_claude_disabled(monkeypatch) -> No
     assert config["system"]["defaultTaskRuntime"] == "codex"
 
 
-
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
     monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
