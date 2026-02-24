@@ -21,9 +21,9 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
   - `GITHUB_TOKEN=<token_with_repo_access>`
   - `CODEX_VOLUME_NAME=codex_auth_volume` (or your override)
 - Optional skills policy overrides (defaults keep Speckit-first parity):
-  - `SPEC_WORKFLOW_USE_SKILLS=true`
-  - `SPEC_WORKFLOW_DEFAULT_SKILL=speckit`
-  - `SPEC_WORKFLOW_ALLOWED_SKILLS=speckit`
+  - `WORKFLOW_USE_SKILLS=true`
+  - `WORKFLOW_DEFAULT_SKILL=speckit`
+  - `WORKFLOW_ALLOWED_SKILLS=speckit`
 
 ## Fastest Path (Docker Compose)
 
@@ -75,7 +75,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
 
 1. **Submit a run**
    ```bash
-   curl -X POST http://localhost:5000/api/workflows/speckit/runs \
+   curl -X POST http://localhost:5000/api/workflows/runs \
      -H 'Content-Type: application/json' \
      -d '{
        "repository": "moonmind/spec-kit-reference",
@@ -85,7 +85,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
 
 2. **Watch task timeline**
    ```bash
-   curl http://localhost:5000/api/workflows/speckit/runs/{run_id}/tasks | jq
+   curl http://localhost:5000/api/workflows/runs/{run_id}/tasks | jq
    ```
    Stage payloads should include:
    - `selectedSkill` (default `speckit` unless overridden),
@@ -93,8 +93,8 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
 
 3. **Inspect artifacts**
    ```bash
-   curl http://localhost:5000/api/workflows/speckit/runs/{run_id}/artifacts | jq
-   ls -la var/artifacts/spec_workflows/{run_id}
+   curl http://localhost:5000/api/workflows/runs/{run_id}/artifacts | jq
+   ls -la var/artifacts/workflow_runs/{run_id}
    ```
 
 ## Validation Gate

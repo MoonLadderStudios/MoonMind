@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Spec Automation Codex Worker Extensions
+  title: Workflow Codex Worker Extensions
   version: 0.1.0
   description: |
     API additions supporting Codex OAuth volume management, deterministic queue routing,

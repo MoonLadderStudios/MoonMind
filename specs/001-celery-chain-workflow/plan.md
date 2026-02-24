@@ -13,7 +13,7 @@ Implement a Celery chain that drives Spec Kit phases end-to-end: discover the ne
 
 **Language/Version**: Python 3.11 (per AGENTS.md instructions and repo toolchain)  
 **Primary Dependencies**: Celery 5.4, RabbitMQ 3.x broker, PostgreSQL (Celery result backend + MoonMind DB), Codex CLI/Cloud, GitHub API, FastAPI service layer  
-**Storage**: PostgreSQL schemas `spec_workflow_runs` & `spec_workflow_task_states`, object storage (local `var/artifacts/spec_workflows/<run_id>` as interim)  
+**Storage**: PostgreSQL schemas `workflow_runs` & `workflow_task_states`, object storage (local `var/artifacts/workflow_runs/<run_id>` as interim)  
 **Testing**: `./tools/test_unit.sh` (unit validation gate), plus contract tests for workflow endpoints  
 **Target Platform**: Linux containers via docker compose (api, celery-worker, rabbitmq)  
 **Project Type**: Backend services (FastAPI API + Celery workers)  

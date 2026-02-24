@@ -11,7 +11,7 @@ Refactor workflow execution so skill adapters are the authoritative execution pa
 
 **Language/Version**: Python 3.11  
 **Primary Dependencies**: FastAPI routing (`api_service`), Pydantic settings (`moonmind.config.settings`), Celery worker startup modules (`celery_worker/*`), workflow execution modules (`moonmind/workflows/skills/*`, `moonmind/workflows/speckit_celery/tasks.py`).  
-**Storage**: Existing PostgreSQL workflow tables remain unchanged (`spec_workflow_runs`, `spec_workflow_task_states`).  
+**Storage**: Existing PostgreSQL workflow tables remain unchanged (`workflow_runs`, `workflow_task_states`).  
 **Testing**: `./tools/test_unit.sh` (required unit test entrypoint), focused updates to workflow skills, codex worker preflight, and workflow API contract tests.  
 **Target Platform**: Docker Compose services and local dev runtime for API + worker modules.  
 **Project Type**: Monorepo Python backend (API + Celery + worker entrypoints).  
@@ -79,7 +79,7 @@ See `specs/036-isolate-speckit-references/research.md`. Key decisions:
 
 1. Use an adapter registry map with explicit erroring for unsupported skills (no silent direct fallback path for unknown adapters).
 2. Gate Speckit executable verification by effective selected skills, not by unconditional startup/task checks.
-3. Provide canonical workflow API route prefix (`/api/workflows/runs`) while retaining `/api/workflows/speckit` as deprecated compatibility alias.
+3. Provide canonical workflow API route prefix (`/api/workflows/runs`) while retaining `/api/workflows` as deprecated compatibility alias.
 4. Keep SPEC-prefixed settings/structures for compatibility, but introduce neutral aliases where practical and deprecation signaling.
 
 ## Phase 1 – Design Outputs
@@ -105,7 +105,7 @@ See `specs/036-isolate-speckit-references/research.md`. Key decisions:
 
 ### US2 – Neutral workflow naming with backward compatibility
 
-- Add canonical workflow API endpoints in `api_service/api/routers/workflows.py` while preserving existing `/api/workflows/speckit/*` paths as deprecated aliases.
+- Add canonical workflow API endpoints in `api_service/api/routers/workflows.py` while preserving existing `/api/workflows/*` paths as deprecated aliases.
 - Add legacy-route usage logging plus response deprecation headers for migration observability.
 - Add API contract coverage for canonical and legacy endpoints in `tests/contract/test_workflow_api.py`.
 - Update `api_service/config.template.toml` and `.env-template` comments/defaults to document canonical naming and legacy alias behavior.
@@ -123,7 +123,7 @@ See `specs/036-isolate-speckit-references/research.md`. Key decisions:
 
 ## Risks & Mitigations
 
-- **Risk**: Legacy clients depend on existing `/api/workflows/speckit` routes.  
+- **Risk**: Legacy clients depend on existing `/api/workflows` routes.  
   **Mitigation**: Keep route compatibility and mark deprecated with explicit response headers and logs.
 - **Risk**: Removing builtin source fallback could break environments without mirrored Speckit skill content.  
   **Mitigation**: Keep configuration-driven skill source overrides and clear error messaging for missing sources.

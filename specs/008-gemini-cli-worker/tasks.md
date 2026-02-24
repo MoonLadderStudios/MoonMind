@@ -30,7 +30,7 @@
 **Goal**: Configure Docker services and build dependencies (serves US1, US2, US3).
 
 - [x] T002 Update `api_service/Dockerfile` to include `INSTALL_GEMINI_CLI` build argument and install logic for `@google/gemini-cli`.
-- [x] T003 Update `docker-compose.yaml` to define `celery_gemini_worker` service with `gemini_auth_volume` and proper environment variables (`GEMINI_API_KEY`, `GEMINI_HOME`, `SPEC_WORKFLOW_CODEX_QUEUE` analog `GEMINI_CELERY_QUEUE`).
+- [x] T003 Update `docker-compose.yaml` to define `celery_gemini_worker` service with `gemini_auth_volume` and proper environment variables (`GEMINI_API_KEY`, `GEMINI_HOME`, `WORKFLOW_CODEX_QUEUE` analog `GEMINI_CELERY_QUEUE`).
 - [x] T004 Create/Verify `api_service/config.template.toml` or ensure Gemini config strategy is defined (if needed for CLI defaults).
 
 ---
@@ -42,7 +42,7 @@
 - [x] T005 [US1] Create `celery_worker/gemini_tasks.py` module with `gemini_generate` task skeleton.
 - [x] T006 [US1] Implement `gemini_generate` task logic in `celery_worker/gemini_tasks.py` to invoke Gemini CLI (using `subprocess` or library).
 - [x] T007 [US1] Implement `gemini_process_response` task logic in `celery_worker/gemini_tasks.py`.
-- [x] T008 [US1] Update `celery_worker/speckit_worker.py` (or `celery_app` config) to register `gemini_tasks` and route them to `gemini` queue.
+- [x] T008 [US1] Update `celery_worker/workflow_worker.py` (or `celery_app` config) to register `gemini_tasks` and route them to `gemini` queue.
 - [x] T009 [US1] Create `tests/integration/test_gemini_worker.py` to verify worker picks up and executes tasks on `gemini` queue.
 
 ---

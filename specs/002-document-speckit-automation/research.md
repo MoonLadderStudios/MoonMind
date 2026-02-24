@@ -1,4 +1,4 @@
-# Research: Skills-First Spec Automation Pipeline
+# Research: Skills-First Workflow Pipeline
 
 ## Decision 1: Preserve Legacy Phase Values, Normalize Skills Metadata
 - **Decision**: Keep existing persisted `speckit_*` phase values and add normalized skills metadata extraction in runtime/API layers.

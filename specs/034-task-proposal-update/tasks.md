@@ -20,7 +20,7 @@
 
 **Purpose**: Introduce shared schema/config hooks before user-story-specific logic lands.
 
-- [X] T003 Implement policy settings (`proposal_targets_default`, `moonmind_ci_repository`) in `moonmind/config/settings.py` plus wire them into `SpecWorkflowSettings`/`AppSettings`, including documented default slot counts (`project=3`, `moonmind=2`) and severity vocabulary (`low|medium|high|critical` with a default MoonMind floor of `high`) (DOC-REQ-003, DOC-REQ-004, DOC-REQ-013).
+- [X] T003 Implement policy settings (`proposal_targets_default`, `moonmind_ci_repository`) in `moonmind/config/settings.py` plus wire them into `WorkflowSettings`/`AppSettings`, including documented default slot counts (`project=3`, `moonmind=2`) and severity vocabulary (`low|medium|high|critical` with a default MoonMind floor of `high`) (DOC-REQ-003, DOC-REQ-004, DOC-REQ-013).
 - [X] T004 Extend `moonmind/workflows/agent_queue/task_contract.py` to accept/validate `task.proposalPolicy` (targets, maxItems, minSeverityForMoonMind), persist it into canonical payloads, and compute an `EffectiveProposalPolicy` that falls back to defaults/logs when overrides are absent (DOC-REQ-005, DOC-REQ-009, DOC-REQ-010, DOC-REQ-013).
 - [X] T005 Update shared schemas (`moonmind/schemas/agent_queue_models.py` for `CreateJobRequest`, `moonmind/schemas/task_proposal_models.py` for optional `reviewPriority` + `priority_override_reason`) so API inputs/outputs reflect the new contract (DOC-REQ-005, DOC-REQ-007, DOC-REQ-010).
 
@@ -80,7 +80,7 @@
 
 ### Implementation for User Story 3
 
-- [X] T018 [US3] Wire new policy settings into `SpecWorkflowSettings`/`AppSettings` bridging logic so `CodexWorkerConfig.from_env` inherits overrides (DOC-REQ-010).
+- [X] T018 [US3] Wire new policy settings into `WorkflowSettings`/`AppSettings` bridging logic so `CodexWorkerConfig.from_env` inherits overrides (DOC-REQ-010).
 - [X] T019 [US3] Update `docs/TaskProposalQueue.md` quickstart section with explicit instructions for configuring `proposalPolicy` overrides and MoonMind CI signals (DOC-REQ-010, DOC-REQ-012).
 - [X] T020 [US3] Refresh `specs/034-task-proposal-update/quickstart.md` (and link from README if needed) to document validation steps (DOC-REQ-010, DOC-REQ-012).
 

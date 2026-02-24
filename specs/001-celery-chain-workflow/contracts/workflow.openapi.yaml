@@ -1,16 +1,16 @@
 openapi: 3.1.0
 info:
-  title: MoonMind Spec Workflow API
+  title: MoonMind Workflow API
   version: 0.1.0
   description: |
     Contracts for triggering, monitoring, and retrying Spec Kit Celery chains.
 servers:
   - url: https://api.moonmind.local
 paths:
-  /api/workflows/speckit/runs:
+  /api/workflows/runs:
     post:
       summary: Trigger the next Spec Kit phase via the Celery chain.
-      operationId: createSpecWorkflowRun
+      operationId: createWorkflowRun
       requestBody:
         required: true
         content:
@@ -23,7 +23,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SpecWorkflowRun'
+                $ref: '#/components/schemas/WorkflowRun'
         '409':
           description: Run already in progress for the same feature key.
           content:
@@ -32,7 +32,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List workflow runs with optional status filtering.
-      operationId: listSpecWorkflowRuns
+      operationId: listWorkflowRuns
       parameters:
         - in: query
           name: status
@@ -52,10 +52,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowRunCollection'
-  /api/workflows/speckit/runs/{runId}:
+  /api/workflows/runs/{runId}:
     get:
       summary: Retrieve a workflow run with task states and artifacts.
-      operationId: getSpecWorkflowRun
+      operationId: getWorkflowRun
       parameters:
         - $ref: '#/components/parameters/RunId'
         - in: query
@@ -74,17 +74,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SpecWorkflowRun'
+                $ref: '#/components/schemas/WorkflowRun'
         '404':
           description: Run not found.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/workflows/speckit/runs/{runId}/tasks:
+  /api/workflows/runs/{runId}/tasks:
     get:
       summary: Return task-level telemetry for the run.
-      operationId: listSpecWorkflowRunTasks
+      operationId: listWorkflowRunTasks
       parameters:
         - $ref: '#/components/parameters/RunId'
       responses:
@@ -108,10 +108,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/workflows/speckit/runs/{runId}/retry:
+  /api/workflows/runs/{runId}/retry:
     post:
       summary: Retry or resume a failed Celery chain from the failing task.
-      operationId: retrySpecWorkflowRun
+      operationId: retryWorkflowRun
       parameters:
         - $ref: '#/components/parameters/RunId'
       requestBody:
@@ -126,17 +126,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SpecWorkflowRun'
+                $ref: '#/components/schemas/WorkflowRun'
         '409':
           description: Run not eligible for retry or credentials missing.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/workflows/speckit/runs/{runId}/artifacts:
+  /api/workflows/runs/{runId}/artifacts:
     get:
       summary: List artifact metadata for download links.
-      operationId: listSpecWorkflowArtifacts
+      operationId: listWorkflowArtifacts
       parameters:
         - $ref: '#/components/parameters/RunId'
       responses:
@@ -202,11 +202,11 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/SpecWorkflowRun'
+            $ref: '#/components/schemas/WorkflowRun'
         nextCursor:
           type: string
           nullable: true
-    SpecWorkflowRun:
+    WorkflowRun:
       type: object
       properties:
         id:

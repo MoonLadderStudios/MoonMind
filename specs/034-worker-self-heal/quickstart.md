@@ -3,7 +3,7 @@
 ## Prerequisites
 - Docker (or WSL2) with the MoonMind compose stack (`docker compose up rabbitmq api celery-worker`), Git, and Python 3.11 tooling installed.
 - Required secrets exported: `GITHUB_TOKEN`, `CODEX_API_KEY`, and any vault credentials used by the worker.
-- Optional observability: set `SPEC_WORKFLOW_METRICS_HOST`/`SPEC_WORKFLOW_METRICS_PORT` (or `STATSD_HOST`/`STATSD_PORT`) if you want to capture the new StatsD metrics locally.
+- Optional observability: set `WORKFLOW_METRICS_HOST`/`WORKFLOW_METRICS_PORT` (or `STATSD_HOST`/`STATSD_PORT`) if you want to capture the new StatsD metrics locally.
 
 ## Configure Worker Budgets
 Set defaults that match `docs/WorkerSelfHealSystem.md`. These env vars can be injected into the Celery worker container or `env/.env`:

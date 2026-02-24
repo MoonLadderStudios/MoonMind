@@ -1,4 +1,4 @@
-# Feature Specification: Skills-First Spec Automation Pipeline
+# Feature Specification: Skills-First Workflow Pipeline
 
 **Feature Branch**: `002-document-speckit-automation`  
 **Created**: 2025-11-03  
@@ -9,7 +9,7 @@
 
 ### User Story 1 - Fast Worker Launch for Automation (Priority: P1)
 
-As an operator, I want one deterministic startup path for Spec Automation workers so Codex authentication and Google Gemini embedding defaults are ready before automation runs are triggered.
+As an operator, I want one deterministic startup path for Workflow workers so Codex authentication and Google Gemini embedding defaults are ready before automation runs are triggered.
 
 **Why this priority**: Every automation run depends on worker readiness, credential validation, and embedding defaults.
 
@@ -49,8 +49,8 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 
 **Acceptance Scenarios**:
 
-1. **Given** a completed run, **When** `/api/spec-automation/runs/{id}` is requested, **Then** per-phase metadata includes skill path fields alongside existing status and artifact references.
-2. **Given** artifacts are requested, **When** `/api/spec-automation/runs/{id}/artifacts/{artifact_id}` is called, **Then** existing artifact detail and download behavior remains unchanged.
+1. **Given** a completed run, **When** `/api/workflows/runs/{id}` is requested, **Then** per-phase metadata includes skill path fields alongside existing status and artifact references.
+2. **Given** artifacts are requested, **When** `/api/workflows/runs/{id}/artifacts/{artifact_id}` is called, **Then** existing artifact detail and download behavior remains unchanged.
 
 ### Edge Cases
 
@@ -76,10 +76,10 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 
 ### Key Entities *(include if feature involves data)*
 
-- **SpecAutomationRun**: Lifecycle record for one automation run, including status, branch/PR references, and artifact links.
-- **SpecAutomationTaskState**: Per-phase execution record including status, attempt, logs, and normalized skills metadata.
-- **SpecAutomationArtifact**: Persisted run outputs with source phase and retention metadata.
-- **SpecAutomationAgentConfiguration**: Agent backend/version snapshot for run-level auditability.
+- **WorkflowRun**: Lifecycle record for one automation run, including status, branch/PR references, and artifact links.
+- **WorkflowTaskState**: Per-phase execution record including status, attempt, logs, and normalized skills metadata.
+- **WorkflowArtifact**: Persisted run outputs with source phase and retention metadata.
+- **WorkflowAgentConfiguration**: Agent backend/version snapshot for run-level auditability.
 
 ## Success Criteria *(mandatory)*
 
@@ -93,10 +93,10 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 
 ## Assumptions & Dependencies
 
-- Existing `spec_automation_*` persistence tables remain in use; this alignment does not require destructive schema changes.
+- Existing `workflow_*` persistence tables remain in use; this alignment does not require destructive schema changes.
 - Legacy `speckit_*` phase values remain valid and should continue to deserialize in API responses.
 - Speckit skills are installed and exposed via shared adapters in `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` may be retained as fallback).
-- Existing `/api/spec-automation/*` endpoints remain the compatibility surface during this migration.
+- Existing `/api/workflows/*` endpoints remain the compatibility surface during this migration.
 
 ### Scope Boundaries
 

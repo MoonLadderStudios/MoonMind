@@ -88,7 +88,7 @@ These decisions remove `NEEDS CLARIFICATION` markers, so Phase 1 can focus on im
 ## Phase 1: Implementation Blueprint
 
 ### 1. Queue API + Service Hardening
-- `moonmind/config/settings.py`: ensure attachment limit env vars + allowed content types documented; add `MOONMIND_VISION_*` settings (enable flag, provider, model, max tokens, OCR toggle). Extend `SpecWorkflowSettings` validators for tuple parsing + defaults.
+- `moonmind/config/settings.py`: ensure attachment limit env vars + allowed content types documented; add `MOONMIND_VISION_*` settings (enable flag, provider, model, max tokens, OCR toggle). Extend `WorkflowSettings` validators for tuple parsing + defaults.
 - `moonmind/workflows/agent_queue/service.py`: finalize `create_job_with_attachments` (validate `CANONICAL_TASK_JOB_TYPE`, enforce count/size/digest). Confirm `_persist_attachments` emits queue events and `list/get` methods filter to `_ATTACHMENT_NAMESPACE`. Add logging for rejected namespace usage (FR-004) and TOT bytes. Ensure `_normalize_attachment_upload` uses signature sniffing for PNG/JPEG/WebP.
 - `moonmind/workflows/agent_queue/storage.py`: verify path sanitization and `AgentQueueArtifactStorage.write_artifact` handles `inputs/` directories; add integration tests if missing.
 - `moonmind/schemas/agent_queue_models.py`: expose `JobWithAttachmentsResponse` (already present but ensure aliasing + documentation). Add dataclasses for `AttachmentManifestEntry` when referenced by worker outputs.

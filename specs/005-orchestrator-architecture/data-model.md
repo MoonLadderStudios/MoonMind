@@ -84,7 +84,7 @@
 - **Relationship**:
   - `ApprovalGate` is referenced by OrchestratorRun (single active policy per service) and by MoonMind API when issuing tokens.
 
-## 5. TaskState (aligns with `spec_workflow_task_states`)
+## 5. TaskState (aligns with `workflow_task_states`)
 - **Description**: Persists Celery task lifecycle for each plan step to power the MoonMind UI timelines.
 - **Key Fields**:
   - `task_state_id` (UUID).

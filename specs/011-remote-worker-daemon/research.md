@@ -20,7 +20,7 @@
 
 ## Decision 4: Skill allowlist policy is local worker config
 
-- **Decision**: Add `default_skill` and `allowed_skills` to worker config with env-driven defaults (`MOONMIND_DEFAULT_SKILL`, `MOONMIND_ALLOWED_SKILLS`, fallback to `SPEC_WORKFLOW_*`).
+- **Decision**: Add `default_skill` and `allowed_skills` to worker config with env-driven defaults (`MOONMIND_DEFAULT_SKILL`, `MOONMIND_ALLOWED_SKILLS`, fallback to `WORKFLOW_*`).
 - **Rationale**: Worker-level guardrails are needed so unsupported skills fail before execution.
 - **Alternative rejected**: Relying only on server-side policy was rejected because runtime observability loses local intent.
 

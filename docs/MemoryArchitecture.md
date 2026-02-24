@@ -143,7 +143,7 @@ Writeback is automatic, async-first, and idempotent by run/job ID.
 ### 6.1 Sources of truth
 - **Postgres**: workflow runs, task states, orchestrator runs, agent queue jobs, event logs.
 - **Artifact store**:
-  - workflow artifacts under `var/artifacts/spec_workflows/<run_id>/`
+  - workflow artifacts under `var/artifacts/workflow_runs/<run_id>/`
   - agent job artifacts under `var/artifacts/agent_jobs/<job_id>/`
 - **Git**: code + Beads planning state.
 

@@ -31,7 +31,7 @@
 
 ### 5. Non-Speckit Skill Overrides
 
-- **Decision**: Preserve allowlist-driven skill selection (`SPEC_WORKFLOW_ALLOWED_SKILLS`) with Speckit as default.
+- **Decision**: Preserve allowlist-driven skill selection (`WORKFLOW_ALLOWED_SKILLS`) with Speckit as default.
 - **Rationale**: Umbrella policy requires skills-based orchestration without requiring separate Speckit-only mode.
 - **Impact**: Stage overrides remain policy-controlled and backward compatible.
 

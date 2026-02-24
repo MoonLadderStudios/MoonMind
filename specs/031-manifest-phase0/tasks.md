@@ -27,7 +27,7 @@
 **Purpose**: Create shared fixtures and configuration defaults that unblock all manifest phases.
 
 - [X] T001 Build reusable manifest YAML fixtures (`tests/fixtures/manifests/phase0/inline.yaml`, `tests/fixtures/manifests/phase0/registry.yaml`) for queue + registry tests to consume the same payload samples.
-- [X] T002 Encode Phase 0 manifest toggles (`spec_workflow.allow_manifest_path_source`, manifest capability flags) inside `moonmind/config/settings.py` and `config.toml` so runtime gating of `manifest.source.kind` matches docs/ManifestTaskSystem.md §6.
+- [X] T002 Encode Phase 0 manifest toggles (`workflow.allow_manifest_path_source`, manifest capability flags) inside `moonmind/config/settings.py` and `config.toml` so runtime gating of `manifest.source.kind` matches docs/ManifestTaskSystem.md §6.
 
 ---
 

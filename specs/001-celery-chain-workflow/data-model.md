@@ -1,6 +1,6 @@
 # Data Model: Celery Chain Workflow Integration
 
-## Entity: SpecWorkflowRun
+## Entity: WorkflowRun
 - **Purpose**: Canonical record per MoonMind-triggered Spec Kit automation run; stores identifiers, chain metadata, operator inputs, and aggregated artifacts.
 - **Primary Identifier**: `id` (UUID).
 - **Key Attributes**:
@@ -13,21 +13,21 @@
   - `status` (enum: `pending`, `running`, `succeeded`, `failed`, `no_work`, `cancelled`, `retrying`).
   - `current_task_name` (string, nullable) – friendly name of the active Celery task during execution.
   - `codex_task_id` (string, nullable) – identifier returned by Codex submission task.
-  - `codex_logs_path` (string, nullable) – path to JSONL stream captured under `var/artifacts/spec_workflows/<run_id>/codex.jsonl`.
+  - `codex_logs_path` (string, nullable) – path to JSONL stream captured under `var/artifacts/workflow_runs/<run_id>/codex.jsonl`.
   - `credential_audit_id` (UUID, nullable) – FK to `WorkflowCredentialAudit` summarizing checks performed for the run.
   - `created_at` / `updated_at` / `completed_at` (timestamps, required/nullable) – lifecycle markers for SLA tracking.
 - **Relationships**:
-  - One-to-many with `SpecWorkflowTaskState` (each run has many task states).
+  - One-to-many with `WorkflowTaskState` (each run has many task states).
   - One-to-many with `WorkflowArtifact` (artifacts keyed by type) and optional one-to-one with `WorkflowCredentialAudit`.
 - **Validation Rules**:
   - `branch_name` must follow `<feature-key>/<run-suffix>` slug pattern and remain immutable once PR step starts.
   - `status` transitions must obey the state machine defined below (e.g., cannot jump from `pending` to `succeeded` without `running`).
 
-## Entity: SpecWorkflowTaskState
+## Entity: WorkflowTaskState
 - **Purpose**: Tracks per-task execution data emitted by Celery for UI monitoring and audit.
 - **Primary Identifier**: composite (`run_id`, `task_name`, `attempt` #) or surrogate `id`.
 - **Key Attributes**:
-  - `run_id` (UUID, FK to `SpecWorkflowRun.id`).
+  - `run_id` (UUID, FK to `WorkflowRun.id`).
   - `task_name` (enum/string: `discover`, `submit`, `apply`, `publish`, `finalize`, `retry-hook`).
   - `state` (enum: `waiting`, `received`, `started`, `succeeded`, `failed`, `retrying`).
   - `message` (JSON / text) – structured payload describing result or failure context.
@@ -37,7 +37,7 @@
   - `started_at`, `finished_at` (timestamps, nullable) – used for runtime charts.
   - `retry_count` (integer, default 0) – increments when Celery retries the task.
 - **Relationships**:
-  - Many-to-one with `SpecWorkflowRun`.
+  - Many-to-one with `WorkflowRun`.
 - **Validation Rules**:
   - Each new `state` entry for a (`run_id`, `task_name`) must have `started_at` when entering `started` and `finished_at` when final states occur.
   - `retry_count` increments monotonically; `state=retrying` requires `retry_count > 0`.
@@ -45,7 +45,7 @@
 
 ## Entity: WorkflowExecutionPathRecord (logical)
 - **Purpose**: Logical per-stage metadata envelope used by the skills-first adapter and written into run/task artifacts.
-- **Primary Identifier**: (`run_id`, `task_name`, `attempt`) via `SpecWorkflowTaskState`.
+- **Primary Identifier**: (`run_id`, `task_name`, `attempt`) via `WorkflowTaskState`.
 - **Key Attributes**:
   - `selectedSkill` (string).
   - `executionPath` (enum: `skill`, `direct_fallback`, `direct_only`).
@@ -53,7 +53,7 @@
   - `usedFallback` (boolean).
   - `shadowModeRequested` (boolean).
 - **Relationships**:
-  - Embedded into `SpecWorkflowTaskState.payload`.
+  - Embedded into `WorkflowTaskState.payload`.
   - Aggregated under `run_summary.json` as `skillExecution`.
 - **Validation Rules**:
   - `executionPath=direct_fallback` requires `usedFallback=true`.
@@ -63,7 +63,7 @@
 - **Purpose**: Records which secrets (Codex, GitHub) were validated for a run and any problems encountered.
 - **Primary Identifier**: `id` (UUID).
 - **Key Attributes**:
-  - `run_id` (UUID, FK) – optional link back to `SpecWorkflowRun`.
+  - `run_id` (UUID, FK) – optional link back to `WorkflowRun`.
   - `codex_status` (enum: `passed`, `failed`, `skipped`).
   - `codex_checked_at` (timestamp, nullable).
   - `codex_message` (text) – remediation guidance on failure.
@@ -72,7 +72,7 @@
   - `github_message` (text).
   - `environment_snapshot` (JSON) – captures version numbers, queue/worker metadata, commit SHAs.
 - **Relationships**:
-  - Optional one-to-one with `SpecWorkflowRun` (a run references the latest audit row).
+  - Optional one-to-one with `WorkflowRun` (a run references the latest audit row).
 - **Validation Rules**:
   - When a status is `failed`, the corresponding `*_message` must be populated.
   - At least one of Codex/GitHub statuses must be `passed` for the run to proceed beyond discovery.
@@ -83,19 +83,19 @@
 - **Key Attributes**:
   - `run_id` (UUID, FK).
   - `artifact_type` (enum: `codex_logs`, `codex_patch`, `apply_output`, `pr_payload`, `retry_context`).
-  - `path` (string) – filesystem/Object Store path relative to `var/artifacts/spec_workflows/<run_id>` or signed URL.
+  - `path` (string) – filesystem/Object Store path relative to `var/artifacts/workflow_runs/<run_id>` or signed URL.
   - `content_type` (string) – MIME descriptor for download.
   - `size_bytes` (integer, nullable) – optional for quota tracking.
   - `digest` (string, nullable) – checksum for integrity validation.
   - `created_at` (timestamp).
 - **Relationships**:
-  - Many-to-one with `SpecWorkflowRun`.
+  - Many-to-one with `WorkflowRun`.
 - **Validation Rules**:
   - (`run_id`, `artifact_type`) should be unique when `artifact_type` is singular (e.g., only one `codex_logs` per run) but may allow multiples for repeating artifacts (e.g., multiple `retry_context` entries) tracked via suffix.
 
 ## Lifecycle & State Transitions
 
-### SpecWorkflowRun
+### WorkflowRun
 1. `pending` → `running`: triggered when the Celery chain is enqueued and discovery task starts.
 2. `running` → `no_work`: discovery reported no actionable phases; no downstream tasks execute.
 3. `running` → `failed`: any task raises unrecoverable error; `current_task_name` captures the failing task.
@@ -104,7 +104,7 @@
 6. `retrying` → (`running` | `failed` | `succeeded`) depending on retry outcome.
 7. Any terminal state sets `completed_at` and freezes mutable fields (branch, PR URL).
 
-### SpecWorkflowTaskState
+### WorkflowTaskState
 - `waiting` → `received` → `started` → (`succeeded` | `failed`).
 - On Celery retry the task re-enters `waiting`/`received` with `retry_count+1` and optional `state=retrying` entry for audit clarity.
 

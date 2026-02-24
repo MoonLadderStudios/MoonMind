@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: Workflow API
+  version: '0.1.0'
+  description: >
+    Endpoints for triggering and monitoring skills-first workflow runs.
+servers:
+  - url: https://moonmind.example.com
+paths:
+  /api/workflows/runs:
+    post:
+      summary: Trigger a new workflow run
+      tags: [WorkflowRuns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRunRequest'
+      responses:
+        '202':
+          description: Run accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRun'
+        '400':
+          description: Invalid request payload
+        '401':
+          description: Missing or invalid credentials
+        '409':
+          description: Run already in progress for the same feature key
+    get:
+      summary: List workflow runs
+      tags: [WorkflowRuns]
+      responses:
+        '200':
+          description: Workflow run collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunCollection'
+  /api/workflows/runs/{runId}:
+    get:
+      summary: Fetch status and metadata for a run
+      tags: [WorkflowRuns]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run status and task metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRun'
+        '404':
+          description: Run not found
+  /api/workflows/runs/{runId}/artifacts:
+    get:
+      summary: List artifacts for a run
+      tags: [WorkflowArtifacts]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Artifact metadata list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowArtifactList'
+        '404':
+          description: Run not found
+  /api/workflows/runs/{runId}/retry:
+    post:
+      summary: Retry a failed workflow run
+      tags: [WorkflowRuns]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetryWorkflowRunRequest'
+      responses:
+        '202':
+          description: Retry accepted and enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRun'
+        '409':
+          description: Run not eligible for retry
+components:
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    CreateWorkflowRunRequest:
+      type: object
+      required: [repository]
+      properties:
+        repository:
+          type: string
+          example: MoonLadderStudios/moonmind
+        featureKey:
+          type: string
+          maxLength: 120
+        forcePhase:
+          type: string
+          enum: [discover, submit, apply, publish]
+        createdBy:
+          type: string
+          format: uuid
+        notes:
+          type: string
+          maxLength: 1024
+    RetryWorkflowRunRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [resume_failed_task, restart_from_discovery]
+          default: resume_failed_task
+        notes:
+          type: string
+          maxLength: 1024
+    WorkflowRunCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowRun'
+        nextCursor:
+          type: string
+          nullable: true
+    WorkflowRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        repository:
+          type: string
+          nullable: true
+        featureKey:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, cancelled, no_work, retrying]
+        phase:
+          type: string
+          enum: [discover, submit, apply, publish, complete]
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowArtifact'
+    WorkflowArtifactList:
+      type: object
+      properties:
+        runId:
+          type: string
+          format: uuid
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowArtifact'
+    WorkflowArtifact:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          type: string
+          enum: [log, patch, metadata, summary, transcript, other]
+        path:
+          type: string
+        mimeType:
+          type: string
+          nullable: true

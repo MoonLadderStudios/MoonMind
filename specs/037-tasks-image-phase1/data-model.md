@@ -15,7 +15,7 @@
 | `content_type` | text | Must be one of `image/png`, `image/jpeg`, `image/webp` (sniffed). |
 | `size_bytes` | bigint | Validated against per-file (10MB default) and aggregate (25MB default) caps. |
 | `digest` | text | `sha256:<hex>` computed on upload; used to validate worker downloads. |
-| `storage_path` | text | Relative path within `settings.spec_workflow.agent_job_artifact_root`. |
+| `storage_path` | text | Relative path within `settings.workflow.agent_job_artifact_root`. |
 | `created_at` | timestamptz | Audit log for uploads (mirrors queue events). |
 
 ### Attachment Events

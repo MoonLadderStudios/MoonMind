@@ -74,8 +74,8 @@ When an instruction targets sensitive services or a verification step fails, the
 - **FR-008**: When verification fails, the orchestrator must execute rollback by reverting touched files, rebuilding if needed, restarting the previous image, and documenting the rollback outcome.
 - **FR-009**: Approval policies must be enforced before the patch step, requiring affirmative approval records for protected services and logging the approver identity with timestamps.
 - **FR-010**: Every step in the run lifecycle must emit structured status updates (state, timestamp, key message, artifact references) so MoonMind's UI and logs can present real-time progress.
-- **FR-011**: The orchestrator must persist per-run artifacts inside the designated spec workflow artifact store (default `spec_workflows` namespace), covering diffs, build logs, compose outputs, health logs, and rollback notes.
-- **FR-012**: Metrics counters and timers (e.g., runs attempted, success/failure counts, verification duration, rollback frequency) must be emitted via the configured StatsD endpoint when `STATSD_HOST/PORT` or `SPEC_WORKFLOW_METRICS_*` are set.
+- **FR-011**: The orchestrator must persist per-run artifacts inside the designated spec workflow artifact store (default `tasks` namespace), covering diffs, build logs, compose outputs, health logs, and rollback notes.
+- **FR-012**: Metrics counters and timers (e.g., runs attempted, success/failure counts, verification duration, rollback frequency) must be emitted via the configured StatsD endpoint when `STATSD_HOST/PORT` or `WORKFLOW_METRICS_*` are set.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -95,7 +95,7 @@ When an instruction targets sensitive services or a verification step fails, the
 
 ## Assumptions & Dependencies
 
-- RabbitMQ broker, Celery worker, and MoonMind API service are already running per the Spec Workflow Verification Checklist so orchestrator tasks can be queued and monitored.
+- RabbitMQ broker, Celery worker, and MoonMind API service are already running per the Workflow Verification Checklist so orchestrator tasks can be queued and monitored.
 - Host Docker daemon access via `/var/run/docker.sock` remains available and secured; orchestrator runs on trusted hosts where this access is acceptable.
 - Service health endpoints (or equivalent checks) are documented so verification can be configured without further discovery.
 - Secrets such as GitHub and Codex tokens are provided through environment variables or Docker secrets and are masked in logs.

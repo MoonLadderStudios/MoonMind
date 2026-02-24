@@ -198,7 +198,7 @@ Tasks may optionally embed a `task.proposalPolicy` object so workers can steer f
 - `maxItems`: per-target caps (e.g., `{ "project": 3, "moonmind": 2 }`). Invalid, missing, or non-positive values revert to documented defaults.
 - `minSeverityForMoonMind`: severity floor (`low`, `medium`, `high`, `critical`) that must be met before emitting MoonMind CI proposals. Defaults to `high` when unspecified.
 
-Global defaults surface through `TaskProposalSettings`/`SpecWorkflowSettings` (see `api_service/config.template.toml`) so API validation, worker routing, and dashboards all share the same knobs.
+Global defaults surface through `TaskProposalSettings`/`WorkflowSettings` (see `api_service/config.template.toml`) so API validation, worker routing, and dashboards all share the same knobs.
 
 ## 5. Claim and Eligibility Rules
 

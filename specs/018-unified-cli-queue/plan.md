@@ -79,7 +79,7 @@ tests/
 ## Phase 0: Research Plan
 
 1. Confirm safe/maintainable Claude CLI installation pattern aligned with existing Codex/Gemini/Speckit fallback behavior in `api_service/Dockerfile`.
-2. Determine queue migration strategy that defaults to `moonmind.jobs` while allowing temporary compatibility with existing `SPEC_WORKFLOW_CODEX_QUEUE` and `GEMINI_CELERY_QUEUE` variables.
+2. Determine queue migration strategy that defaults to `moonmind.jobs` while allowing temporary compatibility with existing `WORKFLOW_CODEX_QUEUE` and `GEMINI_CELERY_QUEUE` variables.
 3. Define runtime mode validation strategy (`codex|gemini|claude|universal`) that fails fast in worker startup.
 4. Define runtime-neutral payload contract representation and universal-targeting semantics without introducing queue partitioning.
 5. Define validation approach and test coverage for queue/routing/runtime settings changes.

@@ -51,7 +51,7 @@ Key responsibilities (unchanged in spirit):
 - Emits StatsD metrics when enabled.
 
 2.2 Job Container
-- Image from SPEC_AUTOMATION_JOB_IMAGE (default ghcr.io/moonladderstudios/moonmind:latest).
+- Image from `WORKFLOW_JOB_IMAGE` (default `ghcr.io/moonladderstudios/moonmind:latest`, legacy alias `SPEC_AUTOMATION_JOB_IMAGE`).
 - Starts sleep infinity; Celery drives it via docker exec.
 - Environment includes:
   - HOME=/work/runs/{run_id}/home (unchanged).
@@ -124,7 +124,7 @@ Monitor the Celery chain from two angles:
 - **API polling** – `/api/workflows/runs/{run_id}` returns the run plus the latest task snapshot; `/runs/{run_id}/tasks`
   exposes the full timeline including `status`, `message`, `startedAt`/`finishedAt`, and any `artifactPaths` emitted by the task
   (Codex logs, patch diffs, apply output, PR payload). `/runs/{run_id}/artifacts` lists the same paths for download.
-  Legacy `/api/workflows/speckit/*` aliases remain available for compatibility and return deprecation headers.
+  Legacy `/api/workflows/speckit/*` aliases remain available for compatibility and return deprecation headers; `/api/workflows/*` is the canonical surface.
 - **Worker logs** – every phase logs `Spec workflow task <name> started/succeeded/failed` with attempt numbers and shard/volume
   details. You should see a `Codex preflight` line before submission and `apply_and_publish` summary lines once the PR payload is
   written. Missing updates in the task list usually correlate with Celery errors in these logs.
@@ -138,7 +138,7 @@ entries include a `message` that should match the Celery exception output.
   same approval flow: the orchestrator will pause the ActionPlan in `awaiting_approval` until an operator calls
   `POST /orchestrator/runs/{run_id}/approvals`.
 * **Artifact hand-off** – Spec Kit attaches discovery/submission artifacts to the orchestrator run so `patch.diff`, `build.log`,
-  `verify.log`, and `rollback.log` live beside the original Spec Kit outputs under `var/artifacts/spec_workflows/<run_id>/`.
+  `verify.log`, and `rollback.log` live beside the original Spec Kit outputs under `var/artifacts/workflow_runs/<run_id>/`.
 * **StatsD alignment** – Both systems emit StatsD when configured; orchestrator metrics use the `moonmind.orchestrator.*`
   namespace (`runs.status.*`, `steps.<step>.started`, `steps.<step>.failed`). Pair these with existing Spec Kit counters to build
   a single Grafana dashboard showing discovery → plan → patch/build/restart → verify.
@@ -177,7 +177,7 @@ entries include a `message` that should match the Celery exception output.
 docker run --rm -it \
   -v codex_auth_0:/home/app/.codex \
   --entrypoint bash \
-  ${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest} -lc 'codex login --device-auth && codex login status'
+  ${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest} -lc 'codex login --device-auth && codex login status'
 # Repeat for codex_auth_1 and codex_auth_2
 ```
 
@@ -222,7 +222,7 @@ docker run --rm -it \
 | CODEX_QUEUE | Queue name for this Codex worker (codex-0, codex-1, codex-2). |
 | CODEX_VOLUME_NAME | Name of the Docker volume that stores ChatGPT OAuth for this worker (codex_auth_0/1/2). |
 | CODEX_SHARDS | Optional; default 3 used in routing helper. |
-| CODEX_LOGIN_CHECK_IMAGE | Job image used for pre-flight status check; defaults to SPEC_AUTOMATION_JOB_IMAGE. |
+| CODEX_LOGIN_CHECK_IMAGE | Job image used for pre-flight status check; defaults to WORKFLOW_JOB_IMAGE. |
 
 (All previous variables remain in effect.)
 
@@ -288,7 +288,7 @@ Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
 -from docker.types import Mount
 +from docker.types import Mount
 +import os
- 
+
  class JobContainerManager:
      def start(self, run_id: str, environment: dict) -> Container:
          home = f"/work/runs/{run_id}/home"
@@ -306,9 +306,9 @@ Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
 +                    read_only=False,
 +                )
 +            )
- 
+
          container = self._client.containers.run(
-             image=os.getenv("SPEC_AUTOMATION_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
+             image=os.getenv("WORKFLOW_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
              command=["sleep", "infinity"],
              environment={
                  **environment,
@@ -332,7 +332,7 @@ def _assert_codex_logged_in():
         return  # no check if not configured
     image = os.getenv(
         "CODEX_LOGIN_CHECK_IMAGE",
-        os.getenv("SPEC_AUTOMATION_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
+        os.getenv("WORKFLOW_JOB_IMAGE", "ghcr.io/moonladderstudios/moonmind:latest"),
     )
     client = from_env()
     # Short-lived check container
@@ -367,7 +367,7 @@ services:
     environment:
       - CODEX_QUEUE=codex-0
       - CODEX_VOLUME_NAME=codex_auth_0
-      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+      - WORKFLOW_JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - speckit_workspaces:/work
@@ -381,7 +381,7 @@ services:
     environment:
       - CODEX_QUEUE=codex-1
       - CODEX_VOLUME_NAME=codex_auth_1
-      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+      - WORKFLOW_JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - speckit_workspaces:/work
@@ -395,7 +395,7 @@ services:
     environment:
       - CODEX_QUEUE=codex-2
       - CODEX_VOLUME_NAME=codex_auth_2
-      - SPEC_AUTOMATION_JOB_IMAGE=${SPEC_AUTOMATION_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+      - WORKFLOW_JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - speckit_workspaces:/work

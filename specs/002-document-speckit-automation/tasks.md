@@ -27,10 +27,10 @@
 
 **Purpose**: Core configuration and persistence foundations required by all user stories.
 
-- [x] T004 Extend moonmind/config/settings.py and config.toml with spec automation job image, workspace root, and metrics toggles
+- [x] T004 Extend moonmind/config/settings.py and config.toml with workflow job image, workspace root, and metrics toggles
 - [x] T005 Implement workspace manager helpers for run/home/artifact directories in moonmind/workflows/speckit_celery/workspace.py
-- [x] T006 Add SpecAutomationRun-related SQLAlchemy models in moonmind/workflows/speckit_celery/models.py
-- [x] T007 Generate Alembic migration creating spec_automation_runs and related tables in api_service/migrations/versions/
+- [x] T006 Add WorkflowRun-related SQLAlchemy models in moonmind/workflows/speckit_celery/models.py
+- [x] T007 Generate Alembic migration creating workflow_runs and related tables in api_service/migrations/versions/
 
 **Checkpoint**: Foundation ready—user story work can proceed once configuration and schema changes land.
 
@@ -44,12 +44,12 @@
 
 ### Implementation for User Story 1
 
-- [x] T008 [US1] Add spec automation repository methods for run/task/artifact persistence in moonmind/workflows/speckit_celery/repositories.py
+- [x] T008 [US1] Add workflow repository methods for run/task/artifact persistence in moonmind/workflows/speckit_celery/repositories.py
 - [x] T009 [US1] Implement job container lifecycle (start/exec/stop) using Docker SDK in moonmind/workflows/speckit_celery/job_container.py
 - [x] T010 [US1] Add branch naming and workspace preparation utilities in moonmind/workflows/speckit_celery/workspace.py
 - [ ] T011 [US1] Orchestrate specify→plan→tasks execution with container phases in moonmind/workflows/speckit_celery/tasks.py
 - [ ] T012 [US1] Implement git commit/push and PR helpers for job container runs in moonmind/workflows/speckit_celery/tasks.py
-- [ ] T013 [US1] Cover successful automation happy path with integration test in tests/integration/workflows/test_spec_automation_pipeline.py
+- [ ] T013 [US1] Cover successful automation happy path with integration test in tests/integration/workflows/test_workflow_pipeline.py
 
 **Checkpoint**: Automation run can be triggered end-to-end and produces branch/PR metadata or a no-op result deterministically.
 
@@ -59,15 +59,15 @@
 
 **Goal**: Allow operators to inspect run status, per-phase details, and artifacts through the API.
 
-**Independent Test**: Trigger a run, then call GET `/spec-automation/runs/{id}` to verify phases, artifacts, and summary fields surface correctly.
+**Independent Test**: Trigger a run, then call GET `/workflow/runs/{id}` to verify phases, artifacts, and summary fields surface correctly.
 
 ### Implementation for User Story 2
 
-- [x] T014 [US2] Define SpecAutomation response schemas in moonmind/schemas/workflow_models.py
+- [x] T014 [US2] Define Workflow response schemas in moonmind/schemas/workflow_models.py
 - [x] T015 [US2] Expose run detail and artifact query helpers in moonmind/workflows/speckit_celery/repositories.py
-- [x] T016 [US2] Implement Spec Automation API router per contract in api_service/api/routers/spec_automation.py
+- [x] T016 [US2] Implement Workflow API router per contract in api_service/api/routers/workflow.py
 - [x] T017 [US2] Register router with FastAPI and ensure dependency wiring in api_service/main.py
-- [x] T018 [US2] Add API tests covering run detail and artifact endpoints in tests/unit/api/test_spec_automation.py
+- [x] T018 [US2] Add API tests covering run detail and artifact endpoints in tests/unit/api/test_workflow.py
 
 **Checkpoint**: Operators can retrieve run status and artifacts via documented API endpoints.
 
@@ -84,7 +84,7 @@
 - [x] T019 [US3] Inject secrets as env vars and redact sensitive logs in moonmind/workflows/speckit_celery/job_container.py
 - [x] T020 [US3] Implement workspace and container cleanup routines with retention policy in moonmind/workflows/speckit_celery/workspace.py
 - [x] T021 [US3] Add agent configuration selection and persistence to moonmind/workflows/speckit_celery/tasks.py
-- [x] T022 [US3] Add unit tests covering cleanup and agent selection behaviors in tests/unit/workflows/test_spec_automation_env.py
+- [x] T022 [US3] Add unit tests covering cleanup and agent selection behaviors in tests/unit/workflows/test_workflow_env.py
 
 **Checkpoint**: Runs leave no residual credentials, clean up containers/workspaces, and honour agent configuration toggles.
 
@@ -105,10 +105,10 @@
 **Purpose**: Align 002 contracts/runtime with skills-first semantics and Speckit-always-on policy while preserving API compatibility.
 
 - [x] T026 [P] Add skills-first compatible stage aliases and metadata normalization helpers in `moonmind/workflows/speckit_celery/models.py`.
-- [x] T027 [P] Expose skills execution metadata fields in Spec Automation schemas in `moonmind/schemas/workflow_models.py`.
-- [x] T028 Wire normalized skills metadata into run-phase API serialization in `api_service/api/routers/spec_automation.py`.
-- [x] T029 Update API unit tests for default/explicit skills metadata serialization in `tests/unit/api/test_spec_automation.py`.
-- [x] T030 Add unit coverage for automation task-state skills metadata normalization in `tests/unit/workflows/test_spec_automation_env.py`.
+- [x] T027 [P] Expose skills execution metadata fields in Workflow schemas in `moonmind/schemas/workflow_models.py`.
+- [x] T028 Wire normalized skills metadata into run-phase API serialization in `api_service/api/routers/workflow.py`.
+- [x] T029 Update API unit tests for default/explicit skills metadata serialization in `tests/unit/api/test_workflow.py`.
+- [x] T030 Add unit coverage for automation task-state skills metadata normalization in `tests/unit/workflows/test_workflow_env.py`.
 - [x] T031 Update 002 feature artifacts (`spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and contracts) to align with 015 umbrella requirements.
 
 ---

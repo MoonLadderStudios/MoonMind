@@ -18,7 +18,7 @@
 
 ## Decision 3: Keep existing queue and API compatibility while adding execution metadata
 
-- **Decision**: Maintain existing queue names and `/api/workflows/speckit` compatibility while enriching run/task metadata with skill id, execution path, and timings.
+- **Decision**: Maintain existing queue names and `/api/workflows` compatibility while enriching run/task metadata with skill id, execution path, and timings.
 - **Rationale**: Fastest path avoids client breakage and allows incremental rollout.
 - **Alternatives considered**:
   - Rename queues/routes immediately to generic names: rejected because migration blast radius is unnecessary for first rollout.

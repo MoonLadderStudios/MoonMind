@@ -9,7 +9,7 @@ Define startup behavior for runtime mode selection, CLI health checks, and queue
 - `MOONMIND_WORKER_RUNTIME`: `codex|gemini|claude|universal`.
 - `MOONMIND_QUEUE`: default `moonmind.jobs`.
 - Legacy compatibility vars (transitional only):
-  - `SPEC_WORKFLOW_CODEX_QUEUE`
+  - `WORKFLOW_CODEX_QUEUE`
   - `GEMINI_CELERY_QUEUE`
 
 ## Startup Contract

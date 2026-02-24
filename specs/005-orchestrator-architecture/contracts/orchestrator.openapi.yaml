@@ -315,7 +315,7 @@ components:
           enum: [patch_diff, build_log, verify_log, rollback_log, metrics, plan_snapshot]
         path:
           type: string
-          description: Relative path under `var/artifacts/spec_workflows/<run_id>`.
+          description: Relative path under `var/artifacts/workflow_runs/<run_id>`.
         checksum:
           type: string
         size_bytes:

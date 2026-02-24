@@ -26,4 +26,4 @@
 
 ## Notes
 
-- The spec intentionally preserves existing `/api/workflows/speckit` compatibility while adopting skills-first policy semantics from umbrella 015.
+- The spec intentionally preserves existing `/api/workflows` compatibility while adopting skills-first policy semantics from umbrella 015.

@@ -77,7 +77,7 @@ All unknowns from Technical Context were resolved through docs/TaskProposalQueue
 
 1. **Config + schema foundation**  
    - Update `api_service/config.template.toml` and docs/TaskQueueSystem.md to surface `MOONMIND_PROPOSAL_TARGETS`/`MOONMIND_CI_REPOSITORY`.  
-   - Extend `settings.TaskProposalSettings`, `SpecWorkflowSettings`, and `CodexWorkerConfig.from_env` so env overrides flow end-to-end, including default slot counts (`project=3`, `moonmind=2`) and severity vocabulary (`low|medium|high|critical`) with a default MoonMind floor of `high`.  
+   - Extend `settings.TaskProposalSettings`, `WorkflowSettings`, and `CodexWorkerConfig.from_env` so env overrides flow end-to-end, including default slot counts (`project=3`, `moonmind=2`) and severity vocabulary (`low|medium|high|critical`) with a default MoonMind floor of `high`.  
    - Teach `task_contract.py` + `agent_queue_models.py` how to parse/validate `proposalPolicy` (targets subset, per-target caps, severity enums) while persisting it into canonical payloads and `task_context.json`, plus emit structured logs whenever defaults are applied.  
    - Revise JSON schemas/tests so API + worker share a single source of truth; failing validation blocks Phase 3 until resolved.
 

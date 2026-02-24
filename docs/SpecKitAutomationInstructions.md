@@ -5,10 +5,10 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 ## Prerequisites
 
 1. **Runtime services** – Bring up RabbitMQ, the Codex-focused Celery worker, and the API service together; they share the automation queues, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
-   - Bind the worker to both Spec Workflow queues (`${CELERY_DEFAULT_QUEUE:-speckit}` and `${WORKFLOW_CODEX_QUEUE:-codex}`), so discovery and Codex phases execute on the same worker process.
-2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`codex login --device-auth`) so the pre-flight status check passes before jobs start. Set `WORKFLOW_TEST_MODE=true` (legacy alias: `SPEC_WORKFLOW_TEST_MODE`) when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
+   - Bind the worker to both Workflow queues (`${CELERY_DEFAULT_QUEUE:-speckit}` and `${WORKFLOW_CODEX_QUEUE:-codex}`), so discovery and Codex phases execute on the same worker process.
+2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`codex login --device-auth`) so the pre-flight status check passes before jobs start. Set `WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
 3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
-4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/spec-automation` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
+4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/workflows` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
     1. **Start Keycloak** – Run `docker compose --profile keycloak up keycloak keycloak-db -d` so the `moonmind` realm is available at `http://localhost:8085`. The default admin credentials are `admin/admin` unless you set `KC_ADMIN_PW`.
     2. **Point the API at Keycloak** – In your `.env`, set `AUTH_PROVIDER=keycloak`, `OIDC_ISSUER_URL=http://localhost:8085/realms/moonmind`, `OIDC_CLIENT_ID=api-service`, and `OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme}` (match any overrides you applied in `docker-compose.yaml`). Restart the `api` container so it reloads the settings.
     3. **Create a user** – Sign in to the Keycloak admin console, select the `moonmind` realm, and add (or reset) a user that will own automation runs. Under the **Credentials** tab, set a non-temporary password and note the username/password pair for the next step.
@@ -137,37 +137,35 @@ Leave the stack running. The default `docker-compose.yaml` mounts the host Docke
 
 ## Step 2 – Prepare your run request
 
-Use Postman to compose the request that kicks off a Spec Automation run.
+Use Postman to compose the request that kicks off a Workflow run.
 
-1. **Create (or select) an environment** – Add variables such as `base_url` (`http://localhost:5000`), `moonmind_api_token`, `repository`, `base_branch`, and `spec_input`. Keeping credentials in Postman variables prevents them from leaking into shell history while making the request reusable across workspaces.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L101】
-2. **Define the request** – Inside a collection, add a `POST {{base_url}}/api/spec-automation/runs` request. Set the **Authorization** tab to **Bearer Token** and reference `{{moonmind_api_token}}` so the header updates automatically. Confirm the **Headers** tab includes `Content-Type: application/json`.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L11-L80】
-3. **Populate the body** – Choose **raw** + **JSON** and paste the payload below. You can replace literal values with Postman variables (for example, `"repository": "{{repository}}"` or `"specify_text": "{{spec_input}}"`) to tailor future runs without editing the JSON.
-4. **Send the request** – Click **Send** to enqueue the workflow. Save the response so you can reference the returned `run_id` in later steps.
+1. **Create (or select) an environment** – Add variables such as `base_url` (`http://localhost:5000`), `moonmind_api_token`, `repository`, `feature_key`, and `notes`. Keeping credentials in Postman variables prevents them from leaking into shell history while making the request reusable across workspaces.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L101】
+2. **Define the request** – Inside a collection, add a `POST {{base_url}}/api/workflows/runs` request. Set the **Authorization** tab to **Bearer Token** and reference `{{moonmind_api_token}}` so the header updates automatically. Confirm the **Headers** tab includes `Content-Type: application/json`.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L80】
+3. **Populate the body** – Choose **raw** + **JSON** and paste the payload below. You can replace literal values with Postman variables (for example, `"repository": "{{repository}}"` or `"featureKey": "{{feature_key}}"`) to tailor future runs without editing the JSON.
+4. **Send the request** – Click **Send** to enqueue the workflow. Save the response so you can reference the returned `id` in later steps.
 
 ```json
 {
   "repository": "MoonLadderStudios/moonmind",
-  "base_branch": "main",
-  "specify_text": "# Spec title\n\n- Goal: Validate automation from Postman\n- Scope: /speckit.specify, /speckit.plan, /speckit.tasks",
-  "dry_run": false,
-  "external_ref": "postman-demo-001"
+  "featureKey": "002-document-speckit-automation",
+  "forcePhase": "discover",
+  "notes": "Validate workflow automation from Postman"
 }
 ```
 
 ## Step 3 – Trigger the automation run
 
-Submit the payload to the Spec Automation API. The endpoint enqueues the Celery chain and returns the run metadata, including the `run_id` you will use in subsequent monitoring calls. If you need a shell-friendly alternative to Postman (for CI or scripted runs), send the same JSON body with `curl`:
+Submit the payload to the Workflow API. The endpoint enqueues the Celery chain and returns the run metadata, including the `id` you will use in subsequent monitoring calls. If you need a shell-friendly alternative to Postman (for CI or scripted runs), send a matching JSON body with `curl`:
 
 ```bash
-curl -sS -X POST "http://localhost:5000/api/spec-automation/runs" \
+curl -sS -X POST "http://localhost:5000/api/workflows/runs" \
   -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
     "repository": "MoonLadderStudios/moonmind",
-    "base_branch": "main",
-    "specify_text": "# Spec title\n\n- Goal: Validate automation from Postman\n- Scope: /speckit.specify, /speckit.plan, /speckit.tasks",
-    "dry_run": false,
-    "external_ref": "postman-demo-001"
+    "featureKey": "002-document-speckit-automation",
+    "forcePhase": "discover",
+    "notes": "Validate workflow automation from curl"
   }'
 ```
 
@@ -175,9 +173,9 @@ curl -sS -X POST "http://localhost:5000/api/spec-automation/runs" \
 > `localhost:5000`. If you change the Compose file or run the service directly,
 > adjust the host and port accordingly.
 
-The response matches the `RunResponse` schema defined in the Spec Automation contract and includes fields such as `run_id`, `status`, and `accepted_at` so you can confirm the request was queued.【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L13-L80】
+The response matches the `WorkflowRun` schema defined in the Workflow contract and includes fields such as `id`, `status`, and `phase` so you can confirm the request was queued.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L13-L80】
 
-A successful response includes the queued status and `run_id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
+A successful response includes the queued status and `id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
 
 Ensure the Celery worker (or Compose stack) exports `WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients; these settings must align with the repository slug you pass in the request.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
 
@@ -190,11 +188,11 @@ Ensure the Celery worker (or Compose stack) exports `WORKFLOW_GITHUB_REPOSITORY`
 2. **Status API** – Poll run state (phases, branch, PR URL, artifacts) using the run identifier returned earlier:
    ```bash
    curl -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
-     "http://localhost:5000/api/spec-automation/runs/<run_id>"
+     "http://localhost:5000/api/workflows/runs/<run_id>"
    ```
-3. **Artifacts** – Inspect logs and generated assets under `/work/runs/<run_id>/artifacts` or download them through `/api/spec-automation/runs/<run_id>/artifacts/<artifact_id>` as needed.【F:docs/SpecKitAutomation.md†L131-L156】【F:specs/002-document-speckit-automation/quickstart.md†L82-L106】【F:specs/002-document-speckit-automation/contracts/spec-automation.openapi.yaml†L32-L77】
-   - Spec Workflow (Celery chain) runs store Codex JSONL logs, generated patches, and GitHub responses under `var/artifacts/spec_workflows/<run_id>/`. Mount this path when running Compose locally so retries can reuse the artifacts.
-   - To retry a failed Celery chain after fixing credentials, POST `/api/workflows/speckit/runs/{id}/retry` with `{"mode": "resume_failed_task"}`. The worker resumes from the failed task and reuses existing artifacts rather than recomputing patches.【F:specs/001-celery-chain-workflow/tasks.md†L85-L93】
+3. **Artifacts** – Inspect logs and generated assets under `/work/runs/<run_id>/artifacts` or download them through `/api/workflows/runs/<run_id>/artifacts/<artifact_id>` as needed.【F:docs/SpecKitAutomation.md†L131-L156】【F:specs/002-document-speckit-automation/quickstart.md†L82-L106】【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L32-L77】
+   - Workflow (Celery chain) runs store Codex JSONL logs, generated patches, and GitHub responses under `var/artifacts/workflow_runs/<run_id>/`. Mount this path when running Compose locally so retries can reuse the artifacts.
+   - To retry a failed Celery chain after fixing credentials, POST `/api/workflows/runs/{id}/retry` with `{"mode": "resume_failed_task"}`. The worker resumes from the failed task and reuses existing artifacts rather than recomputing patches.【F:specs/001-celery-chain-workflow/tasks.md†L85-L93】
 
 ## Step 5 – Review results and handoff
 
