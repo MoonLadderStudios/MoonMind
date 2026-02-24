@@ -2440,7 +2440,7 @@
       setView(
         "Orchestrator Runs",
         "Recent orchestrator runs.",
-        `<div class="actions"><a href="/tasks/orchestrator/new"><button type="button">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
+        `<div class="actions"><a href="/tasks/new?runtime=orchestrator"><button type="button">New Orchestrator Run</button></a></div>${renderRowsTable(rows)}`,
         { showAutoRefreshControls: true },
       );
     };
@@ -2448,10 +2448,12 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage() {
+  function renderQueueSubmitPage(presetRuntime) {
     const sanitizedWorkerDraft = submitDraftController.loadWorker();
     const selectedWorkerRuntime = resolveSubmitRuntime(
-      sanitizedWorkerDraft.runtime,
+      typeof presetRuntime === "undefined"
+        ? sanitizedWorkerDraft.runtime
+        : presetRuntime,
       defaultTaskRuntime,
     );
     const queueDraftModel = String(
@@ -3861,6 +3863,18 @@
           String(error?.message || "request failed");
       }
     });
+  }
+
+  function renderSubmitWorkPage(presetRuntime) {
+    const normalizedRuntime = resolveSubmitRuntime(
+      presetRuntime,
+      defaultTaskRuntime,
+    );
+    if (isWorkerSubmitRuntime(normalizedRuntime)) {
+      renderQueueSubmitPage(normalizedRuntime);
+      return;
+    }
+    renderOrchestratorSubmitPage();
   }
 
   function renderOrchestratorSubmitPage() {
@@ -6191,7 +6205,7 @@
     );
   }
 
-  async function renderForPath(pathname) {
+  async function renderForPath(pathname, searchParams) {
     stopPolling();
     activateNav(pathname);
 
@@ -6221,6 +6235,14 @@
       renderManifestSubmitPage();
       return;
     }
+    if (pathname === "/tasks/new") {
+      renderSubmitWorkPage(
+        searchParams && searchParams.get("runtime")
+          ? searchParams.get("runtime")
+          : null,
+      );
+      return;
+    }
     if (pathname === "/tasks/proposals") {
       await renderProposalsListPage();
       return;
@@ -6231,11 +6253,17 @@
     }
 
     if (pathname === "/tasks/queue/new") {
-      renderQueueSubmitPage();
+      const presetRuntime = resolveSubmitRuntime(
+        searchParams && searchParams.get("runtime"),
+        defaultTaskRuntime,
+      );
+      renderSubmitWorkPage(
+        isWorkerSubmitRuntime(presetRuntime) ? presetRuntime : defaultTaskRuntime,
+      );
       return;
     }
     if (pathname === "/tasks/orchestrator/new") {
-      renderOrchestratorSubmitPage();
+      renderSubmitWorkPage("orchestrator");
       return;
     }
 
@@ -6280,7 +6308,11 @@
   );
 
   if (!skipInitialRender) {
-    renderForPath(window.location.pathname).catch((error) => {
+    const currentLocation = new URL(window.location.href);
+    renderForPath(
+      window.location.pathname,
+      currentLocation.searchParams,
+    ).catch((error) => {
       console.error("dashboard render failed", error);
       setView(
         "Dashboard Error",
