@@ -83,6 +83,67 @@ run_cmd() {
   fi
 }
 
+load_compose_service_images() {
+  if ! command -v jq >/dev/null 2>&1; then
+    say "jq unavailable; skipping compose image drift checks."
+    return 1
+  fi
+
+  local line
+  declare -gA COMPOSE_SERVICE_IMAGE=()
+  mapfile -t compose_image_lines < <("${COMPOSE_CMD[@]}" config --format json | jq -r '.services | to_entries[] | "\(.key)|\(.value.image // empty)"')
+  for line in "${compose_image_lines[@]}"; do
+    service="${line%%|*}"
+    image="${line#*|}"
+    COMPOSE_SERVICE_IMAGE["$service"]="$image"
+  done
+  return 0
+}
+
+mark_stale_services_for_restart() {
+  local service image expected_image_id
+  local -a container_ids=()
+  local container_id running_image_id compose_image_id
+
+  for service in "${COMPOSE_SERVICES[@]}"; do
+    if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
+      continue
+    fi
+
+    image="${COMPOSE_SERVICE_IMAGE[$service]:-}"
+    if [[ -z "$image" ]]; then
+      continue
+    fi
+
+    mapfile -t container_ids < <("${COMPOSE_CMD[@]}" ps -q "$service" 2>/dev/null || true)
+    if [[ ${#container_ids[@]} -eq 0 ]]; then
+      continue
+    fi
+
+    expected_image_id="$(docker image inspect "$image" --format '{{.Id}}' 2>/dev/null || true)"
+    if [[ -z "$expected_image_id" ]]; then
+      continue
+    fi
+
+    for container_id in "${container_ids[@]}"; do
+      compose_image_id="$(docker inspect "$container_id" --format '{{index .Config.Labels "com.docker.compose.image"}}' 2>/dev/null || true)"
+      running_image_id="$(docker inspect "$container_id" --format '{{.Config.Image}}' 2>/dev/null || true)"
+
+      if [[ "$compose_image_id" == "$expected_image_id" || "$running_image_id" == "$expected_image_id" ]]; then
+        continue
+      fi
+
+      if [[ -n "$compose_image_id" ]]; then
+        say "Marking service '$service' for restart: image drift detected (running ${compose_image_id} vs expected ${expected_image_id})."
+      else
+        say "Marking service '$service' for restart: image drift detected (running ${running_image_id} vs expected ${expected_image_id})."
+      fi
+      add_target "$service"
+      break
+    done
+  done
+}
+
 compose_cmd() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     echo docker compose
@@ -186,21 +247,25 @@ run_cmd git pull --ff-only origin "$BRANCH"
 
 POST_PULL_COMMIT="$(git rev-parse HEAD)"
 
-if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
-  say "No new commit received from origin/$BRANCH; skipping container updates."
-  exit 0
-fi
-
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   say "Pulling updated compose images"
   run_cmd "${COMPOSE_CMD[@]}" pull
 fi
 
-mapfile -t CHANGED_FILES < <(git diff --name-only "${PRE_PULL_COMMIT}..${POST_PULL_COMMIT}" --)
+if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
+  say "No new commit received from origin/$BRANCH; skipping file-based restart detection."
+fi
 
-if [[ ${#CHANGED_FILES[@]} -eq 0 ]]; then
-  say "No changed files detected; skipping container updates."
-  exit 0
+mapfile -t CHANGED_FILES < <(
+  if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
+    printf ''
+  else
+    git diff --name-only "${PRE_PULL_COMMIT}..${POST_PULL_COMMIT}" --
+  fi
+)
+
+if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" && "$SKIP_COMPOSE_PULL" == "true" ]]; then
+  say "No commit update detected and compose image refresh was skipped; only stale image checks that can be resolved locally were applied."
 fi
 
 mapfile -t COMPOSE_SERVICES < <("${COMPOSE_CMD[@]}" config --services)
@@ -235,6 +300,10 @@ add_all_services() {
     fi
   done
 }
+
+if load_compose_service_images; then
+  mark_stale_services_for_restart
+fi
 
 for changed_file in "${CHANGED_FILES[@]}"; do
   case "$changed_file" in
@@ -285,7 +354,7 @@ readarray -t SERVICES_TO_RESTART < <(
 )
 
 if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
-  say "No restartable changed services detected after filtering."
+  say "No restartable services detected after filtering."
   exit 0
 fi
 
