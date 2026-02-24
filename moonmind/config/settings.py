@@ -1,6 +1,8 @@
 import os
+import re
 from pathlib import Path
 from typing import Annotated, Any, Optional, Sequence
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -8,6 +10,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
+_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class DatabaseSettings(BaseSettings):
@@ -973,6 +976,31 @@ class SpecWorkflowSettings(BaseSettings):
             raise ValueError("live_session_provider must be one of: tmate")
         return normalized
 
+    @field_validator("github_repository", mode="before")
+    @classmethod
+    def _normalize_github_repository(cls, value: object) -> str:
+        """Normalize default workflow repository and reject unsafe references."""
+
+        normalized = str(value or "").strip() or "MoonLadderStudios/MoonMind"
+        if _OWNER_REPO_PATTERN.fullmatch(normalized):
+            return normalized
+        if normalized.startswith("http://") or normalized.startswith("https://"):
+            parsed = urlsplit(normalized)
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError(
+                    "github_repository URL must not include embedded credentials"
+                )
+            if not parsed.netloc or not parsed.path or parsed.path == "/":
+                raise ValueError(
+                    "github_repository URL must include a host and repository path"
+                )
+            return normalized
+        if normalized.startswith("git@"):
+            return normalized
+        raise ValueError(
+            "github_repository must be owner/repo, https://<host>/<path>, or git@<host>:<path>"
+        )
+
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Validate agent backend selections after settings load."""
 
@@ -1766,7 +1794,10 @@ class AppSettings(BaseSettings):
             self.spec_workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:
             self.spec_workflow.codex_effort = self.worker_codex_effort
-        if self.workflow_github_repository is not None:
+        if (
+            not self.spec_workflow.github_repository
+            and self.workflow_github_repository is not None
+        ):
             repo = self.workflow_github_repository.strip()
             if repo:
                 self.spec_workflow.github_repository = repo

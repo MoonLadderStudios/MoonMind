@@ -631,6 +631,41 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
 
+    def test_app_settings_workflow_github_repository_preserves_explicit_override(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Explicit spec_workflow repository values should take precedence over env defaults."""
+
+        monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
+
+        settings = AppSettings(
+            _env_file=None,
+            **app_settings_defaults,
+            spec_workflow={"github_repository": "Explicit/Repo"},
+        )
+
+        assert settings.spec_workflow.github_repository == "Explicit/Repo"
+
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
+    def test_app_settings_rejects_workflow_github_repository_with_credentials(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Legacy workflow repository aliases should reject URLs with embedded credentials."""
+
+        monkeypatch.setenv(
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "https://token@example.com/MoonLadderStudios/MoonMind.git",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="must not include embedded credentials",
+        ):
+            AppSettings(_env_file=None, **app_settings_defaults)
+
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
     def test_default_skill_is_added_to_allowlist(self):
         """Allowlist mode should include default skill in allowlist."""
 
