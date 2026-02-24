@@ -612,6 +612,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
         is False
     )
 
+
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
     tmp_path: Path,
 ) -> None:
