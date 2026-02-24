@@ -1,9 +1,9 @@
-# Batch PR Resolver Skill
-
 ---
 name: batch-pr-resolver
 description: Discover open PRs in a repository and enqueue one `pr-resolver` task for each.
 ---
+
+# Batch PR Resolver Skill
 
 ## Purpose
 
@@ -64,4 +64,3 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
 - Use `state=open` by default to avoid accidental non-open PR dispatch.
 - `--include-forks` is rejected to avoid unreliable fork-branch checkout behavior in queued jobs.
 - Skip fork PRs by default.
-
