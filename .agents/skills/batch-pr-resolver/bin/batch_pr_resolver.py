@@ -55,7 +55,9 @@ def _infer_repo_from_remote() -> str | None:
             body = body[:-4]
         if "/" in body:
             return body
-    match = re.search(r"github\.com[:/](?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?$", remote)
+    match = re.search(
+        r"github\.com[:/](?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?$", remote
+    )
     if match:
         return match.group("repo")
     return None
@@ -308,4 +310,3 @@ async def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(main()))
-
