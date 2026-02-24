@@ -2640,7 +2640,7 @@
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <button type="submit" class="queue-submit-primary">Submit</button>
+          <button type="submit" class="queue-submit-primary">Create</button>
         </div>
       </form>
       `,
@@ -3879,6 +3879,9 @@
           method: "POST",
           body: JSON.stringify(requestBody),
         });
+        if (!created || typeof created.id !== "string" || !created.id.trim()) {
+          throw new Error("queue creation response missing job id");
+        }
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);
