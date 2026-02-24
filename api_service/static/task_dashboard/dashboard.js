@@ -704,10 +704,14 @@
   }
 
   function activateNav(pathname) {
+    const activePath =
+      pathname === "/tasks/queue/new" || pathname === "/tasks/orchestrator/new"
+        ? "/tasks/new"
+        : pathname;
     const links = document.querySelectorAll("a[data-nav]");
     links.forEach((link) => {
       const href = link.getAttribute("href") || "";
-      if (href === pathname) {
+      if (href === activePath) {
         link.classList.add("active");
       } else {
         link.classList.remove("active");
@@ -1669,6 +1673,29 @@
       return normalized;
     }
     return fallback;
+  };
+
+  const validateSubmitRuntime = (runtimeValue) => {
+    const normalized = String(runtimeValue || "").trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    if (normalized === "orchestrator") {
+      return "orchestrator";
+    }
+    if (supportedTaskRuntimes.includes(normalized)) {
+      return normalized;
+    }
+    return null;
+  };
+
+  const parseRuntimeSearchParam = (searchParams) => {
+    const runtimeValue = searchParams?.get("runtime");
+    if (runtimeValue === null) {
+      return { provided: false, runtime: undefined, rawValue: "" };
+    }
+    const runtime = validateSubmitRuntime(runtimeValue);
+    return { provided: true, runtime, rawValue: runtimeValue };
   };
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
@@ -3866,10 +3893,23 @@
   }
 
   function renderSubmitWorkPage(presetRuntime) {
-    const normalizedRuntime = resolveSubmitRuntime(
-      presetRuntime,
-      defaultTaskRuntime,
-    );
+    if (presetRuntime === null || typeof presetRuntime === "undefined") {
+      renderQueueSubmitPage();
+      return;
+    }
+    const normalizedRuntime = validateSubmitRuntime(presetRuntime);
+    if (!normalizedRuntime) {
+      setView(
+        "Invalid Runtime",
+        "Unsupported runtime query parameter.",
+        `<div class="notice error">Unsupported runtime value: <code>${escapeHtml(
+          String(presetRuntime),
+        )}</code>. Use one of: <code>${escapeHtml(
+          [...supportedTaskRuntimes, "orchestrator"].join(", "),
+        )}</code>.</div>`,
+      );
+      return;
+    }
     if (isWorkerSubmitRuntime(normalizedRuntime)) {
       renderQueueSubmitPage(normalizedRuntime);
       return;
@@ -6236,11 +6276,12 @@
       return;
     }
     if (pathname === "/tasks/new") {
-      renderSubmitWorkPage(
-        searchParams && searchParams.get("runtime")
-          ? searchParams.get("runtime")
-          : null,
-      );
+      const runtimeParam = parseRuntimeSearchParam(searchParams);
+      if (runtimeParam.provided && !runtimeParam.runtime) {
+        renderSubmitWorkPage(runtimeParam.rawValue);
+        return;
+      }
+      renderSubmitWorkPage(runtimeParam.runtime);
       return;
     }
     if (pathname === "/tasks/proposals") {
@@ -6253,13 +6294,12 @@
     }
 
     if (pathname === "/tasks/queue/new") {
-      const presetRuntime = resolveSubmitRuntime(
-        searchParams && searchParams.get("runtime"),
-        defaultTaskRuntime,
-      );
-      renderSubmitWorkPage(
-        isWorkerSubmitRuntime(presetRuntime) ? presetRuntime : defaultTaskRuntime,
-      );
+      const runtimeParam = parseRuntimeSearchParam(searchParams);
+      if (runtimeParam.provided && !runtimeParam.runtime) {
+        renderSubmitWorkPage(runtimeParam.rawValue);
+        return;
+      }
+      renderSubmitWorkPage(runtimeParam.runtime);
       return;
     }
     if (pathname === "/tasks/orchestrator/new") {
