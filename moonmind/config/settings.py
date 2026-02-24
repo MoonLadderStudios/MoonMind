@@ -1059,6 +1059,7 @@ class SpecWorkflowSettings(BaseSettings):
                 f"Allowed values: {allowed_display or '<none>'}"
             )
 
+
 # Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
 # ``AppSettings.model_post_init`` to populate sensible defaults.
 

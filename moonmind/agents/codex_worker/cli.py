@@ -245,7 +245,11 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     runtime = _resolve_worker_runtime(source)
     capabilities = _effective_worker_capabilities(source, runtime)
     runtime_verification_order = ("codex", "gemini", "claude")
-    resolved_paths: dict[str, str | None] = {"codex": None, "gemini": None, "claude": None}
+    resolved_paths: dict[str, str | None] = {
+        "codex": None,
+        "gemini": None,
+        "claude": None,
+    }
 
     for runtime_name in runtime_verification_order:
         if runtime_name == "claude":
@@ -273,7 +277,9 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         else:
             if runtime_name not in capabilities:
                 continue
-            binary = str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
+            binary = (
+                str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
+            )
 
         try:
             resolved_paths[runtime_name] = verify_cli_is_executable(binary)
