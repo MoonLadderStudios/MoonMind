@@ -164,6 +164,15 @@ class WorkerReportTaskRunLiveSessionRequest(BaseModel):
     error_message: Optional[str] = Field(None, alias="errorMessage")
 
 
+class RuntimeCapabilities(BaseModel):
+    """Per-runtime model and effort options."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    models: list[str] = Field(default_factory=list, alias="models")
+    efforts: list[str] = Field(default_factory=list, alias="efforts")
+
+
 class CreateWorkerTokenRequest(BaseModel):
     """Request payload for creating a worker token."""
 
@@ -174,6 +183,10 @@ class CreateWorkerTokenRequest(BaseModel):
     allowed_repositories: Optional[list[str]] = Field(None, alias="allowedRepositories")
     allowed_job_types: Optional[list[str]] = Field(None, alias="allowedJobTypes")
     capabilities: Optional[list[str]] = Field(None, alias="capabilities")
+    runtime_capabilities: Optional[dict[str, RuntimeCapabilities]] = Field(
+        None,
+        alias="runtimeCapabilities",
+    )
 
 
 class JobModel(BaseModel):
@@ -369,8 +382,34 @@ class WorkerTokenModel(BaseModel):
     allowed_repositories: Optional[list[str]] = Field(None, alias="allowedRepositories")
     allowed_job_types: Optional[list[str]] = Field(None, alias="allowedJobTypes")
     capabilities: Optional[list[str]] = Field(None, alias="capabilities")
+    runtime_capabilities: Optional[dict[str, RuntimeCapabilities]] = Field(
+        None,
+        alias="runtimeCapabilities",
+    )
     is_active: bool = Field(..., alias="isActive")
     created_at: datetime = Field(..., alias="createdAt")
+
+
+class WorkerRuntimeCapabilitiesRequest(BaseModel):
+    """Request payload for replacing worker runtime capability metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    runtime_capabilities: Optional[dict[str, RuntimeCapabilities]] = Field(
+        None,
+        alias="runtimeCapabilities",
+    )
+
+
+class WorkerRuntimeCapabilitiesResponse(BaseModel):
+    """Aggregated runtime model/effort options from active worker registrations."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: dict[str, RuntimeCapabilities] = Field(
+        default_factory=dict,
+        alias="items",
+    )
 
 
 class WorkerTokenCreateResponse(BaseModel):

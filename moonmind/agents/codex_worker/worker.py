@@ -245,6 +245,50 @@ class CodexWorkerConfig:
     enable_task_proposals: bool = False
     artifact_upload_incremental: bool = True
 
+    @staticmethod
+    def _normalize_runtime_option_values(raw_value: str | None) -> list[str]:
+        values: list[str] = []
+        if not raw_value:
+            return values
+        for candidate in str(raw_value).split(","):
+            normalized = candidate.strip()
+            if normalized and normalized not in values:
+                values.append(normalized)
+        return values
+
+    def build_runtime_capabilities(self) -> dict[str, dict[str, list[str]]]:
+        """Return runtime model/effort options this worker advertises."""
+
+        runtime_capabilities: dict[str, dict[str, list[str]]] = {}
+        if self.worker_runtime in {"codex", "universal"}:
+            runtime_capabilities["codex"] = {
+                "models": self._normalize_runtime_option_values(
+                    self.default_codex_model,
+                ),
+                "efforts": self._normalize_runtime_option_values(
+                    self.default_codex_effort,
+                ),
+            }
+        if self.worker_runtime in {"gemini", "universal"}:
+            runtime_capabilities["gemini"] = {
+                "models": self._normalize_runtime_option_values(
+                    self.default_gemini_model,
+                ),
+                "efforts": self._normalize_runtime_option_values(
+                    self.default_gemini_effort,
+                ),
+            }
+        if self.worker_runtime in {"claude", "universal"}:
+            runtime_capabilities["claude"] = {
+                "models": self._normalize_runtime_option_values(
+                    self.default_claude_model,
+                ),
+                "efforts": self._normalize_runtime_option_values(
+                    self.default_claude_effort,
+                ),
+            }
+        return runtime_capabilities
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CodexWorkerConfig":
         """Load worker settings from environment variables."""
@@ -1145,6 +1189,18 @@ class QueueApiClient:
         """Submit a task proposal to the MoonMind API."""
 
         return await self._post_json("/api/proposals", json=proposal)
+
+    async def replace_worker_runtime_capabilities(
+        self,
+        *,
+        runtime_capabilities: Mapping[str, Any],
+    ) -> None:
+        """Publish worker runtime capabilities to queue metadata."""
+
+        await self._post_json(
+            "/api/queue/workers/tokens/capabilities",
+            json={"runtimeCapabilities": runtime_capabilities},
+        )
 
     @staticmethod
     def _sha256_file(path: Path) -> str:

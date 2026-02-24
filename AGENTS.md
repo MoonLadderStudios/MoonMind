@@ -19,6 +19,11 @@
 - Before posting any PR/issue/review comment, scan the outgoing text for secret-like patterns (`ghp_`, `github_pat_`, `AIza`, `ATATT`, `AKIA`, private key blocks, `token=`/`password=` assignments) and block posting on any match.
 - If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
 
+## Compatibility Policy
+- Never introduce compatibility transforms that change execution semantics or billing-relevant values (for example model identifiers, effort values, queue semantics, or publish behavior).
+- Prefer fail-fast behavior for unsupported runtime input values over hidden fallback behavior.
+- For Codex execution specifically, `codex.model` and `codex.effort` inputs must be passed through exactly as provided. Unsupported values must fail through normal CLI/API validation.
+
 ## Spec Numbering
 
 When creating a new spec folder/feature ID:

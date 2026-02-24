@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import shlex
 import subprocess
@@ -23,11 +24,15 @@ from moonmind.agents.codex_worker.utils import (
 from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
+    QueueClientError,
     QueueApiClient,
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
+
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -429,6 +434,17 @@ async def _run(args: argparse.Namespace) -> None:
         base_url=config.moonmind_url,
         worker_token=config.worker_token,
     )
+    if config.worker_token:
+        try:
+            await queue_client.replace_worker_runtime_capabilities(
+                runtime_capabilities=config.build_runtime_capabilities(),
+            )
+        except QueueClientError as exc:
+            logger.warning(
+                "Worker could not sync runtime capabilities: %s",
+                exc,
+            )
+
     handler = CodexExecHandler(
         workdir_root=config.workdir,
         default_codex_model=config.default_codex_model,

@@ -64,6 +64,9 @@ from moonmind.schemas.agent_queue_models import (
     TaskRunLiveSessionResponse,
     TaskRunLiveSessionWriteGrantResponse,
     TaskRunOperatorMessageRequest,
+    RuntimeCapabilities,
+    WorkerRuntimeCapabilitiesResponse,
+    WorkerRuntimeCapabilitiesRequest,
     WorkerTokenCreateResponse,
     WorkerTokenListResponse,
     WorkerTokenModel,
@@ -98,6 +101,8 @@ from moonmind.workflows.agent_queue.service import (
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
 
+_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude")
+
 _QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
 
 
@@ -110,6 +115,7 @@ class _WorkerRequestAuth:
     allowed_repositories: tuple[str, ...]
     allowed_job_types: tuple[str, ...]
     capabilities: tuple[str, ...]
+    token_id: Optional[UUID]
 
 
 async def _get_repository(
@@ -204,6 +210,51 @@ def _serialize_event(event: models.AgentJobEvent) -> JobEventModel:
 
 def _serialize_worker_token(token: models.AgentWorkerToken) -> WorkerTokenModel:
     return WorkerTokenModel.model_validate(token)
+
+
+def _normalize_runtime_capability_values(
+    raw_values: object,
+) -> list[str]:
+    """Normalize runtime capability values to a stable ordered unique list."""
+
+    if not isinstance(raw_values, (list, tuple)):
+        return []
+    values: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        value = str(raw_value or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def _normalize_runtime_capability_entry(
+    raw_payload: object,
+) -> tuple[list[str], list[str]]:
+    """Extract and normalize one runtime's model/effort option list."""
+
+    if not isinstance(raw_payload, dict):
+        return [], []
+    return (
+        _normalize_runtime_capability_values(raw_payload.get("models")),
+        _normalize_runtime_capability_values(raw_payload.get("efforts")),
+    )
+
+
+def _merge_runtime_capability_values(
+    *,
+    base: list[str],
+    additions: list[str],
+) -> list[str]:
+    """Merge ordered string values while preserving prior items and uniqueness."""
+
+    merged = list(base)
+    for value in additions:
+        if value not in merged:
+            merged.append(value)
+    return merged
 
 
 def _serialize_safeguard_job(
@@ -340,6 +391,7 @@ async def _require_worker_auth(
             allowed_repositories=policy.allowed_repositories,
             allowed_job_types=policy.allowed_job_types,
             capabilities=policy.capabilities,
+            token_id=policy.token_id,
         )
 
     # OIDC/JWT path: require non-disabled provider and authenticated user id.
@@ -353,6 +405,7 @@ async def _require_worker_auth(
             allowed_repositories=(),
             allowed_job_types=(),
             capabilities=(),
+            token_id=None,
         )
 
     raise AgentQueueAuthenticationError(
@@ -1476,6 +1529,7 @@ async def create_worker_token(
             allowed_repositories=payload.allowed_repositories,
             allowed_job_types=payload.allowed_job_types,
             capabilities=payload.capabilities,
+            runtime_capabilities=payload.runtime_capabilities,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1517,3 +1571,81 @@ async def revoke_worker_token(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_worker_token(token)
+
+
+@router.put(
+    "/workers/tokens/capabilities",
+    response_model=WorkerTokenModel,
+)
+async def sync_worker_token_capabilities(
+    payload: WorkerRuntimeCapabilitiesRequest,
+    auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+    service: AgentQueueService = Depends(_get_service),
+) -> WorkerTokenModel:
+    """Replace runtime capabilities metadata for the authenticated worker token."""
+
+    if auth.auth_source != "worker_token" or auth.token_id is None:
+        raise _to_http_exception(
+            AgentQueueAuthorizationError(
+                "worker token authentication is required for capability sync"
+            )
+        )
+    try:
+        token = await service.replace_worker_runtime_capabilities(
+            token_id=auth.token_id,
+            runtime_capabilities=payload.runtime_capabilities,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_worker_token(token)
+
+
+@router.get(
+    "/workers/runtime-capabilities",
+    response_model=WorkerRuntimeCapabilitiesResponse,
+)
+async def list_worker_runtime_capabilities(
+    service: AgentQueueService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> WorkerRuntimeCapabilitiesResponse:
+    """Return aggregated runtime model/effort options from active worker tokens."""
+
+    try:
+        token_rows = await service.list_worker_tokens(limit=500)
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+
+    runtime_capabilities: dict[str, dict[str, list[str]]] = {
+        runtime: {"models": [], "efforts": []}
+        for runtime in _RUNTIME_CAPABILITY_RUNTIMES
+    }
+    for token in token_rows:
+        if not token.is_active:
+            continue
+        token_caps = getattr(token, "runtime_capabilities", None)
+        if not isinstance(token_caps, dict):
+            continue
+        for raw_runtime, raw_payload in token_caps.items():
+            runtime = str(raw_runtime).strip().lower()
+            if runtime not in _RUNTIME_CAPABILITY_RUNTIMES:
+                continue
+            models, efforts = _normalize_runtime_capability_entry(raw_payload)
+            current = runtime_capabilities.setdefault(
+                runtime,
+                {"models": [], "efforts": []},
+            )
+            current["models"] = _merge_runtime_capability_values(
+                base=current["models"],
+                additions=models,
+            )
+            current["efforts"] = _merge_runtime_capability_values(
+                base=current["efforts"],
+                additions=efforts,
+            )
+
+    return WorkerRuntimeCapabilitiesResponse(
+        items={
+            runtime: RuntimeCapabilities(models=payload["models"], efforts=payload["efforts"])
+            for runtime, payload in runtime_capabilities.items()
+        },
+    )
