@@ -115,7 +115,7 @@ class _WorkerRequestAuth:
     allowed_repositories: tuple[str, ...]
     allowed_job_types: tuple[str, ...]
     capabilities: tuple[str, ...]
-    token_id: Optional[UUID]
+    token_id: Optional[UUID] = None
 
 
 async def _get_repository(
@@ -391,7 +391,7 @@ async def _require_worker_auth(
             allowed_repositories=policy.allowed_repositories,
             allowed_job_types=policy.allowed_job_types,
             capabilities=policy.capabilities,
-            token_id=policy.token_id,
+            token_id=getattr(policy, "token_id", None),
         )
 
     # OIDC/JWT path: require non-disabled provider and authenticated user id.

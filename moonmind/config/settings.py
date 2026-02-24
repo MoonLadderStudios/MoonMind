@@ -1059,8 +1059,18 @@ class SpecWorkflowSettings(BaseSettings):
                 f"Allowed values: {allowed_display or '<none>'}"
             )
 
-        # Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
-        # ``AppSettings.model_post_init`` to populate sensible defaults.
+# Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
+# ``AppSettings.model_post_init`` to populate sensible defaults.
+
+
+class AppSpecWorkflowSettings(SpecWorkflowSettings):
+    """App-level variant used by `AppSettings` to avoid legacy alias overrides."""
+
+    github_repository: Optional[str] = Field(
+        "MoonLadderStudios/MoonMind",
+        env=("SPEC_WORKFLOW_GITHUB_REPOSITORY",),
+        validation_alias=AliasChoices("SPEC_WORKFLOW_GITHUB_REPOSITORY"),
+    )
 
 
 class SecuritySettings(BaseSettings):
@@ -1481,7 +1491,9 @@ class AppSettings(BaseSettings):
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
-    spec_workflow: SpecWorkflowSettings = Field(default_factory=SpecWorkflowSettings)
+    spec_workflow: AppSpecWorkflowSettings = Field(
+        default_factory=AppSpecWorkflowSettings
+    )
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
@@ -1810,12 +1822,16 @@ class AppSettings(BaseSettings):
         if self.worker_codex_effort is not None:
             self.spec_workflow.codex_effort = self.worker_codex_effort
         if (
-            not self.spec_workflow.github_repository
+            "spec_workflow" not in self.__pydantic_fields_set__
             and self.workflow_github_repository is not None
         ):
             repo = self.workflow_github_repository.strip()
             if repo:
-                self.spec_workflow.github_repository = repo
+                self.spec_workflow = AppSpecWorkflowSettings(
+                    _env_file=None,
+                    **self.spec_workflow.model_dump(exclude={"github_repository"}),
+                    github_repository=repo,
+                )
         configured_default = (
             str(self.spec_workflow.default_task_runtime or "").strip().lower()
         )
