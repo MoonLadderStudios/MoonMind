@@ -82,7 +82,10 @@ def status_maps() -> dict[str, dict[str, str]]:
 
 
 def _build_supported_task_runtimes() -> list[str]:
-    return ["codex", "gemini", "claude"]
+    supported: list[str] = ["codex", "gemini"]
+    if settings.claude_runtime_gate.enabled:
+        supported.append("claude")
+    return supported
 
 
 def build_runtime_config(initial_path: str) -> dict[str, Any]:

@@ -829,6 +829,16 @@ class TestAppSettingsRuntimeValidation:
         settings = AppSettings(**defaults)
         assert settings.spec_workflow.default_task_runtime == "claude"
 
+    def test_app_settings_maps_claude_alias_to_anthropic_api_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
+
+        settings = AppSettings(**dict(app_settings_defaults))
+
+        assert settings.anthropic.anthropic_api_key == "enabled"
+
     def test_app_settings_allows_claude_default_with_claude_alias_key(
         self, app_settings_defaults, monkeypatch
     ):

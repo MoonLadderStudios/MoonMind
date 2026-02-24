@@ -32,7 +32,11 @@ def test_status_maps_returns_copy() -> None:
     assert status_maps()["queue"]["queued"] == "queued"
 
 
-def test_build_runtime_config_contains_expected_keys() -> None:
+def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
+    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
+
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
     assert config["pollIntervalsMs"]["list"] > 0
@@ -97,7 +101,7 @@ def test_build_runtime_config_contains_expected_keys() -> None:
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -119,6 +123,8 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude")
+    monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
+
     config = build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
@@ -142,7 +148,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
 
 
 def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> None:
-    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "enabled")
 
     config = build_runtime_config("/tasks")
 
