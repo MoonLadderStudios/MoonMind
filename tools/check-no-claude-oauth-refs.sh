@@ -5,10 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATTERNS=(
   'claude oauth'
-  'Claude OAuth'
   'auth-claude-volume'
   'claude_auth_volume'
-  'MOONMIND_CLAUDE_AUTH_STATUS_COMMAND'
+  'moonmind_claude_auth_status_command'
   'CLAUDE_HOME'
   'CLAUDE_VOLUME_'
 )
@@ -28,8 +27,8 @@ SEARCH_PATHS=(
 failed=0
 
 for pattern in "${PATTERNS[@]}"; do
-  matches="$(grep -RIn --include='*.md' --include='*.sh' \
-    --include='*.yml' --include='*.yaml' --include='.env-template' \
+  matches="$(grep -RIn -i \
+    --include='*.md' --include='*.sh' --include='*.yml' --include='*.yaml' --include='*.env*' \
     --exclude-dir='.git' --exclude-dir='.venv' --exclude-dir='node_modules' \
     --exclude="${BASH_SOURCE[0]##*/}" "$pattern" "${SEARCH_PATHS[@]}" 2>/dev/null || true)"
 
