@@ -24,7 +24,7 @@ It also provides a concrete implementation for the manifest scheduling intent de
 * **Dashboard-managed schedules**: create/update/enable/disable, “run now”, view history and next run.
 * **DB-backed scheduler**: no RabbitMQ requirement.
 * **Reuse Agent Queue**: scheduled work becomes normal queue jobs where possible (`task`, `manifest`, and a new optional `housekeeping` job type).
-* **HA-safe + idempotent**: multiple scheduler instances can run; no duplicate enqueues.
+* **HA-safe + idempotent**: multiple scheduler instances can run; dispatch uses an idempotency key so retries/crashes do not create duplicate queue jobs.
 * **Timezone-correct cron** (DST-aware).
 * **Manifests + housekeeping** supported as first-class targets.
 
@@ -32,7 +32,7 @@ It also provides a concrete implementation for the manifest scheduling intent de
 
 * Full distributed “workflow engine”.
 * Sub-minute precision or seconds-field cron (optional later).
-* Perfect “exactly once” execution (we guarantee at-most-once enqueue per scheduled occurrence; execution is still “at least once” at worker layer due to retries).
+* Perfect “exactly once” execution (we target effectively-once enqueue per scheduled occurrence via idempotent submission + reconciliation; worker execution is still “at least once” due to retries).
 
 ---
 
@@ -217,8 +217,7 @@ This design proceeds assuming Option 1, because you explicitly want reuse for �
   "overlap": { "mode": "skip", "maxConcurrentRuns": 1 },
   "catchup": { "mode": "last", "maxBackfill": 3 },
   "misfireGraceSeconds": 900,
-  "jitterSeconds": 30,
-  "dispatch": { "maxBatchPerTick": 50 }
+  "jitterSeconds": 30
 }
 ```
 
@@ -237,6 +236,9 @@ This design proceeds assuming Option 1, because you explicitly want reuse for �
 * **Jitter**
 
   * Add small random delay at dispatch time to avoid thundering herds.
+* **Dispatch batch sizing**
+
+  * `maxBatchPerTick` is intentionally **global**, configured via `MOONMIND_SCHEDULER_BATCH_SIZE` (section 7.5), not per schedule policy.
 
 ---
 
@@ -274,7 +276,7 @@ Use the shared async DB session helpers (same module used widely across services
 
 1. Select pending runs:
 
-   * `outcome = pending_dispatch AND dispatch_after <= now`
+   * `outcome IN (pending_dispatch, dispatch_error) AND dispatch_after <= now`
    * lock with `FOR UPDATE SKIP LOCKED`
 2. For each run:
 
@@ -284,7 +286,10 @@ Use the shared async DB session helpers (same module used widely across services
 
 Why two loops?
 
-* `AgentQueueService.create_job()` commits internally , and `ManifestsService.submit_manifest_run()` commits too . Separating “schedule decisions” from “dispatch side effects” keeps the system resilient and prevents half-advanced schedules from duplicating work.
+* `AgentQueueService.create_job()` commits internally , and `ManifestsService.submit_manifest_run()` commits too . Separating “schedule decisions” from “dispatch side effects” keeps the system resilient.
+* Because enqueue and run-row update are not one DB transaction, dispatch must include an idempotency guard keyed by `(definition_id, scheduled_for)` / `run_id`.
+* After an uncertain outcome (timeout/crash after external enqueue), leave the row retryable (`dispatch_error`) and re-dispatch with the same idempotency key; the queue/manifest layer should return the existing job/run instead of creating a duplicate.
+* Add a lightweight reconciliation pass that resolves `dispatch_error` rows by checking whether a job/run already exists for the idempotency key before issuing a new enqueue.
 
 ### 7.4 Attaching recurrence metadata to queue jobs
 
