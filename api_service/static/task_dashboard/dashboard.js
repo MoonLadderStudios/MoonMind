@@ -162,13 +162,37 @@
     systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
       : ["codex", "gemini", "claude", "universal"];
+
+  function normalizeRuntimeIdentifier(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function normalizeTaskRuntimeList(values) {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    const seen = new Set();
+    const normalized = [];
+    values.forEach((value) => {
+      const candidate = normalizeRuntimeIdentifier(value);
+      if (!candidate || seen.has(candidate)) {
+        return;
+      }
+      seen.add(candidate);
+      normalized.push(candidate);
+    });
+    return normalized;
+  }
+
   const configuredTaskRuntimes =
     Array.isArray(systemConfig.supportedTaskRuntimes) &&
     systemConfig.supportedTaskRuntimes.length > 0
-      ? systemConfig.supportedTaskRuntimes
+      ? normalizeTaskRuntimeList(systemConfig.supportedTaskRuntimes)
       : [];
-  const inferredTaskRuntimes = supportedWorkerRuntimes.filter(
-    (runtime) => runtime !== "universal",
+  const inferredTaskRuntimes = normalizeTaskRuntimeList(
+    supportedWorkerRuntimes.filter(
+      (runtime) => normalizeRuntimeIdentifier(runtime) !== "universal",
+    ),
   );
   const supportedTaskRuntimes =
     configuredTaskRuntimes.length > 0
@@ -176,8 +200,13 @@
       : inferredTaskRuntimes.length > 0
         ? inferredTaskRuntimes
         : ["codex", "gemini", "claude"];
+  const normalizedDefaultTaskRuntime = normalizeRuntimeIdentifier(
+    systemConfig.defaultTaskRuntime,
+  );
   const defaultTaskRuntime =
-    normalizeTaskRuntimeInput(systemConfig.defaultTaskRuntime) ||
+    (supportedTaskRuntimes.includes(normalizedDefaultTaskRuntime)
+      ? normalizedDefaultTaskRuntime
+      : null) ||
     (supportedTaskRuntimes.includes("codex")
       ? "codex"
       : supportedTaskRuntimes[0] || "codex");
@@ -219,6 +248,9 @@
   }
 
   const ORCHESTRATOR_RUNTIME = "orchestrator";
+
+  const listSubmitRuntimes = () =>
+    Array.from(new Set([...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME]));
 
   const TASK_RUNTIME_LABELS = {
     codex: "Codex worker",
@@ -1029,7 +1061,7 @@
   }
 
   function normalizeTaskRuntimeInput(value) {
-    const normalized = String(value || "").trim().toLowerCase();
+    const normalized = normalizeRuntimeIdentifier(value);
     if (!normalized) {
       return "";
     }
@@ -3987,12 +4019,22 @@
     const defaultOrchestratorDraftPriority = normalizeOrchestratorPriority(
       sanitizedOrchestratorDraft.priority || "normal",
     );
+    const selectedOrchestratorRuntime = ORCHESTRATOR_RUNTIME;
+    const runtimeOptions = renderRuntimeOptions(
+      listSubmitRuntimes(),
+      selectedOrchestratorRuntime,
+    );
 
     setView(
       "Submit Orchestrator Run",
       "Queue an orchestrator action plan.",
       `
       <form id="orchestrator-submit-form">
+        <label>Runtime
+          <select name="runtime">
+            ${runtimeOptions}
+          </select>
+        </label>
         <label>Instruction
           <textarea name="instruction" required placeholder="Describe what should be changed and verified.">${escapeHtml(
             String(sanitizedOrchestratorDraft.instruction || "").trim(),
@@ -4071,6 +4113,34 @@
     );
     form.addEventListener("input", scheduleOrchestratorDraftPersist);
     form.addEventListener("change", scheduleOrchestratorDraftPersist);
+    const runtimeSelect = form.querySelector('select[name="runtime"]');
+    if (runtimeSelect) {
+      runtimeSelect.addEventListener("change", (event) => {
+        const selectedRuntime = String(event.target.value || "").trim();
+        const normalizedRuntime = validateSubmitRuntime(selectedRuntime);
+        if (!normalizedRuntime) {
+          message.className = "notice error";
+          message.textContent = `Unsupported runtime selected: ${
+            selectedRuntime || "(empty)"
+          }.`;
+          runtimeSelect.value = ORCHESTRATOR_RUNTIME;
+          return;
+        }
+        if (normalizedRuntime === ORCHESTRATOR_RUNTIME) {
+          return;
+        }
+        if (!isWorkerSubmitRuntime(normalizedRuntime)) {
+          message.className = "notice error";
+          message.textContent = `Unsupported worker runtime selected: ${normalizedRuntime}.`;
+          runtimeSelect.value = ORCHESTRATOR_RUNTIME;
+          return;
+        }
+        persistOrchestratorDraft();
+        window.location.href = `/tasks/queue/new?runtime=${encodeURIComponent(
+          normalizedRuntime,
+        )}`;
+      });
+    }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
