@@ -4491,6 +4491,9 @@
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
       }
+      message.className = "small queue-submit-message";
+      message.textContent = "Submitting...";
+      form.setAttribute("aria-busy", "true");
 
       try {
         const created = await fetchJson("/api/queue/jobs", {
@@ -4510,6 +4513,7 @@
         if (submitButton instanceof HTMLButtonElement) {
           submitButton.disabled = false;
         }
+        form.removeAttribute("aria-busy");
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
         message.textContent =
