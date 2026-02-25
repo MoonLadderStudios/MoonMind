@@ -1618,7 +1618,9 @@ async def test_run_once_task_steps_self_referential_log_growth_tracks_unique_out
     assert step2_text == step_two_unique
     assert step3_text == step_three_unique
 
-    observed_growth_bytes = step2_log_path.stat().st_size + step3_log_path.stat().st_size
+    observed_growth_bytes = (
+        step2_log_path.stat().st_size + step3_log_path.stat().st_size
+    )
     unique_growth_bytes = len(step_two_unique.encode("utf-8")) + len(
         step_three_unique.encode("utf-8")
     )
