@@ -115,6 +115,44 @@ async def test_claim_prioritizes_highest_priority_then_oldest(tmp_path):
     assert first.lease_expires_at is not None
 
 
+async def test_claim_blocks_second_running_job_for_same_worker_id(tmp_path):
+    """One worker id should not hold multiple concurrent running claims."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            first_job = await _create_job(repo, priority=10)
+            second_job = await _create_job(repo, priority=5)
+            await repo.commit()
+
+            first_claim = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=45,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+            blocked_claim = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=45,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+            other_worker_claim = await repo.claim_job(
+                worker_id="worker-2",
+                lease_seconds=45,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+    assert first_claim is not None
+    assert first_claim.id == first_job.id
+    assert blocked_claim is None
+    assert other_worker_claim is not None
+    assert other_worker_claim.id == second_job.id
+
+
 async def test_heartbeat_requires_owner_and_running_state(tmp_path):
     """Heartbeat should reject ownership mismatch and non-running states."""
 

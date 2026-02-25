@@ -388,7 +388,10 @@ async def _require_worker_auth(
     """Resolve worker auth from dedicated token or authenticated OIDC principal."""
 
     if worker_token:
-        policy: WorkerAuthPolicy = await service.resolve_worker_token(worker_token)
+        try:
+            policy: WorkerAuthPolicy = await service.resolve_worker_token(worker_token)
+        except Exception as exc:
+            raise _to_http_exception(exc) from exc
         return _WorkerRequestAuth(
             auth_source=policy.auth_source,
             worker_id=policy.worker_id,
@@ -412,8 +415,10 @@ async def _require_worker_auth(
             token_id=None,
         )
 
-    raise AgentQueueAuthenticationError(
-        "worker authentication is required via X-MoonMind-Worker-Token or OIDC/JWT"
+    raise _to_http_exception(
+        AgentQueueAuthenticationError(
+            "worker authentication is required via X-MoonMind-Worker-Token or OIDC/JWT"
+        )
     )
 
 

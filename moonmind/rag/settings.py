@@ -17,8 +17,10 @@ _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai", "ollama"})
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
 ) -> str | None:
-    if source and key in source:
-        return str(source[key])
+    if source is not None:
+        if key in source:
+            return str(source[key])
+        return default
     return os.getenv(key, default)
 
 
