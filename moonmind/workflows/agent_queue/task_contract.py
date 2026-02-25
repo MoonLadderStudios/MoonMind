@@ -766,7 +766,7 @@ def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str,
             "newBranch": None,
         },
         "publish": {
-            "mode": _normalize_publish_mode(publish.get("mode") or "none"),
+            "mode": _normalize_publish_mode(publish.get("mode")),
             "prBaseBranch": _clean_optional_str(
                 publish.get("prBaseBranch") or publish.get("baseBranch")
             ),
@@ -811,11 +811,9 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         or f"Execute skill '{skill_id}' with inputs:\n"
         + json.dumps(inputs, indent=2, sort_keys=True)
     )
-    publish_mode = (
-        _clean_optional_str(inputs.get("publishMode"))
-        or _clean_optional_str(payload.get("publishMode"))
-        or "none"
-    )
+    publish_mode = _clean_optional_str(
+        inputs.get("publishMode")
+    ) or _clean_optional_str(payload.get("publishMode"))
     publish_base = (
         _clean_optional_str(inputs.get("publishBaseBranch"))
         or _clean_optional_str(payload.get("publishBaseBranch"))
@@ -923,7 +921,7 @@ def build_canonical_task_view(
                 },
                 "git": {"startingBranch": None, "newBranch": None},
                 "publish": {
-                    "mode": "none",
+                    "mode": _normalize_publish_mode(None),
                     "prBaseBranch": None,
                     "commitMessage": None,
                     "prTitle": None,

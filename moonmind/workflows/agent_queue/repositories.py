@@ -223,6 +223,25 @@ class AgentQueueRepository:
 
         now = datetime.now(UTC)
         await self._requeue_expired_jobs(now=now)
+        # Harden single-worker execution: do not allow one logical worker id to
+        # hold multiple concurrent running claims. This prevents a second claim
+        # when a prior terminal transition (complete/fail/cancel ack) has not
+        # been durably persisted yet.
+        active_claim_stmt: Select[tuple[UUID]] = (
+            select(models.AgentJob.id)
+            .where(
+                models.AgentJob.status == models.AgentJobStatus.RUNNING,
+                models.AgentJob.claimed_by == worker_id,
+                or_(
+                    models.AgentJob.lease_expires_at.is_(None),
+                    models.AgentJob.lease_expires_at >= now,
+                ),
+            )
+            .limit(1)
+        )
+        active_claim_result = await self._session.execute(active_claim_stmt)
+        if active_claim_result.scalar_one_or_none() is not None:
+            return None
 
         base_stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob).where(
             models.AgentJob.status == models.AgentJobStatus.QUEUED,

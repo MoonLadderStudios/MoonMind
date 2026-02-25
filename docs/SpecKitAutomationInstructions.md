@@ -6,7 +6,7 @@ These instructions describe how to launch the Spec Kit automation pipeline so th
 
 1. **Runtime services** – Bring up RabbitMQ, the Codex-focused Celery worker, and the API service together; they share the automation queues, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
    - Bind the worker to both Workflow queues (`${CELERY_DEFAULT_QUEUE:-speckit}` and `${WORKFLOW_CODEX_QUEUE:-codex}`), so discovery and Codex phases execute on the same worker process.
-2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`codex login --device-auth`) so the pre-flight status check passes before jobs start. Set `WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
+2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`./tools/auth-codex-volume.sh`, which runs `codex login --device-auth`) so the pre-flight status check passes before jobs start. Set `WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
 3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
 4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/workflows` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
     1. **Start Keycloak** – Run `docker compose --profile keycloak up keycloak keycloak-db -d` so the `moonmind` realm is available at `http://localhost:8085`. The default admin credentials are `admin/admin` unless you set `KC_ADMIN_PW`.
@@ -125,8 +125,7 @@ logs that the approval policy is incorrect, follow these steps:
 From the repository root, authenticate the Codex volume once, then start supporting services so the worker can accept automation jobs:
 
 ```bash
-docker compose run --rm celery_codex_worker \
-  bash -lc 'codex login --device-auth && codex login status'
+./tools/auth-codex-volume.sh
 ```
 
 ```bash

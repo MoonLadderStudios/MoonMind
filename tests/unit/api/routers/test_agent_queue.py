@@ -10,7 +10,7 @@ from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI, status
+from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.agent_queue import (
@@ -556,12 +556,34 @@ async def test_require_worker_auth_rejects_missing_credentials_when_oidc_enabled
     """Missing worker token and missing OIDC user should fail authentication."""
 
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
-    with pytest.raises(AgentQueueAuthenticationError):
+    with pytest.raises(HTTPException) as exc_info:
         await _require_worker_auth(
             worker_token=None,
             service=AsyncMock(),
             user=None,
         )
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.detail["code"] == "worker_auth_failed"
+
+
+@pytest.mark.asyncio
+async def test_require_worker_auth_maps_invalid_token_to_401() -> None:
+    """Invalid worker tokens should map to HTTP 401 instead of bubbling as 500."""
+
+    mock_service = AsyncMock()
+    mock_service.resolve_worker_token.side_effect = AgentQueueAuthenticationError(
+        "invalid worker token"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _require_worker_auth(
+            worker_token="mmwt_invalid",
+            service=mock_service,
+            user=None,
+        )
+
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.detail["code"] == "worker_auth_failed"
 
 
 def test_heartbeat_job_includes_system_metadata(

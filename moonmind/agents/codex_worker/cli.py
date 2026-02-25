@@ -185,12 +185,22 @@ def _run_checked_command(
     if result.returncode == 0:
         return
 
-    message = (
-        result.stderr.strip()
-        or result.stdout.strip()
-        or f"command failed: {' '.join(command)}"
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+    command_hint = (
+        " ".join(command[:2]) if len(command) > 1 else " ".join(command) or "<empty>"
     )
-    raise RuntimeError(_redact_value(message, redaction_values))
+    if detail:
+        message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
+        message = _redact_value(message, redaction_values)
+        if len(message) > 1024:
+            message = f"{message[:1021]}..."
+        raise RuntimeError(message)
+
+    raise RuntimeError(
+        _redact_value(
+            f"command failed ({result.returncode}): {command_hint}", redaction_values
+        )
+    )
 
 
 def _verify_speckit_cli(
@@ -238,6 +248,21 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     )
 
 
+def _verify_codex_search_cli(source: Mapping[str, str]) -> str:
+    """Validate ripgrep availability for Codex-first repository search defaults."""
+
+    binary = str(source.get("MOONMIND_RG_BINARY", "rg")).strip() or "rg"
+    try:
+        return verify_cli_is_executable(binary)
+    except CliVerificationError as exc:
+        raise RuntimeError(
+            "Codex runtime requires ripgrep (`rg`) for first-pass repository "
+            "search commands. Install ripgrep in the execution environment (or "
+            "set MOONMIND_RG_BINARY to a compatible `rg` executable on PATH). "
+            f"Details: {exc}"
+        ) from exc
+
+
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
@@ -249,6 +274,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         "codex": None,
         "gemini": None,
         "claude": None,
+        "rg": None,
     }
 
     for runtime_name in runtime_verification_order:
@@ -286,6 +312,9 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
+    if "codex" in capabilities:
+        resolved_paths["rg"] = _verify_codex_search_cli(source)
+
     _validate_embedding_profile(source)
     try:
         ensure_rag_ready(RagRuntimeSettings.from_env(source))
@@ -305,6 +334,12 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     if speckit_path is not None:
         _verify_speckit_cli(
             speckit_path,
+            redaction_values=redaction_values,
+        )
+
+    if resolved_paths["rg"] is not None:
+        _run_checked_command(
+            [resolved_paths["rg"], "--version"],
             redaction_values=redaction_values,
         )
 

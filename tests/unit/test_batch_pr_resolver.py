@@ -56,3 +56,25 @@ def test_is_local_head_rejects_fork_owner_mismatch():
     }
 
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is False
+
+
+def test_build_queue_request_sets_branch_publish_with_matching_branches():
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/example",
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+
+    task = request["payload"]["task"]
+    git = task["git"]
+
+    assert task["publish"]["mode"] == "branch"
+    assert git["startingBranch"] == "feature/example"
+    assert git["newBranch"] == "feature/example"
