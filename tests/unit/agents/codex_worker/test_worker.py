@@ -1151,7 +1151,9 @@ async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
             succeeded=True,
             summary="step ok",
             error_message=None,
-            artifacts=(ArtifactUpload(path=large_step_log, name="logs/codex_exec.log"),),
+            artifacts=(
+                ArtifactUpload(path=large_step_log, name="logs/codex_exec.log"),
+            ),
         )
     )
     config = CodexWorkerConfig(
