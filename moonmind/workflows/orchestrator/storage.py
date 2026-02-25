@@ -17,11 +17,17 @@ def _resolve_root(base: Path, configured: str | os.PathLike[str] | None) -> Path
     if configured in (None, ""):
         return root
 
-    candidate = Path(configured)
-    if not candidate.is_absolute():
-        candidate = (root / candidate).resolve()
+    configured_path = Path(configured)
+    base_path = Path(base)
+    if configured_path.is_absolute():
+        candidate = configured_path
+    elif configured_path.resolve() == base_path.resolve():
+        # Avoid double-prefixing when override equals base.
+        candidate = base_path
     else:
-        candidate = candidate.resolve()
+        candidate = base_path / configured_path
+
+    candidate = candidate.resolve()
 
     try:
         candidate.relative_to(root)

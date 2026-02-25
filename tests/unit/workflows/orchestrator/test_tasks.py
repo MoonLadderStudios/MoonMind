@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -26,6 +27,38 @@ def test_build_storage_for_run_uses_persisted_directory(tmp_path):
     assert storage.base_path == base.resolve()
     assert run.artifact_root == str((base / str(run_id)).resolve())
     assert (base / str(run_id)).exists()
+
+
+def test_build_storage_for_run_retries_configured_root_for_stale_path(
+    tmp_path, monkeypatch
+):
+    """Unusable persisted run roots should fall back to the worker's configured root."""
+
+    run_id = uuid4()
+    stale_base = tmp_path / "legacy-root"
+    stale_root = stale_base / str(run_id)
+    configured_root = tmp_path / "worker-root"
+    run = SimpleNamespace(id=run_id, artifact_root=str(stale_root))
+
+    class PermissionDeniedStorage(tasks.ArtifactStorage):
+        def __init__(self, base_path: Path | str):
+            super().__init__(base_path)
+            self.base_path_inited = Path(base_path).resolve()
+
+        def ensure_run_directory(self, run_id: UUID) -> Path:  # type: ignore[override]
+            if self.base_path_inited == stale_base.resolve():
+                raise PermissionError("simulated permission denial")
+            return super().ensure_run_directory(run_id)
+
+    monkeypatch.setattr(tasks, "ArtifactStorage", PermissionDeniedStorage)
+    monkeypatch.setattr(tasks, "_artifact_root", lambda: configured_root)
+
+    storage = tasks._build_storage_for_run(run)
+
+    assert storage.base_path == configured_root.resolve()
+    expected = configured_root / str(run_id)
+    assert run.artifact_root == str(expected.resolve())
+    assert expected.exists()
 
 
 def test_build_storage_for_run_generates_directory_when_missing(tmp_path, monkeypatch):
