@@ -780,7 +780,7 @@ class CodexExecHandler:
         redaction_values: tuple[str, ...] = (),
         cancel_event: asyncio.Event | None = None,
         output_chunk_callback: OutputChunkCallback | None = None,
-        enable_replay_dedupe: bool = False,
+        enable_replay_dedupe: bool = True,
     ) -> CommandResult:
         self._append_log(
             log_path,
@@ -834,6 +834,7 @@ class CodexExecHandler:
         }
         replay_cursor: dict[str, int | None] = {"stdout": None, "stderr": None}
         replay_suppressed_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -933,7 +934,10 @@ class CodexExecHandler:
                     return ""
 
                 replay_cursor[stream] = None
-                emitted_replay_prefix = "".join(replay_suppressed_chunks[stream])
+                replay_pending_candidate_text[stream] = ""
+                emitted_replay_prefix = ""
+                if expected is not None:
+                    emitted_replay_prefix = "".join(replay_suppressed_chunks[stream])
                 replay_suppressed_chunks[stream] = []
                 _append_chunk_history(stream, text)
                 return f"{emitted_replay_prefix}{text}"
@@ -947,10 +951,17 @@ class CodexExecHandler:
                 expected = stream_history_index.get(expected_seq)
                 if expected is not None and text == expected:
                     replay_cursor[stream] = expected_seq + 1
+                    replay_pending_candidate_text[stream] = ""
                     replay_suppressed_chunks[stream] = [pending_text, text]
                     return ""
-                emitted_prefix = pending_text
+                emitted_prefix = replay_pending_candidate_text[stream]
+                if not emitted_prefix:
+                    emitted_prefix = pending_text
+                replay_pending_candidate_text[stream] = text
                 _append_chunk_history(stream, pending_text)
+                replay_candidate[stream] = (start_seq, text)
+                _append_chunk_history(stream, text)
+                return emitted_prefix
 
             if (
                 len(text) >= min_replay_candidate_chars
@@ -973,6 +984,7 @@ class CodexExecHandler:
             if candidate is None:
                 return
             replay_candidate[stream] = None
+            replay_pending_candidate_text[stream] = ""
             _index, pending_text = candidate
             _append_chunk_history(stream, pending_text)
             stream_log_buffers[stream] = (
