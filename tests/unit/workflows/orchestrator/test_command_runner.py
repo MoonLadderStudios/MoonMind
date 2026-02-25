@@ -513,8 +513,14 @@ def test_rollback_stops_after_first_successful_strategy(tmp_path, monkeypatch):
         {
             "logArtifact": "rollback.log",
             "strategies": [
-                {"type": "git-revert", "commands": [["git", "reset", "--hard", "HEAD"]]},
-                {"type": "rebuild", "commands": [["docker", "compose", "build", "svc"]]},
+                {
+                    "type": "git-revert",
+                    "commands": [["git", "reset", "--hard", "HEAD"]],
+                },
+                {
+                    "type": "rebuild",
+                    "commands": [["docker", "compose", "build", "svc"]],
+                },
             ],
         }
     )
@@ -550,8 +556,14 @@ def test_rollback_uses_fallback_strategy_after_failure(tmp_path, monkeypatch):
         {
             "logArtifact": "rollback.log",
             "strategies": [
-                {"type": "git-revert", "commands": [["git", "reset", "--hard", "HEAD"]]},
-                {"type": "restart", "commands": [["docker", "compose", "up", "-d", "svc"]]},
+                {
+                    "type": "git-revert",
+                    "commands": [["git", "reset", "--hard", "HEAD"]],
+                },
+                {
+                    "type": "restart",
+                    "commands": [["docker", "compose", "up", "-d", "svc"]],
+                },
             ],
         }
     )
@@ -575,7 +587,9 @@ def test_rollback_raises_when_all_strategies_fail(tmp_path, monkeypatch):
 
     def execute(self, command, *, cwd=None):  # pragma: no cover - test hook
         del self, command, cwd
-        raise CommandExecutionError("rollback command failed", output="simulated failure")
+        raise CommandExecutionError(
+            "rollback command failed", output="simulated failure"
+        )
 
     monkeypatch.setattr(CommandRunner, "_execute_command", execute)
 
@@ -584,8 +598,14 @@ def test_rollback_raises_when_all_strategies_fail(tmp_path, monkeypatch):
             {
                 "logArtifact": "rollback.log",
                 "strategies": [
-                    {"type": "git-revert", "commands": [["git", "reset", "--hard", "HEAD"]]},
-                    {"type": "rebuild", "commands": [["docker", "compose", "build", "svc"]]},
+                    {
+                        "type": "git-revert",
+                        "commands": [["git", "reset", "--hard", "HEAD"]],
+                    },
+                    {
+                        "type": "rebuild",
+                        "commands": [["docker", "compose", "build", "svc"]],
+                    },
                 ],
             }
         )
