@@ -12,6 +12,16 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 
+def ollama_dependency_available() -> bool:
+    """Return whether the optional ollama package is importable."""
+
+    try:
+        import ollama  # type: ignore  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class EmbeddingError(RuntimeError):
     """Raised when embedding generation fails."""
 
