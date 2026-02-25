@@ -79,9 +79,7 @@ def _parse_field(
             start = _parse_int(start_part, field_name=field_name)
             end = _parse_int(end_part, field_name=field_name)
             if end < start:
-                raise CronExpressionError(
-                    f"{field_name} range start must be <= end"
-                )
+                raise CronExpressionError(f"{field_name} range start must be <= end")
         else:
             start = _parse_int(base, field_name=field_name)
             end = start

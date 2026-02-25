@@ -34,7 +34,6 @@ from moonmind.workflows.agent_queue.job_types import (
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.recurring_tasks.cron import (
-    CronExpressionError,
     compute_next_occurrence,
     parse_cron_expression,
     validate_timezone_name,
@@ -77,7 +76,9 @@ def _json_object(value: object, *, field_name: str) -> dict[str, Any]:
     raise RecurringTaskValidationError(f"{field_name} must be a JSON object")
 
 
-def _clean_text(value: object, *, field_name: str, required: bool = False) -> str | None:
+def _clean_text(
+    value: object, *, field_name: str, required: bool = False
+) -> str | None:
     text = str(value or "").strip()
     if not text:
         if required:
@@ -118,7 +119,9 @@ def _normalize_policy(
 
     max_concurrent_raw = overlap.get("maxConcurrentRuns")
     try:
-        max_concurrent = int(max_concurrent_raw) if max_concurrent_raw is not None else 1
+        max_concurrent = (
+            int(max_concurrent_raw) if max_concurrent_raw is not None else 1
+        )
     except (TypeError, ValueError) as exc:
         raise RecurringTaskValidationError(
             "policy.overlap.maxConcurrentRuns must be an integer"
@@ -156,7 +159,9 @@ def _normalize_policy(
     try:
         jitter_seconds = int(jitter_raw)
     except (TypeError, ValueError) as exc:
-        raise RecurringTaskValidationError("policy.jitterSeconds must be an integer") from exc
+        raise RecurringTaskValidationError(
+            "policy.jitterSeconds must be an integer"
+        ) from exc
     jitter_seconds = max(0, jitter_seconds)
 
     return RecurringPolicy(
@@ -189,7 +194,9 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         job = dict(job_payload)
         job_type = str(job.get("type") or "").strip().lower() or CANONICAL_TASK_JOB_TYPE
         if job_type != CANONICAL_TASK_JOB_TYPE:
-            raise RecurringTaskValidationError("target.job.type must be 'task' for queue_task")
+            raise RecurringTaskValidationError(
+                "target.job.type must be 'task' for queue_task"
+            )
         payload = job.get("payload")
         if not isinstance(payload, Mapping):
             raise RecurringTaskValidationError(
@@ -223,7 +230,9 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     if kind == "manifest_run":
         manifest_name = str(target.get("name") or "").strip()
         if not manifest_name:
-            raise RecurringTaskValidationError("target.name is required for manifest_run")
+            raise RecurringTaskValidationError(
+                "target.name is required for manifest_run"
+            )
         action = str(target.get("action") or "run").strip().lower() or "run"
         if action not in {"run", "plan"}:
             raise RecurringTaskValidationError(
@@ -650,7 +659,11 @@ class RecurringTasksService:
             )
 
             for scheduled_for in selected_occurrences:
-                jitter = random.randint(0, policy.jitter_seconds) if policy.jitter_seconds else 0
+                jitter = (
+                    random.randint(0, policy.jitter_seconds)
+                    if policy.jitter_seconds
+                    else 0
+                )
                 dispatch_after = scheduled_for + timedelta(seconds=jitter)
                 inserted = await self._insert_run_if_missing(
                     definition_id=definition.id,
@@ -718,9 +731,9 @@ class RecurringTasksService:
         return {
             "definitionId": str(definition.id),
             "runId": str(run.id),
-            "scheduledFor": _coerce_utc(run.scheduled_for).isoformat().replace(
-                "+00:00", "Z"
-            ),
+            "scheduledFor": _coerce_utc(run.scheduled_for)
+            .isoformat()
+            .replace("+00:00", "Z"),
         }
 
     @staticmethod
@@ -743,7 +756,9 @@ class RecurringTasksService:
         job_type: str,
         scan_limit: int = 1000,
     ) -> queue_models.AgentJob | None:
-        jobs = await self._queue_repository.list_jobs(job_type=job_type, limit=scan_limit)
+        jobs = await self._queue_repository.list_jobs(
+            job_type=job_type, limit=scan_limit
+        )
         target_id = str(run_id)
         for job in jobs:
             payload = dict(job.payload or {})
@@ -835,7 +850,9 @@ class RecurringTasksService:
 
         payload = dict(task_defaults)
         task_payload_raw = payload.get("task")
-        task_payload = dict(task_payload_raw) if isinstance(task_payload_raw, Mapping) else {}
+        task_payload = (
+            dict(task_payload_raw) if isinstance(task_payload_raw, Mapping) else {}
+        )
 
         if not isinstance(task_payload.get("publish"), Mapping):
             task_payload["publish"] = {"mode": "none"}
@@ -865,14 +882,21 @@ class RecurringTasksService:
         caps: list[str] = []
         existing_caps = payload.get("requiredCapabilities")
         if isinstance(existing_caps, list):
-            caps.extend(str(item).strip().lower() for item in existing_caps if str(item).strip())
+            caps.extend(
+                str(item).strip().lower() for item in existing_caps if str(item).strip()
+            )
         expanded_caps = expanded.get("capabilities")
         if isinstance(expanded_caps, list):
-            caps.extend(str(item).strip().lower() for item in expanded_caps if str(item).strip())
+            caps.extend(
+                str(item).strip().lower() for item in expanded_caps if str(item).strip()
+            )
         if caps:
             payload["requiredCapabilities"] = list(dict.fromkeys(caps))
 
-        if "repository" not in payload or not str(payload.get("repository") or "").strip():
+        if (
+            "repository" not in payload
+            or not str(payload.get("repository") or "").strip()
+        ):
             payload["repository"] = str(
                 settings.spec_workflow.github_repository or "MoonLadderStudios/MoonMind"
             ).strip()
@@ -913,7 +937,9 @@ class RecurringTasksService:
         name = str(target.get("name") or "").strip()
         action = str(target.get("action") or "run").strip().lower() or "run"
         options_payload = target.get("options")
-        options = dict(options_payload) if isinstance(options_payload, Mapping) else None
+        options = (
+            dict(options_payload) if isinstance(options_payload, Mapping) else None
+        )
 
         return await self._manifests_service.submit_manifest_run(
             name=name,

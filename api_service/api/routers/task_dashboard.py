@@ -150,13 +150,13 @@ async def task_dashboard_route(
             detail={
                 "code": "dashboard_route_not_found",
                 "message": (
-                "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
-                "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
-                "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                "/tasks/schedules, /tasks/schedules/new, "
-                "or /tasks/settings."
-            ),
-        },
+                    "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
+                    "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
+                    "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+                    "/tasks/schedules, /tasks/schedules/new, "
+                    "or /tasks/settings."
+                ),
+            },
         )
 
     return _render_dashboard(request, f"/tasks/{normalized}")

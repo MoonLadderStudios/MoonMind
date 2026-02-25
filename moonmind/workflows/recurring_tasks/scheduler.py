@@ -26,7 +26,9 @@ class SchedulerConfig:
     @classmethod
     def from_settings(cls) -> "SchedulerConfig":
         return cls(
-            poll_interval_ms=max(250, int(settings.spec_workflow.scheduler_poll_interval_ms)),
+            poll_interval_ms=max(
+                250, int(settings.spec_workflow.scheduler_poll_interval_ms)
+            ),
             batch_size=max(1, int(settings.spec_workflow.scheduler_batch_size)),
             max_backfill=max(1, int(settings.spec_workflow.scheduler_max_backfill)),
         )
@@ -99,9 +101,7 @@ def _resolve_config(args: argparse.Namespace) -> SchedulerConfig:
         else base.poll_interval_ms
     )
     batch_size = (
-        max(1, int(args.batch_size))
-        if args.batch_size is not None
-        else base.batch_size
+        max(1, int(args.batch_size)) if args.batch_size is not None else base.batch_size
     )
     max_backfill = (
         max(1, int(args.max_backfill))

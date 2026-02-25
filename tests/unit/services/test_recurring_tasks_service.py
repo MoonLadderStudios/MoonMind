@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, ManifestRecord, RecurringTaskRun, RecurringTaskRunOutcome
+from api_service.db.models import (
+    Base,
+    ManifestRecord,
+    RecurringTaskRun,
+    RecurringTaskRunOutcome,
+)
 from api_service.services.manifests_service import ManifestsService
 from api_service.services.recurring_tasks_service import RecurringTasksService
 
@@ -39,7 +44,13 @@ async def recurring_db(tmp_path: Path):
 
 
 def _fixture_manifest_content() -> str:
-    path = Path(__file__).resolve().parents[2] / "fixtures" / "manifests" / "phase0" / "registry.yaml"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "manifests"
+        / "phase0"
+        / "registry.yaml"
+    )
     return path.read_text(encoding="utf-8")
 
 
@@ -160,10 +171,16 @@ async def test_scheduler_tick_creates_and_dispatches_runs(tmp_path: Path) -> Non
             assert dispatched >= 2
 
             runs = (
-                await session.execute(
-                    select(RecurringTaskRun).order_by(RecurringTaskRun.created_at.asc())
+                (
+                    await session.execute(
+                        select(RecurringTaskRun).order_by(
+                            RecurringTaskRun.created_at.asc()
+                        )
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(runs) >= 2
             outcomes = {run.outcome for run in runs}
             assert RecurringTaskRunOutcome.ENQUEUED in outcomes

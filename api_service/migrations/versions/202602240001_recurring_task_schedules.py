@@ -87,7 +87,9 @@ def upgrade() -> None:
         sa.Column("scope_ref", sa.String(length=255), nullable=True),
         sa.Column("target", _json_variant(), nullable=False),
         sa.Column("policy", _json_variant(), nullable=False),
-        sa.Column("version", sa.BigInteger(), nullable=False, server_default=sa.text("1")),
+        sa.Column(
+            "version", sa.BigInteger(), nullable=False, server_default=sa.text("1")
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

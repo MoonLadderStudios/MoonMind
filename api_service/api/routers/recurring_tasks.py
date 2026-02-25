@@ -21,8 +21,8 @@ from api_service.db.models import (
 from api_service.services.recurring_tasks_service import (
     RecurringTaskAuthorizationError,
     RecurringTaskNotFoundError,
-    RecurringTaskValidationError,
     RecurringTasksService,
+    RecurringTaskValidationError,
 )
 
 router = APIRouter(prefix="/api/recurring-tasks", tags=["recurring-tasks"])
@@ -59,7 +59,9 @@ class RecurringTaskDefinitionListResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    items: list[RecurringTaskDefinitionModel] = Field(default_factory=list, alias="items")
+    items: list[RecurringTaskDefinitionModel] = Field(
+        default_factory=list, alias="items"
+    )
 
 
 class RecurringTaskRunModel(BaseModel):
@@ -100,9 +102,7 @@ class CreateRecurringTaskRequest(BaseModel):
     schedule_type: Literal["cron"] = Field("cron", alias="scheduleType")
     cron: str = Field(..., alias="cron")
     timezone: str = Field("UTC", alias="timezone")
-    scope_type: Literal["personal", "global"] = Field(
-        "personal", alias="scopeType"
-    )
+    scope_type: Literal["personal", "global"] = Field("personal", alias="scopeType")
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
@@ -129,7 +129,9 @@ async def _get_service(
     return RecurringTasksService(session)
 
 
-def _serialize_definition(definition: RecurringTaskDefinition) -> RecurringTaskDefinitionModel:
+def _serialize_definition(
+    definition: RecurringTaskDefinition,
+) -> RecurringTaskDefinitionModel:
     return RecurringTaskDefinitionModel(
         id=definition.id,
         name=definition.name,
