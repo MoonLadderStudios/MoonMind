@@ -1596,6 +1596,14 @@
       draft && typeof draft === "object" && !Array.isArray(draft) ? draft : {},
     );
 
+  const resetWorkerSubmissionFields = (draft = {}) => {
+    const normalized = normalizeSubmissionDraftForTest(draft);
+    normalized.instruction = "";
+    normalized.templateFeatureRequest = "";
+    normalized.steps = [];
+    return normalized;
+  };
+
   const createSubmitDraftController = (queueDraft = {}, orchestratorDraft = {}) => {
     let workerDraft = normalizeSubmissionDraftForTest(queueDraft);
     if (!Array.isArray(workerDraft.steps)) {
@@ -1834,6 +1842,7 @@
       determineSubmitDestination,
       validateOrchestratorSubmission,
       cloneStepStateEntries,
+      resetWorkerSubmissionFields,
       readSubmitDraftStorage,
       resolveSubmitRuntime,
       isWorkerSubmitRuntime,
@@ -3207,6 +3216,18 @@
       templateFeatureRequest instanceof HTMLTextAreaElement
         ? String(templateFeatureRequest.value || "").trim()
         : "";
+    const clearWorkerSubmissionDraftAfterCreate = () => {
+      stepState.splice(0, stepState.length, createStepStateEntry());
+      appliedTemplateState = [];
+      if (templateFeatureRequest instanceof HTMLTextAreaElement) {
+        templateFeatureRequest.value = "";
+      }
+      renderStepEditor();
+      submitDraftController.saveWorker(
+        resetWorkerSubmissionFields(collectWorkerDraftFromForm()),
+      );
+      persistSubmitDraftsToStorage();
+    };
     const normalizeTemplateInputKey = (key) =>
       String(key || "")
         .trim()
@@ -3984,6 +4005,7 @@
         if (!created || typeof created.id !== "string" || !created.id.trim()) {
           throw new Error("queue creation response missing job id");
         }
+        clearWorkerSubmissionDraftAfterCreate();
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);

@@ -140,6 +140,24 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(orchestratorSnapshot.priority, "high");
 })();
 
+(function testResetWorkerSubmissionFieldsClearsStepInputs() {
+  const sourceDraft = {
+    instruction: "Implement queue task",
+    templateFeatureRequest: "Do the work",
+    repository: "moon/demo",
+    steps: helpers.cloneStepStateEntries([
+      { instructions: "Step one" },
+      { instructions: "Step two" },
+    ]),
+  };
+  const resetDraft = helpers.resetWorkerSubmissionFields(sourceDraft);
+  assert.strictEqual(resetDraft.instruction, "");
+  assert.strictEqual(resetDraft.templateFeatureRequest, "");
+  assert.strictEqual(Array.isArray(resetDraft.steps), true);
+  assert.strictEqual(resetDraft.steps.length, 0);
+  assert.strictEqual(resetDraft.repository, "moon/demo");
+})();
+
 (function testDetermineSubmitDestinationRoutesPayloads() {
   const endpoints = { queue: "/api/queue/jobs", orchestrator: "/orchestrator/runs" };
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
