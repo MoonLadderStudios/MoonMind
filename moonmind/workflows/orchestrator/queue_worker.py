@@ -67,9 +67,7 @@ class QueueWorkerConfig:
             str(source.get("ORCHESTRATOR_QUEUE_API_RETRY_DELAY_SECONDS", "1.0"))
         )
         if queue_api_retry_delay_seconds <= 0:
-            raise ValueError(
-                "ORCHESTRATOR_QUEUE_API_RETRY_DELAY_SECONDS must be > 0"
-            )
+            raise ValueError("ORCHESTRATOR_QUEUE_API_RETRY_DELAY_SECONDS must be > 0")
 
         allowed_types_csv = (
             str(source.get("MOONMIND_WORKER_ALLOWED_TYPES", "")).strip()
@@ -283,7 +281,9 @@ class QueueApiClient:
                     continue
                 break
             except httpx.HTTPError as exc:
-                raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
+                raise QueueClientError(
+                    f"queue API request failed: {path}: {exc}"
+                ) from exc
         raise QueueClientError(
             f"queue API request failed: {path}: {last_error}"
         ) from last_error
