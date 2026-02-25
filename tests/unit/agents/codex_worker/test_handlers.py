@@ -536,9 +536,7 @@ async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
 
     text = log_path.read_text(encoding="utf-8")
     assert (
-        text.count(
-            "Implemented the runtime capability fix and regression coverage."
-        )
+        text.count("Implemented the runtime capability fix and regression coverage.")
         == 1
     )
     assert text.count("Ran required unit test script: `./tools/test_unit.sh`") == 1

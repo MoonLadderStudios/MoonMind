@@ -909,7 +909,9 @@ class CodexExecHandler:
             replay_candidate[stream] = None
             _index, pending_text = candidate
             _append_chunk_history(stream, pending_text)
-            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + pending_text
+            stream_log_buffers[stream] = (
+                stream_log_buffers.get(stream, "") + pending_text
+            )
             if output_chunk_callback is not None:
                 with suppress(Exception):
                     await output_chunk_callback(stream, pending_text)
@@ -918,7 +920,9 @@ class CodexExecHandler:
             deduped_text = _dedupe_replayed_stream_chunk(stream, text)
             if not deduped_text:
                 return
-            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + deduped_text
+            stream_log_buffers[stream] = (
+                stream_log_buffers.get(stream, "") + deduped_text
+            )
             _flush_stream_log_buffer(stream, force=False)
             if output_chunk_callback is not None:
                 with suppress(Exception):
