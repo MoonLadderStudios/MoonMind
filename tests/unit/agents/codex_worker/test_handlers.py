@@ -559,21 +559,14 @@ async def test_run_command_streaming_polling_snapshots_append_only_new_deltas(
     """Polling snapshots should emit only newly appended deltas."""
 
     handler = CodexExecHandler(workdir_root=tmp_path)
-    log_path = (
-        tmp_path / "artifacts" / "logs" / "steps" / "step-0000.log"
-    )
+    log_path = tmp_path / "artifacts" / "logs" / "steps" / "step-0000.log"
     callback_events: list[tuple[str, str | None]] = []
-    file_update = (
-        "file update:\n"
-        "M moonmind/agents/codex_worker/handlers.py\n"
-    )
+    file_update = "file update:\n" "M moonmind/agents/codex_worker/handlers.py\n"
     assistant_summary = (
-        "assistant summary:\n"
-        "Implemented streaming delta collector fix.\n"
+        "assistant summary:\n" "Implemented streaming delta collector fix.\n"
     )
     final_summary = (
-        "final summary:\n"
-        "Added long-running polling regression coverage.\n"
+        "final summary:\n" "Added long-running polling regression coverage.\n"
     )
     snapshots: list[str] = []
     cumulative = ""
@@ -631,9 +624,7 @@ async def test_run_command_streaming_polling_snapshots_append_only_new_deltas(
     )
     assert callback_text.count("file update:") == 1
     assert callback_text.count("Implemented streaming delta collector fix.") == 1
-    assert (
-        callback_text.count("Added long-running polling regression coverage.") == 1
-    )
+    assert callback_text.count("Added long-running polling regression coverage.") == 1
 
 
 async def test_run_command_streaming_keeps_repeated_output_across_turn_boundaries(
