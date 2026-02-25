@@ -46,8 +46,8 @@ Each queue row maps to the following semantic structure:
 
 | Section | Elements | Description |
 | --- | --- | --- |
-| Header | `<div class="queue-card-header">` containing `<a.queue-card-title>`, `<p.queue-card-meta>`, and `<div.queue-card-status>` with `statusBadge` result | Displays ID/title, queue/skill metadata line, and dual status indicators (badge + raw status text). |
-| Definition list | `<dl class="queue-card-fields">` with repeated `<div><dt>label</dt><dd>value</dd></div>` pairs iterated from `queueFieldDefinitions` | Keeps cards in sync with table columns and ensures assistive tech reads label/value pairs properly. |
+| Header | `<div class="queue-card-header">` containing `<a.queue-card-title>` and `<p.queue-card-meta>` | Displays ID/title and queue/skill metadata line while keeping the header single-column on mobile. |
+| Definition list | `<dl class="queue-card-fields">` starting with a fixed `Status` `<dt>/<dd>` row, then repeated `<div><dt>label</dt><dd>value</dd></div>` pairs iterated from `queueFieldDefinitions` | Keeps status as the first card field and preserves parity with table columns for remaining values. |
 | Actions | `<div class="queue-card-actions"> <a class="button secondary" href="row.link">View details</a> </div>` | Primary CTA to job detail page; future buttons can append here without altering card skeleton. |
 
 ## 5. CSS/Breakpoint metadata
@@ -57,6 +57,7 @@ Each queue row maps to the following semantic structure:
 | `.queue-layouts` | CSS grid container | Wraps both layouts; ensures consistent spacing/topology.
 | `.queue-table-wrapper[data-sticky-table]` | Attribute flag | When `true`, CSS keeps the table visible even on mobile to surface non-queue sources.
 | `.queue-card-list[data-layout="card"]` | Semantic hint | Allows future JS/tests to assert that cards are rendered even when hidden on desktop.
+| `.queue-card-status-field` | Status wrapper class | Enforces vertical stacking (`badge` above `raw status`) after status moved into card definition list.
 | Media queries | `@media (min-width:768px)` / `@media (max-width:767px)` | Toggle visibility per DOC-REQ-001; identical breakpoints documented in TailwindStyleSystem.md.
 
 These structures ensure layout switching remains data-driven and extensible.

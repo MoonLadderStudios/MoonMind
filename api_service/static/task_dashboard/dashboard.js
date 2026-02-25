@@ -1433,8 +1433,10 @@
           <div>
             <dt>Status</dt>
             <dd>
-              ${statusBadge(row.source, row.rawStatus)}
-              <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
+              <span class="queue-card-status-field">
+                ${statusBadge(row.source, row.rawStatus)}
+                <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
+              </span>
             </dd>
           </div>
         `;
@@ -1556,10 +1558,11 @@
     });
   }
 
-  // Queue/table/card metadata lives in one definition list so new fields only
-  // require a single entry plus a render helper. When expanding queue metadata,
-  // update docs/TaskUiQueue.md ("Extending queue fields") and add tests that
-  // exercise the new label/value pairs.
+  // Queue metadata for table columns and card field rows is centralized here.
+  // Card status remains a fixed leading row in renderQueueCards so mobile keeps
+  // status first regardless of future queueFieldDefinitions ordering. When
+  // expanding queue metadata, update docs/TaskUiQueue.md ("Extending queue
+  // fields") and add tests that exercise the new label/value pairs.
   const queueFieldDefinitions = [
     {
       key: "queueName",
