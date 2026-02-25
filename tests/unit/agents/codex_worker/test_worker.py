@@ -349,7 +349,7 @@ class StreamingReplayStepHandler(FakeHandler):
             ["codex", "exec", "simulate"],
             cwd=self._workdir_root,
             log_path=log_path,
-            check=False,
+            check=True,
             output_chunk_callback=output_chunk_callback,
             enable_replay_dedupe=True,
         )
@@ -1567,6 +1567,9 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
 
         def kill(self) -> None:
             return None
+
+        async def communicate(self, input: object | None = None) -> tuple[bytes, bytes]:
+            return (b"", b"")
 
     async def fake_exec(*args, **kwargs):
         del args, kwargs
