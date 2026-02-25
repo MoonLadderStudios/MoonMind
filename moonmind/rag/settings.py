@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Mapping, MutableMapping, Optional
 
 from moonmind.config.settings import settings as app_settings
+from moonmind.rag.embedding import ollama_dependency_available
 from moonmind.utils.env_bool import env_to_bool
 
 _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai", "ollama"})
@@ -187,14 +188,41 @@ class RagRuntimeSettings:
         provider = self.embedding_provider.lower()
         if provider == "google":
             google_key = (_get_env(source, "GOOGLE_API_KEY") or "").strip()
-            gemini_key = (_get_env(source, "GEMINI_API_KEY") or "").strip()
-            return bool(google_key or gemini_key)
-        if provider == "openai":
+            return bool(google_key)
+        elif provider == "openai":
             openai_key = (_get_env(source, "OPENAI_API_KEY") or "").strip()
             return bool(openai_key)
-        if provider == "ollama":
-            return True
+        elif provider == "ollama":
+            return ollama_dependency_available()
         return False
+
+    def retrieval_execution_reason(
+        self,
+        source: Mapping[str, str] | None = None,
+        *,
+        preferred_transport: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """Return retrieval execution status and a non-secret reason."""
+
+        if not self.rag_enabled:
+            return False, "rag_disabled"
+        if not self.embedding_provider_supported():
+            return False, "embedding_provider_unsupported"
+
+        transport = self.resolved_transport(preferred_transport)
+        if transport == "gateway":
+            if not self.retrieval_gateway_url:
+                return False, "retrieval_gateway_url_missing"
+            return True, "ok"
+
+        if not self.embedding_provider_configured(source):
+            provider = self.embedding_provider.lower()
+            if provider == "ollama":
+                return False, "ollama_dependency_missing"
+            return False, "embedding_provider_not_configured"
+        if not self.qdrant_enabled:
+            return False, "qdrant_disabled"
+        return True, "ok"
 
     def retrieval_executable(
         self,
@@ -204,13 +232,7 @@ class RagRuntimeSettings:
     ) -> bool:
         """Return whether retrieval can run with the current runtime settings."""
 
-        if not self.rag_enabled:
-            return False
-        if not self.embedding_provider_supported():
-            return False
-        if not self.embedding_provider_configured(source):
-            return False
-        transport = self.resolved_transport(preferred_transport)
-        if transport == "direct" and not self.qdrant_enabled:
-            return False
-        return True
+        executable, _reason = self.retrieval_execution_reason(
+            source, preferred_transport=preferred_transport
+        )
+        return executable

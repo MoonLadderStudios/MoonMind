@@ -623,9 +623,13 @@ async def test_retrieve_context_pack_skips_when_embedding_provider_unexecutable(
         handlers, "ContextRetrievalService", _UnexpectedRetrievalService
     )
 
-    pack = handler._retrieve_context_pack(job_id=uuid4(), payload=payload)
+    pack, reason = handler._retrieve_context_pack(job_id=uuid4(), payload=payload)
 
     assert pack is None
+    assert reason in {
+        "embedding_provider_unsupported",
+        "embedding_provider_not_configured",
+    }
 
 
 async def test_handler_falls_back_when_retrieval_raises(

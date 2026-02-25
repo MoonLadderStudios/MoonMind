@@ -510,8 +510,9 @@ class CodexExecHandler:
         if not query:
             return PromptContextResolution(instruction=payload.instruction)
 
+        retrieval_skip_reason: str | None = None
         try:
-            pack = await asyncio.to_thread(
+            pack, retrieval_skip_reason = await asyncio.to_thread(
                 self._retrieve_context_pack,
                 job_id=job_id,
                 payload=payload,
@@ -524,6 +525,11 @@ class CodexExecHandler:
             return PromptContextResolution(instruction=payload.instruction)
 
         if pack is None:
+            if retrieval_skip_reason:
+                self._append_log(
+                    log_path,
+                    f"[rag] retrieval skipped: {retrieval_skip_reason}",
+                )
             return PromptContextResolution(instruction=payload.instruction)
 
         artifact = self._persist_context_pack(
@@ -556,10 +562,11 @@ class CodexExecHandler:
         *,
         job_id: UUID,
         payload: CodexExecPayload,
-    ) -> ContextPack | None:
+    ) -> tuple[ContextPack | None, str | None]:
         settings = RagRuntimeSettings.from_env(os.environ)
-        if not settings.retrieval_executable(os.environ):
-            return None
+        executable, reason = settings.retrieval_execution_reason(os.environ)
+        if not executable:
+            return None, reason
         if not settings.job_id:
             settings.job_id = str(job_id)
         if not settings.run_id:
@@ -574,13 +581,16 @@ class CodexExecHandler:
             filters.setdefault("repository", repo_filter)
 
         service = ContextRetrievalService(settings=settings, env=os.environ)
-        return service.retrieve(
-            query=payload.instruction,
-            filters=filters,
-            top_k=settings.similarity_top_k,
-            overlay_policy=self._resolve_rag_overlay_policy(),
-            budgets=self._resolve_rag_budgets(),
-            transport=transport,
+        return (
+            service.retrieve(
+                query=payload.instruction,
+                filters=filters,
+                top_k=settings.similarity_top_k,
+                overlay_policy=self._resolve_rag_overlay_policy(),
+                budgets=self._resolve_rag_budgets(),
+                transport=transport,
+            ),
+            None,
         )
 
     def _persist_context_pack(

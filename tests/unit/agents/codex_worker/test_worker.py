@@ -508,6 +508,10 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     assert isinstance(claimed_payload, dict)
     assert claimed_payload["ragAvailable"] is False
     assert claimed_payload["ragMode"] == "unavailable"
+    assert claimed_payload["ragUnavailableReason"] in {
+        "embedding_provider_unsupported",
+        "embedding_provider_not_configured",
+    }
     assert "ragCommand" not in claimed_payload
 
     task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
@@ -515,6 +519,10 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     rag_payload = task_context["rag"]
     assert rag_payload["ragAvailable"] is False
     assert rag_payload["ragMode"] == "unavailable"
+    assert rag_payload["ragUnavailableReason"] in {
+        "embedding_provider_unsupported",
+        "embedding_provider_not_configured",
+    }
     assert "ragCommand" not in rag_payload
 
 
