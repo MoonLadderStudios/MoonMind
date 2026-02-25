@@ -8,6 +8,7 @@ import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Sequence
 from uuid import uuid4
 
 import pytest
@@ -290,6 +291,40 @@ class FakeHandler:
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"$ {' '.join(command)}\n")
         return CommandResult(tuple(command), 0, "", "")
+
+
+class CumulativeStepLogHandler(FakeHandler):
+    """Handler stub that appends each step output into one shared runtime log."""
+
+    def __init__(self, *, workdir_root: Path, segments: Sequence[str]) -> None:
+        super().__init__(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        )
+        self._workdir_root = workdir_root
+        self._segments = list(segments)
+        self._segment_index = 0
+
+    async def handle(
+        self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+    ):
+        del cancel_event, output_chunk_callback
+        self.calls.append("codex_exec")
+        self.exec_payloads.append(dict(payload))
+        if self._segment_index >= len(self._segments):
+            raise RuntimeError("no cumulative step log segment configured")
+
+        segment = self._segments[self._segment_index]
+        self._segment_index += 1
+        log_path = self._workdir_root / str(job_id) / "artifacts" / "codex_exec.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(segment)
+        return WorkerExecutionResult(
+            succeeded=True,
+            summary=f"step {self._segment_index} ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=log_path, name="logs/codex_exec.log"),),
+        )
 
 
 async def test_run_once_returns_false_when_no_job() -> None:
@@ -1023,6 +1058,119 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert len(finished) == 2
     assert started[0]["payload"]["stepId"] == "step-1"
     assert started[1]["payload"]["stepId"] == "step-2"
+
+
+async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
+    tmp_path: Path,
+) -> None:
+    """Step logs should contain only new runtime output for that step."""
+
+    step_one_segment = "== SESSION HEADER step-1 ==\nstep-one output\n"
+    step_two_segment = "== SESSION HEADER step-2 ==\nstep-two output\n"
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "step-1", "instructions": "First"},
+                    {"id": "step-2", "instructions": "Second"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = CumulativeStepLogHandler(
+        workdir_root=tmp_path,
+        segments=[step_one_segment, step_two_segment],
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_one_log = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step_two_log = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    step_one_text = step_one_log.read_text(encoding="utf-8")
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert step_one_text == step_one_segment
+    assert step_two_text == step_two_segment
+    assert "SESSION HEADER step-1" in step_one_text
+    assert "SESSION HEADER step-1" not in step_two_text
+    assert "SESSION HEADER step-2" in step_two_text
+
+
+async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
+    tmp_path: Path,
+) -> None:
+    """Later step logs should not inherit earlier large output chunks."""
+
+    step_one_segment = "== SESSION HEADER step-1 ==\n" + ("A" * 4096) + "\n"
+    step_two_segment = "== SESSION HEADER step-2 ==\n" + ("B" * 96) + "\n"
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "step-1", "instructions": "First"},
+                    {"id": "step-2", "instructions": "Second"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = CumulativeStepLogHandler(
+        workdir_root=tmp_path,
+        segments=[step_one_segment, step_two_segment],
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_two_log = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert step_two_text == step_two_segment
+    assert len(step_two_text) == len(step_two_segment)
+    assert len(step_two_text) < len(step_one_segment)
+    assert len(step_two_text) < len(step_one_segment) + len(step_two_segment)
 
 
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(

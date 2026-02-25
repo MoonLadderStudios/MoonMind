@@ -3434,6 +3434,7 @@ class CodexWorker:
         result_artifacts: Sequence[ArtifactUpload],
         step_log_path: Path,
         step_patch_path: Path,
+        log_byte_checkpoints: dict[str, int] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3446,14 +3447,23 @@ class CodexWorker:
             if artifact.name in {"logs/codex_exec.log", "logs/execute.log"}:
                 if artifact.path.exists():
                     step_log_path.parent.mkdir(parents=True, exist_ok=True)
+                    step_log_digest = artifact.digest
                     if artifact.path != step_log_path:
-                        shutil.copy2(artifact.path, step_log_path)
+                        if log_byte_checkpoints is None:
+                            shutil.copy2(artifact.path, step_log_path)
+                        else:
+                            self._copy_log_delta(
+                                source_path=artifact.path,
+                                destination_path=step_log_path,
+                                byte_checkpoints=log_byte_checkpoints,
+                            )
+                            step_log_digest = None
                     normalized.append(
                         ArtifactUpload(
                             path=step_log_path,
                             name=step_log_name,
                             content_type="text/plain",
-                            digest=artifact.digest,
+                            digest=step_log_digest,
                             required=False,
                         )
                     )
@@ -3501,6 +3511,35 @@ class CodexWorker:
                 )
             )
         return normalized
+
+    @staticmethod
+    def _copy_log_delta(
+        *,
+        source_path: Path,
+        destination_path: Path,
+        byte_checkpoints: dict[str, int],
+    ) -> None:
+        """Copy only newly appended bytes from ``source_path`` into ``destination_path``."""
+
+        source_key = str(source_path.resolve(strict=False))
+        previous_size = max(0, int(byte_checkpoints.get(source_key, 0)))
+        current_size = source_path.stat().st_size
+        if current_size < previous_size:
+            previous_size = 0
+
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        if current_size <= previous_size:
+            destination_path.write_bytes(b"")
+            byte_checkpoints[source_key] = current_size
+            return
+
+        with source_path.open("rb") as source_handle, destination_path.open(
+            "wb"
+        ) as destination_handle:
+            source_handle.seek(previous_size)
+            shutil.copyfileobj(source_handle, destination_handle, length=64 * 1024)
+
+            byte_checkpoints[source_key] = source_handle.tell()
 
     def _evaluate_step_gate(
         self,
@@ -4920,6 +4959,7 @@ class CodexWorker:
         cancel_event = getattr(self, "_active_cancel_event", None)
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
+        step_log_byte_checkpoints: dict[str, int] = {}
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5096,6 +5136,7 @@ class CodexWorker:
                 result_artifacts=step_result.artifacts,
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
+                log_byte_checkpoints=step_log_byte_checkpoints,
             )
             step_artifacts.extend(normalized_step_artifacts)
             if artifact_callback is not None and normalized_step_artifacts:
