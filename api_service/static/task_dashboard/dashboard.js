@@ -4494,6 +4494,8 @@
           : "Create";
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
+        submitButton.textContent = "Submitting...";
+        submitButton.setAttribute("aria-busy", "true");
       }
 
       try {
@@ -4514,6 +4516,7 @@
         if (submitButton instanceof HTMLButtonElement) {
           submitButton.disabled = false;
           submitButton.textContent = originalSubmitLabel;
+          submitButton.removeAttribute("aria-busy");
         }
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
