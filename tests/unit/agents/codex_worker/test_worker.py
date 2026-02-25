@@ -1309,7 +1309,14 @@ async def test_copy_incremental_step_log_rejects_symlink_source(tmp_path: Path) 
         lease_seconds=120,
         workdir=tmp_path,
     )
-    worker = CodexWorker(config=config, queue_client=FakeQueueClient())
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="step", error_message=None)
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=handler,
+    )
     real_log = tmp_path / "real.log"
     real_log.write_text("safe", encoding="utf-8")
     symlink_log = tmp_path / "linked.log"
@@ -1339,18 +1346,27 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
         ):
             del payload, cancel_event, output_chunk_callback
             self.calls.append("codex_exec")
-            self._step_index += 1
-            patch_path = step1_patch if self._step_index == 1 else step2_patch
+            self._segment_index += 1
+            patch_path = step1_patch if self._segment_index == 1 else step2_patch
+            if self._segment_index > len(self._segments):
+                raise RuntimeError("no cumulative step log segment configured")
+            segment = self._segments[self._segment_index - 1]
+            log_path = (
+                self._workdir_root
+                / str(job_id)
+                / "artifacts"
+                / "codex_exec.log"
+            )
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(segment)
             return WorkerExecutionResult(
                 succeeded=True,
-                summary=f"step{self._step_index} ok",
+                summary=f"step{self._segment_index} ok",
                 error_message=None,
                 artifacts=(
                     ArtifactUpload(
-                        path=self._workdir_root
-                        / str(job_id)
-                        / "artifacts"
-                        / "codex_exec.log",
+                        path=log_path,
                         name="logs/codex_exec.log",
                     ),
                     ArtifactUpload(path=patch_path, name="patches/changes.patch"),
