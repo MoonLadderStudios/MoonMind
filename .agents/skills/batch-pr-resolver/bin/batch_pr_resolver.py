@@ -96,7 +96,7 @@ def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
             "--state",
             state,
             "--json",
-            "number,title,headRefName,headRepositoryOwner,headRepository",
+            "number,title,headRefName,headRepositoryOwner,headRepository,isCrossRepository",
             "--limit",
             "100000",
         ]
@@ -108,13 +108,45 @@ def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
 
 
 def _is_local_head(pr: dict[str, Any], repo: str) -> bool:
+    target_repo = repo.strip().lower()
+    target_owner, target_repo_name = _parse_repo_parts(target_repo)
+
+    is_cross = pr.get("isCrossRepository")
+    if isinstance(is_cross, bool) and is_cross:
+        return False
+
     head_repo = pr.get("headRepository")
     if isinstance(head_repo, dict):
         name_with_owner = str(head_repo.get("nameWithOwner") or "").strip().lower()
         if name_with_owner:
-            return name_with_owner == repo.lower()
+            return name_with_owner == target_repo
+
+        head_repo_name = str(head_repo.get("name") or "").strip().lower()
+        if head_repo_name:
+            head_owner = str(
+                (
+                    pr.get("headRepositoryOwner") if isinstance(pr.get("headRepositoryOwner"), dict) else {}
+                ).get("login", "")
+            ).strip().lower()
+            if head_owner:
+                return head_owner == target_owner and head_repo_name == target_repo_name
+
+            return False
+
+    owner_obj = pr.get("headRepositoryOwner")
+    if isinstance(owner_obj, dict):
+        head_owner = str(owner_obj.get("login") or "").strip().lower()
+        if head_owner:
+            return head_owner == target_owner
 
     return False
+
+
+def _parse_repo_parts(repo: str) -> tuple[str, str]:
+    parts = (repo or "").strip().split("/", 1)
+    if len(parts) != 2:
+        return "", ""
+    return parts[0], parts[1]
 
 
 def _extract_branch(pr: dict[str, Any]) -> str:
