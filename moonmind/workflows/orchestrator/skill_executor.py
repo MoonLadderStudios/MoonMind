@@ -140,7 +140,9 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _resolve_compose_project(skill_args: Mapping[str, Any]) -> str | None:
-    compose_project = skill_args.get("composeProject") or skill_args.get("compose_project")
+    compose_project = skill_args.get("composeProject") or skill_args.get(
+        "compose_project"
+    )
     if compose_project:
         text = str(compose_project).strip()
         if text:
@@ -188,9 +190,7 @@ def _resolve_skill_command(
         command.append("--allow-dirty")
     if is_update_moonmind:
         compose_project = _resolve_compose_project(skill_args)
-        _append_flag(
-            command, "--compose-project", compose_project
-        )
+        _append_flag(command, "--compose-project", compose_project)
     if is_update_moonmind and _flag_enabled(
         skill_args, "noComposePull", "no_compose_pull"
     ):
