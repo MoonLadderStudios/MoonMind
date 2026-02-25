@@ -82,6 +82,7 @@ tests = ["pytest", "pytest-mock", "pytest-asyncio"]
 [tool.poetry.scripts]
 moonmind = "moonmind.cli:main"
 moonmind-codex-worker = "moonmind.agents.codex_worker.cli:main"
+moonmind-scheduler = "moonmind.workflows.recurring_tasks.scheduler:main"
 
 [tool.black]
 line-length = 88

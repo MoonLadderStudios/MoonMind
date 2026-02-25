@@ -8,7 +8,6 @@ CANONICAL_TASK_JOB_TYPE = "task"
 LEGACY_TASK_JOB_TYPES: FrozenSet[str] = frozenset({"codex_exec", "codex_skill"})
 MANIFEST_JOB_TYPE = "manifest"
 ORCHESTRATOR_RUN_JOB_TYPE = "orchestrator_run"
-
 SUPPORTED_QUEUE_JOB_TYPES: FrozenSet[str] = frozenset(
     {
         CANONICAL_TASK_JOB_TYPE,

@@ -155,6 +155,10 @@
     sourceConfig.manifests && typeof sourceConfig.manifests === "object"
       ? sourceConfig.manifests
       : {};
+  const schedulesSourceConfig =
+    sourceConfig.schedules && typeof sourceConfig.schedules === "object"
+      ? sourceConfig.schedules
+      : {};
   const systemConfig = config.system || {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
   const supportedWorkerRuntimes =
@@ -2600,6 +2604,410 @@
         message.textContent = "Failed to create manifest job.";
       }
     });
+  }
+
+  function formatScheduleDate(value) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "—";
+    }
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.valueOf())) {
+      return escapeHtml(text);
+    }
+    return escapeHtml(parsed.toLocaleString());
+  }
+
+  function summarizeScheduleTarget(target) {
+    if (!target || typeof target !== "object") {
+      return "unknown";
+    }
+    const kind = String(target.kind || "").trim();
+    if (kind === "manifest_run") {
+      return `manifest: ${String(target.name || "").trim() || "unnamed"}`;
+    }
+    if (kind === "queue_task_template") {
+      const template = target.template || {};
+      return `task template: ${String(template.slug || "").trim() || "unknown"}`;
+    }
+    if (kind === "queue_task") {
+      return "task";
+    }
+    return kind || "unknown";
+  }
+
+  function resolveScheduleEndpoint(template, id) {
+    return String(template || "").replace("{id}", encodeURIComponent(String(id || "").trim()));
+  }
+
+  async function renderSchedulesListPage() {
+    setView(
+      "Recurring Schedules",
+      "Managed recurring schedules for queue and manifest targets.",
+      "<p class='loading'>Loading recurring schedules...</p>",
+      { showAutoRefreshControls: true },
+    );
+
+    const load = async () => {
+      const endpoint =
+        schedulesSourceConfig.list ||
+        "/api/recurring-tasks?scope=personal";
+      const payload = await fetchJson(endpoint);
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const rowsHtml = items
+        .map((item) => {
+          const id = String(item.id || "").trim();
+          const name = escapeHtml(String(item.name || "").trim() || "(unnamed)");
+          const targetSummary = escapeHtml(summarizeScheduleTarget(item.target || {}));
+          const status = escapeHtml(String(item.lastDispatchStatus || "").trim() || "—");
+          const nextRun = formatScheduleDate(item.nextRunAt);
+          const enabled = item.enabled ? "Yes" : "No";
+          return `
+            <tr>
+              <td><a href="/tasks/schedules/${encodeURIComponent(id)}">${name}</a></td>
+              <td>${targetSummary}</td>
+              <td>${enabled}</td>
+              <td>${nextRun}</td>
+              <td>${status}</td>
+            </tr>
+          `;
+        })
+        .join("");
+      const tableHtml = items.length
+        ? `
+          <table class="rows-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Target</th>
+                <th>Enabled</th>
+                <th>Next Run</th>
+                <th>Last Dispatch</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        `
+        : "<p class='small'>No recurring schedules found.</p>";
+      setView(
+        "Recurring Schedules",
+        "Managed recurring schedules for queue and manifest targets.",
+        `<div class="actions"><a href="/tasks/schedules/new"><button type="button">New Schedule</button></a></div>${tableHtml}`,
+        { showAutoRefreshControls: true },
+      );
+    };
+
+    startPolling(load, pollIntervals.list);
+  }
+
+  function renderScheduleCreatePage() {
+    setView(
+      "Create Schedule",
+      "Define a recurring schedule.",
+      `
+      <form id="schedule-create-form">
+        <label>Name
+          <input name="name" required />
+        </label>
+        <label>Description
+          <input name="description" />
+        </label>
+        <div class="grid-2">
+          <label>Cron
+            <input name="cron" value="0 9 * * 1-5" required />
+          </label>
+          <label>Timezone
+            <input name="timezone" value="UTC" required />
+          </label>
+        </div>
+        <div class="grid-2">
+          <label>Scope
+            <select name="scopeType">
+              <option value="personal" selected>personal</option>
+              <option value="global">global</option>
+            </select>
+          </label>
+          <label>Target Kind
+            <select name="targetKind">
+              <option value="queue_task" selected>queue_task</option>
+              <option value="manifest_run">manifest_run</option>
+            </select>
+          </label>
+        </div>
+        <div id="schedule-target-fields"></div>
+        <label>Policy JSON (optional)
+          <textarea name="policyJson" rows="6" placeholder='{\"misfireGraceSeconds\": 900}'></textarea>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="enabled" checked />
+          Enabled
+        </label>
+        <div class="actions">
+          <button type="submit">Create Schedule</button>
+          <a href="/tasks/schedules"><button class="secondary" type="button">Cancel</button></a>
+        </div>
+        <p class="small" id="schedule-create-message"></p>
+      </form>
+      `,
+    );
+
+    const form = document.getElementById("schedule-create-form");
+    const targetFields = document.getElementById("schedule-target-fields");
+    const message = document.getElementById("schedule-create-message");
+    if (!form || !targetFields || !message) {
+      return;
+    }
+
+    const renderTargetFields = () => {
+      const kind = String(form.elements.namedItem("targetKind")?.value || "").trim();
+      if (kind === "manifest_run") {
+        targetFields.innerHTML = `
+          <label>Manifest Name
+            <input name="targetManifestName" required />
+          </label>
+          <label>Manifest Action
+            <select name="targetManifestAction">
+              <option value="run" selected>run</option>
+              <option value="plan">plan</option>
+            </select>
+          </label>
+        `;
+        return;
+      }
+      targetFields.innerHTML = `
+        <label>Repository
+          <input name="targetTaskRepository" value="${escapeHtml(defaultRepository)}" required />
+        </label>
+        <label>Instructions
+          <textarea name="targetTaskInstructions" rows="5" placeholder="Scheduled instructions..." required></textarea>
+        </label>
+        <label>Runtime
+          <select name="targetTaskRuntime">
+            ${supportedTaskRuntimes
+              .map(
+                (runtime) =>
+                  `<option value="${escapeHtml(runtime)}"${runtime === defaultTaskRuntime ? " selected" : ""}>${escapeHtml(runtime)}</option>`,
+              )
+              .join("")}
+          </select>
+        </label>
+      `;
+    };
+
+    renderTargetFields();
+    form.elements.namedItem("targetKind")?.addEventListener("change", renderTargetFields);
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      message.textContent = "";
+      const formData = new FormData(form);
+      const name = String(formData.get("name") || "").trim();
+      const description = String(formData.get("description") || "").trim();
+      const cron = String(formData.get("cron") || "").trim();
+      const timezone = String(formData.get("timezone") || "").trim();
+      const scopeType = String(formData.get("scopeType") || "personal").trim().toLowerCase();
+      const targetKind = String(formData.get("targetKind") || "queue_task").trim();
+      const policyJson = String(formData.get("policyJson") || "").trim();
+      let policy = {};
+      if (policyJson) {
+        try {
+          policy = JSON.parse(policyJson);
+        } catch (error) {
+          message.textContent = "Policy JSON is invalid.";
+          return;
+        }
+      }
+
+      if (!name || !cron || !timezone) {
+        message.textContent = "Name, cron, and timezone are required.";
+        return;
+      }
+
+      let target;
+      if (targetKind === "manifest_run") {
+        const manifestName = String(formData.get("targetManifestName") || "").trim();
+        const action = String(formData.get("targetManifestAction") || "run").trim() || "run";
+        if (!manifestName) {
+          message.textContent = "Manifest name is required.";
+          return;
+        }
+        target = {
+          kind: "manifest_run",
+          name: manifestName,
+          action,
+          options: {},
+        };
+      } else {
+        const repository = String(formData.get("targetTaskRepository") || "").trim();
+        const instructions = String(formData.get("targetTaskInstructions") || "").trim();
+        const runtime = String(formData.get("targetTaskRuntime") || defaultTaskRuntime).trim();
+        if (!repository || !instructions) {
+          message.textContent = "Repository and instructions are required for queue_task.";
+          return;
+        }
+        target = {
+          kind: "queue_task",
+          job: {
+            type: "task",
+            priority: 0,
+            maxAttempts: 3,
+            payload: {
+              repository,
+              targetRuntime: runtime,
+              task: {
+                instructions,
+                skill: { id: "auto", args: {} },
+                publish: { mode: "none" },
+              },
+            },
+          },
+        };
+      }
+
+      try {
+        const created = await fetchJson(
+          schedulesSourceConfig.create || "/api/recurring-tasks",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name,
+              description: description || null,
+              enabled: Boolean(formData.get("enabled")),
+              scheduleType: "cron",
+              cron,
+              timezone,
+              scopeType,
+              target,
+              policy,
+            }),
+          },
+        );
+        window.location.href = `/tasks/schedules/${encodeURIComponent(
+          String(created.id || ""),
+        )}`;
+      } catch (error) {
+        console.error("schedule create failed", error);
+        message.textContent = "Failed to create schedule.";
+      }
+    });
+  }
+
+  async function renderScheduleDetailPage(scheduleId) {
+    const detailEndpoint = resolveScheduleEndpoint(
+      schedulesSourceConfig.detail || "/api/recurring-tasks/{id}",
+      scheduleId,
+    );
+    const runsEndpoint = resolveScheduleEndpoint(
+      schedulesSourceConfig.runs || "/api/recurring-tasks/{id}/runs?limit=200",
+      scheduleId,
+    );
+    const updateEndpoint = resolveScheduleEndpoint(
+      schedulesSourceConfig.update || "/api/recurring-tasks/{id}",
+      scheduleId,
+    );
+    const runNowEndpoint = resolveScheduleEndpoint(
+      schedulesSourceConfig.runNow || "/api/recurring-tasks/{id}/run",
+      scheduleId,
+    );
+
+    const renderPage = (schedule, runs, notice = "") => {
+      const targetJson = escapeHtml(JSON.stringify(schedule.target || {}, null, 2));
+      const policyJson = escapeHtml(JSON.stringify(schedule.policy || {}, null, 2));
+      const rows = runs
+        .map((run) => {
+          const queueJobId = String(run.queueJobId || "").trim();
+          const queueJobLink = queueJobId
+            ? `<a href=\"/tasks/queue/${encodeURIComponent(queueJobId)}\">${escapeHtml(queueJobId)}</a>`
+            : "—";
+          return `
+            <tr>
+              <td>${formatScheduleDate(run.scheduledFor)}</td>
+              <td>${escapeHtml(String(run.trigger || ""))}</td>
+              <td>${escapeHtml(String(run.outcome || ""))}</td>
+              <td>${queueJobLink}</td>
+              <td>${escapeHtml(String(run.message || ""))}</td>
+            </tr>
+          `;
+        })
+        .join("");
+      const runsTable = runs.length
+        ? `
+          <table class="rows-table">
+            <thead>
+              <tr>
+                <th>Scheduled For</th>
+                <th>Trigger</th>
+                <th>Outcome</th>
+                <th>Queue Job</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `
+        : "<p class='small'>No runs yet.</p>";
+      setView(
+        `Schedule: ${escapeHtml(String(schedule.name || ""))}`,
+        `Scope: ${escapeHtml(String(schedule.scopeType || ""))} | Next: ${formatScheduleDate(schedule.nextRunAt)}`,
+        `
+          ${notice ? `<div class=\"notice\">${escapeHtml(notice)}</div>` : ""}
+          <div class="actions">
+            <button type="button" id="schedule-run-now">Run Now</button>
+            <button type="button" id="schedule-toggle-enabled">${schedule.enabled ? "Disable" : "Enable"}</button>
+            <a href="/tasks/schedules"><button class="secondary" type="button">Back</button></a>
+          </div>
+          <p><strong>Last dispatch:</strong> ${escapeHtml(String(schedule.lastDispatchStatus || "—"))}</p>
+          <h3>Target</h3>
+          <pre>${targetJson}</pre>
+          <h3>Policy</h3>
+          <pre>${policyJson}</pre>
+          <h3>Run History</h3>
+          ${runsTable}
+        `,
+        { showAutoRefreshControls: true },
+      );
+    };
+
+    const load = async (notice = "") => {
+      const [schedule, runsPayload] = await Promise.all([
+        fetchJson(detailEndpoint),
+        fetchJson(runsEndpoint),
+      ]);
+      const runs = Array.isArray(runsPayload?.items) ? runsPayload.items : [];
+      renderPage(schedule || {}, runs, notice);
+
+      const runNowButton = document.getElementById("schedule-run-now");
+      const toggleButton = document.getElementById("schedule-toggle-enabled");
+      runNowButton?.addEventListener("click", async () => {
+        try {
+          await fetchJson(runNowEndpoint, { method: "POST" });
+          await load("Run queued.");
+        } catch (error) {
+          console.error("run now failed", error);
+          await load("Failed to queue run.");
+        }
+      });
+      toggleButton?.addEventListener("click", async () => {
+        try {
+          await fetchJson(updateEndpoint, {
+            method: "PATCH",
+            body: JSON.stringify({ enabled: !schedule.enabled }),
+          });
+          await load(`Schedule ${schedule.enabled ? "disabled" : "enabled"}.`);
+        } catch (error) {
+          console.error("schedule toggle failed", error);
+          await load("Failed to update schedule.");
+        }
+      });
+    };
+
+    setView(
+      "Schedule Detail",
+      "Loading recurring schedule details...",
+      "<p class='loading'>Loading schedule details...</p>",
+      { showAutoRefreshControls: true },
+    );
+    startPolling(() => load(), pollIntervals.list);
   }
 
   async function renderOrchestratorListPage() {
@@ -6588,6 +6996,7 @@
       /^\/tasks\/orchestrator\/([^/]+)$/,
     );
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
+    const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
 
     if (normalizedRoute === "/tasks") {
       await renderActivePage();
@@ -6607,6 +7016,14 @@
     }
     if (normalizedRoute === "/tasks/manifests/new") {
       renderManifestSubmitPage();
+      return;
+    }
+    if (normalizedRoute === "/tasks/schedules") {
+      await renderSchedulesListPage();
+      return;
+    }
+    if (normalizedRoute === "/tasks/schedules/new") {
+      renderScheduleCreatePage();
       return;
     }
     if (normalizedRoute === "/tasks/proposals") {
@@ -6642,6 +7059,10 @@
     }
     if (proposalDetailMatch) {
       await renderProposalDetailPage(proposalDetailMatch[1]);
+      return;
+    }
+    if (scheduleDetailMatch) {
+      await renderScheduleDetailPage(scheduleDetailMatch[1]);
       return;
     }
 
