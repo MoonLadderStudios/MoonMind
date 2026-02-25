@@ -1429,7 +1429,7 @@ async def test_run_command_error_message_is_compact_and_actionable(
 
     message = str(exc_info.value)
     assert "command failed (1):" in message
-    assert "git status" not in message
+    assert "git status" in message
     assert len(message) < 280
 
 

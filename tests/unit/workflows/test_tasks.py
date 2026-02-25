@@ -525,7 +525,7 @@ def test_submit_codex_job_preflight_skipped(monkeypatch, tmp_path):
 
 
 def test_run_codex_preflight_check_runs_bootstrap_login_shell(monkeypatch):
-    """Shell-based Codex preflight should run ``codex login status`` with the auth volume."""
+    """Shell-based Codex preflight should run ``rg`` + ``codex login status`` with the auth volume."""
 
     run_calls: dict[str, object] = {}
 
@@ -588,7 +588,7 @@ def test_run_codex_preflight_check_runs_bootstrap_login_shell(monkeypatch):
     assert result.volume == "codex_auth_bootstrap"
     assert result.message == "passed"
     assert run_calls["image"] == "moonmind/bootstrapped-codex:latest"
-    assert run_calls["command"] == ["bash", "-lc", "codex login status"]
+    assert run_calls["command"] == ["bash", "-lc", "command -v rg && codex login status"]
     assert run_calls["environment"] == {"HOME": "/home/app"}
     assert run_calls["volumes"] == {
         "codex_auth_bootstrap": {"bind": "/home/app/.codex", "mode": "ro"}
