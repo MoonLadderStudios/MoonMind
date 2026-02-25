@@ -338,7 +338,7 @@ def _assert_codex_logged_in():
     # Short-lived check container
     container = client.containers.run(
         image=image,
-        command=["bash", "-lc", "codex login status"],
+        command=["bash", "-lc", "command -v rg && codex login status"],
         mounts=[Mount(target="/home/app/.codex", source=codex_volume, type="volume")],
         user="1000:1000",
         detach=True,

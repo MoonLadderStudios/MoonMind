@@ -257,14 +257,15 @@ RUN apt-get update && \
         build-essential \
         pkg-config \
         libcairo2-dev \
-        libffi-dev \
-        tesseract-ocr \
-        tesseract-ocr-eng \
-        git \
-        gh \
-        curl \
-        ca-certificates \
-        openssh-client \
+    libffi-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    git \
+    gh \
+    ripgrep \
+    curl \
+    ca-certificates \
+    openssh-client \
         tmux \
         tmate \
         gnupg \

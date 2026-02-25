@@ -1400,6 +1400,39 @@ async def test_run_command_error_includes_stderr_tail(
         )
 
 
+async def test_run_command_error_message_is_compact_and_actionable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Failure errors should stay compact to reduce fallback-noise in logs."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "command.log"
+    noise = "x" * 512
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (b"", noise.encode("utf-8"))
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(CodexWorkerHandlerError) as exc_info:
+        await handler._run_command(
+            ["git", "status"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert "command failed (1):" in message
+    assert "git status" not in message
+    assert len(message) < 280
+
+
 async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> None:
     """Handler should normalize validation failures into failed results."""
 

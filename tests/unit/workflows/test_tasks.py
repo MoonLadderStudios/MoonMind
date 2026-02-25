@@ -524,6 +524,82 @@ def test_submit_codex_job_preflight_skipped(monkeypatch, tmp_path):
     assert task_updates[-1]["status"] == models.SpecWorkflowTaskStatus.SUCCEEDED
 
 
+def test_run_codex_preflight_check_runs_bootstrap_login_shell(monkeypatch):
+    """Shell-based Codex preflight should run ``codex login status`` with the auth volume."""
+
+    run_calls: dict[str, object] = {}
+
+    class FakeContainer:
+        def wait(self, timeout: int | None = None) -> dict[str, int]:
+            run_calls["wait_timeout"] = timeout
+            return {"StatusCode": 0}
+
+        def logs(self, stdout: bool = False, stderr: bool = False) -> bytes:
+            if stdout and not stderr:
+                return b"passed\n"
+            if stderr and not stdout:
+                return b""
+            return b""
+
+    class FakeContainers:
+        def run(self, *args, **kwargs) -> FakeContainer:
+            run_calls["image"] = args[0]
+            run_calls["command"] = kwargs["command"]
+            run_calls["environment"] = kwargs["environment"]
+            run_calls["volumes"] = kwargs["volumes"]
+            run_calls["options"] = {
+                key: kwargs[key]
+                for key in ("detach", "auto_remove", "tty")
+                if key in kwargs
+            }
+            return FakeContainer()
+
+    class FakeDockerClient:
+        def __init__(self) -> None:
+            self.containers = FakeContainers()
+
+        def close(self) -> None:
+            run_calls["closed"] = True
+
+    monkeypatch.setattr(
+        tasks.docker,
+        "from_env",
+        lambda: FakeDockerClient(),
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "codex_login_check_image",
+        "moonmind/bootstrapped-codex:latest",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tasks.settings.spec_workflow,
+        "codex_volume_name",
+        "codex_auth_bootstrap",
+        raising=False,
+    )
+
+    result = tasks._run_codex_preflight_check(timeout=5, volume_name="codex_auth_bootstrap")
+
+    assert result.status is models.CodexPreflightStatus.PASSED
+    assert result.exit_code == 0
+    assert result.volume == "codex_auth_bootstrap"
+    assert result.message == "passed"
+    assert run_calls["image"] == "moonmind/bootstrapped-codex:latest"
+    assert run_calls["command"] == ["bash", "-lc", "codex login status"]
+    assert run_calls["environment"] == {"HOME": "/home/app"}
+    assert run_calls["volumes"] == {
+        "codex_auth_bootstrap": {"bind": "/home/app/.codex", "mode": "ro"}
+    }
+    assert run_calls["options"] == {
+        "detach": True,
+        "auto_remove": True,
+        "tty": False,
+    }
+    assert run_calls["wait_timeout"] == 5
+    assert run_calls["closed"] is True
+
+
 def test_codex_routing_deterministic_queue_selection(monkeypatch):
     """Codex tasks should hash to a stable queue based on the affinity key."""
 
