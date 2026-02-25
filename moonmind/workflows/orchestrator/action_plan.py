@@ -90,7 +90,10 @@ def _build_skill_build_step(
     skill_id: str,
     skill_args: Mapping[str, Any] | None,
 ) -> PlanStep:
-    serialized_args = json.dumps(dict(skill_args or {}), sort_keys=True)
+    normalized_args: dict[str, Any] = dict(skill_args or {})
+    if skill_id == "update-moonmind":
+        normalized_args.setdefault("composeProject", profile.compose_project)
+    serialized_args = json.dumps(normalized_args, sort_keys=True)
     parameters = {
         "service": profile.compose_service,
         "workspace": str(profile.workspace_path),
