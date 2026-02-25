@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from os import environ
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from uuid import UUID
 
 import httpx
@@ -99,6 +99,9 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
+_DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
+_MIN_STEP_LOG_MAX_BYTES = 1024
+_MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -246,6 +249,7 @@ class CodexWorkerConfig:
     live_session_max_concurrent_per_worker: int = 4
     enable_task_proposals: bool = False
     artifact_upload_incremental: bool = True
+    step_log_max_bytes: int = _DEFAULT_STEP_LOG_MAX_BYTES
 
     @staticmethod
     def _normalize_runtime_option_values(raw_value: str | None) -> list[str]:
@@ -717,6 +721,27 @@ class CodexWorkerConfig:
             "off",
             "",
         }
+        step_log_max_bytes_raw = str(
+            source.get(
+                "MOONMIND_STEP_LOG_MAX_BYTES",
+                str(_DEFAULT_STEP_LOG_MAX_BYTES),
+            )
+        ).strip()
+        try:
+            step_log_max_bytes = int(step_log_max_bytes_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "MOONMIND_STEP_LOG_MAX_BYTES must be an integer; "
+                f"received {step_log_max_bytes_raw!r}"
+            ) from exc
+        if step_log_max_bytes < _MIN_STEP_LOG_MAX_BYTES:
+            raise ValueError(
+                "MOONMIND_STEP_LOG_MAX_BYTES must be >= " f"{_MIN_STEP_LOG_MAX_BYTES}"
+            )
+        if step_log_max_bytes > _MAX_STEP_LOG_MAX_BYTES:
+            raise ValueError(
+                "MOONMIND_STEP_LOG_MAX_BYTES must be <= " f"{_MAX_STEP_LOG_MAX_BYTES}"
+            )
 
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
@@ -766,6 +791,7 @@ class CodexWorkerConfig:
             live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
             enable_task_proposals=enable_task_proposals,
             artifact_upload_incremental=artifact_upload_incremental,
+            step_log_max_bytes=step_log_max_bytes,
         )
 
 
@@ -3434,7 +3460,7 @@ class CodexWorker:
         result_artifacts: Sequence[ArtifactUpload],
         step_log_path: Path,
         step_patch_path: Path,
-        log_byte_checkpoints: dict[str, int] | None = None,
+        step_log_offsets: MutableMapping[str, int] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3446,24 +3472,16 @@ class CodexWorker:
         for artifact in result_artifacts:
             if artifact.name in {"logs/codex_exec.log", "logs/execute.log"}:
                 if artifact.path.exists():
-                    step_log_path.parent.mkdir(parents=True, exist_ok=True)
-                    step_log_digest = artifact.digest
-                    if artifact.path != step_log_path:
-                        if log_byte_checkpoints is None:
-                            shutil.copy2(artifact.path, step_log_path)
-                        else:
-                            self._copy_log_delta(
-                                source_path=artifact.path,
-                                destination_path=step_log_path,
-                                byte_checkpoints=log_byte_checkpoints,
-                            )
-                            step_log_digest = None
+                    self._copy_incremental_step_log(
+                        source_path=artifact.path,
+                        destination_path=step_log_path,
+                        step_log_offsets=step_log_offsets,
+                    )
                     normalized.append(
                         ArtifactUpload(
                             path=step_log_path,
                             name=step_log_name,
                             content_type="text/plain",
-                            digest=step_log_digest,
                             required=False,
                         )
                     )
@@ -3512,34 +3530,177 @@ class CodexWorker:
             )
         return normalized
 
-    @staticmethod
-    def _copy_log_delta(
+    def _copy_incremental_step_log(
+        self,
         *,
         source_path: Path,
         destination_path: Path,
-        byte_checkpoints: dict[str, int],
+        step_log_offsets: MutableMapping[str, int] | None = None,
     ) -> None:
-        """Copy only newly appended bytes from ``source_path`` into ``destination_path``."""
+        """Persist only the unread log delta for a step with a bounded snapshot size."""
 
-        source_key = str(source_path.resolve(strict=False))
-        previous_size = max(0, int(byte_checkpoints.get(source_key, 0)))
-        current_size = source_path.stat().st_size
-        if current_size < previous_size:
-            previous_size = 0
+        source_stat = source_path.lstat()
+        if stat.S_ISLNK(source_stat.st_mode):
+            raise ValueError(
+                f"Refusing to read step log symlink: {source_path.as_posix()}"
+            )
+        source_size = source_stat.st_size
+        start_offset = 0
+        if step_log_offsets is not None:
+            offset_key = self._resolve_log_offset_key(source_path)
+            previous_offset = max(0, int(step_log_offsets.get(offset_key, 0)))
+            if previous_offset <= source_size:
+                start_offset = previous_offset
+            step_log_offsets[offset_key] = source_size
 
+        bounded_content = self._read_bounded_step_log_bytes(
+            source_path=source_path,
+            start_offset=start_offset,
+            source_size=source_size,
+            max_bytes=self._config.step_log_max_bytes,
+        )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        if current_size <= previous_size:
-            destination_path.write_bytes(b"")
-            byte_checkpoints[source_key] = current_size
-            return
+        destination_path.write_bytes(bounded_content)
 
-        with source_path.open("rb") as source_handle, destination_path.open(
-            "wb"
-        ) as destination_handle:
-            source_handle.seek(previous_size)
-            shutil.copyfileobj(source_handle, destination_handle, length=64 * 1024)
+    def _read_bounded_step_log_bytes(
+        self,
+        *,
+        source_path: Path,
+        start_offset: int,
+        source_size: int,
+        max_bytes: int,
+    ) -> bytes:
+        """Read a bounded step log snapshot without loading huge deltas in memory."""
 
-            byte_checkpoints[source_key] = source_handle.tell()
+        unread_bytes = max(0, source_size - start_offset)
+        if unread_bytes == 0 or max_bytes <= 0:
+            return b""
+
+        if unread_bytes <= max_bytes:
+            with source_path.open("rb") as handle:
+                if start_offset:
+                    handle.seek(start_offset)
+                return handle.read(unread_bytes)
+
+        head_bytes, tail_bytes, marker = self._compute_step_log_truncation_plan(
+            total_bytes=unread_bytes,
+            max_bytes=max_bytes,
+        )
+        with source_path.open("rb") as handle:
+            handle.seek(start_offset)
+            head_content = handle.read(head_bytes)
+            tail_start = max(start_offset, source_size - tail_bytes)
+            handle.seek(tail_start)
+            tail_content = handle.read(source_size - tail_start)
+
+        safe_head = self._utf8_safe_prefix(head_content)
+        safe_tail = self._utf8_safe_suffix(tail_content)
+        bounded_content = safe_head + marker + safe_tail
+        if len(bounded_content) > max_bytes:
+            return self._bounded_step_log_bytes(
+                content=bounded_content, max_bytes=max_bytes
+            )
+        return bounded_content
+
+    @staticmethod
+    def _resolve_log_offset_key(path: Path) -> str:
+        """Return a stable key for tracking incremental read offsets."""
+
+        return str(path.resolve(strict=False))
+
+    @staticmethod
+    def _compute_step_log_truncation_plan(
+        *, total_bytes: int, max_bytes: int
+    ) -> tuple[int, int, bytes]:
+        """Plan bounded log content sizes and truncation marker."""
+
+        head_bytes = min(64 * 1024, max_bytes // 8)
+        tail_bytes = max_bytes - head_bytes
+
+        def _marker_for_plan(current_head: int, current_tail: int) -> bytes:
+            omitted_bytes = max(0, total_bytes - current_head - current_tail)
+            return (
+                "\n"
+                "[moonmind] step log truncated: omitted "
+                f"{omitted_bytes} bytes from the middle; "
+                f"retained first {current_head} bytes and last {current_tail} bytes "
+                f"(cap={max_bytes}).\n"
+            ).encode("utf-8")
+
+        marker = _marker_for_plan(head_bytes, tail_bytes)
+        for _ in range(3):
+            available = max_bytes - len(marker)
+            if available <= 0:
+                return (0, max_bytes, b"")
+
+            next_head_bytes = min(head_bytes, available // 2)
+            next_tail_bytes = max(0, available - next_head_bytes)
+            next_marker = _marker_for_plan(next_head_bytes, next_tail_bytes)
+
+            if (
+                next_head_bytes == head_bytes
+                and next_tail_bytes == tail_bytes
+                and next_marker == marker
+            ):
+                return (head_bytes, tail_bytes, marker)
+
+            head_bytes = next_head_bytes
+            tail_bytes = next_tail_bytes
+            marker = next_marker
+
+        return (head_bytes, tail_bytes, marker)
+
+    @staticmethod
+    def _utf8_safe_prefix(content: bytes) -> bytes:
+        """Trim trailing partial UTF-8 bytes from a prefix slice."""
+
+        for end_index in range(len(content), max(-1, len(content) - 4), -1):
+            candidate = content[:end_index]
+            try:
+                candidate.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            return candidate
+        return content.decode("utf-8", errors="ignore").encode("utf-8")
+
+    @staticmethod
+    def _utf8_safe_suffix(content: bytes) -> bytes:
+        """Trim leading partial UTF-8 bytes from a suffix slice."""
+
+        for start_index in range(min(4, len(content)) + 1):
+            candidate = content[start_index:]
+            try:
+                candidate.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            return candidate
+        return content.decode("utf-8", errors="ignore").encode("utf-8")
+
+    @staticmethod
+    def _bounded_step_log_bytes(*, content: bytes, max_bytes: int) -> bytes:
+        """Clamp per-step log size while preserving early context and failure tail."""
+
+        if max_bytes <= 0:
+            return b""
+        if len(content) <= max_bytes:
+            return content
+
+        head_bytes, tail_bytes, marker = CodexWorker._compute_step_log_truncation_plan(
+            total_bytes=len(content),
+            max_bytes=max_bytes,
+        )
+        if not marker:
+            return content[-max_bytes:]
+        safe_head = CodexWorker._utf8_safe_prefix(content[:head_bytes])
+        safe_tail = (
+            CodexWorker._utf8_safe_suffix(content[-tail_bytes:])
+            if tail_bytes > 0
+            else b""
+        )
+        bounded = safe_head + marker + safe_tail
+        if len(bounded) > max_bytes:
+            return bounded[-max_bytes:]
+        return bounded
 
     def _evaluate_step_gate(
         self,
@@ -4959,7 +5120,7 @@ class CodexWorker:
         cancel_event = getattr(self, "_active_cancel_event", None)
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
-        step_log_byte_checkpoints: dict[str, int] = {}
+        step_log_offsets: dict[str, int] = {}
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5136,7 +5297,7 @@ class CodexWorker:
                 result_artifacts=step_result.artifacts,
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
-                log_byte_checkpoints=step_log_byte_checkpoints,
+                step_log_offsets=step_log_offsets,
             )
             step_artifacts.extend(normalized_step_artifacts)
             if artifact_callback is not None and normalized_step_artifacts:
