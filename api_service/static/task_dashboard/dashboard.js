@@ -1429,6 +1429,15 @@
         const titleBase = row.title ? row.title : "Queue Job";
         const titleWithId = row.id ? `${titleBase} · ${row.id}` : titleBase;
         const rawStatus = String(row.rawStatus || "").trim() || "-";
+        const statusField = `
+          <div>
+            <dt>Status</dt>
+            <dd>
+              ${statusBadge(row.source, row.rawStatus)}
+              <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
+            </dd>
+          </div>
+        `;
         return `
           <li class="queue-card">
             <div class="queue-card-header">
@@ -1436,12 +1445,9 @@
                 <a href="${linkTarget}" class="queue-card-title">${escapeHtml(titleWithId)}</a>
                 <p class="queue-card-meta">${escapeHtml(metaText)}</p>
               </div>
-              <div class="queue-card-status">
-                ${statusBadge(row.source, row.rawStatus)}
-                <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
-              </div>
             </div>
             <dl class="queue-card-fields">
+              ${statusField}
               ${fieldItems}
             </dl>
             <div class="queue-card-actions">
