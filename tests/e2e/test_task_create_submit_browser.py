@@ -11,7 +11,6 @@ from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from api_service.main import app as main_app
 
-
 if not os.getenv("RUN_E2E_TESTS"):
     pytest.skip("E2E tests disabled", allow_module_level=True)
 
