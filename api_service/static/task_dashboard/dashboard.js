@@ -4185,7 +4185,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       message.className = "small queue-submit-message";
-      message.textContent = "Submitting...";
+      message.textContent = "";
       persistWorkerDraft();
 
       const formData = new FormData(form);
