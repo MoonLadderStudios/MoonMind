@@ -148,11 +148,222 @@ class ManifestRecord(Base):
     state_updated_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class RecurringTaskScheduleType(str, enum.Enum):
+    """Supported recurring definition schedule kinds."""
+
+    CRON = "cron"
+
+
+class RecurringTaskScopeType(str, enum.Enum):
+    """Scope ownership for recurring definitions."""
+
+    PERSONAL = "personal"
+    TEAM = "team"
+    GLOBAL = "global"
+
+
+class RecurringTaskRunOutcome(str, enum.Enum):
+    """Dispatch result state for one recurring run decision."""
+
+    PENDING_DISPATCH = "pending_dispatch"
+    ENQUEUED = "enqueued"
+    SKIPPED = "skipped"
+    DISPATCH_ERROR = "dispatch_error"
+
+
+class RecurringTaskRunTrigger(str, enum.Enum):
+    """How one recurring run row was created."""
+
+    SCHEDULE = "schedule"
+    MANUAL = "manual"
+
+
+class RecurringTaskDefinition(Base):
+    """Persistent recurring schedule definition."""
+
+    __tablename__ = "recurring_task_definitions"
+    __table_args__ = (
+        Index(
+            "ix_recurring_task_definitions_enabled_next_run_at",
+            "enabled",
+            "next_run_at",
+        ),
+        Index(
+            "ix_recurring_task_definitions_owner_enabled",
+            "owner_user_id",
+            "enabled",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    schedule_type: Mapped[RecurringTaskScheduleType] = mapped_column(
+        Enum(
+            RecurringTaskScheduleType,
+            name="recurringtaskscheduletype",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=RecurringTaskScheduleType.CRON,
+    )
+    cron: Mapped[str] = mapped_column(String(128), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(128), nullable=False)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_scheduled_for: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_dispatch_status: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    last_dispatch_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    scope_type: Mapped[RecurringTaskScopeType] = mapped_column(
+        Enum(
+            RecurringTaskScopeType,
+            name="recurringtaskscopetype",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=RecurringTaskScopeType.PERSONAL,
+    )
+    scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    target: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    policy: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    version: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    runs: Mapped[list["RecurringTaskRun"]] = relationship(
+        "RecurringTaskRun",
+        back_populates="definition",
+        cascade="all, delete-orphan",
+    )
+
+
+class RecurringTaskRun(Base):
+    """Persistent recurring run dispatch decision row."""
+
+    __tablename__ = "recurring_task_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "definition_id",
+            "scheduled_for",
+            name="uq_recurring_task_runs_definition_scheduled_for",
+        ),
+        Index(
+            "ix_recurring_task_runs_definition_created_at",
+            "definition_id",
+            "created_at",
+        ),
+        Index(
+            "ix_recurring_task_runs_outcome_dispatch_after",
+            "outcome",
+            "dispatch_after",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    definition_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("recurring_task_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    trigger: Mapped[RecurringTaskRunTrigger] = mapped_column(
+        Enum(
+            RecurringTaskRunTrigger,
+            name="recurringtaskruntrigger",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=RecurringTaskRunTrigger.SCHEDULE,
+    )
+    outcome: Mapped[RecurringTaskRunOutcome] = mapped_column(
+        Enum(
+            RecurringTaskRunOutcome,
+            name="recurringtaskrunoutcome",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=RecurringTaskRunOutcome.PENDING_DISPATCH,
+    )
+    dispatch_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    dispatch_after: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    queue_job_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
+    queue_job_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    definition: Mapped[RecurringTaskDefinition] = relationship(
+        "RecurringTaskDefinition",
+        back_populates="runs",
+    )
+
+
 __all__ = [
     "Base",
     "User",
     "UserProfile",
     "ManifestRecord",
+    "RecurringTaskDefinition",
+    "RecurringTaskRun",
+    "RecurringTaskRunOutcome",
+    "RecurringTaskRunTrigger",
+    "RecurringTaskScheduleType",
+    "RecurringTaskScopeType",
     "ApprovalGate",
     "OrchestratorActionPlan",
     "OrchestratorRun",

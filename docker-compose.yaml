@@ -473,6 +473,34 @@ services:
       - docker-proxy-network
     restart: unless-stopped
 
+  scheduler:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    user: app
+    command: >-
+      poetry run moonmind-scheduler
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      - MOONMIND_SCHEDULER_POLL_INTERVAL_MS=${MOONMIND_SCHEDULER_POLL_INTERVAL_MS:-2000}
+      - MOONMIND_SCHEDULER_BATCH_SIZE=${MOONMIND_SCHEDULER_BATCH_SIZE:-50}
+      - MOONMIND_SCHEDULER_MAX_BACKFILL=${MOONMIND_SCHEDULER_MAX_BACKFILL:-3}
+      - MOONMIND_SCHEDULER_LOCK_TIMEOUT_SECONDS=${MOONMIND_SCHEDULER_LOCK_TIMEOUT_SECONDS:-}
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    depends_on:
+      api:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.1.1
     environment:

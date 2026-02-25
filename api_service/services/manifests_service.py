@@ -101,6 +101,7 @@ class ManifestsService:
         action: str,
         options: dict[str, Any] | None,
         user_id: UUID | None,
+        system_payload: dict[str, Any] | None = None,
     ) -> queue_models.AgentJob:
         record = await self.require_manifest(name)
 
@@ -117,6 +118,8 @@ class ManifestsService:
         }
         if options:
             payload["manifest"]["options"] = options
+        if system_payload:
+            payload["system"] = dict(system_payload)
 
         job = await self._queue_service.create_job(
             job_type=MANIFEST_JOB_TYPE,

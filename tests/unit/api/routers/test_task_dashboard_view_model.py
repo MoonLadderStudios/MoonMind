@@ -90,6 +90,15 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["manifests"]["create"] == "/api/queue/jobs"
     assert config["sources"]["manifests"]["registry"] == "/api/manifests"
     assert config["sources"]["manifests"]["registryRun"] == "/api/manifests/{name}/runs"
+    assert config["sources"]["schedules"]["list"] == "/api/recurring-tasks?scope=personal"
+    assert config["sources"]["schedules"]["create"] == "/api/recurring-tasks"
+    assert config["sources"]["schedules"]["detail"] == "/api/recurring-tasks/{id}"
+    assert config["sources"]["schedules"]["update"] == "/api/recurring-tasks/{id}"
+    assert config["sources"]["schedules"]["runNow"] == "/api/recurring-tasks/{id}/run"
+    assert (
+        config["sources"]["schedules"]["runs"]
+        == "/api/recurring-tasks/{id}/runs?limit=200"
+    )
     assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
     assert config["system"]["defaultQueue"]

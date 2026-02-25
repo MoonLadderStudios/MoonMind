@@ -178,6 +178,14 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "registry": "/api/manifests",
                 "registryRun": "/api/manifests/{name}/runs",
             },
+            "schedules": {
+                "list": "/api/recurring-tasks?scope=personal",
+                "create": "/api/recurring-tasks",
+                "detail": "/api/recurring-tasks/{id}",
+                "update": "/api/recurring-tasks/{id}",
+                "runNow": "/api/recurring-tasks/{id}/run",
+                "runs": "/api/recurring-tasks/{id}/runs?limit=200",
+            },
         },
         "system": {
             "defaultQueue": "agent_jobs",

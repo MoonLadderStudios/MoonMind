@@ -1,0 +1,410 @@
+openapi: 3.0.3
+info:
+  title: Recurring Task Schedules API
+  version: 0.1.0
+  description: >-
+    Contract for recurring schedule definition management, manual triggering,
+    and run-history retrieval.
+paths:
+  /api/recurring-tasks:
+    get:
+      summary: List recurring schedules by scope
+      operationId: listRecurringTasks
+      parameters:
+        - in: query
+          name: scope
+          schema:
+            type: string
+            enum: [personal, global]
+            default: personal
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+      responses:
+        '200':
+          description: Recurring schedule list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringTaskDefinitionListResponse'
+        '403':
+          description: Scope access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Create recurring schedule
+      operationId: createRecurringTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRecurringTaskRequest'
+      responses:
+        '201':
+          description: Created recurring schedule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringTaskDefinition'
+        '403':
+          description: Scope access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/recurring-tasks/{definitionId}:
+    get:
+      summary: Get recurring schedule detail
+      operationId: getRecurringTask
+      parameters:
+        - in: path
+          name: definitionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Recurring schedule detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringTaskDefinition'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Recurring schedule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      summary: Update recurring schedule
+      operationId: updateRecurringTask
+      parameters:
+        - in: path
+          name: definitionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRecurringTaskRequest'
+      responses:
+        '200':
+          description: Updated recurring schedule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringTaskDefinition'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Recurring schedule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/recurring-tasks/{definitionId}/run:
+    post:
+      summary: Trigger a manual recurring run
+      operationId: runRecurringTaskNow
+      parameters:
+        - in: path
+          name: definitionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Manual run row queued for dispatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringTaskRun'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Recurring schedule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/recurring-tasks/{definitionId}/runs:
+    get:
+      summary: List recent recurring runs for a definition
+      operationId: listRecurringTaskRuns
+      parameters:
+        - in: path
+          name: definitionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+      responses:
+        '200':
+          description: Recurring run history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringTaskRunListResponse'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Recurring schedule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    RecurringTaskDefinitionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurringTaskDefinition'
+    RecurringTaskRunListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurringTaskRun'
+    RecurringTaskDefinition:
+      type: object
+      required:
+        - id
+        - name
+        - enabled
+        - scheduleType
+        - cron
+        - timezone
+        - scopeType
+        - target
+        - policy
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+        scheduleType:
+          type: string
+          enum: [cron]
+        cron:
+          type: string
+        timezone:
+          type: string
+        nextRunAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastScheduledFor:
+          type: string
+          format: date-time
+          nullable: true
+        lastDispatchStatus:
+          type: string
+          nullable: true
+        lastDispatchError:
+          type: string
+          nullable: true
+        ownerUserId:
+          type: string
+          format: uuid
+          nullable: true
+        scopeType:
+          type: string
+          enum: [personal, global]
+        scopeRef:
+          type: string
+          nullable: true
+        target:
+          type: object
+          additionalProperties: true
+          description: Target contract (`queue_task`, `queue_task_template`, `manifest_run`, `housekeeping`).
+        policy:
+          type: object
+          additionalProperties: true
+          description: Overlap/catchup/misfire/jitter policy contract.
+        version:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    RecurringTaskRun:
+      type: object
+      required:
+        - id
+        - definitionId
+        - scheduledFor
+        - trigger
+        - outcome
+        - dispatchAttempts
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        definitionId:
+          type: string
+          format: uuid
+        scheduledFor:
+          type: string
+          format: date-time
+        trigger:
+          type: string
+          enum: [schedule, manual]
+        outcome:
+          type: string
+          enum: [pending_dispatch, enqueued, skipped, dispatch_error]
+        dispatchAttempts:
+          type: integer
+        dispatchAfter:
+          type: string
+          format: date-time
+          nullable: true
+        queueJobId:
+          type: string
+          format: uuid
+          nullable: true
+        queueJobType:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateRecurringTaskRequest:
+      type: object
+      required: [name, scheduleType, cron, timezone, scopeType, target]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+          default: true
+        scheduleType:
+          type: string
+          enum: [cron]
+        cron:
+          type: string
+        timezone:
+          type: string
+        scopeType:
+          type: string
+          enum: [personal, global]
+        scopeRef:
+          type: string
+          nullable: true
+        target:
+          type: object
+          additionalProperties: true
+        policy:
+          type: object
+          additionalProperties: true
+    UpdateRecurringTaskRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+        cron:
+          type: string
+        timezone:
+          type: string
+        scopeRef:
+          type: string
+          nullable: true
+        target:
+          type: object
+          additionalProperties: true
+        policy:
+          type: object
+          additionalProperties: true
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
