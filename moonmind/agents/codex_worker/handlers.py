@@ -848,6 +848,7 @@ class CodexExecHandler:
         replay_cursor: dict[str, int | None] = {"stdout": None, "stderr": None}
         replay_suppressed_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
+        replay_snapshot_text: dict[str, str] = {"stdout": "", "stderr": ""}
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -936,6 +937,17 @@ class CodexExecHandler:
                 return text
             if not text:
                 return ""
+
+            if len(text) >= min_replay_candidate_chars and "\n" in text:
+                previous_snapshot = replay_snapshot_text.get(stream, "")
+                replay_snapshot_text[stream] = text
+                if previous_snapshot:
+                    if text == previous_snapshot:
+                        return ""
+                    if text.startswith(previous_snapshot):
+                        text = text[len(previous_snapshot) :]
+                        if not text:
+                            return ""
 
             stream_history_index = history_index[stream]
             cursor = replay_cursor.get(stream)

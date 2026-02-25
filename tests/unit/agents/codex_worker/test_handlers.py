@@ -553,6 +553,89 @@ async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
     )
 
 
+async def test_run_command_streaming_polling_snapshots_append_only_new_deltas(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Polling snapshots should emit only newly appended deltas."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = (
+        tmp_path / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    callback_events: list[tuple[str, str | None]] = []
+    file_update = (
+        "file update:\n"
+        "M moonmind/agents/codex_worker/handlers.py\n"
+    )
+    assistant_summary = (
+        "assistant summary:\n"
+        "Implemented streaming delta collector fix.\n"
+    )
+    final_summary = (
+        "final summary:\n"
+        "Added long-running polling regression coverage.\n"
+    )
+    snapshots: list[str] = []
+    cumulative = ""
+    for update in (file_update, assistant_summary, final_summary):
+        cumulative = f"{cumulative}{update}"
+        snapshots.extend([cumulative, cumulative])
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(snapshots)
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["codex", "exec", "polling"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+        enable_replay_dedupe=True,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("file update:") == 1
+    assert text.count("Implemented streaming delta collector fix.") == 1
+    assert text.count("Added long-running polling regression coverage.") == 1
+    callback_text = "".join(
+        chunk for stream, chunk in callback_events if stream == "stdout" and chunk
+    )
+    assert callback_text.count("file update:") == 1
+    assert callback_text.count("Implemented streaming delta collector fix.") == 1
+    assert (
+        callback_text.count("Added long-running polling regression coverage.") == 1
+    )
+
+
 async def test_run_command_streaming_keeps_repeated_output_across_turn_boundaries(
     tmp_path: Path, monkeypatch
 ) -> None:
