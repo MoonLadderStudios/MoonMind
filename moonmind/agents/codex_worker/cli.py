@@ -185,12 +185,22 @@ def _run_checked_command(
     if result.returncode == 0:
         return
 
-    message = (
-        result.stderr.strip()
-        or result.stdout.strip()
-        or f"command failed: {' '.join(command)}"
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+    command_hint = (
+        " ".join(command[:2]) if len(command) > 1 else " ".join(command) or "<empty>"
     )
-    raise RuntimeError(_redact_value(message, redaction_values))
+    if detail:
+        message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
+        message = _redact_value(message, redaction_values)
+        if len(message) > 1024:
+            message = f"{message[:1021]}..."
+        raise RuntimeError(message)
+
+    raise RuntimeError(
+        _redact_value(
+            f"command failed ({result.returncode}): {command_hint}", redaction_values
+        )
+    )
 
 
 def _verify_speckit_cli(
