@@ -36,8 +36,8 @@ from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
-    normalize_queue_job_payload,
     _normalize_publish_mode,
+    normalize_queue_job_payload,
 )
 from moonmind.workflows.tasks import compile_task_payload_templates
 
@@ -2407,9 +2407,7 @@ class AgentQueueService:
         publish_node = source.get("publish")
         publish = publish_node if isinstance(publish_node, dict) else {}
         publish = (
-            task_publish.get("mode")
-            or publish.get("mode")
-            or source.get("publishMode")
+            task_publish.get("mode") or publish.get("mode") or source.get("publishMode")
         )
         try:
             return _normalize_publish_mode(publish)

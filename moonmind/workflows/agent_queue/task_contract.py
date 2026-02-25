@@ -811,10 +811,9 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         or f"Execute skill '{skill_id}' with inputs:\n"
         + json.dumps(inputs, indent=2, sort_keys=True)
     )
-    publish_mode = (
-        _clean_optional_str(inputs.get("publishMode"))
-        or _clean_optional_str(payload.get("publishMode"))
-    )
+    publish_mode = _clean_optional_str(
+        inputs.get("publishMode")
+    ) or _clean_optional_str(payload.get("publishMode"))
     publish_base = (
         _clean_optional_str(inputs.get("publishBaseBranch"))
         or _clean_optional_str(payload.get("publishBaseBranch"))
