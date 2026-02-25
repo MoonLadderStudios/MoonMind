@@ -155,6 +155,7 @@ mark_stale_services_for_restart() {
   local container_id running_image_id compose_image_id
 
   for service in "${COMPOSE_SERVICES[@]}"; do
+    [[ -n "${service//[[:space:]]/}" ]] || continue
     if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
       continue
     fi
@@ -199,6 +200,7 @@ mark_not_running_services_for_restart() {
   local all_running=true
 
   for service in "${COMPOSE_SERVICES[@]}"; do
+    [[ -n "${service//[[:space:]]/}" ]] || continue
     if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
       continue
     fi
@@ -422,6 +424,7 @@ mapfile -t COMPOSE_SERVICES < <("${COMPOSE_CMD[@]}" config --services)
 
 declare -A available_services=()
 for service in "${COMPOSE_SERVICES[@]}"; do
+  [[ -n "${service//[[:space:]]/}" ]] || continue
   available_services["$service"]=1
 done
 
@@ -429,7 +432,7 @@ declare -A target_services=()
 
 add_target() {
   local service="$1"
-  if [[ -z "$service" ]]; then
+  if [[ -z "${service//[[:space:]]/}" ]]; then
     return
   fi
   if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
@@ -442,6 +445,7 @@ add_target() {
 
 add_all_services() {
   for service in "${COMPOSE_SERVICES[@]}"; do
+    [[ -n "${service//[[:space:]]/}" ]] || continue
     if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
       continue
     fi
@@ -457,6 +461,8 @@ fi
 mark_not_running_services_for_restart
 
 for changed_file in "${CHANGED_FILES[@]}"; do
+  [[ -n "${changed_file//[[:space:]]/}" ]] || continue
+
   case "$changed_file" in
     docker-compose*.y*ml | .env* | AGENTS.md | .env-template* | .env.vllm-template* | .gitmodules )
       add_all_services
@@ -493,6 +499,7 @@ done
 
 readarray -t SERVICES_TO_RESTART < <(
   for target in "${!target_services[@]}"; do
+    [[ -n "${target//[[:space:]]/}" ]] || continue
     case "$target" in
       docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
         continue
@@ -520,7 +527,7 @@ if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
 else
   readarray -t RECONCILE_SERVICES < <(
     for target in "${SERVICES_TO_RESTART[@]}"; do
-      [[ -n "$target" ]] || continue
+      [[ -n "${target//[[:space:]]/}" ]] || continue
       printf '%s\n' "$target"
     done
   )
