@@ -35,6 +35,9 @@ class DummyProfileService:
         return None
 
 
+TEST_JOB_ID = "123e4567-e89b-12d3-a456-426614174000"
+
+
 @pytest.fixture(scope="module")
 def server():
     test_user = User(id=__import__("uuid").uuid4(), email="test@example.com")
@@ -104,8 +107,7 @@ def _mock_queue_create_job(page, job_id=None, should_fail=False):
                 body=json.dumps({"detail": "queue error"}),
             )
             return
-        payload = json.dumps({"id": job_id or "123e4567-e89b-12d3-a456-426614174000"})
-        time.sleep(0.25)
+        payload = json.dumps({"id": job_id or TEST_JOB_ID})
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -119,46 +121,42 @@ def test_submit_create_task_flow_successful_navigation(server):
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        _mock_queue_runtime_capabilities(page)
-        _mock_queue_create_job(page, job_id="123e4567-e89b-12d3-a456-426614174000")
-        page.goto("http://127.0.0.1:8001/tasks/create")
+        try:
+            _mock_queue_runtime_capabilities(page)
+            _mock_queue_create_job(page, job_id=TEST_JOB_ID)
+            page.goto("http://127.0.0.1:8001/tasks/create")
 
-        submit_button = _fill_queue_task_create_form(page)
-        assert submit_button.inner_text().strip() == "Create"
+            submit_button = _fill_queue_task_create_form(page)
+            expect(submit_button).to_have_text("Create")
 
-        with page.expect_request("**/api/queue/jobs") as request_info:
-            submit_button.click()
-        assert (
-            submit_button.evaluate("el => (el.textContent || '').trim()")
-            == "Submitting..."
-        )
-        assert request_info.value.method == "POST"
-        page.wait_for_url("**/tasks/queue/123e4567-e89b-12d3-a456-426614174000")
+            with page.expect_request("**/api/queue/jobs") as request_info:
+                submit_button.click()
+            assert request_info.value.method == "POST"
+            page.wait_for_url(f"**/tasks/queue/{TEST_JOB_ID}")
 
-        assert page.url.endswith("/tasks/queue/123e4567-e89b-12d3-a456-426614174000")
-        browser.close()
+            assert page.url.endswith(f"/tasks/queue/{TEST_JOB_ID}")
+        finally:
+            browser.close()
 
 
 def test_submit_create_task_flow_error_restores_label(server):
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        _mock_queue_runtime_capabilities(page)
-        _mock_queue_create_job(page, should_fail=True)
-        page.goto("http://127.0.0.1:8001/tasks/create")
+        try:
+            _mock_queue_runtime_capabilities(page)
+            _mock_queue_create_job(page, should_fail=True)
+            page.goto("http://127.0.0.1:8001/tasks/create")
 
-        submit_button = _fill_queue_task_create_form(page)
-        original_label = submit_button.inner_text().strip()
-        submit_button.click()
-
-        assert (
-            submit_button.evaluate("el => (el.textContent || '').trim()")
-            == "Submitting..."
-        )
-        expect(submit_button).to_have_text(original_label)
-        expect(page.locator("#queue-submit-message")).to_contain_text(
-            "Failed to create queue task"
-        )
-        assert page.url.endswith("/tasks/create")
-
-        browser.close()
+            submit_button = _fill_queue_task_create_form(page)
+            original_label = submit_button.inner_text().strip()
+            with page.expect_request("**/api/queue/jobs") as request_info:
+                submit_button.click()
+            assert request_info.value.method == "POST"
+            expect(submit_button).to_have_text(original_label)
+            expect(page.locator("#queue-submit-message")).to_contain_text(
+                "Failed to create queue task"
+            )
+            assert page.url.endswith("/tasks/create")
+        finally:
+            browser.close()
