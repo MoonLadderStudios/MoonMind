@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from os import environ
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from uuid import UUID
 
 import httpx
@@ -99,6 +99,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
+_DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -246,6 +247,7 @@ class CodexWorkerConfig:
     live_session_max_concurrent_per_worker: int = 4
     enable_task_proposals: bool = False
     artifact_upload_incremental: bool = True
+    step_log_max_bytes: int = _DEFAULT_STEP_LOG_MAX_BYTES
 
     @staticmethod
     def _normalize_runtime_option_values(raw_value: str | None) -> list[str]:
@@ -717,6 +719,16 @@ class CodexWorkerConfig:
             "off",
             "",
         }
+        step_log_max_bytes = int(
+            str(
+                source.get(
+                    "MOONMIND_STEP_LOG_MAX_BYTES",
+                    str(_DEFAULT_STEP_LOG_MAX_BYTES),
+                )
+            ).strip()
+        )
+        if step_log_max_bytes < 1024:
+            raise ValueError("MOONMIND_STEP_LOG_MAX_BYTES must be >= 1024")
 
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
@@ -766,6 +778,7 @@ class CodexWorkerConfig:
             live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
             enable_task_proposals=enable_task_proposals,
             artifact_upload_incremental=artifact_upload_incremental,
+            step_log_max_bytes=step_log_max_bytes,
         )
 
 
@@ -3434,6 +3447,7 @@ class CodexWorker:
         result_artifacts: Sequence[ArtifactUpload],
         step_log_path: Path,
         step_patch_path: Path,
+        step_log_offsets: MutableMapping[str, int] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3445,15 +3459,16 @@ class CodexWorker:
         for artifact in result_artifacts:
             if artifact.name in {"logs/codex_exec.log", "logs/execute.log"}:
                 if artifact.path.exists():
-                    step_log_path.parent.mkdir(parents=True, exist_ok=True)
-                    if artifact.path != step_log_path:
-                        shutil.copy2(artifact.path, step_log_path)
+                    self._copy_incremental_step_log(
+                        source_path=artifact.path,
+                        destination_path=step_log_path,
+                        step_log_offsets=step_log_offsets,
+                    )
                     normalized.append(
                         ArtifactUpload(
                             path=step_log_path,
                             name=step_log_name,
                             content_type="text/plain",
-                            digest=artifact.digest,
                             required=False,
                         )
                     )
@@ -3501,6 +3516,87 @@ class CodexWorker:
                 )
             )
         return normalized
+
+    def _copy_incremental_step_log(
+        self,
+        *,
+        source_path: Path,
+        destination_path: Path,
+        step_log_offsets: MutableMapping[str, int] | None = None,
+    ) -> None:
+        """Persist only the unread log delta for a step with a bounded snapshot size."""
+
+        source_size = source_path.stat().st_size
+        start_offset = 0
+        if step_log_offsets is not None:
+            offset_key = self._resolve_log_offset_key(source_path)
+            previous_offset = max(0, int(step_log_offsets.get(offset_key, 0)))
+            if previous_offset <= source_size:
+                start_offset = previous_offset
+            step_log_offsets[offset_key] = source_size
+
+        with source_path.open("rb") as handle:
+            if start_offset:
+                handle.seek(start_offset)
+            delta_content = handle.read()
+
+        bounded_content = self._bounded_step_log_bytes(
+            content=delta_content,
+            max_bytes=self._config.step_log_max_bytes,
+        )
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_bytes(bounded_content)
+
+    @staticmethod
+    def _resolve_log_offset_key(path: Path) -> str:
+        """Return a stable key for tracking incremental read offsets."""
+
+        return str(path.resolve(strict=False))
+
+    @staticmethod
+    def _bounded_step_log_bytes(*, content: bytes, max_bytes: int) -> bytes:
+        """Clamp per-step log size while preserving early context and failure tail."""
+
+        if max_bytes <= 0:
+            return b""
+        if len(content) <= max_bytes:
+            return content
+
+        head_bytes = min(64 * 1024, max_bytes // 8)
+        tail_bytes = max_bytes - head_bytes
+        omitted_bytes = max(0, len(content) - head_bytes - tail_bytes)
+        marker = (
+            "\n"
+            "[moonmind] step log truncated: omitted "
+            f"{omitted_bytes} bytes from the middle; "
+            f"retained first {head_bytes} bytes and last {tail_bytes} bytes "
+            f"(cap={max_bytes}).\n"
+        ).encode("utf-8")
+
+        available = max_bytes - len(marker)
+        if available <= 0:
+            return content[-max_bytes:]
+        if head_bytes > available:
+            head_bytes = available // 2
+        tail_bytes = max(0, available - head_bytes)
+        omitted_bytes = max(0, len(content) - head_bytes - tail_bytes)
+        marker = (
+            "\n"
+            "[moonmind] step log truncated: omitted "
+            f"{omitted_bytes} bytes from the middle; "
+            f"retained first {head_bytes} bytes and last {tail_bytes} bytes "
+            f"(cap={max_bytes}).\n"
+        ).encode("utf-8")
+        available = max_bytes - len(marker)
+        if available <= 0:
+            return content[-max_bytes:]
+        if head_bytes > available:
+            head_bytes = available // 2
+        tail_bytes = max(0, available - head_bytes)
+
+        if tail_bytes > 0:
+            return content[:head_bytes] + marker + content[-tail_bytes:]
+        return content[:head_bytes] + marker
 
     def _evaluate_step_gate(
         self,
@@ -4920,6 +5016,7 @@ class CodexWorker:
         cancel_event = getattr(self, "_active_cancel_event", None)
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
+        step_log_offsets: dict[str, int] = {}
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5096,6 +5193,7 @@ class CodexWorker:
                 result_artifacts=step_result.artifacts,
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
+                step_log_offsets=step_log_offsets,
             )
             step_artifacts.extend(normalized_step_artifacts)
             if artifact_callback is not None and normalized_step_artifacts:

@@ -1025,6 +1025,158 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert started[1]["payload"]["stepId"] == "step-2"
 
 
+async def test_run_once_task_steps_write_incremental_step_logs_without_duplication(
+    tmp_path: Path,
+) -> None:
+    """Later step logs should only include new output, not repeated history."""
+
+    shared_step_log = tmp_path / "codex.log"
+    shared_step_log.write_text("", encoding="utf-8")
+    step1_patch = tmp_path / "step1.patch"
+    step2_patch = tmp_path / "step2.patch"
+    step1_patch.write_text("diff1", encoding="utf-8")
+    step2_patch.write_text("diff2", encoding="utf-8")
+
+    class CumulativeStepLogHandler(FakeHandler):
+        def __init__(self) -> None:
+            super().__init__(
+                WorkerExecutionResult(
+                    succeeded=True,
+                    summary="unused",
+                    error_message=None,
+                )
+            )
+            self._step_index = 0
+
+        async def handle(
+            self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+        ):
+            del job_id, payload, cancel_event, output_chunk_callback
+            self.calls.append("codex_exec")
+            self._step_index += 1
+            if self._step_index == 1:
+                shared_step_log.write_text("step-1 output\n", encoding="utf-8")
+                patch_path = step1_patch
+            else:
+                with shared_step_log.open("a", encoding="utf-8") as handle:
+                    handle.write("step-2 output\n")
+                patch_path = step2_patch
+            return WorkerExecutionResult(
+                succeeded=True,
+                summary=f"step{self._step_index} ok",
+                error_message=None,
+                artifacts=(
+                    ArtifactUpload(path=shared_step_log, name="logs/codex_exec.log"),
+                    ArtifactUpload(path=patch_path, name="patches/changes.patch"),
+                ),
+            )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "step-1", "instructions": "Do step 1"},
+                    {"id": "step-2", "instructions": "Do step 2"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = CumulativeStepLogHandler()
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step1_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step2_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    assert step1_log_path.read_text(encoding="utf-8") == "step-1 output\n"
+    step2_text = step2_log_path.read_text(encoding="utf-8")
+    assert step2_text == "step-2 output\n"
+    assert "step-1 output" not in step2_text
+
+
+async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
+    tmp_path: Path,
+) -> None:
+    """Bounded step logs should keep failure context from the tail."""
+
+    large_step_log = tmp_path / "large-step.log"
+    large_step_log.write_text(
+        ("prefix-line\n" * 200)
+        + "ERROR: critical failure context that must be preserved\n",
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=large_step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=320,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step_log_content = step_log_path.read_text(encoding="utf-8")
+    assert step_log_path.stat().st_size <= 320
+    assert "[moonmind] step log truncated" in step_log_content
+    assert "ERROR: critical failure context that must be preserved" in step_log_content
+
+
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     tmp_path: Path,
 ) -> None:
@@ -2636,6 +2788,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", "1800")
     monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
     monkeypatch.setenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "false")
+    monkeypatch.setenv("MOONMIND_STEP_LOG_MAX_BYTES", "2097152")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
@@ -2657,6 +2810,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.container_default_timeout_seconds == 1800
     assert config.stage_command_timeout_seconds == 2400
     assert config.artifact_upload_incremental is False
+    assert config.step_log_max_bytes == 2097152
     assert config.git_user_name == "Nate Sticco"
     assert config.git_user_email == "nsticco@gmail.com"
 
@@ -2745,6 +2899,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", raising=False)
+    monkeypatch.delenv("MOONMIND_STEP_LOG_MAX_BYTES", raising=False)
     monkeypatch.delenv("MOONMIND_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SKILL_POLICY_MODE", raising=False)
@@ -2769,6 +2924,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.container_default_timeout_seconds == 3600
     assert config.stage_command_timeout_seconds == 3600
     assert config.artifact_upload_incremental is True
+    assert config.step_log_max_bytes == 1024 * 1024
 
 
 async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
