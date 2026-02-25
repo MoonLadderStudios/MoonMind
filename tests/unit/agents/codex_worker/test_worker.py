@@ -1492,6 +1492,140 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     assert "step-1 output" not in step2_text
 
 
+async def test_run_once_task_steps_dedupes_self_referential_log_echo_prefix(
+    tmp_path: Path,
+) -> None:
+    """Step logs should strip replayed history blocks from cumulative source logs."""
+
+    echoed_block = "".join(
+        f"replayed step block line {index:02d}: history payload\n"
+        for index in range(24)
+    )
+    step_one_segment = echoed_block + "step-1 unique output\n"
+    step_two_unique = "step-2 unique output\n"
+    step_two_segment = step_one_segment + step_two_unique
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "step-1", "instructions": "Do step 1"},
+                    {"id": "step-2", "instructions": "Do step 2"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = CumulativeStepLogHandler(
+        workdir_root=tmp_path,
+        segments=[step_one_segment, step_two_segment],
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step1_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step2_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    assert step1_log_path.read_text(encoding="utf-8") == step_one_segment
+    step2_text = step2_log_path.read_text(encoding="utf-8")
+    assert step2_text == step_two_unique
+    assert "replayed step block line" not in step2_text
+
+
+async def test_run_once_task_steps_self_referential_log_growth_tracks_unique_output(
+    tmp_path: Path,
+) -> None:
+    """Replay loops should not inflate per-step log growth beyond unique output."""
+
+    echoed_block = "".join(
+        f"self-echo line {index:02d}: repeated transcript section\n"
+        for index in range(24)
+    )
+    step_one_segment = echoed_block + "step-1 unique output\n"
+    step_two_unique = "step-2 unique output\n"
+    step_three_unique = "step-3 unique output\n"
+    step_two_segment = step_one_segment + step_two_unique
+    step_three_segment = step_two_segment + step_three_unique
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "step-1", "instructions": "Do step 1"},
+                    {"id": "step-2", "instructions": "Do step 2"},
+                    {"id": "step-3", "instructions": "Do step 3"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = CumulativeStepLogHandler(
+        workdir_root=tmp_path,
+        segments=[step_one_segment, step_two_segment, step_three_segment],
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step2_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    step3_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0002.log"
+    )
+    step2_text = step2_log_path.read_text(encoding="utf-8")
+    step3_text = step3_log_path.read_text(encoding="utf-8")
+    assert step2_text == step_two_unique
+    assert step3_text == step_three_unique
+
+    observed_growth_bytes = step2_log_path.stat().st_size + step3_log_path.stat().st_size
+    unique_growth_bytes = len(step_two_unique.encode("utf-8")) + len(
+        step_three_unique.encode("utf-8")
+    )
+    assert observed_growth_bytes == unique_growth_bytes
+    assert observed_growth_bytes < len(step_two_segment.encode("utf-8"))
+
+
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     tmp_path: Path,
 ) -> None:

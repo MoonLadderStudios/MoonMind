@@ -102,6 +102,8 @@ _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
+_MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES = 128
+_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES = 8 * 1024 * 1024
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -3469,6 +3471,7 @@ class CodexWorker:
         step_log_path: Path,
         step_patch_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
+        step_log_checkpoints: MutableMapping[str, bytes] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3484,6 +3487,7 @@ class CodexWorker:
                         source_path=artifact.path,
                         destination_path=step_log_path,
                         step_log_offsets=step_log_offsets,
+                        step_log_checkpoints=step_log_checkpoints,
                     )
                     normalized.append(
                         ArtifactUpload(
@@ -3544,6 +3548,7 @@ class CodexWorker:
         source_path: Path,
         destination_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
+        step_log_checkpoints: MutableMapping[str, bytes] | None = None,
     ) -> None:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
@@ -3554,6 +3559,7 @@ class CodexWorker:
             )
         source_size = source_stat.st_size
         start_offset = 0
+        offset_key: str | None = None
         if step_log_offsets is not None:
             offset_key = self._resolve_log_offset_key(source_path)
             previous_offset = max(0, int(step_log_offsets.get(offset_key, 0)))
@@ -3567,6 +3573,17 @@ class CodexWorker:
             source_size=source_size,
             max_bytes=self._config.step_log_max_bytes,
         )
+        if step_log_checkpoints is not None:
+            if offset_key is None:
+                offset_key = self._resolve_log_offset_key(source_path)
+            previous_checkpoint = step_log_checkpoints.get(offset_key)
+            current_checkpoint = self._checkpoint_step_log_bytes(bounded_content)
+            bounded_content = self._dedupe_replayed_step_log_bytes(
+                content=bounded_content,
+                replay_checkpoint=previous_checkpoint,
+            )
+            if current_checkpoint:
+                step_log_checkpoints[offset_key] = current_checkpoint
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         destination_path.write_bytes(bounded_content)
 
@@ -3615,6 +3632,32 @@ class CodexWorker:
         """Return a stable key for tracking incremental read offsets."""
 
         return str(path.resolve(strict=False))
+
+    @staticmethod
+    def _checkpoint_step_log_bytes(content: bytes) -> bytes:
+        """Capture a bounded replay checkpoint from the current source snapshot."""
+
+        if not content:
+            return b""
+        if len(content) <= _MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES:
+            return content
+        return content[:_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES]
+
+    @staticmethod
+    def _dedupe_replayed_step_log_bytes(
+        *, content: bytes, replay_checkpoint: bytes | None
+    ) -> bytes:
+        """Strip prefixed replay blocks from per-step log snapshots."""
+
+        if not content or not replay_checkpoint:
+            return content
+        if len(replay_checkpoint) < _MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES:
+            return content
+
+        deduped = content
+        while deduped.startswith(replay_checkpoint):
+            deduped = deduped[len(replay_checkpoint) :]
+        return deduped
 
     @staticmethod
     def _compute_step_log_truncation_plan(
@@ -5129,6 +5172,7 @@ class CodexWorker:
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
         step_log_offsets: dict[str, int] = {}
+        step_log_checkpoints: dict[str, bytes] = {}
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5306,6 +5350,7 @@ class CodexWorker:
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
                 step_log_offsets=step_log_offsets,
+                step_log_checkpoints=step_log_checkpoints,
             )
             step_artifacts.extend(normalized_step_artifacts)
             if artifact_callback is not None and normalized_step_artifacts:
