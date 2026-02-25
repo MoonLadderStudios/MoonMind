@@ -491,3 +491,111 @@ def test_build_step_metadata_includes_log_path(tmp_path, monkeypatch):
     artifact = result.artifacts[0]
     log_path = storage.ensure_run_directory(run_id) / artifact.path
     assert log_path.exists()
+
+
+def test_rollback_stops_after_first_successful_strategy(tmp_path, monkeypatch):
+    """Rollback should not execute later strategies after a success."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+    calls: list[str] = []
+
+    def execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del self, cwd
+        calls.append(command[0])
+        return SimpleNamespace(stdout="ok", stderr="")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", execute)
+
+    result = runner.rollback(
+        {
+            "logArtifact": "rollback.log",
+            "strategies": [
+                {"type": "git-revert", "commands": [["git", "reset", "--hard", "HEAD"]]},
+                {"type": "rebuild", "commands": [["docker", "compose", "build", "svc"]]},
+            ],
+        }
+    )
+
+    assert calls == ["git"]
+    assert result.metadata and result.metadata["strategy"] == "git-revert"
+    artifact = result.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    contents = log_path.read_text()
+    assert "Rollback strategy succeeded: git-revert" in contents
+    assert "docker compose build svc" not in contents
+
+
+def test_rollback_uses_fallback_strategy_after_failure(tmp_path, monkeypatch):
+    """Rollback should continue to the next strategy when one fails."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+    calls: list[str] = []
+
+    def execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del self, cwd
+        calls.append(command[0])
+        if command[0] == "git":
+            raise CommandExecutionError("git reset failed", output="simulated failure")
+        return SimpleNamespace(stdout="restarted", stderr="")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", execute)
+
+    result = runner.rollback(
+        {
+            "logArtifact": "rollback.log",
+            "strategies": [
+                {"type": "git-revert", "commands": [["git", "reset", "--hard", "HEAD"]]},
+                {"type": "restart", "commands": [["docker", "compose", "up", "-d", "svc"]]},
+            ],
+        }
+    )
+
+    assert calls == ["git", "docker"]
+    assert result.metadata and result.metadata["strategy"] == "restart"
+    artifact = result.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    contents = log_path.read_text()
+    assert "Rollback strategy failed: git-revert" in contents
+    assert "Rollback strategy succeeded: restart" in contents
+
+
+def test_rollback_raises_when_all_strategies_fail(tmp_path, monkeypatch):
+    """Rollback should fail with an artifact when no strategy succeeds."""
+
+    profile = _make_profile(tmp_path)
+    storage = ArtifactStorage(tmp_path)
+    run_id = uuid4()
+    runner = CommandRunner(run_id=run_id, profile=profile, artifact_storage=storage)
+
+    def execute(self, command, *, cwd=None):  # pragma: no cover - test hook
+        del self, command, cwd
+        raise CommandExecutionError("rollback command failed", output="simulated failure")
+
+    monkeypatch.setattr(CommandRunner, "_execute_command", execute)
+
+    with pytest.raises(CommandExecutionError) as excinfo:
+        runner.rollback(
+            {
+                "logArtifact": "rollback.log",
+                "strategies": [
+                    {"type": "git-revert", "commands": [["git", "reset", "--hard", "HEAD"]]},
+                    {"type": "rebuild", "commands": [["docker", "compose", "build", "svc"]]},
+                ],
+            }
+        )
+
+    error = excinfo.value
+    assert error.artifacts, "rollback failure should include log artifact"
+    artifact = error.artifacts[0]
+    log_path = storage.ensure_run_directory(run_id) / artifact.path
+    contents = log_path.read_text()
+    assert "Rollback strategy failed: git-revert" in contents
+    assert "Rollback strategy failed: rebuild" in contents
+    assert "Rollback failed:" in str(error)
+    assert error.metadata and error.metadata["log"].endswith("rollback.log")

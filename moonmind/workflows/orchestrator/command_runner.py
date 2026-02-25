@@ -327,24 +327,69 @@ class CommandRunner:
     def rollback(self, parameters: Mapping[str, Any]) -> StepResult:
         strategies = parameters.get("strategies") or []
         workspace = self._resolve_workspace(parameters.get("workspace"))
+        log_name = str(parameters.get("logArtifact", "rollback.log"))
         log_lines: list[str] = []
+        failures: list[str] = []
+
         for strategy in strategies:
-            strategy_type = strategy.get("type", "unknown")
+            strategy_type = str(strategy.get("type", "unknown"))
+            commands = strategy.get("commands", [])
             log_lines.append(f"Executing rollback strategy: {strategy_type}")
-            for command in strategy.get("commands", []):
-                result = self._execute_command(_ensure_sequence(command), cwd=workspace)
-                log_lines.append(self._scrub(self._format_command(command)))
+            if not commands:
+                log_lines.append("Rollback strategy has no commands; skipping.")
+                failures.append(f"{strategy_type}: no commands configured")
+                continue
+
+            strategy_failed = False
+            for command in commands:
+                command_sequence = _ensure_sequence(command)
+                log_lines.append(self._scrub(self._format_command(command_sequence)))
+                try:
+                    result = self._execute_command(command_sequence, cwd=workspace)
+                except CommandRunnerError as exc:
+                    strategy_failed = True
+                    error_message = self._scrub(str(exc))
+                    if error_message:
+                        log_lines.append(error_message)
+                    failures.append(
+                        f"{strategy_type}: {error_message or 'command failed'}"
+                    )
+                    break
                 combined = self._scrub(self._combine_streams(result))
                 if combined:
                     log_lines.append(combined)
+
+            if not strategy_failed:
+                log_lines.append(f"Rollback strategy succeeded: {strategy_type}")
+                artifact = self._storage.write_text(
+                    self._run_id,
+                    log_name,
+                    self._scrub("\n".join(log_lines)),
+                )
+                return StepResult(
+                    message="Rollback executed",
+                    artifacts=[artifact],
+                    metadata={"log": artifact.path, "strategy": strategy_type},
+                )
+
+            log_lines.append(f"Rollback strategy failed: {strategy_type}")
+
         if not log_lines:
             log_lines.append("No rollback actions executed.")
+
         artifact = self._storage.write_text(
             self._run_id,
-            str(parameters.get("logArtifact", "rollback.log")),
+            log_name,
             self._scrub("\n".join(log_lines)),
         )
-        return StepResult(message="Rollback executed", artifacts=[artifact])
+        summary = "; ".join(failures) if failures else "No rollback strategy succeeded."
+        error = CommandExecutionError(
+            f"Rollback failed: {summary}",
+            output=self._scrub("\n".join(log_lines)),
+            artifacts=[artifact],
+        )
+        error.metadata = {"log": artifact.path}
+        raise error
 
     # ------------------------------------------------------------------
     # Helpers

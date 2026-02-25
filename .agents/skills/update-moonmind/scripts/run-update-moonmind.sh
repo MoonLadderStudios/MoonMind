@@ -52,6 +52,10 @@ say() {
   log_json "INFO" "$*"
 }
 
+warn() {
+  log_json "WARN" "$*"
+}
+
 die() {
   log_json "ERROR" "$*" >&2
   exit 1
@@ -81,6 +85,50 @@ run_cmd() {
   if [[ $exit_code -ne 0 ]]; then
     die "Command failed with exit code $exit_code: ${cmd[*]}"
   fi
+}
+
+run_cmd_capture_into() {
+  local result_var_name="$1"
+  shift
+
+  local cmd=()
+  cmd=("$@")
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    printf '[dry-run]'
+    for arg in "${cmd[@]}"; do
+      printf ' %q' "$arg"
+    done
+    printf '\n'
+    printf -v "$result_var_name" ''
+    return 0
+  fi
+
+  printf '[update-moonmind] $'
+  for arg in "${cmd[@]}"; do
+    printf ' %q' "$arg"
+  done
+  printf '\n'
+
+  local output
+  set +e
+  output="$("${cmd[@]}" 2>&1)"
+  local exit_code=$?
+  set -e
+
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output"
+  fi
+
+  printf -v "$result_var_name" '%s' "$output"
+  return $exit_code
+}
+
+is_compose_pull_policy_blocked() {
+  local message="$1"
+  local normalized="${message,,}"
+  [[ "$normalized" == *"403 forbidden"* ]] || \
+    [[ "$normalized" == *"request forbidden by administrative rules"* ]]
 }
 
 load_compose_service_images() {
@@ -200,6 +248,7 @@ ALLOW_DIRTY="false"
 SKIP_COMPOSE_PULL="false"
 DRY_RUN="false"
 RESTART_ORCHESTRATOR="false"
+COMPOSE_PULL_FAILED="false"
 
 validate_branch() {
   local branch="$1"
@@ -286,7 +335,18 @@ POST_PULL_COMMIT="$(git rev-parse HEAD)"
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   say "Pulling updated compose images"
-  run_cmd "${COMPOSE_CMD[@]}" pull
+  compose_pull_output=""
+  if run_cmd_capture_into compose_pull_output "${COMPOSE_CMD[@]}" pull; then
+    :
+  else
+    compose_pull_exit=$?
+    if is_compose_pull_policy_blocked "$compose_pull_output"; then
+      COMPOSE_PULL_FAILED="true"
+      warn "Compose image pull was blocked by registry policy (HTTP 403). Continuing with locally available images."
+    else
+      die "Command failed with exit code $compose_pull_exit: ${COMPOSE_CMD[*]} pull"
+    fi
+  fi
 fi
 
 if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
@@ -301,8 +361,12 @@ mapfile -t CHANGED_FILES < <(
   fi
 )
 
-if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" && "$SKIP_COMPOSE_PULL" == "true" ]]; then
-  say "No commit update detected and compose image refresh was skipped; only stale image checks that can be resolved locally were applied."
+if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
+  if [[ "$SKIP_COMPOSE_PULL" == "true" ]]; then
+    say "No commit update detected and compose image refresh was skipped; only stale image checks that can be resolved locally were applied."
+  elif [[ "${COMPOSE_PULL_FAILED:-false}" == "true" ]]; then
+    warn "No commit update detected and compose image pull was blocked; continuing with stale-image detection against local cache only."
+  fi
 fi
 
 mapfile -t COMPOSE_SERVICES < <("${COMPOSE_CMD[@]}" config --services)
