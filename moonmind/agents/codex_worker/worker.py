@@ -3471,7 +3471,7 @@ class CodexWorker:
         step_log_path: Path,
         step_patch_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
-        step_log_checkpoints: MutableMapping[str, bytes] | None = None,
+        step_log_checkpoints: MutableMapping[str, tuple[bytes, int]] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3548,7 +3548,7 @@ class CodexWorker:
         source_path: Path,
         destination_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
-        step_log_checkpoints: MutableMapping[str, bytes] | None = None,
+        step_log_checkpoints: MutableMapping[str, tuple[bytes, int]] | None = None,
     ) -> None:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
@@ -3559,6 +3559,7 @@ class CodexWorker:
             )
         source_size = source_stat.st_size
         start_offset = 0
+        dedupe_start_offset = 0
         offset_key: str | None = None
         if step_log_offsets is not None:
             offset_key = self._resolve_log_offset_key(source_path)
@@ -3566,24 +3567,78 @@ class CodexWorker:
             if previous_offset <= source_size:
                 start_offset = previous_offset
             step_log_offsets[offset_key] = source_size
+            dedupe_start_offset = start_offset
+            original_start_offset = start_offset
+        else:
+            original_start_offset = 0
 
+        source_delta_bytes = max(0, source_size - original_start_offset)
         bounded_content = self._read_bounded_step_log_bytes(
             source_path=source_path,
-            start_offset=start_offset,
+            start_offset=dedupe_start_offset,
             source_size=source_size,
             max_bytes=self._config.step_log_max_bytes,
         )
         if step_log_checkpoints is not None:
             if offset_key is None:
                 offset_key = self._resolve_log_offset_key(source_path)
-            previous_checkpoint = step_log_checkpoints.get(offset_key)
-            current_checkpoint = self._checkpoint_step_log_bytes(bounded_content)
-            bounded_content = self._dedupe_replayed_step_log_bytes(
-                content=bounded_content,
-                replay_checkpoint=previous_checkpoint,
+            previous_checkpoint: tuple[bytes, int] | None = step_log_checkpoints.get(
+                offset_key
+            )
+            if dedupe_start_offset > 0 and previous_checkpoint is not None:
+                replay_checkpoint, replay_source_size = previous_checkpoint
+                if (
+                    replay_checkpoint
+                    and replay_source_size >= _MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES
+                ):
+                    while True:
+                        remaining_bytes = max(0, source_size - dedupe_start_offset)
+                        if remaining_bytes <= replay_source_size:
+                            break
+
+                        prefix_len = min(
+                            len(replay_checkpoint),
+                            _MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES,
+                        )
+                        if prefix_len == 0:
+                            break
+
+                        source_prefix = self._read_step_log_prefix_bytes(
+                            source_path=source_path,
+                            start_offset=dedupe_start_offset,
+                            max_bytes=prefix_len,
+                        )
+                        if len(source_prefix) < prefix_len:
+                            break
+                        if not source_prefix.startswith(replay_checkpoint[:prefix_len]):
+                            break
+                        dedupe_start_offset += replay_source_size
+
+                    if dedupe_start_offset != original_start_offset:
+                        bounded_content = self._read_bounded_step_log_bytes(
+                            source_path=source_path,
+                            start_offset=dedupe_start_offset,
+                            source_size=source_size,
+                            max_bytes=self._config.step_log_max_bytes,
+                        )
+
+            current_checkpoint = self._checkpoint_step_log_bytes(
+                self._read_step_log_prefix_bytes(
+                    source_path=source_path,
+                    start_offset=original_start_offset,
+                    max_bytes=_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES,
+                )
             )
             if current_checkpoint:
-                step_log_checkpoints[offset_key] = current_checkpoint
+                step_log_checkpoints[offset_key] = (
+                    current_checkpoint,
+                    source_delta_bytes,
+                )
+
+            bounded_content = self._dedupe_replayed_step_log_bytes(
+                content=bounded_content,
+                replay_checkpoint=current_checkpoint,
+            )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         destination_path.write_bytes(bounded_content)
 
@@ -3639,9 +3694,22 @@ class CodexWorker:
 
         if not content:
             return b""
-        if len(content) <= _MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES:
-            return content
         return content[:_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES]
+
+    @staticmethod
+    def _read_step_log_prefix_bytes(
+        *,
+        source_path: Path,
+        start_offset: int,
+        max_bytes: int,
+    ) -> bytes:
+        """Read a bounded source log prefix without applying truncation markers."""
+
+        if max_bytes <= 0:
+            return b""
+        with source_path.open("rb") as handle:
+            handle.seek(start_offset)
+            return handle.read(max_bytes)
 
     @staticmethod
     def _dedupe_replayed_step_log_bytes(
@@ -3649,15 +3717,21 @@ class CodexWorker:
     ) -> bytes:
         """Strip prefixed replay blocks from per-step log snapshots."""
 
-        if not content or not replay_checkpoint:
+        if (
+            not content
+            or not replay_checkpoint
+            or len(content) <= len(replay_checkpoint)
+            or len(replay_checkpoint) < _MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES
+        ):
             return content
-        if len(replay_checkpoint) < _MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES:
-            return content
-
-        deduped = content
-        while deduped.startswith(replay_checkpoint):
-            deduped = deduped[len(replay_checkpoint) :]
-        return deduped
+        prefix_length = len(replay_checkpoint)
+        cut_index = 0
+        while True:
+            if content.startswith(replay_checkpoint, cut_index):
+                cut_index += prefix_length
+            else:
+                break
+        return content[cut_index:]
 
     @staticmethod
     def _compute_step_log_truncation_plan(
@@ -5172,7 +5246,7 @@ class CodexWorker:
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
         step_log_offsets: dict[str, int] = {}
-        step_log_checkpoints: dict[str, bytes] = {}
+        step_log_checkpoints: dict[str, tuple[bytes, int]] = {}
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
