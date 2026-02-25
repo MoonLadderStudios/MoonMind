@@ -461,6 +461,20 @@ def test_normalize_legacy_exec_payload_adds_task_contract_fields() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
+def test_normalize_legacy_exec_payload_defaults_publish_mode_to_pr() -> None:
+    """Legacy codex_exec payloads should default publish mode to PR when omitted."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="codex_exec",
+        payload={
+            "repository": "Moon/Mind",
+            "instruction": "Run tests",
+        },
+    )
+
+    assert normalized["task"]["publish"]["mode"] == "pr"
+
+
 def test_normalize_legacy_exec_payload_requires_repository() -> None:
     """Legacy codex_exec payloads must include repository for worker compatibility."""
 
@@ -486,6 +500,20 @@ def test_build_canonical_view_for_skill_payload_sets_skill_id() -> None:
     assert canonical["task"]["skill"]["id"] == "speckit"
     assert canonical["task"]["instructions"] == "Run"
     assert canonical["targetRuntime"] == "codex"
+
+
+def test_normalize_legacy_skill_payload_defaults_publish_mode_to_pr() -> None:
+    """Legacy codex_skill payloads should default publish mode to PR when omitted."""
+
+    canonical = build_canonical_task_view(
+        job_type="codex_skill",
+        payload={
+            "skillId": "speckit",
+            "inputs": {"repo": "Moon/Mind", "instruction": "Run"},
+        },
+    )
+
+    assert canonical["task"]["publish"]["mode"] == "pr"
 
 
 def test_build_canonical_view_for_skill_payload_requires_repository() -> None:

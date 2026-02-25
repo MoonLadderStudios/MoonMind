@@ -37,6 +37,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
     normalize_queue_job_payload,
+    _normalize_publish_mode,
 )
 from moonmind.workflows.tasks import compile_task_payload_templates
 
@@ -2409,11 +2410,14 @@ class AgentQueueService:
             task_publish.get("mode")
             or publish.get("mode")
             or source.get("publishMode")
-            or "none"
         )
-        mode = str(publish).strip().lower()
-        if mode in {"none", "branch", "pr"}:
-            return mode
+        try:
+            return _normalize_publish_mode(publish)
+        except TaskContractError:
+            logger.debug(
+                "Invalid publish mode %r found in payload for telemetry; defaulting to none",
+                publish,
+            )
         return "none"
 
     @staticmethod
