@@ -1200,7 +1200,6 @@ async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "main", "newBranch": None},
                 "publish": {"mode": "none"},
-                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
                 "steps": [
                     {"id": "step-1", "instructions": "First"},
                     {"id": "step-2", "instructions": "Second"},
