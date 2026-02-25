@@ -146,7 +146,9 @@ def _resolve_compose_project(skill_args: Mapping[str, Any]) -> str | None:
         if text:
             return text
 
-    env_project = (os.getenv("COMPOSE_PROJECT_NAME") or os.getenv("COMPOSE_PROJECT")).strip()
+    env_project = (
+        os.getenv("COMPOSE_PROJECT_NAME") or os.getenv("COMPOSE_PROJECT") or ""
+    ).strip()
     return env_project or None
 
 
