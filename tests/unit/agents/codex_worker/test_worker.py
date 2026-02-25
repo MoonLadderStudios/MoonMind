@@ -1235,6 +1235,7 @@ async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
     assert len(step_two_text) < len(step_one_segment)
     assert len(step_two_text) < len(step_one_segment) + len(step_two_segment)
 
+
 async def test_run_once_task_step_log_truncation_preserves_utf8(
     tmp_path: Path,
 ) -> None:
@@ -1347,7 +1348,10 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
                 error_message=None,
                 artifacts=(
                     ArtifactUpload(
-                        path=self._workdir_root / str(job_id) / "artifacts" / "codex_exec.log",
+                        path=self._workdir_root
+                        / str(job_id)
+                        / "artifacts"
+                        / "codex_exec.log",
                         name="logs/codex_exec.log",
                     ),
                     ArtifactUpload(path=patch_path, name="patches/changes.patch"),
@@ -1401,9 +1405,6 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     step2_text = step2_log_path.read_text(encoding="utf-8")
     assert step2_text == "step-2 output\n"
     assert "step-1 output" not in step2_text
-
-
-
 
 
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
