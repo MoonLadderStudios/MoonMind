@@ -389,6 +389,7 @@ def _build_resolved_step(
         has_step_instructions=True,
     )
 
+
 class StreamingReplayStepHandler(FakeHandler):
     """Handler stub that streams Codex-like replay chunks through real dedupe logic."""
 
