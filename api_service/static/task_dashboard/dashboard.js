@@ -6081,13 +6081,13 @@
         const originSource = pick(origin, "source") || "-";
         const originLink =
           originSource === "queue" && pick(origin, "id")
-            ? `<a href="/tasks/queue/${escapeHtml(
+            ? `<a href="/tasks/queue/${encodeURIComponent(
                 String(pick(origin, "id") || ""),
               )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
             : escapeHtml(originSource);
         const repo = pick(row, "repository") || pick(preview, "repository") || "-";
         const instructions = pick(preview, "instructions") || "";
-        const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
+        const tags = (pick(row, "tags") || []).join(", ");
         const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
         const overrideReason = pick(row, "priorityOverrideReason");
         const priorityBadge = `<span class="badge priority-${escapeHtml(
@@ -6107,7 +6107,7 @@
             <td>${escapeHtml(pick(row, "category") || "-")}</td>
             <td>${priorityBadge}</td>
             <td>${statusBadge("proposals", pick(row, "status"))}</td>
-            <td>${formatTimestamp(pick(row, "createdAt"))}</td>
+            <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
             <td>${originLink}</td>
             <td>${escapeHtml(tags || "-")}</td>
             <td>${escapeHtml(snoozedDisplay)}</td>
@@ -6152,7 +6152,7 @@
         const originSource = pick(origin, "source") || "-";
         const originLink =
           originSource === "queue" && pick(origin, "id")
-            ? `<a href="/tasks/queue/${escapeHtml(
+            ? `<a href="/tasks/queue/${encodeURIComponent(
                 String(pick(origin, "id") || ""),
               )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
             : escapeHtml(originSource);
@@ -6164,7 +6164,7 @@
               instructionText.length > 140 ? "..." : ""
             }`
           : "-";
-        const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
+        const tags = (pick(row, "tags") || []).join(", ");
         const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
         const overrideReason = pick(row, "priorityOverrideReason");
         const priorityBadge = `<span class="badge priority-${escapeHtml(
@@ -6213,7 +6213,7 @@
               </div>
               <div>
                 <dt>Created</dt>
-                <dd>${formatTimestamp(pick(row, "createdAt"))}</dd>
+                <dd>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</dd>
               </div>
               <div>
                 <dt>Origin</dt>
