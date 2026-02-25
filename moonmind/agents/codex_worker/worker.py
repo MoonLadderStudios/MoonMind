@@ -103,6 +103,7 @@ _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
+_MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES = 64 * 1024
 _STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
 
 
@@ -3622,9 +3623,9 @@ class CodexWorker:
                 step_log_offsets.get(offset_key)
             )
             source_id = self._step_log_source_id(source_stat=source_stat)
-            if previous_source_id and source_id and previous_source_id != source_id:
-                start_offset = 0
-            elif previous_offset <= source_size:
+            if not (
+                previous_source_id and source_id and previous_source_id != source_id
+            ) and previous_offset <= source_size:
                 start_offset = previous_offset
             step_log_offsets[offset_key] = self._build_step_log_offset_entry(
                 offset=source_size,
@@ -3753,8 +3754,8 @@ class CodexWorker:
     def _step_log_source_id(*, source_stat: os.stat_result) -> str | None:
         """Return a stable source identifier for rotation detection."""
 
-        device = int(getattr(source_stat, "st_dev", 0) or 0)
-        inode = int(getattr(source_stat, "st_ino", 0) or 0)
+        device = getattr(source_stat, "st_dev", 0)
+        inode = getattr(source_stat, "st_ino", 0)
         if device == 0 and inode == 0:
             return None
         return f"{device}:{inode}"
@@ -3802,18 +3803,27 @@ class CodexWorker:
         checkpoint_path = self._step_log_offsets_checkpoint_path(
             artifacts_dir=artifacts_dir
         )
-        if not checkpoint_path.exists():
-            return {}
         try:
             stat_result = checkpoint_path.lstat()
-            if stat.S_ISLNK(stat_result.st_mode):
+            if stat_result.st_size < 0 or stat_result.st_size > _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES:
                 logger.warning(
-                    "Ignoring step log offset checkpoint symlink: %s",
+                    "Ignoring step log offset checkpoint with unexpected size (%d bytes): %s",
+                    stat_result.st_size,
                     checkpoint_path,
                 )
                 return {}
-            payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        except OSError:
+            return {}
+        if stat.S_ISLNK(stat_result.st_mode):
+            logger.warning(
+                "Ignoring step log offset checkpoint symlink: %s",
+                checkpoint_path,
+            )
+            return {}
+        try:
+            payload_text = checkpoint_path.read_text(encoding="utf-8")
+            payload = json.loads(payload_text)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, UnicodeDecodeError):
             logger.warning(
                 "Failed reading step log offset checkpoint at %s",
                 checkpoint_path,
@@ -3860,8 +3870,7 @@ class CodexWorker:
         checkpoint_path = self._step_log_offsets_checkpoint_path(
             artifacts_dir=artifacts_dir
         )
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-
+        temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
         entries: dict[str, dict[str, int | str]] = {}
         for raw_key, raw_entry in step_log_offsets.items():
             key = str(raw_key or "").strip()
@@ -3879,15 +3888,53 @@ class CodexWorker:
             "version": _STEP_LOG_OFFSET_CHECKPOINT_VERSION,
             "sources": entries,
         }
-        temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
         try:
-            temp_path.write_text(
-                json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            parent_stat = checkpoint_path.parent.lstat()
+            if stat.S_ISLNK(parent_stat.st_mode):
+                logger.warning(
+                    "Ignoring step log offset checkpoint write to symlinked directory: %s",
+                    checkpoint_path.parent,
+                )
+                return
+
+            try:
+                checkpoint_stat = checkpoint_path.lstat()
+            except OSError:
+                checkpoint_stat = None
+            else:
+                if stat.S_ISLNK(checkpoint_stat.st_mode):
+                    logger.warning(
+                        "Ignoring step log offset checkpoint write to symlinked file: %s",
+                        checkpoint_path,
+                    )
+                    return
+
+            try:
+                temp_stat = temp_path.lstat()
+            except OSError:
+                temp_stat = None
+            else:
+                if stat.S_ISLNK(temp_stat.st_mode):
+                    logger.warning(
+                        "Ignoring step log offset checkpoint temp symlink: %s",
+                        temp_path,
+                    )
+                    return
+
+            open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            if hasattr(os, "O_NOFOLLOW"):
+                open_flags |= os.O_NOFOLLOW
+            with os.fdopen(
+                os.open(temp_path, open_flags, 0o644), "w", encoding="utf-8"
+            ) as temp_handle:
+                temp_handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
             os.replace(temp_path, checkpoint_path)
         except OSError:
-            temp_path.unlink(missing_ok=True)
+            with suppress(OSError):
+                temp_stat = temp_path.lstat()
+                if not stat.S_ISDIR(temp_stat.st_mode):
+                    temp_path.unlink()
             logger.warning(
                 "Failed writing step log offset checkpoint at %s",
                 checkpoint_path,

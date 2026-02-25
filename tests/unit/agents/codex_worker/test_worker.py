@@ -2045,6 +2045,112 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     assert stdout_event_text.count("Final answer status: tests already green.") == 2
 
 
+def test_load_step_log_offsets_checkpoint_ignores_large_payload(
+    tmp_path: Path,
+) -> None:
+    """Oversized checkpoint payloads should be ignored instead of loaded into memory."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),  # type: ignore[arg-type]
+    )
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = worker._step_log_offsets_checkpoint_path(
+        artifacts_dir=artifacts_dir
+    )
+    checkpoint_path.write_text("x" * (70_000), encoding="utf-8")
+
+    assert worker._load_step_log_offsets_checkpoint(artifacts_dir=artifacts_dir) == {}
+
+
+def test_persist_step_log_offsets_checkpoint_safely_skips_symlinked_parent(
+    tmp_path: Path,
+) -> None:
+    """Checkpoint writes must avoid symlinked checkpoint state directories."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),  # type: ignore[arg-type]
+    )
+    artifacts_dir = tmp_path / "job" / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    state_target = tmp_path / "state-target"
+    state_target.mkdir(parents=True, exist_ok=True)
+    state_link = artifacts_dir / "state"
+    state_link.symlink_to(state_target)
+
+    worker._persist_step_log_offsets_checkpoint(
+        artifacts_dir=artifacts_dir,
+        step_log_offsets={"artifacts/source.log": {"offset": 1}},
+    )
+
+    assert not (state_target / "step_log_offsets.json").exists()
+
+
+def test_persist_step_log_offsets_checkpoint_handles_temp_path_directory(
+    tmp_path: Path,
+) -> None:
+    """Cleanup handling should tolerate a pre-existing temporary path directory."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),  # type: ignore[arg-type]
+    )
+
+    artifacts_dir = tmp_path / "job-2" / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = worker._step_log_offsets_checkpoint_path(
+        artifacts_dir=artifacts_dir
+    )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
+    temp_path.mkdir()
+    try:
+        worker._persist_step_log_offsets_checkpoint(
+            artifacts_dir=artifacts_dir,
+            step_log_offsets={"artifacts/source.log": {"offset": 1}},
+        )
+    finally:
+        assert temp_path.is_dir()
+
+
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     tmp_path: Path,
 ) -> None:
