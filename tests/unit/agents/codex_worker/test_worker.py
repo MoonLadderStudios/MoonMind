@@ -1351,12 +1351,7 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
             if self._segment_index > len(self._segments):
                 raise RuntimeError("no cumulative step log segment configured")
             segment = self._segments[self._segment_index - 1]
-            log_path = (
-                self._workdir_root
-                / str(job_id)
-                / "artifacts"
-                / "codex_exec.log"
-            )
+            log_path = self._workdir_root / str(job_id) / "artifacts" / "codex_exec.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write(segment)
