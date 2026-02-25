@@ -123,11 +123,17 @@ def _is_local_head(pr: dict[str, Any], repo: str) -> bool:
 
         head_repo_name = str(head_repo.get("name") or "").strip().lower()
         if head_repo_name:
-            head_owner = str(
-                (
-                    pr.get("headRepositoryOwner") if isinstance(pr.get("headRepositoryOwner"), dict) else {}
-                ).get("login", "")
-            ).strip().lower()
+            head_owner = (
+                str(
+                    (
+                        pr.get("headRepositoryOwner")
+                        if isinstance(pr.get("headRepositoryOwner"), dict)
+                        else {}
+                    ).get("login", "")
+                )
+                .strip()
+                .lower()
+            )
             if head_owner:
                 return head_owner == target_owner and head_repo_name == target_repo_name
 

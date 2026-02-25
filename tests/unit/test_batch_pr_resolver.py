@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import runpy
 from pathlib import Path
 from typing import Any
-
-import runpy
 
 
 def _load_module() -> dict[str, Any]:
@@ -57,4 +56,3 @@ def test_is_local_head_rejects_fork_owner_mismatch():
     }
 
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is False
-
