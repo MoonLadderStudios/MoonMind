@@ -2247,7 +2247,7 @@ class CodexWorker:
             )
         if not succeeded:
             stage = (failure_stage or "unknown").strip() or "unknown"
-            reason = self._redact_text(failure_reason or f"{stage} stage failed")
+            reason = f"{stage} stage failed"
             return FinishOutcome(code="FAILED", stage=stage, reason=reason)
 
         if publish_mode == "none":
@@ -2260,7 +2260,7 @@ class CodexWorker:
         if publish_status == "skipped":
             reason = publish_reason or "publish skipped: no local changes"
             return FinishOutcome(code="NO_CHANGES", stage="publish", reason=reason)
-        if publish_status == "published" and publish_pr_url:
+        if publish_status == "published" and (publish_mode == "pr" or publish_pr_url):
             return FinishOutcome(
                 code="PUBLISHED_PR",
                 stage="publish",
@@ -2996,7 +2996,7 @@ class CodexWorker:
 
     @staticmethod
     def _extract_first_instructions_sentence(
-        canonical_payload: Mapping[str, Any]
+        canonical_payload: Mapping[str, Any],
     ) -> str | None:
         """Extract first non-empty instruction sentence/line."""
 
@@ -5417,11 +5417,7 @@ class CodexWorker:
             command.extend(
                 [
                     "--mount",
-                    (
-                        "type=bind,"
-                        f"src={workspace_root.resolve()},"
-                        f"dst={mount_target}"
-                    ),
+                    (f"type=bind,src={workspace_root.resolve()},dst={mount_target}"),
                 ]
             )
 
@@ -5429,11 +5425,7 @@ class CodexWorker:
             command.extend(
                 [
                     "--mount",
-                    (
-                        "type=volume,"
-                        f"src={cache_volume.name},"
-                        f"dst={cache_volume.target}"
-                    ),
+                    (f"type=volume,src={cache_volume.name},dst={cache_volume.target}"),
                 ]
             )
 

@@ -303,6 +303,20 @@ class AgentQueueService:
         return text or None
 
     @classmethod
+    def _clean_optional_str_max(
+        cls,
+        value: object,
+        *,
+        max_length: int,
+    ) -> str | None:
+        """Return a trimmed optional string bounded to ``max_length`` chars."""
+
+        text = cls._clean_optional_str(value)
+        if text is None:
+            return None
+        return text[:max_length]
+
+    @classmethod
     def _validate_repository_reference(cls, repository: str) -> None:
         """Validate repository values align with accepted worker clone formats."""
 
@@ -934,9 +948,18 @@ class AgentQueueService:
             job_id=job_id,
             worker_id=worker,
             result_summary=result_summary.strip() if result_summary else None,
-            finish_outcome_code=self._clean_optional_str(finish_outcome_code),
-            finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
-            finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
+            finish_outcome_code=self._clean_optional_str_max(
+                finish_outcome_code,
+                max_length=64,
+            ),
+            finish_outcome_stage=self._clean_optional_str_max(
+                finish_outcome_stage,
+                max_length=32,
+            ),
+            finish_outcome_reason=self._clean_optional_str_max(
+                finish_outcome_reason,
+                max_length=256,
+            ),
             finish_summary=(
                 dict(finish_summary) if finish_summary is not None else None
             ),
@@ -984,9 +1007,18 @@ class AgentQueueService:
             error_message=detail,
             retryable=retryable,
             retry_delay_seconds=retry_delay_seconds,
-            finish_outcome_code=self._clean_optional_str(finish_outcome_code),
-            finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
-            finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
+            finish_outcome_code=self._clean_optional_str_max(
+                finish_outcome_code,
+                max_length=64,
+            ),
+            finish_outcome_stage=self._clean_optional_str_max(
+                finish_outcome_stage,
+                max_length=32,
+            ),
+            finish_outcome_reason=self._clean_optional_str_max(
+                finish_outcome_reason,
+                max_length=256,
+            ),
             finish_summary=(
                 dict(finish_summary) if finish_summary is not None else None
             ),
@@ -1035,14 +1067,13 @@ class AgentQueueService:
     ) -> models.AgentJob:
         """Request cancellation for one queue job."""
 
-        clean_reason = reason.strip() if reason else None
-        if clean_reason == "":
-            clean_reason = None
+        clean_reason = self._clean_optional_str_max(reason, max_length=256)
 
         job, action = await self._repository.request_cancel(
             job_id=job_id,
             requested_by_user_id=requested_by_user_id,
             reason=clean_reason,
+            finish_outcome_reason=clean_reason,
         )
         if action == "queued_cancelled":
             await self._repository.append_event(
@@ -1100,9 +1131,18 @@ class AgentQueueService:
         job, action = await self._repository.ack_cancel(
             job_id=job_id,
             worker_id=worker,
-            finish_outcome_code=self._clean_optional_str(finish_outcome_code),
-            finish_outcome_stage=self._clean_optional_str(finish_outcome_stage),
-            finish_outcome_reason=self._clean_optional_str(finish_outcome_reason),
+            finish_outcome_code=self._clean_optional_str_max(
+                finish_outcome_code,
+                max_length=64,
+            ),
+            finish_outcome_stage=self._clean_optional_str_max(
+                finish_outcome_stage,
+                max_length=32,
+            ),
+            finish_outcome_reason=self._clean_optional_str_max(
+                finish_outcome_reason,
+                max_length=256,
+            ),
             finish_summary=(
                 dict(finish_summary) if finish_summary is not None else None
             ),

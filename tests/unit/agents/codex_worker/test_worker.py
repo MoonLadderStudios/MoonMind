@@ -2205,7 +2205,11 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
     )
     monkeypatch.setattr(
         "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
-        lambda *, selection, run_root, cache_root, verify_signatures: _MaterializedWorkspace(),
+        lambda *,
+        selection,
+        run_root,
+        cache_root,
+        verify_signatures: _MaterializedWorkspace(),
     )
 
     job = ClaimedJob(
@@ -2530,6 +2534,43 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
         event["message"] == "Job cancellation requested; stopping"
         for event in queue.events
     )
+
+
+async def test_determine_finish_outcome_pr_publish_without_pr_url_maps_to_published_pr(
+    tmp_path: Path,
+) -> None:
+    """PR publish mode should classify successful publish as PUBLISHED_PR even without URL."""
+
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=FakeQueueClient(jobs=[]),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )
+
+    outcome = worker._determine_finish_outcome(
+        succeeded=True,
+        cancelled=False,
+        cancel_reason=None,
+        failure_stage=None,
+        failure_reason=None,
+        publish_mode="pr",
+        publish_status="published",
+        publish_reason=None,
+        publish_pr_url=None,
+        publish_branch="task/branch",
+    )
+
+    assert outcome.code == "PUBLISHED_PR"
+    assert outcome.stage == "publish"
 
 
 async def test_live_log_chunk_callback_emits_redacted_step_metadata(

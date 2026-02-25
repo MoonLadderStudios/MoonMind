@@ -307,6 +307,7 @@ class AgentQueueRepository:
         job_id: UUID,
         requested_by_user_id: UUID | None,
         reason: str | None,
+        finish_outcome_reason: str | None = None,
     ) -> tuple[models.AgentJob, str]:
         """Request cancellation for a queued or running job."""
 
@@ -330,6 +331,11 @@ class AgentQueueRepository:
             job.claimed_by = None
             job.lease_expires_at = None
             job.next_attempt_at = None
+            job.finish_outcome_code = "CANCELLED"
+            job.finish_outcome_stage = "unknown"
+            job.finish_outcome_reason = (
+                finish_outcome_reason or "cancellation requested"
+            )
             job.updated_at = now
             await self._session.flush()
             return (job, "queued_cancelled")
@@ -468,6 +474,11 @@ class AgentQueueRepository:
             job.claimed_by = None
             job.lease_expires_at = None
             job.next_attempt_at = None
+            job.finish_outcome_code = "CANCELLED"
+            job.finish_outcome_stage = "unknown"
+            job.finish_outcome_reason = (
+                finish_outcome_reason or "cancellation requested"
+            )
             job.updated_at = now
             await self._session.flush()
             return job
