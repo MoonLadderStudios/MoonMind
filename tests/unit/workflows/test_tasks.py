@@ -579,7 +579,9 @@ def test_run_codex_preflight_check_runs_bootstrap_login_shell(monkeypatch):
         raising=False,
     )
 
-    result = tasks._run_codex_preflight_check(timeout=5, volume_name="codex_auth_bootstrap")
+    result = tasks._run_codex_preflight_check(
+        timeout=5, volume_name="codex_auth_bootstrap"
+    )
 
     assert result.status is models.CodexPreflightStatus.PASSED
     assert result.exit_code == 0
