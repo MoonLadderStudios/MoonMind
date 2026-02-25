@@ -20,8 +20,8 @@ from api_service.db.models import (
 )
 from api_service.services.manifests_service import ManifestsService
 from api_service.services.recurring_tasks_service import (
-    RecurringTaskValidationError,
     RecurringTasksService,
+    RecurringTaskValidationError,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]

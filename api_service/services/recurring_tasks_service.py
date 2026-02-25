@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import random
 import logging
+import random
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
@@ -38,7 +38,6 @@ from moonmind.workflows.recurring_tasks.cron import (
     parse_cron_expression,
     validate_timezone_name,
 )
-
 
 logger = logging.getLogger(__name__)
 
