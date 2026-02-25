@@ -3910,7 +3910,6 @@ class CodexWorker:
                 )
                 return
 
-        try:
             if stat.S_ISLNK(checkpoint_path.lstat().st_mode):
                 logger.warning(
                     "Ignoring step log offset checkpoint write to symlinked file: %s",
@@ -6126,13 +6125,16 @@ class CodexWorker:
                 cwd=prepared.repo_dir,
                 log_path=prepared.execute_log_path,
             )
-            run_command, container_name, artifact_dir_in_container, run_env = (
-                self._build_container_run_command(
-                    job_id=job_id,
-                    repository=repository,
-                    prepared=prepared,
-                    container_spec=container_spec,
-                )
+            (
+                run_command,
+                container_name,
+                artifact_dir_in_container,
+                run_env,
+            ) = self._build_container_run_command(
+                job_id=job_id,
+                repository=repository,
+                prepared=prepared,
+                container_spec=container_spec,
             )
             run_command_env = dict(environ)
             run_command_env.update(run_env)
