@@ -512,11 +512,16 @@ class CodexExecHandler:
 
         retrieval_skip_reason: str | None = None
         try:
-            pack, retrieval_skip_reason = await asyncio.to_thread(
+            retrieval_result = await asyncio.to_thread(
                 self._retrieve_context_pack,
                 job_id=job_id,
                 payload=payload,
             )
+            if isinstance(retrieval_result, tuple) and len(retrieval_result) == 2:
+                pack, retrieval_skip_reason = retrieval_result
+            else:
+                pack = retrieval_result
+                retrieval_skip_reason = None
         except Exception as exc:
             self._append_log(
                 log_path,
