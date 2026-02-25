@@ -220,6 +220,11 @@ const helpers = loadSubmitRuntimeHelpers();
   });
   assert.strictEqual(invalidEncoded, "/tasks/queue");
 
+  const reservedCreateRoute = helpers.resolvePromotedQueueRoute({
+    job: { id: "new" },
+  });
+  assert.strictEqual(reservedCreateRoute, "/tasks/queue");
+
   const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
   assert.strictEqual(missing, "/tasks/queue");
 })();

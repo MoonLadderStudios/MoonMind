@@ -838,7 +838,7 @@
 
   function normalizeDashboardDetailSegment(value) {
     const text = String(value ?? "").trim();
-    if (!text || text === "." || text === "..") {
+    if (!text || text === "." || text === ".." || text.toLowerCase() === "new") {
       return "";
     }
     if (!DASHBOARD_DETAIL_SEGMENT_PATTERN.test(text)) {
