@@ -242,6 +242,62 @@ compose_cmd() {
   fi
 }
 
+detect_compose_project() {
+  local repo_root="$1"
+  local mount_root
+  mount_root="$(readlink -f "$repo_root" 2>/dev/null || pwd -P)"
+
+  local container_id container_mount container_service container_project
+  local fallback_project=""
+  local -a container_ids=()
+
+  mapfile -t container_ids < <(docker ps -q --filter status=running 2>/dev/null || true)
+  [[ ${#container_ids[@]} -eq 0 ]] && return 1
+
+  for container_id in "${container_ids[@]}"; do
+    [[ -n "$container_id" ]] || continue
+
+    container_mount="$(
+      docker inspect "$container_id" \
+        --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' \
+        2>/dev/null || true
+    )"
+    [[ -n "$container_mount" ]] || continue
+    container_mount="$(readlink -f "$container_mount" 2>/dev/null || printf '%s' "$container_mount")"
+    if [[ "$container_mount" != "$mount_root" ]]; then
+      continue
+    fi
+
+    container_project="$(
+      docker inspect "$container_id" \
+        --format '{{index .Config.Labels "com.docker.compose.project"}}' \
+        2>/dev/null || true
+    )"
+    [[ -n "${container_project//[[:space:]]/}" ]] || continue
+
+    container_service="$(
+      docker inspect "$container_id" \
+        --format '{{index .Config.Labels "com.docker.compose.service"}}' \
+        2>/dev/null || true
+    )"
+    if [[ "$container_service" == "orchestrator" ]]; then
+      printf '%s' "$container_project"
+      return 0
+    fi
+
+    if [[ -z "$fallback_project" ]]; then
+      fallback_project="$container_project"
+    fi
+  done
+
+  if [[ -n "$fallback_project" ]]; then
+    printf '%s' "$fallback_project"
+    return 0
+  fi
+
+  return 1
+}
+
 resolve_workspace_mount_source() {
   local repo_path="$1"
   local mount_root=""
@@ -328,6 +384,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_branch "$BRANCH"
+if [[ -z "$COMPOSE_PROJECT" ]]; then
+  COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-}"
+  if [[ -z "${COMPOSE_PROJECT//[[:space:]]/}" ]]; then
+    inferred_project="$(detect_compose_project "$REPO_PATH" || true)"
+    if [[ -n "${inferred_project//[[:space:]]/}" ]]; then
+      COMPOSE_PROJECT="$inferred_project"
+      say "Auto-detected docker compose project '$COMPOSE_PROJECT' from active running containers."
+    fi
+  fi
+fi
+
 if [[ -n "$COMPOSE_PROJECT" ]]; then
   [[ "$COMPOSE_PROJECT" != -* ]] || die "--compose-project must not start with '-'"
   COMPOSE_CMD+=(--project-name "$COMPOSE_PROJECT")
