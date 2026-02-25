@@ -3623,9 +3623,12 @@ class CodexWorker:
                 step_log_offsets.get(offset_key)
             )
             source_id = self._step_log_source_id(source_stat=source_stat)
-            if not (
-                previous_source_id and source_id and previous_source_id != source_id
-            ) and previous_offset <= source_size:
+            if (
+                not (
+                    previous_source_id and source_id and previous_source_id != source_id
+                )
+                and previous_offset <= source_size
+            ):
                 start_offset = previous_offset
             step_log_offsets[offset_key] = self._build_step_log_offset_entry(
                 offset=source_size,
@@ -3805,7 +3808,10 @@ class CodexWorker:
         )
         try:
             stat_result = checkpoint_path.lstat()
-            if stat_result.st_size < 0 or stat_result.st_size > _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES:
+            if (
+                stat_result.st_size < 0
+                or stat_result.st_size > _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES
+            ):
                 logger.warning(
                     "Ignoring step log offset checkpoint with unexpected size (%d bytes): %s",
                     stat_result.st_size,
@@ -3823,7 +3829,13 @@ class CodexWorker:
         try:
             payload_text = checkpoint_path.read_text(encoding="utf-8")
             payload = json.loads(payload_text)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError, UnicodeDecodeError):
+        except (
+            OSError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+            UnicodeDecodeError,
+        ):
             logger.warning(
                 "Failed reading step log offset checkpoint at %s",
                 checkpoint_path,
