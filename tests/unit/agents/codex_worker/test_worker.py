@@ -1626,7 +1626,9 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     step_text = step_log_path.read_text(encoding="utf-8")
     for text in (codex_text, step_text):
         assert (
-            text.count("Implemented execute-stage duplicate-output regression coverage.")
+            text.count(
+                "Implemented execute-stage duplicate-output regression coverage."
+            )
             == 1
         )
         assert text.count("Result: `802 passed, 8 subtests passed`.") == 1
