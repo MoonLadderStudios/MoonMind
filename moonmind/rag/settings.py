@@ -10,6 +10,8 @@ from typing import Mapping, MutableMapping, Optional
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.env_bool import env_to_bool
 
+_SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai", "ollama"})
+
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
@@ -171,3 +173,44 @@ class RagRuntimeSettings:
         if self.run_id:
             data["run_id"] = self.run_id
         return data
+
+    def embedding_provider_supported(self) -> bool:
+        """Return whether the configured embedding provider is recognized."""
+
+        return self.embedding_provider.lower() in _SUPPORTED_EMBEDDING_PROVIDERS
+
+    def embedding_provider_configured(
+        self, source: Mapping[str, str] | None = None
+    ) -> bool:
+        """Return whether provider-specific embedding credentials are configured."""
+
+        provider = self.embedding_provider.lower()
+        if provider == "google":
+            google_key = (_get_env(source, "GOOGLE_API_KEY") or "").strip()
+            gemini_key = (_get_env(source, "GEMINI_API_KEY") or "").strip()
+            return bool(google_key or gemini_key)
+        if provider == "openai":
+            openai_key = (_get_env(source, "OPENAI_API_KEY") or "").strip()
+            return bool(openai_key)
+        if provider == "ollama":
+            return True
+        return False
+
+    def retrieval_executable(
+        self,
+        source: Mapping[str, str] | None = None,
+        *,
+        preferred_transport: Optional[str] = None,
+    ) -> bool:
+        """Return whether retrieval can run with the current runtime settings."""
+
+        if not self.rag_enabled:
+            return False
+        if not self.embedding_provider_supported():
+            return False
+        if not self.embedding_provider_configured(source):
+            return False
+        transport = self.resolved_transport(preferred_transport)
+        if transport == "direct" and not self.qdrant_enabled:
+            return False
+        return True

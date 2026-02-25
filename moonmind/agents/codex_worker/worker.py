@@ -2602,6 +2602,11 @@ class CodexWorker:
                 "ragAvailable": False,
                 "ragMode": "disabled",
             }
+        if not settings.retrieval_executable(os.environ):
+            return {
+                "ragAvailable": False,
+                "ragMode": "unavailable",
+            }
         transport = settings.resolved_transport(None)
         mode = "direct-qdrant" if transport == "direct" else "retrieval-gateway"
         return {

@@ -558,7 +558,7 @@ class CodexExecHandler:
         payload: CodexExecPayload,
     ) -> ContextPack | None:
         settings = RagRuntimeSettings.from_env(os.environ)
-        if not settings.rag_enabled:
+        if not settings.retrieval_executable(os.environ):
             return None
         if not settings.job_id:
             settings.job_id = str(job_id)
@@ -566,8 +566,6 @@ class CodexExecHandler:
             settings.run_id = str(job_id)
 
         transport = settings.resolved_transport(None)
-        if transport == "direct" and not settings.qdrant_enabled:
-            return None
 
         filters = settings.as_filter_metadata()
         repo_filter = self._repository_filter_value(payload.repository)

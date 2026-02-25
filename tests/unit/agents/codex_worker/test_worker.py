@@ -451,6 +451,73 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     assert payload["executionPath"] == "direct_only"
 
 
+@pytest.mark.parametrize(
+    "provider",
+    ("[REDACTED]", "unsupported-provider", "google"),
+)
+async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecutable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    """task_context and claim metadata should agree when retrieval cannot execute."""
+
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("QDRANT_ENABLED", "1")
+    monkeypatch.setenv("DEFAULT_EMBEDDING_PROVIDER", provider)
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "a/b",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    claimed = next(
+        event for event in queue.events if event["message"] == "Worker claimed job"
+    )
+    claimed_payload = claimed["payload"]
+    assert isinstance(claimed_payload, dict)
+    assert claimed_payload["ragAvailable"] is False
+    assert claimed_payload["ragMode"] == "unavailable"
+    assert "ragCommand" not in claimed_payload
+
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    task_context = json.loads(task_context_path.read_text(encoding="utf-8"))
+    rag_payload = task_context["rag"]
+    assert rag_payload["ragAvailable"] is False
+    assert rag_payload["ragMode"] == "unavailable"
+    assert "ragCommand" not in rag_payload
+
+
 async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     """Zero-byte artifacts should be skipped to avoid upload validation failures."""
 

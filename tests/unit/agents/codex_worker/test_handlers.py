@@ -587,6 +587,45 @@ async def test_handler_injects_retrieved_context_when_available(
     assert "rag_context_items=1" in (result.summary or "")
 
 
+@pytest.mark.parametrize(
+    "provider",
+    ("[REDACTED]", "unsupported-provider", "google"),
+)
+async def test_retrieve_context_pack_skips_when_embedding_provider_unexecutable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    """Unsupported or unconfigured providers should skip retrieval cleanly."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    payload = CodexExecPayload.from_payload(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "publish": {"mode": "none"},
+        }
+    )
+
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("QDRANT_ENABLED", "1")
+    monkeypatch.setenv("DEFAULT_EMBEDDING_PROVIDER", provider)
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    class _UnexpectedRetrievalService:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("retrieval service should not initialize")
+
+    monkeypatch.setattr(handlers, "ContextRetrievalService", _UnexpectedRetrievalService)
+
+    pack = handler._retrieve_context_pack(job_id=uuid4(), payload=payload)
+
+    assert pack is None
+
+
 async def test_handler_falls_back_when_retrieval_raises(
     tmp_path: Path,
     monkeypatch,
