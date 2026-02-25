@@ -3910,17 +3910,13 @@ class CodexWorker:
                 )
                 return
 
-            try:
-                checkpoint_stat = checkpoint_path.lstat()
-            except OSError:
-                checkpoint_stat = None
-            else:
-                if stat.S_ISLNK(checkpoint_stat.st_mode):
-                    logger.warning(
-                        "Ignoring step log offset checkpoint write to symlinked file: %s",
-                        checkpoint_path,
-                    )
-                    return
+        try:
+            if stat.S_ISLNK(checkpoint_path.lstat().st_mode):
+                logger.warning(
+                    "Ignoring step log offset checkpoint write to symlinked file: %s",
+                    checkpoint_path,
+                )
+                return
 
             try:
                 temp_stat = temp_path.lstat()
