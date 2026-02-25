@@ -16,6 +16,7 @@ import pytest
 
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
+    CodexExecHandler,
     CommandCancelledError,
     CommandResult,
     WorkerExecutionResult,
@@ -323,6 +324,39 @@ class CumulativeStepLogHandler(FakeHandler):
         return WorkerExecutionResult(
             succeeded=True,
             summary=f"step {self._segment_index} ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=log_path, name="logs/codex_exec.log"),),
+        )
+
+
+class StreamingReplayStepHandler(FakeHandler):
+    """Handler stub that streams Codex-like replay chunks through real dedupe logic."""
+
+    def __init__(self, *, workdir_root: Path) -> None:
+        super().__init__(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        )
+        self._workdir_root = workdir_root
+        self._streaming_handler = CodexExecHandler(workdir_root=workdir_root)
+
+    async def handle(
+        self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+    ):
+        del cancel_event
+        self.calls.append("codex_exec")
+        self.exec_payloads.append(dict(payload))
+        log_path = self._workdir_root / str(job_id) / "artifacts" / "codex_exec.log"
+        await self._streaming_handler._run_command(
+            ["codex", "exec", "simulate"],
+            cwd=self._workdir_root,
+            log_path=log_path,
+            check=False,
+            output_chunk_callback=output_chunk_callback,
+            enable_replay_dedupe=True,
+        )
+        return WorkerExecutionResult(
+            succeeded=True,
+            summary="streamed step",
             error_message=None,
             artifacts=(ArtifactUpload(path=log_path, name="logs/codex_exec.log"),),
         )
@@ -1661,6 +1695,130 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     step2_text = step2_log_path.read_text(encoding="utf-8")
     assert step2_text == "step-2 output\n"
     assert "step-1 output" not in step2_text
+
+
+async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_turn_repeats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Execute-stage artifacts should dedupe replay chunks without collapsing distinct turns."""
+
+    completion_block = (
+        "Implemented execute-stage duplicate-output regression coverage.\n"
+        "**Completion Summary**\n"
+        "- Added worker-level replay regression assertions.\n"
+    )
+    test_summary_block = (
+        "**Test Summary**\n"
+        "- Ran required unit test script: `./tools/test_unit.sh`\n"
+        "- Result: `802 passed, 8 subtests passed`.\n"
+    )
+    repeated_turn_line = "- Final answer status: tests already green.\n"
+
+    class FakeReader:
+        def __init__(self, chunks: Sequence[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self, chunks: Sequence[str]) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(chunks)
+            self.stderr = FakeReader(())
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return FakeProcess(
+            (
+                "thinking\n",
+                completion_block,
+                test_summary_block,
+                completion_block,
+                test_summary_block,
+                "assistant\n",
+                repeated_turn_line,
+                "user\nPlease repeat the same status line exactly.\n",
+                repeated_turn_line,
+                "done\n",
+            )
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = StreamingReplayStepHandler(workdir_root=tmp_path)
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    codex_text = codex_log_path.read_text(encoding="utf-8")
+    step_text = step_log_path.read_text(encoding="utf-8")
+    for text in (codex_text, step_text):
+        assert (
+            text.count(
+                "Implemented execute-stage duplicate-output regression coverage."
+            )
+            == 1
+        )
+        assert text.count("Result: `802 passed, 8 subtests passed`.") == 1
+        assert text.count("Final answer status: tests already green.") == 2
+
+    stdout_event_text = "".join(
+        str(event["message"])
+        for event in queue.events
+        if event["payload"].get("kind") == "log"
+        and event["payload"].get("stream") == "stdout"
+    )
+    assert (
+        stdout_event_text.count(
+            "Implemented execute-stage duplicate-output regression coverage."
+        )
+        == 1
+    )
+    assert stdout_event_text.count("Result: `802 passed, 8 subtests passed`.") == 1
+    assert stdout_event_text.count("Final answer status: tests already green.") == 2
 
 
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
