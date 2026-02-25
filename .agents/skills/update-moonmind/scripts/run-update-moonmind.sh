@@ -515,31 +515,16 @@ else
   run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${SERVICES_TO_RESTART[@]}"
 fi
 
-readarray -t RUNNING_SERVICES < <(
-  "${COMPOSE_CMD[@]}" ps --services --status running 2>/dev/null || true
-)
-
 readarray -t RECONCILE_SERVICES < <(
-  for target in "${RUNNING_SERVICES[@]}"; do
-    case "$target" in
-      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
-        continue
-        ;;
-      orchestrator)
-        [[ "$RESTART_ORCHESTRATOR" == "true" ]] || continue
-        ;;
-    esac
-    printf '%s\n' "$target"
-  done | sort -u
+  printf '%s\n' "${SERVICES_TO_RESTART[@]}"
 )
-
 if [[ ${#RECONCILE_SERVICES[@]} -eq 0 ]]; then
-  say "No running compose services required reconciliation."
+  say "No selected services require reconciliation."
 else
   if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
-    say "Reconciling running compose services: ${RECONCILE_SERVICES[*]}"
+    say "Reconciling selected services for reconciliation: ${RECONCILE_SERVICES[*]}"
   else
-    say "Reconciling running compose services (excluding orchestrator): ${RECONCILE_SERVICES[*]}"
+    say "Reconciling selected services for reconciliation (excluding orchestrator): ${RECONCILE_SERVICES[*]}"
   fi
   run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${RECONCILE_SERVICES[@]}"
 fi
