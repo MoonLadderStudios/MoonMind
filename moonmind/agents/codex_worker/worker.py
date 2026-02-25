@@ -3334,10 +3334,14 @@ class CodexWorker:
             if not log_path.exists() or not log_path.is_file():
                 continue
             try:
-                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                lines = log_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
             except OSError:
                 continue
-            artifact_name = cls._artifact_name_for_path(path=log_path, prepared=prepared)
+            artifact_name = cls._artifact_name_for_path(
+                path=log_path, prepared=prepared
+            )
             for line_number, line in enumerate(lines, start=1):
                 if not line.startswith("$ "):
                     continue
@@ -3383,9 +3387,7 @@ class CodexWorker:
             else None
         )
         if reason_raw is None and isinstance(raw_skip_reason, Mapping):
-            reason_raw = (
-                raw_skip_reason.get("detail") or raw_skip_reason.get("details")
-            )
+            reason_raw = raw_skip_reason.get("detail") or raw_skip_reason.get("details")
         category = re.sub(r"[^a-z0-9_-]+", "_", str(category_raw or "").strip().lower())
         category = category.strip("_")
         reason = " ".join(str(reason_raw or "").split())
@@ -3660,7 +3662,9 @@ class CodexWorker:
             verification_payload["evidence"] = list(
                 preflight_result.verification_evidence
             )
-            verification_payload["skipReason"] = preflight_result.verification_skip_reason
+            verification_payload["skipReason"] = (
+                preflight_result.verification_skip_reason
+            )
             if preflight_result.verification_skip_reason is not None:
                 verification_payload["status"] = "skipped"
             elif preflight_result.source_code_paths:
@@ -3753,7 +3757,9 @@ class CodexWorker:
                     else f"published PR {pr_url}"
                 )
             if preflight_result and preflight_result.verification_skip_reason:
-                skip_category = preflight_result.verification_skip_reason.get("category")
+                skip_category = preflight_result.verification_skip_reason.get(
+                    "category"
+                )
                 if skip_category:
                     publish_note = (
                         f"{publish_note}; verification skipped ({skip_category})"

@@ -3956,11 +3956,12 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     assert "Reason: CI runner was unavailable during this queue window." in pr_body
     assert "Ticket: OPS-1234" in pr_body
 
-    publish_payload = json.loads(prepared.publish_result_path.read_text(encoding="utf-8"))
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
     assert publish_payload["verification"]["status"] == "skipped"
     assert (
-        publish_payload["verification"]["skipReason"]["category"]
-        == "infra_unavailable"
+        publish_payload["verification"]["skipReason"]["category"] == "infra_unavailable"
     )
     assert any(
         artifact.name == "reports/publish_preflight.json"
