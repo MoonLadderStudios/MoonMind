@@ -111,3 +111,66 @@ def test_context_retrieval_service_enforces_token_budget():
         assert exc.budget_type == "tokens"
     else:
         raise AssertionError("expected RetrievalBudgetExceededError")
+
+
+def test_context_retrieval_service_gateway_does_not_initialize_embedding(monkeypatch):
+    env = {
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "MOONMIND_RETRIEVAL_URL": "http://gateway:7777",
+        "DEFAULT_EMBEDDING_PROVIDER": "google",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+
+    class _UnexpectedEmbeddingClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError(
+                "embedding client should not initialize in gateway mode"
+            )
+
+    class _GatewayResponse:
+        def json(self):
+            return {
+                "items": [],
+                "filters": {},
+                "budgets": {},
+                "usage": {},
+                "context_text": "",
+                "retrieved_at": "",
+                "telemetry_id": "tid",
+            }
+
+        def raise_for_status(self):
+            return None
+
+    class _GatewayClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _GatewayResponse()
+
+    monkeypatch.setattr(
+        "moonmind.rag.service.EmbeddingClient", _UnexpectedEmbeddingClient
+    )
+    monkeypatch.setattr("moonmind.rag.service.httpx.Client", _GatewayClient)
+
+    service = ContextRetrievalService(
+        settings=settings, env=env, qdrant_client=StubQdrant()
+    )
+    pack = service.retrieve(
+        query="gateway query",
+        filters={},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="gateway",
+    )
+
+    assert pack.transport == "gateway"
