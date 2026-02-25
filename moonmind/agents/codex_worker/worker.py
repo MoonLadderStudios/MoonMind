@@ -3616,22 +3616,38 @@ class CodexWorker:
 
         head_bytes = min(64 * 1024, max_bytes // 8)
         tail_bytes = max_bytes - head_bytes
-        marker = b""
-        for _ in range(3):
-            omitted_bytes = max(0, total_bytes - head_bytes - tail_bytes)
-            marker = (
+
+        def _marker_for_plan(current_head: int, current_tail: int) -> bytes:
+            omitted_bytes = max(0, total_bytes - current_head - current_tail)
+            return (
                 "\n"
                 "[moonmind] step log truncated: omitted "
                 f"{omitted_bytes} bytes from the middle; "
-                f"retained first {head_bytes} bytes and last {tail_bytes} bytes "
+                f"retained first {current_head} bytes and last {current_tail} bytes "
                 f"(cap={max_bytes}).\n"
             ).encode("utf-8")
+
+        marker = _marker_for_plan(head_bytes, tail_bytes)
+        for _ in range(3):
             available = max_bytes - len(marker)
             if available <= 0:
                 return (0, max_bytes, b"")
-            if head_bytes > available:
-                head_bytes = available // 2
-            tail_bytes = max(0, available - head_bytes)
+
+            next_head_bytes = min(head_bytes, available // 2)
+            next_tail_bytes = max(0, available - next_head_bytes)
+            next_marker = _marker_for_plan(next_head_bytes, next_tail_bytes)
+
+            if (
+                next_head_bytes == head_bytes
+                and next_tail_bytes == tail_bytes
+                and next_marker == marker
+            ):
+                return (head_bytes, tail_bytes, marker)
+
+            head_bytes = next_head_bytes
+            tail_bytes = next_tail_bytes
+            marker = next_marker
+
         return (head_bytes, tail_bytes, marker)
 
     @staticmethod
