@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 from contextlib import suppress
@@ -1192,6 +1193,176 @@ async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
     assert "SESSION HEADER step-1" in step_one_text
     assert "SESSION HEADER step-1" not in step_two_text
     assert "SESSION HEADER step-2" in step_two_text
+
+
+async def test_run_once_task_step_log_without_truncation_skips_companion_artifact(
+    tmp_path: Path,
+) -> None:
+    """Untruncated per-step log snapshots should not emit companion artifacts."""
+
+    step_log = tmp_path / "small-step.log"
+    step_log.write_text("step output\nall good\n", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=4096,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    full_step_log_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.gz"
+    )
+    linkage_metadata_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.metadata.json"
+    )
+
+    assert step_log_path.read_text(encoding="utf-8") == "step output\nall good\n"
+    assert not full_step_log_path.exists()
+    assert not linkage_metadata_path.exists()
+    assert "logs/steps/step-0000.full.log.gz" not in queue.uploaded
+    assert "logs/steps/step-0000.full.log.metadata.json" not in queue.uploaded
+
+
+async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
+    tmp_path: Path,
+) -> None:
+    """Truncated previews should emit a gzip full-fidelity companion and linkage."""
+
+    source_content = (
+        "prefix-line\n" * 200
+    ) + "ERROR: critical failure context that must be preserved\n"
+    source_step_log = tmp_path / "truncated-step.log"
+    source_step_log.write_text(source_content, encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(
+                ArtifactUpload(path=source_step_log, name="logs/codex_exec.log"),
+            ),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=320,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    full_step_log_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.gz"
+    )
+    linkage_metadata_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.metadata.json"
+    )
+
+    preview = step_log_path.read_text(encoding="utf-8")
+    assert step_log_path.stat().st_size <= 320
+    assert "[moonmind] step log truncated" in preview
+    assert "[moonmind] step log linkage:" in preview
+    assert "logs/steps/step-0000.full.log.metadata.json" in preview
+
+    with gzip.open(full_step_log_path, "rb") as handle:
+        companion_content = handle.read().decode("utf-8")
+    assert companion_content == source_content
+
+    metadata = json.loads(linkage_metadata_path.read_text(encoding="utf-8"))
+    assert metadata["kind"] == "moonmind.stepLogLinkage"
+    assert metadata["truncated"] is True
+    assert metadata["previewArtifact"] == "logs/steps/step-0000.log"
+    assert metadata["fullArtifact"] == "logs/steps/step-0000.full.log.gz"
+    assert metadata["metadataArtifact"] == "logs/steps/step-0000.full.log.metadata.json"
+    assert metadata["sourceDeltaBytes"] == len(source_content.encode("utf-8"))
+    assert metadata["omittedBytes"] > 0
+
+    assert "logs/steps/step-0000.log" in queue.uploaded
+    assert "logs/steps/step-0000.full.log.gz" in queue.uploaded
+    assert "logs/steps/step-0000.full.log.metadata.json" in queue.uploaded
 
 
 async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
