@@ -463,7 +463,6 @@ services:
       api:
         condition: service_started
       docker-proxy:
-        condition: service_started
       agent-workspaces-init:
         condition: service_completed_successfully
       codex-auth-init:

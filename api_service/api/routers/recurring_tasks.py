@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
@@ -26,6 +27,7 @@ from api_service.services.recurring_tasks_service import (
 )
 
 router = APIRouter(prefix="/api/recurring-tasks", tags=["recurring-tasks"])
+logger = logging.getLogger(__name__)
 
 
 class RecurringTaskDefinitionModel(BaseModel):
@@ -189,6 +191,40 @@ def _require_operator_for_global_scope(
         )
 
 
+def _log_route_exception(
+    *, action: str, definition_id: UUID | None, user_id: UUID | None, exc: Exception
+) -> None:
+    logger.exception(
+        "Recurring task endpoint failed",
+        extra={
+            "action": action,
+            "definition_id": str(definition_id) if definition_id else None,
+            "user_id": str(user_id) if user_id else None,
+            "error_type": type(exc).__name__,
+        },
+    )
+
+
+def _audit_schedule_action(
+    *,
+    action: str,
+    outcome: str,
+    user_id: UUID | None,
+    definition_id: UUID | None = None,
+    scope: str | None = None,
+) -> None:
+    logger.info(
+        "Recurring schedule audit",
+        extra={
+            "action": action,
+            "outcome": outcome,
+            "user_id": str(user_id) if user_id else None,
+            "definition_id": str(definition_id) if definition_id else None,
+            "scope": scope,
+        },
+    )
+
+
 def _map_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RecurringTaskNotFoundError):
         return HTTPException(
@@ -284,8 +320,27 @@ async def create_recurring_task(
             policy=payload.policy,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="create_recurring_task",
+            definition_id=None,
+            user_id=owner_user_id if isinstance(owner_user_id, UUID) else None,
+            exc=exc,
+        )
+        _audit_schedule_action(
+            action="recurring_schedule.create",
+            outcome="failure",
+            user_id=owner_user_id if isinstance(owner_user_id, UUID) else None,
+            scope=payload.scope_type,
+        )
         raise _map_error(exc) from exc
 
+    _audit_schedule_action(
+        action="recurring_schedule.create",
+        outcome="success",
+        user_id=owner_user_id if isinstance(owner_user_id, UUID) else None,
+        definition_id=definition.id,
+        scope=definition.scope_type.value,
+    )
     return _serialize_definition(definition)
 
 
@@ -303,6 +358,12 @@ async def get_recurring_task(
             can_manage_global=bool(getattr(user, "is_superuser", False)),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="get_recurring_task",
+            definition_id=definition_id,
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            exc=exc,
+        )
         raise _map_error(exc) from exc
     return _serialize_definition(definition)
 
@@ -333,7 +394,26 @@ async def update_recurring_task(
             policy=payload.policy,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="update_recurring_task",
+            definition_id=definition_id,
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            exc=exc,
+        )
+        _audit_schedule_action(
+            action="recurring_schedule.update",
+            outcome="failure",
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            definition_id=definition_id,
+        )
         raise _map_error(exc) from exc
+    _audit_schedule_action(
+        action="recurring_schedule.update",
+        outcome="success",
+        user_id=user_id if isinstance(user_id, UUID) else None,
+        definition_id=updated.id,
+        scope=updated.scope_type.value,
+    )
     return _serialize_definition(updated)
 
 
@@ -356,7 +436,26 @@ async def run_recurring_task_now(
         )
         run = await service.create_manual_run(definition)
     except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="run_recurring_task_now",
+            definition_id=definition_id,
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            exc=exc,
+        )
+        _audit_schedule_action(
+            action="recurring_schedule.run_now",
+            outcome="failure",
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            definition_id=definition_id,
+        )
         raise _map_error(exc) from exc
+    _audit_schedule_action(
+        action="recurring_schedule.run_now",
+        outcome="success",
+        user_id=user_id if isinstance(user_id, UUID) else None,
+        definition_id=definition.id,
+        scope=definition.scope_type.value,
+    )
     return _serialize_run(run)
 
 
@@ -377,6 +476,12 @@ async def list_recurring_task_runs(
         )
         runs = await service.list_runs(definition_id=definition.id, limit=limit)
     except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="list_recurring_task_runs",
+            definition_id=definition_id,
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            exc=exc,
+        )
         raise _map_error(exc) from exc
 
     return RecurringTaskRunListResponse(items=[_serialize_run(item) for item in runs])

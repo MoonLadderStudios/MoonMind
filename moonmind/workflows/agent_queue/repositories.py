@@ -131,6 +131,38 @@ class AgentQueueRepository:
             raise AgentJobNotFoundError(job_id)
         return job
 
+    async def find_job_by_recurrence_run_id(
+        self,
+        *,
+        run_id: UUID,
+        job_type: str,
+    ) -> Optional[models.AgentJob]:
+        """Find a job by recurrence run id stored in payload.system.recurrence.runId."""
+
+        run_id_text = str(run_id)
+        stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob).where(
+            models.AgentJob.type == job_type
+        )
+
+        bind = self._session.get_bind()
+        dialect_name = bind.dialect.name if bind is not None else ""
+        if dialect_name == "postgresql":
+            stmt = stmt.where(
+                models.AgentJob.payload["system"]["recurrence"]["runId"].astext
+                == run_id_text
+            )
+        elif dialect_name == "sqlite":
+            stmt = stmt.where(
+                func.json_extract(models.AgentJob.payload, "$.system.recurrence.runId")
+                == run_id_text
+            )
+        else:
+            return None
+
+        stmt = stmt.order_by(models.AgentJob.created_at.desc()).limit(1)
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
+
     async def list_jobs(
         self,
         *,

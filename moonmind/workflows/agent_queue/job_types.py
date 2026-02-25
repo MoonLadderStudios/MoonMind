@@ -8,13 +8,10 @@ CANONICAL_TASK_JOB_TYPE = "task"
 LEGACY_TASK_JOB_TYPES: FrozenSet[str] = frozenset({"codex_exec", "codex_skill"})
 MANIFEST_JOB_TYPE = "manifest"
 ORCHESTRATOR_RUN_JOB_TYPE = "orchestrator_run"
-HOUSEKEEPING_JOB_TYPE = "housekeeping"
-
 SUPPORTED_QUEUE_JOB_TYPES: FrozenSet[str] = frozenset(
     {
         CANONICAL_TASK_JOB_TYPE,
         MANIFEST_JOB_TYPE,
-        HOUSEKEEPING_JOB_TYPE,
         ORCHESTRATOR_RUN_JOB_TYPE,
         *LEGACY_TASK_JOB_TYPES,
     }
@@ -24,7 +21,6 @@ __all__ = [
     "CANONICAL_TASK_JOB_TYPE",
     "LEGACY_TASK_JOB_TYPES",
     "MANIFEST_JOB_TYPE",
-    "HOUSEKEEPING_JOB_TYPE",
     "ORCHESTRATOR_RUN_JOB_TYPE",
     "SUPPORTED_QUEUE_JOB_TYPES",
 ]

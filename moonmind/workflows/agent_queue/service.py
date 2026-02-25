@@ -414,6 +414,7 @@ class AgentQueueService:
         requested_by_user_id: Optional[UUID] = None,
         affinity_key: Optional[str] = None,
         max_attempts: int = 3,
+        commit: bool = True,
     ) -> models.AgentJob:
         """Create and persist a new queued job."""
 
@@ -426,7 +427,8 @@ class AgentQueueService:
             affinity_key=affinity_key,
             max_attempts=max_attempts,
         )
-        await self._repository.commit()
+        if commit:
+            await self._repository.commit()
         return job
 
     async def _create_job_record(

@@ -2574,9 +2574,6 @@
     if (kind === "queue_task") {
       return "task";
     }
-    if (kind === "housekeeping") {
-      return `housekeeping: ${String(target.action || "").trim() || "action"}`;
-    }
     return kind || "unknown";
   }
 
@@ -2587,7 +2584,7 @@
   async function renderSchedulesListPage() {
     setView(
       "Recurring Schedules",
-      "Managed recurring schedules for queue, manifest, and housekeeping targets.",
+      "Managed recurring schedules for queue and manifest targets.",
       "<p class='loading'>Loading recurring schedules...</p>",
       { showAutoRefreshControls: true },
     );
@@ -2635,7 +2632,7 @@
         : "<p class='small'>No recurring schedules found.</p>";
       setView(
         "Recurring Schedules",
-        "Managed recurring schedules for queue, manifest, and housekeeping targets.",
+        "Managed recurring schedules for queue and manifest targets.",
         `<div class="actions"><a href="/tasks/schedules/new"><button type="button">New Schedule</button></a></div>${tableHtml}`,
         { showAutoRefreshControls: true },
       );
@@ -2675,7 +2672,6 @@
             <select name="targetKind">
               <option value="queue_task" selected>queue_task</option>
               <option value="manifest_run">manifest_run</option>
-              <option value="housekeeping">housekeeping</option>
             </select>
           </label>
         </div>
@@ -2715,17 +2711,6 @@
               <option value="run" selected>run</option>
               <option value="plan">plan</option>
             </select>
-          </label>
-        `;
-        return;
-      }
-      if (kind === "housekeeping") {
-        targetFields.innerHTML = `
-          <label>Action
-            <input name="targetHousekeepingAction" value="prune_artifacts" required />
-          </label>
-          <label>Args JSON (optional)
-            <textarea name="targetHousekeepingArgs" rows="4" placeholder='{\"olderThanDays\": 14}'></textarea>
           </label>
         `;
         return;
@@ -2792,27 +2777,6 @@
           name: manifestName,
           action,
           options: {},
-        };
-      } else if (targetKind === "housekeeping") {
-        const action = String(formData.get("targetHousekeepingAction") || "").trim();
-        if (!action) {
-          message.textContent = "Housekeeping action is required.";
-          return;
-        }
-        let args = {};
-        const argsRaw = String(formData.get("targetHousekeepingArgs") || "").trim();
-        if (argsRaw) {
-          try {
-            args = JSON.parse(argsRaw);
-          } catch (error) {
-            message.textContent = "Housekeeping args JSON is invalid.";
-            return;
-          }
-        }
-        target = {
-          kind: "housekeeping",
-          action,
-          args,
         };
       } else {
         const repository = String(formData.get("targetTaskRepository") || "").trim();

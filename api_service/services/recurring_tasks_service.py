@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
@@ -28,7 +29,6 @@ from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models as queue_models
 from moonmind.workflows.agent_queue.job_types import (
     CANONICAL_TASK_JOB_TYPE,
-    HOUSEKEEPING_JOB_TYPE,
     MANIFEST_JOB_TYPE,
 )
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
@@ -38,6 +38,9 @@ from moonmind.workflows.recurring_tasks.cron import (
     parse_cron_expression,
     validate_timezone_name,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class RecurringTaskValidationError(ValueError):
@@ -181,10 +184,9 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         "queue_task",
         "queue_task_template",
         "manifest_run",
-        "housekeeping",
     }:
         raise RecurringTaskValidationError(
-            "target.kind must be one of: queue_task, queue_task_template, manifest_run, housekeeping"
+            "target.kind must be one of: queue_task, queue_task_template, manifest_run"
         )
 
     if kind == "queue_task":
@@ -244,16 +246,6 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
                 "target.options for manifest_run must be an object"
             )
         target["action"] = action
-
-    if kind == "housekeeping":
-        action = str(target.get("action") or "").strip()
-        if not action:
-            raise RecurringTaskValidationError(
-                "target.action is required for housekeeping targets"
-            )
-        args_payload = target.get("args")
-        if args_payload is not None and not isinstance(args_payload, Mapping):
-            raise RecurringTaskValidationError("target.args must be an object")
 
     target["kind"] = kind
     return target
@@ -368,6 +360,12 @@ class RecurringTasksService:
         name_text = _clean_text(name, field_name="name", required=True) or ""
         target_payload = _normalize_target(_json_object(target, field_name="target"))
         policy_payload = _json_object(policy, field_name="policy")
+        _normalize_policy(
+            policy_payload,
+            global_max_backfill=max(
+                1, int(settings.spec_workflow.scheduler_max_backfill)
+            ),
+        )
         scope = _normalize_scope_type(scope_type)
 
         if scope is RecurringTaskScopeType.PERSONAL and owner_user_id is None:
@@ -444,7 +442,14 @@ class RecurringTasksService:
                 _json_object(target, field_name="target")
             )
         if policy is not None:
-            definition.policy = _json_object(policy, field_name="policy")
+            normalized_policy_payload = _json_object(policy, field_name="policy")
+            _normalize_policy(
+                normalized_policy_payload,
+                global_max_backfill=max(
+                    1, int(settings.spec_workflow.scheduler_max_backfill)
+                ),
+            )
+            definition.policy = normalized_policy_payload
         if scope_ref is not None:
             definition.scope_ref = _clean_text(scope_ref, field_name="scopeRef")
 
@@ -608,7 +613,9 @@ class RecurringTasksService:
         if not due_candidates:
             return [], cursor
 
-        if policy.catchup_mode in {"none", "last"}:
+        if policy.catchup_mode == "none":
+            selected = []
+        elif policy.catchup_mode == "last":
             selected = [due_candidates[-1]]
         else:
             selected = due_candidates[-policy.max_backfill :]
@@ -699,6 +706,21 @@ class RecurringTasksService:
             ),
         )
         rows = (await self._session.execute(stmt)).scalars().all()
+
+        queued_job_ids = {
+            row.queue_job_id
+            for row in rows
+            if row.outcome is RecurringTaskRunOutcome.ENQUEUED
+            and row.queue_job_id is not None
+        }
+        queue_jobs_by_id: dict[UUID, queue_models.AgentJob] = {}
+        if queued_job_ids:
+            queue_stmt: Select[tuple[queue_models.AgentJob]] = select(
+                queue_models.AgentJob
+            ).where(queue_models.AgentJob.id.in_(queued_job_ids))
+            queue_rows = (await self._session.execute(queue_stmt)).scalars().all()
+            queue_jobs_by_id = {job.id: job for job in queue_rows}
+
         active = 0
         for row in rows:
             if row.outcome in {
@@ -712,7 +734,7 @@ class RecurringTasksService:
                 active += 1
                 continue
 
-            queue_job = await self._session.get(queue_models.AgentJob, row.queue_job_id)
+            queue_job = queue_jobs_by_id.get(row.queue_job_id)
             if queue_job is None:
                 continue
             if queue_job.status in {
@@ -756,6 +778,13 @@ class RecurringTasksService:
         job_type: str,
         scan_limit: int = 1000,
     ) -> queue_models.AgentJob | None:
+        existing = await self._queue_repository.find_job_by_recurrence_run_id(
+            run_id=run_id,
+            job_type=job_type,
+        )
+        if existing is not None:
+            return existing
+
         jobs = await self._queue_repository.list_jobs(
             job_type=job_type, limit=scan_limit
         )
@@ -811,6 +840,7 @@ class RecurringTasksService:
             requested_by_user_id=definition.owner_user_id,
             affinity_key=affinity,
             max_attempts=max(1, max_attempts),
+            commit=False,
         )
 
     async def _dispatch_queue_task_template(
@@ -925,6 +955,7 @@ class RecurringTasksService:
             requested_by_user_id=definition.owner_user_id,
             affinity_key=affinity,
             max_attempts=max(1, max_attempts),
+            commit=False,
         )
 
     async def _dispatch_manifest_run(
@@ -951,32 +982,6 @@ class RecurringTasksService:
             },
         )
 
-    async def _dispatch_housekeeping(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        run: RecurringTaskRun,
-        target: Mapping[str, Any],
-    ) -> queue_models.AgentJob:
-        payload = {
-            "housekeeping": {
-                "action": str(target.get("action") or "").strip(),
-                "args": dict(target.get("args") or {}),
-            }
-        }
-        payload = self._merge_recurrence_system(
-            payload,
-            recurrence=self._recurrence_payload(definition=definition, run=run),
-        )
-        return await self._queue_service.create_job(
-            job_type=HOUSEKEEPING_JOB_TYPE,
-            payload=payload,
-            priority=0,
-            created_by_user_id=definition.owner_user_id,
-            requested_by_user_id=definition.owner_user_id,
-            max_attempts=1,
-        )
-
     async def _dispatch_run(
         self,
         *,
@@ -986,8 +991,8 @@ class RecurringTasksService:
         policy: RecurringPolicy,
     ) -> int:
         scheduled_for = _coerce_utc(run.scheduled_for)
-        if policy.misfire_grace_seconds > 0 and now - scheduled_for > timedelta(
-            seconds=policy.misfire_grace_seconds
+        if now - scheduled_for > timedelta(
+            seconds=max(0, policy.misfire_grace_seconds)
         ):
             run.outcome = RecurringTaskRunOutcome.SKIPPED
             run.message = "Skipped due to misfire grace threshold"
@@ -997,19 +1002,18 @@ class RecurringTasksService:
             definition.updated_at = now
             return 1
 
-        if policy.overlap_mode == "skip":
-            active_count = await self._count_active_runs(
-                definition_id=definition.id,
-                current_run_id=run.id,
-            )
-            if active_count >= policy.max_concurrent_runs:
-                run.outcome = RecurringTaskRunOutcome.SKIPPED
-                run.message = "Skipped due to overlap policy"
-                run.updated_at = now
-                definition.last_dispatch_status = "skipped"
-                definition.last_dispatch_error = run.message[:2000]
-                definition.updated_at = now
-                return 1
+        active_count = await self._count_active_runs(
+            definition_id=definition.id,
+            current_run_id=run.id,
+        )
+        if active_count >= policy.max_concurrent_runs:
+            run.outcome = RecurringTaskRunOutcome.SKIPPED
+            run.message = "Skipped due to overlap policy"
+            run.updated_at = now
+            definition.last_dispatch_status = "skipped"
+            definition.last_dispatch_error = run.message[:2000]
+            definition.updated_at = now
+            return 1
 
         target = dict(definition.target or {})
         kind = str(target.get("kind") or "").strip().lower()
@@ -1020,8 +1024,6 @@ class RecurringTasksService:
             expected_job_type = CANONICAL_TASK_JOB_TYPE
         elif kind == "manifest_run":
             expected_job_type = MANIFEST_JOB_TYPE
-        elif kind == "housekeeping":
-            expected_job_type = HOUSEKEEPING_JOB_TYPE
         else:
             run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
             run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
@@ -1068,10 +1070,8 @@ class RecurringTasksService:
                     target=target,
                 )
             else:
-                job = await self._dispatch_housekeeping(
-                    definition=definition,
-                    run=run,
-                    target=target,
+                raise RecurringTaskValidationError(
+                    f"Unsupported target kind: {kind or '<empty>'}"
                 )
         except Exception as exc:
             attempt = int(run.dispatch_attempts or 0) + 1
@@ -1079,7 +1079,16 @@ class RecurringTasksService:
             run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
             run.dispatch_attempts = attempt
             run.dispatch_after = now + timedelta(seconds=backoff_seconds)
-            run.message = str(exc)[:2000]
+            run.message = "Recurring dispatch failed. See server logs for details."
+            logger.exception(
+                "Recurring run dispatch failed",
+                extra={
+                    "definition_id": str(definition.id),
+                    "run_id": str(run.id),
+                    "target_kind": kind,
+                    "attempt": attempt,
+                },
+            )
             run.updated_at = now
             definition.last_dispatch_status = "error"
             definition.last_dispatch_error = run.message[:2000]
