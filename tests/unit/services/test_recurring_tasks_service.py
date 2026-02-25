@@ -264,7 +264,7 @@ async def test_compute_due_occurrences_none_catchup_skips_backfill(
                 policy={"catchup": {"mode": "none"}},
             )
 
-            now = datetime.now(UTC).replace(second=0, microsecond=0)
+            now = datetime.now(UTC).replace(microsecond=0)
             definition.next_run_at = now - timedelta(minutes=3)
             await session.commit()
 
@@ -303,7 +303,7 @@ async def test_dispatch_pending_runs_applies_zero_misfire_grace(tmp_path: Path) 
                 },
                 policy={"misfireGraceSeconds": 0},
             )
-            now = datetime.now(UTC).replace(second=0, microsecond=0)
+            now = datetime.now(UTC).replace(microsecond=0)
             definition.next_run_at = now - timedelta(minutes=2)
             await session.commit()
             await service.schedule_due_definitions(now=now, batch_size=10)
