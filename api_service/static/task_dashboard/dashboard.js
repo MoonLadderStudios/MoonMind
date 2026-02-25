@@ -2477,7 +2477,7 @@
           <input type="number" name="priority" value="0" />
         </label>
         <div class="actions">
-          <button type="submit">Create Manifest Job</button>
+          <button type="submit" class="queue-submit-primary">Create Manifest Job</button>
           <a href="/tasks/manifests"><button class="secondary" type="button">Cancel</button></a>
         </div>
         <p class="small" id="manifest-submit-message"></p>
@@ -2743,7 +2743,7 @@
           Enabled
         </label>
         <div class="actions">
-          <button type="submit">Create Schedule</button>
+          <button type="submit" class="queue-submit-primary">Create Schedule</button>
           <a href="/tasks/schedules"><button class="secondary" type="button">Cancel</button></a>
         </div>
         <p class="small" id="schedule-create-message"></p>
