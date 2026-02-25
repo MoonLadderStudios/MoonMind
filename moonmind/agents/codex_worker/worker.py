@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import re
 import shutil
 import socket
@@ -163,6 +164,7 @@ _VERIFICATION_COMMAND_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -3244,27 +3246,50 @@ class CodexWorker:
     def _parse_git_status_paths(status_output: str) -> tuple[str, ...]:
         """Extract changed paths from `git status --porcelain` output."""
 
+        def _split_rename_paths(
+            entry: str,
+            *,
+            is_renamed: bool,
+        ) -> tuple[str, ...]:
+            if not is_renamed or " -> " not in entry:
+                return (entry,)
+            try:
+                tokens = tuple(shlex.split(entry))
+            except ValueError:
+                return (entry,)
+            if len(tokens) == 3 and tokens[1] == "->":
+                return (tokens[0], tokens[2])
+            return (entry,)
+
+        def _normalize_path(path_text: str) -> str:
+            text = str(path_text or "").strip()
+            if text.startswith('"') and text.endswith('"') and len(text) >= 2:
+                return text[1:-1]
+            return text
+
         paths: list[str] = []
         for raw_line in str(status_output or "").splitlines():
             line = raw_line.rstrip()
             if len(line) < 4:
                 continue
+            status = line[:2]
+            is_renamed = ("R" in status) or ("C" in status)
             entry = line[3:].strip()
             if not entry:
                 continue
-            if " -> " in entry:
-                entry = entry.split(" -> ", 1)[1].strip()
-            if entry.startswith('"') and entry.endswith('"') and len(entry) >= 2:
-                entry = entry[1:-1]
-            if entry:
-                paths.append(entry)
+            for path in _split_rename_paths(entry, is_renamed=is_renamed):
+                normalized_path = _normalize_path(path)
+                if normalized_path:
+                    paths.append(normalized_path)
         return tuple(dict.fromkeys(paths))
 
     @staticmethod
     def _is_source_code_change_path(path_text: str) -> bool:
         """Return True when a changed path likely impacts executable code."""
 
-        normalized = str(path_text or "").strip().lstrip("./")
+        normalized = str(path_text or "").strip()
+        if normalized.startswith("./"):
+            normalized = normalized.removeprefix("./")
         if not normalized:
             return False
         lowered = normalized.lower()
@@ -3337,15 +3362,20 @@ class CodexWorker:
                 lines = log_path.read_text(
                     encoding="utf-8", errors="replace"
                 ).splitlines()
-            except OSError:
+            except OSError as exc:
+                logger.warning(
+                    "failed to collect verification evidence from stage log %s: %s",
+                    log_path,
+                    exc,
+                )
                 continue
             artifact_name = cls._artifact_name_for_path(
                 path=log_path, prepared=prepared
             )
             for line_number, line in enumerate(lines, start=1):
-                if not line.startswith("$ "):
+                if not line.startswith(_VERIFICATION_COMMAND_LOG_PREFIX):
                     continue
-                command = line[2:].strip()
+                command = line[len(_VERIFICATION_COMMAND_LOG_PREFIX) :].strip()
                 if not cls._looks_like_verification_command(command):
                     continue
                 evidence.append(
@@ -3364,30 +3394,23 @@ class CodexWorker:
         """Normalize optional structured verification skip reason."""
 
         raw_skip_reason = publish.get("verificationSkipReason")
-        verification_node = publish.get("verification")
-        if raw_skip_reason is None and isinstance(verification_node, Mapping):
-            raw_skip_reason = verification_node.get("skipReason")
         if raw_skip_reason is None:
+            legacy_verification = publish.get("verification")
+            if isinstance(legacy_verification, Mapping) and (
+                "skipReason" in legacy_verification
+            ):
+                raise ValueError(
+                    "task.publish.verification.skipReason is not supported; "
+                    "use task.publish.verificationSkipReason instead"
+                )
             return None
         if not isinstance(raw_skip_reason, Mapping):
             raise ValueError(
                 "task.publish.verificationSkipReason must be an object with category/reason"
             )
 
-        category_raw = (
-            raw_skip_reason.get("category")
-            if isinstance(raw_skip_reason, Mapping)
-            else None
-        )
-        if category_raw is None and isinstance(raw_skip_reason, Mapping):
-            category_raw = raw_skip_reason.get("type")
-        reason_raw = (
-            raw_skip_reason.get("reason")
-            if isinstance(raw_skip_reason, Mapping)
-            else None
-        )
-        if reason_raw is None and isinstance(raw_skip_reason, Mapping):
-            reason_raw = raw_skip_reason.get("detail") or raw_skip_reason.get("details")
+        category_raw = raw_skip_reason.get("category")
+        reason_raw = raw_skip_reason.get("reason")
         category = re.sub(r"[^a-z0-9_-]+", "_", str(category_raw or "").strip().lower())
         category = category.strip("_")
         reason = " ".join(str(reason_raw or "").split())
@@ -3589,7 +3612,6 @@ class CodexWorker:
                 "evidenceCount": 0,
                 "evidence": [],
                 "skipReason": None,
-                "evidenceArtifact": "reports/publish_preflight.json",
             }
             preflight_result: PublishPreflightResult | None = None
             if not status.stdout.strip():
@@ -3671,6 +3693,34 @@ class CodexWorker:
                 verification_payload["status"] = "passed"
 
             if not preflight_result.passed:
+                verification_payload["status"] = "failed"
+                failure_payload = {
+                    "mode": publish_mode,
+                    "branch": prepared.working_branch,
+                    "baseBranch": prepared.starting_branch,
+                    "prUrl": None,
+                    "skipped": False,
+                    "reason": preflight_result.reason,
+                    "verification": verification_payload,
+                }
+                prepared.publish_result_path.write_text(
+                    json.dumps(failure_payload, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                staged_artifacts.extend(
+                    [
+                        ArtifactUpload(
+                            path=prepared.publish_log_path,
+                            name="logs/publish.log",
+                            content_type="text/plain",
+                        ),
+                        ArtifactUpload(
+                            path=prepared.publish_result_path,
+                            name="publish_result.json",
+                            content_type="application/json",
+                        ),
+                    ]
+                )
                 raise RuntimeError(preflight_result.reason)
 
             await self._run_stage_command(
@@ -4663,7 +4713,9 @@ class CodexWorker:
         redacted_command = self._redact_command_for_log(
             command, redaction_values=merged_redaction_values
         )
-        self._append_stage_log(log_path, f"$ {' '.join(redacted_command)}")
+        self._append_stage_log(
+            log_path, f"{_VERIFICATION_COMMAND_LOG_PREFIX}{' '.join(redacted_command)}"
+        )
         raise RuntimeError("Codex execution handler is missing command runner")
 
     @staticmethod

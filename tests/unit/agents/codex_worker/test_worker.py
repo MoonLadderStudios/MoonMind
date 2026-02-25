@@ -289,7 +289,7 @@ class FakeHandler:
         del cwd, check, env, redaction_values, cancel_event, output_chunk_callback
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"$ {' '.join(command)}\n")
+            handle.write(f"[command] $ {' '.join(command)}\n")
         return CommandResult(tuple(command), 0, "", "")
 
 
@@ -3633,6 +3633,103 @@ async def test_resolve_publish_text_override_preserves_non_empty_verbatim() -> N
     assert CodexWorker._resolve_publish_text_override(None) is None
 
 
+def test_parse_git_status_paths_collects_renamed_source_paths() -> None:
+    """Git status parser should include both sides of a rename or copy for safety."""
+
+    status_output = """
+R  moonmind/agents/codex_worker/worker.py -> docs/README.md
+R  \"src/legacy path.py\" -> \"legacy/src/archived.py\"
+ M \"docs -> handbook.md\"\n"""
+    paths = CodexWorker._parse_git_status_paths(status_output)
+    assert paths == (
+        "moonmind/agents/codex_worker/worker.py",
+        "docs/README.md",
+        "src/legacy path.py",
+        "legacy/src/archived.py",
+        "docs -> handbook.md",
+    )
+
+
+def test_is_source_code_change_path_preserves_dotfile_classes() -> None:
+    """Source-path classifier should keep dot-prefixed allowlist entries working."""
+
+    assert (
+        CodexWorker._is_source_code_change_path(".github/workflows/test.yml") is False
+    )
+    assert CodexWorker._is_source_code_change_path("./.github/workflows/test.yml") is False
+    assert CodexWorker._is_source_code_change_path(".specify/specs/overview.md") is False
+    assert CodexWorker._is_source_code_change_path(".gitignore") is False
+    assert (
+        CodexWorker._is_source_code_change_path("moonmind/agents/codex_worker/worker.py")
+        is True
+    )
+
+
+def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> None:
+    """Only `verificationSkipReason.category`/`reason` should be accepted."""
+
+    assert CodexWorker._resolve_publish_verification_skip_reason(
+        {"verificationSkipReason": {"category": "ops", "reason": "scheduled maintenance"}}
+    ) == {"category": "ops", "reason": "scheduled maintenance"}
+
+    with pytest.raises(ValueError, match="task.publish.verificationSkipReason.reason"):
+        CodexWorker._resolve_publish_verification_skip_reason(
+            {
+                "verificationSkipReason": {
+                    "category": "ops",
+                    "detail": "temporary issue",
+                }
+            }
+        )
+
+    with pytest.raises(ValueError, match="task.publish.verificationSkipReason.category"):
+        CodexWorker._resolve_publish_verification_skip_reason(
+            {
+                "verificationSkipReason": {
+                    "type": "ops",
+                    "details": "temporary issue",
+                }
+            }
+        )
+
+    with pytest.raises(ValueError, match="task.publish.verification.skipReason"):
+        CodexWorker._resolve_publish_verification_skip_reason(
+            {"verification": {"skipReason": {"category": "ops", "reason": "legacy"}}}
+        )
+
+
+def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(tmp_path: Path) -> None:
+    """Evidence collection should ignore plain `$`-prefixed output text."""
+
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path,
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.execute_log_path.write_text(
+        "$ pytest\n"
+        "[command] $ ./tools/test_unit.sh\n"
+        "[command] $ npm run build\n",
+        encoding="utf-8",
+    )
+    evidence = CodexWorker._collect_verification_evidence(prepared=prepared)
+    assert len(evidence) == 2
+    assert evidence[0]["command"] == "./tools/test_unit.sh"
+    assert evidence[1]["command"] == "npm run build"
+
+
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3709,7 +3806,7 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
     prepared.execute_log_path.write_text(
-        "$ ./tools/test_unit.sh\nok\n",
+        "[command] $ ./tools/test_unit.sh\nok\n",
         encoding="utf-8",
     )
 
@@ -3842,10 +3939,176 @@ async def test_run_publish_stage_fails_without_verification_evidence_for_source_
     assert preflight_payload["status"] == "FAIL"
     assert preflight_payload["verification"]["required"] is True
     assert preflight_payload["verification"]["evidenceCount"] == 0
+    assert preflight_payload["verification"]["skipReason"] is None
     assert any(
         artifact.name == "reports/publish_preflight.json"
         for artifact in staged_artifacts
     )
+    assert any(artifact.name == "logs/publish.log" for artifact in staged_artifacts)
+    assert any(artifact.name == "publish_result.json" for artifact in staged_artifacts)
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["verification"]["status"] == "failed"
+    assert "publish preflight failed: source-code changes detected" in publish_payload["reason"]
+
+
+async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No-change publish path should report verification as not run without a preflight artifact."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(tuple(command), 0, "", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={"task": {"publish": {"mode": "branch"}}},
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert publish_note == "publish skipped: no local changes"
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["verification"]["status"] == "not_required"
+    assert "evidenceArtifact" not in publish_payload["verification"]
+    assert any(artifact.name == "logs/publish.log" for artifact in staged_artifacts)
+
+
+async def test_run_publish_stage_fails_for_renamed_source_change_without_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Renamed source paths should still be checked for verification evidence."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(
+                tuple(command),
+                0,
+                "R  moonmind/agents/codex_worker/worker.py -> docs/README.md\n",
+                "",
+            )
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    with pytest.raises(RuntimeError, match="publish preflight failed"):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={"task": {"publish": {"mode": "branch"}}},
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=staged_artifacts,
+        )
 
 
 async def test_run_publish_stage_allows_structured_verification_skip_reason(
