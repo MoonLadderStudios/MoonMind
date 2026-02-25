@@ -33,7 +33,9 @@ def test_generate_skill_action_plan_includes_rollback_step() -> None:
     ]
 
 
-def test_generate_skill_action_plan_applies_default_compose_project_for_update_moonmind() -> None:
+def test_generate_skill_action_plan_applies_default_compose_project_for_update_moonmind() -> (
+    None
+):
     profile = ServiceProfile(
         key="orchestrator",
         compose_service="orchestrator",
