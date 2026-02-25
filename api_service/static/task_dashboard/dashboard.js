@@ -3217,16 +3217,16 @@
         ? String(templateFeatureRequest.value || "").trim()
         : "";
     const clearWorkerSubmissionDraftAfterCreate = () => {
+      const clearedDraft = resetWorkerSubmissionFields(collectWorkerDraftFromForm());
+      submitDraftController.saveWorker(clearedDraft);
+      persistSubmitDraftsToStorage();
+
       stepState.splice(0, stepState.length, createStepStateEntry());
       appliedTemplateState = [];
       if (templateFeatureRequest instanceof HTMLTextAreaElement) {
         templateFeatureRequest.value = "";
       }
       renderStepEditor();
-      submitDraftController.saveWorker(
-        resetWorkerSubmissionFields(collectWorkerDraftFromForm()),
-      );
-      persistSubmitDraftsToStorage();
     };
     const normalizeTemplateInputKey = (key) =>
       String(key || "")
@@ -4005,7 +4005,11 @@
         if (!created || typeof created.id !== "string" || !created.id.trim()) {
           throw new Error("queue creation response missing job id");
         }
-        clearWorkerSubmissionDraftAfterCreate();
+        try {
+          clearWorkerSubmissionDraftAfterCreate();
+        } catch (cleanupError) {
+          console.warn("worker draft cleanup failed after queue creation", cleanupError);
+        }
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
         console.error("queue submit failed", error);
