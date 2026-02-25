@@ -4490,11 +4490,10 @@
       const submitButton = form.querySelector('button[type="submit"]');
       const originalSubmitLabel =
         submitButton instanceof HTMLButtonElement
-          ? submitButton.textContent || "Create"
+          ? (submitButton.textContent || "Create").trim() || "Create"
           : "Create";
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
-        submitButton.textContent = "Submitting...";
       }
 
       try {
