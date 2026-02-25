@@ -345,13 +345,6 @@ tbody tr:hover {
   font-size: 0.85rem;
 }
 
-.queue-card-status {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.15rem;
-}
-
 .queue-card-fields {
   margin: 0;
   display: grid;
@@ -375,6 +368,13 @@ tbody tr:hover {
   margin: 0;
   font-size: 0.92rem;
   font-weight: 500;
+}
+
+.queue-card-status-field {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
 }
 
 .queue-card-actions {

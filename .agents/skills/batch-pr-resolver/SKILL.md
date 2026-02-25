@@ -46,7 +46,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - `maxIterations` -> `--max-iterations`
 
 3. For each open PR in the target repo:
-   - Skip PRs whose head repository is not exactly the target repo.
+   - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.
    - Build a canonical queue task with:
      - `type: "task"`
      - `payload.repository`: target repo

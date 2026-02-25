@@ -123,6 +123,29 @@ def _append_flag(command: list[str], flag: str, value: Any) -> None:
     command.extend([flag, text])
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _flag_enabled(skill_args: Mapping[str, Any], *keys: str) -> bool:
+    for key in keys:
+        if key in skill_args:
+            return _coerce_bool(skill_args.get(key))
+    return False
+
+
 def _resolve_skill_command(
     *,
     script_path: Path,
@@ -148,18 +171,18 @@ def _resolve_skill_command(
         raise RuntimeError(
             "Custom update commands are not supported for orchestrator skill runs."
         )
-    if is_update_moonmind and bool(
-        skill_args.get("allowDirty") or skill_args.get("allow_dirty")
-    ):
+    if is_update_moonmind and _flag_enabled(skill_args, "allowDirty", "allow_dirty"):
         command.append("--allow-dirty")
-    if is_update_moonmind and bool(
-        skill_args.get("noComposePull") or skill_args.get("no_compose_pull")
+    if is_update_moonmind and _flag_enabled(
+        skill_args, "noComposePull", "no_compose_pull"
     ):
         command.append("--no-compose-pull")
-    if is_update_moonmind and bool(
-        skill_args.get("dryRun") or skill_args.get("dry_run")
-    ):
+    if is_update_moonmind and _flag_enabled(skill_args, "dryRun", "dry_run"):
         command.append("--dry-run")
+    if is_update_moonmind and _flag_enabled(
+        skill_args, "restartOrchestrator", "restart_orchestrator"
+    ):
+        command.append("--restart-orchestrator")
 
     return (command, repo_path)
 
