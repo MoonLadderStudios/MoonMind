@@ -3685,7 +3685,6 @@ class CodexWorker:
         if len(bounded) > max_bytes:
             return bounded[-max_bytes:]
         return bounded
-
     def _evaluate_step_gate(
         self,
         *,

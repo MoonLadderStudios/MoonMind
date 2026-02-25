@@ -30,6 +30,7 @@ from .service_profiles import get_service_profile
 from .storage import (
     ArtifactStorage,
     ArtifactStorageError,
+    ArtifactPathError,
     ArtifactWriteResult,
     resolve_artifact_root,
 )
@@ -94,6 +95,7 @@ def _build_storage_for_run(run: db_models.OrchestratorRun) -> ArtifactStorage:
     """Return an ``ArtifactStorage`` aligned with the run's configured root."""
 
     stored_root = run.artifact_root
+    configured_root = _artifact_root()
     if stored_root:
         run_path = Path(stored_root)
         if not run_path.is_absolute():
@@ -101,11 +103,16 @@ def _build_storage_for_run(run: db_models.OrchestratorRun) -> ArtifactStorage:
 
         # ``artifact_root`` may point at the specific run directory or the base root.
         base_path = run_path.parent if run_path.name == str(run.id) else run_path
-        storage = ArtifactStorage(base_path)
+        try:
+            storage = ArtifactStorage(base_path)
+            resolved = storage.ensure_run_directory(run.id)
+        except (ArtifactPathError, PermissionError, OSError):
+            storage = ArtifactStorage(configured_root)
+            resolved = storage.ensure_run_directory(run.id)
     else:
-        storage = ArtifactStorage(_artifact_root())
+        storage = ArtifactStorage(configured_root)
+        resolved = storage.ensure_run_directory(run.id)
 
-    resolved = storage.ensure_run_directory(run.id)
     # Persist the fully qualified run directory for future task executions.
     run.artifact_root = str(resolved)
     return storage

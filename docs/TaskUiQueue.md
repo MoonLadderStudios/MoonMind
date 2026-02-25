@@ -100,9 +100,9 @@ Integration points:
 
 `renderQueueCards(rows)` renders each queue row as a card (non-queue rows return empty strings). Structure:
 
-1. **Header row**: job title / ID link on the left, `statusBadge(row.source, row.rawStatus)` on the right.
-2. **Meta line**: queue name + skill preview in muted text for quick scanning.
-3. **Definition list**: iterate `queueFieldDefinitions` to show label/value pairs stacked on two columns for md- width and one column for very small widths.
+1. **Header row**: job title / ID link plus queue/skill metadata for quick scanning.
+2. **Definition list**: emit a fixed leading `Status` row first, then iterate `queueFieldDefinitions` for the remaining label/value pairs.
+3. **Status formatting**: the `Status` `<dd>` wraps badge + raw status inside `.queue-card-status-field` so values stay stacked in a compact vertical block on mobile.
 4. **Actions**: include a `View details` button linking to `row.link` and an optional secondary action (e.g., `Retry`) only when the existing table row exposes that action (future work). For now the design keeps a single `View details` button to avoid duplicating controls.
 
 Markup sketch (rendered via string templates to stay consistent with the rest of `dashboard.js`):
@@ -114,9 +114,17 @@ Markup sketch (rendered via string templates to stay consistent with the rest of
       <a href="/tasks/queue/123" class="queue-card-title">Queue Job · 123</a>
       <p class="queue-card-meta">moonmind.jobs · auto/speckit-orchestrate</p>
     </div>
-    <span class="status status-running">Running</span>
   </div>
   <dl class="queue-card-fields">
+    <div>
+      <dt>Status</dt>
+      <dd>
+        <span class="queue-card-status-field">
+          <span class="status status-running">Running</span>
+          <span class="queue-card-status-raw small">running</span>
+        </span>
+      </dd>
+    </div>
     <div>
       <dt>Runtime</dt>
       <dd>codex</dd>
