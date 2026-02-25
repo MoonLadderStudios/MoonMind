@@ -6073,6 +6073,187 @@
       `;
     };
 
+    const renderProposalTable = (rows) => rows
+      .map((row) => {
+        const id = pick(row, "id");
+        const preview = pick(row, "taskPreview") || {};
+        const origin = pick(row, "origin") || {};
+        const originSource = pick(origin, "source") || "-";
+        const originLink =
+          originSource === "queue" && pick(origin, "id")
+            ? `<a href="/tasks/queue/${escapeHtml(
+                String(pick(origin, "id") || ""),
+              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            : escapeHtml(originSource);
+        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const instructions = pick(preview, "instructions") || "";
+        const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
+        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+        const overrideReason = pick(row, "priorityOverrideReason");
+        const priorityBadge = `<span class="badge priority-${escapeHtml(
+          priority.toLowerCase(),
+        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
+        const snoozedUntil = pick(row, "snoozedUntil");
+        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
+        const dedupHash = (pick(row, "dedupHash") || "").toString();
+        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+        return `
+          <tr>
+            <td><a href="/tasks/proposals/${encodeURIComponent(
+              String(id || ""),
+            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
+            <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
+            <td>${escapeHtml(repo)}</td>
+            <td>${escapeHtml(pick(row, "category") || "-")}</td>
+            <td>${priorityBadge}</td>
+            <td>${statusBadge("proposals", pick(row, "status"))}</td>
+            <td>${formatTimestamp(pick(row, "createdAt"))}</td>
+            <td>${originLink}</td>
+            <td>${escapeHtml(tags || "-")}</td>
+            <td>${escapeHtml(snoozedDisplay)}</td>
+            <td><code>${escapeHtml(dedupShort)}</code></td>
+            <td>
+              <div class="stack compact">
+                <button
+                  type="button"
+                  class="proposal-action queue-action"
+                  data-action="promote"
+                  data-proposal-id="${escapeHtml(
+                  String(id || ""),
+                )}">Promote</button>
+                <button
+                  type="button"
+                  class="danger proposal-action queue-action queue-action-danger"
+                  data-action="dismiss"
+                  data-proposal-id="${escapeHtml(
+                  String(id || ""),
+                )}">Dismiss</button>
+              </div>
+            </td>
+          </tr>
+          ${
+            instructions
+              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+                  instructions,
+                )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
+                  dedupHash || "-",
+                )}</code></span></td></tr>`
+              : ""
+          }
+        `;
+      })
+      .join("");
+
+    const renderProposalCards = (rows) => rows
+      .map((row) => {
+        const id = pick(row, "id");
+        const preview = pick(row, "taskPreview") || {};
+        const origin = pick(row, "origin") || {};
+        const originSource = pick(origin, "source") || "-";
+        const originLink =
+          originSource === "queue" && pick(origin, "id")
+            ? `<a href="/tasks/queue/${escapeHtml(
+                String(pick(origin, "id") || ""),
+              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            : escapeHtml(originSource);
+        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const instructions = pick(preview, "instructions") || "";
+        const instructionText = String(instructions || "").trim();
+        const instructionPreview = instructionText
+          ? `${escapeHtml(instructionText.slice(0, 140))}${
+              instructionText.length > 140 ? "..." : ""
+            }`
+          : "-";
+        const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
+        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+        const overrideReason = pick(row, "priorityOverrideReason");
+        const priorityBadge = `<span class="badge priority-${escapeHtml(
+          priority.toLowerCase(),
+        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
+        const snoozedUntil = pick(row, "snoozedUntil");
+        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
+        const dedupHash = (pick(row, "dedupHash") || "").toString();
+        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+        const rowId = String(id || "");
+        const title = pick(row, "title") || "(untitled)";
+        const titleWithId = rowId ? `${title} · ${rowId}` : title;
+        const encodedRowId = encodeURIComponent(String(id || ""));
+        return `
+          <li class="queue-card">
+            <div class="queue-card-header">
+              <div>
+                <a href="/tasks/proposals/${encodedRowId}" class="queue-card-title">${escapeHtml(
+                  titleWithId,
+                )}</a>
+                <p class="queue-card-meta">${escapeHtml(repo)}</p>
+              </div>
+              <div class="queue-card-status">
+                ${statusBadge("proposals", pick(row, "status"))}
+                <span class="queue-card-status-raw small">${escapeHtml(
+                  String(pick(row, "status") || "-").trim(),
+                )}</span>
+              </div>
+            </div>
+            <dl class="queue-card-fields">
+              <div>
+                <dt>ID</dt>
+                <dd><code>${escapeHtml(rowId.slice(0, 8) || "-")}</code></dd>
+              </div>
+              <div>
+                <dt>Category</dt>
+                <dd>${escapeHtml(pick(row, "category") || "-")}</dd>
+              </div>
+              <div>
+                <dt>Priority</dt>
+                <dd>${priorityBadge}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>${statusBadge("proposals", pick(row, "status"))}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>${formatTimestamp(pick(row, "createdAt"))}</dd>
+              </div>
+              <div>
+                <dt>Origin</dt>
+                <dd>${originLink}</dd>
+              </div>
+              <div>
+                <dt>Tags</dt>
+                <dd>${escapeHtml(tags || "-")}</dd>
+              </div>
+              <div>
+                <dt>Snoozed Until</dt>
+                <dd>${escapeHtml(snoozedDisplay)}</dd>
+              </div>
+              <div>
+                <dt>Dedup</dt>
+                <dd><code>${escapeHtml(dedupShort)}</code></dd>
+              </div>
+              <div>
+                <dt>Instructions</dt>
+                <dd><span class="small">${instructionPreview}</span></dd>
+              </div>
+            </dl>
+            <div class="queue-card-actions">
+              <a href="/tasks/proposals/${encodedRowId}" class="button secondary" role="button">View details</a>
+              <button
+                type="button"
+                class="proposal-action queue-action"
+                data-action="promote"
+                data-proposal-id="${escapeHtml(String(id || ""))}">Promote</button>
+              <button
+                type="button"
+                class="danger proposal-action queue-action queue-action-danger"
+                data-action="dismiss"
+                data-proposal-id="${escapeHtml(String(id || ""))}">Dismiss</button>
+            </div>
+          </li>
+        `;
+      })
+      .join("");
+
     const renderTable = () => {
       if (!state.rows.length) {
         return "<p class='small'>No proposals found for the current filters.</p>";
@@ -6087,99 +6268,36 @@
         );
         return tagList.includes(tagNeedle);
       });
-      const rows = filteredRows
-        .map((row) => {
-          const id = pick(row, "id");
-          const preview = pick(row, "taskPreview") || {};
-          const origin = pick(row, "origin") || {};
-          const originSource = pick(origin, "source") || "-";
-          const originLink =
-            originSource === "queue" && pick(origin, "id")
-              ? `<a href="/tasks/queue/${escapeHtml(
-                  String(pick(origin, "id") || ""),
-                )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
-              : escapeHtml(originSource);
-          const repo = pick(row, "repository") || pick(preview, "repository") || "-";
-          const instructions = pick(preview, "instructions") || "";
-          const tags = (pick(row, "tags") || []).map((tag) => escapeHtml(tag)).join(", ");
-          const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
-          const overrideReason = pick(row, "priorityOverrideReason");
-          const priorityBadge = `<span class="badge priority-${escapeHtml(
-            priority.toLowerCase(),
-          )}" ${
-            overrideReason
-              ? `title="Override: ${escapeHtml(String(overrideReason))}"`
-              : ""
-          }>${escapeHtml(priority)}</span>`;
-          const snoozedUntil = pick(row, "snoozedUntil");
-          const snoozedDisplay = snoozedUntil
-            ? `${formatTimestamp(snoozedUntil)}`
-            : "-";
-          const dedupHash = (pick(row, "dedupHash") || "").toString();
-          const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
-          return `
-            <tr>
-              <td><a href="/tasks/proposals/${encodeURIComponent(
-                String(id || ""),
-              )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
-              <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
-              <td>${escapeHtml(repo)}</td>
-              <td>${escapeHtml(pick(row, "category") || "-")}</td>
-              <td>${priorityBadge}</td>
-              <td>${statusBadge("proposals", pick(row, "status"))}</td>
-              <td>${formatTimestamp(pick(row, "createdAt"))}</td>
-              <td>${originLink}</td>
-              <td>${escapeHtml(tags || "-")}</td>
-              <td>${escapeHtml(snoozedDisplay)}</td>
-              <td><code>${escapeHtml(dedupShort)}</code></td>
-              <td>
-                <div class="stack compact">
-                  <button
-                    type="button"
-                    class="proposal-action queue-action"
-                    data-action="promote"
-                    data-proposal-id="${escapeHtml(
-                    String(id || ""),
-                  )}">Promote</button>
-                  <button type="button" class="danger proposal-action queue-action queue-action-danger" data-action="dismiss" data-proposal-id="${escapeHtml(
-                    String(id || ""),
-                  )}">Dismiss</button>
-                </div>
-              </td>
-            </tr>
-            ${
-              instructions
-                ? `<tr><td colspan="12"><span class="small">${escapeHtml(
-                    instructions,
-                  )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
-                    dedupHash || "-",
-                  )}</code></span></td></tr>`
-                : ""
-            }
-          `;
-        })
-        .join("");
-
+      if (!filteredRows.length) {
+        return "<p class='small'>No proposals found for the current filters.</p>";
+      }
       return `
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Title</th>
-              <th>Repository</th>
-              <th>Category</th>
-              <th>Priority</th>
-              <th>Status</th>
-              <th>Created</th>
-              <th>Origin</th>
-              <th>Tags</th>
-              <th>Snoozed Until</th>
-              <th>Dedup</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <div class="queue-layouts">
+          <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Title</th>
+                  <th>Repository</th>
+                  <th>Category</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Origin</th>
+                  <th>Tags</th>
+                  <th>Snoozed Until</th>
+                  <th>Dedup</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>${renderProposalTable(filteredRows)}</tbody>
+            </table>
+          </div>
+          <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
+            filteredRows,
+          )}</ul>
+        </div>
       `;
     };
 
