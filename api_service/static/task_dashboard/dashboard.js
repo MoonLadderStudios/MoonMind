@@ -6075,8 +6075,8 @@
         return `
           <tr data-proposal-id="${escapedRowId}">
             <td><a href="/tasks/proposals/${encodeURIComponent(
-              String(id || ""),
-            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
+              rowId,
+            )}">${escapeHtml(rowId.slice(0, 8) || "-")}</a></td>
             <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
             <td>${escapeHtml(repo)}</td>
             <td>${escapeHtml(pick(row, "category") || "-")}</td>
@@ -6092,13 +6092,11 @@
                 <button
                   type="button"
                   class="proposal-action queue-action"
-                  data-action="promote"
                   data-proposal-action="promote"
                   data-proposal-id="${escapedRowId}">Promote</button>
                 <button
                   type="button"
                   class="danger proposal-action queue-action queue-action-danger"
-                  data-action="dismiss"
                   data-proposal-action="dismiss"
                   data-proposal-id="${escapedRowId}">Dismiss</button>
               </div>
@@ -6153,7 +6151,7 @@
         const escapedRowId = escapeHtml(rowId);
         const title = pick(row, "title") || "(untitled)";
         const titleWithId = rowId ? `${title} · ${rowId}` : title;
-        const encodedRowId = encodeURIComponent(String(id || ""));
+        const encodedRowId = encodeURIComponent(rowId);
         return `
           <li class="queue-card" data-proposal-id="${escapedRowId}">
             <div class="queue-card-header">
@@ -6209,7 +6207,9 @@
               </div>
               <div data-field="instructions">
                 <dt>Instructions</dt>
-                <dd data-field-value="instructions"><span class="small">${instructionPreview}</span></dd>
+                <dd data-field-value="instructions"><span class="small">${escapeHtml(
+                  instructionPreview,
+                )}</span></dd>
               </div>
             </dl>
             <div class="queue-card-actions">
@@ -6217,13 +6217,11 @@
               <button
                 type="button"
                 class="proposal-action queue-action"
-                data-action="promote"
                 data-proposal-action="promote"
                 data-proposal-id="${escapedRowId}">Promote</button>
               <button
                 type="button"
                 class="danger proposal-action queue-action queue-action-danger"
-                data-action="dismiss"
                 data-proposal-action="dismiss"
                 data-proposal-id="${escapedRowId}">Dismiss</button>
             </div>
@@ -6272,7 +6270,7 @@
     if (!tagFilter) {
       return proposals;
     }
-    const tagNeedle = String(tagFilter || "").toLowerCase();
+    const tagNeedle = String(tagFilter).toLowerCase();
     return proposals.filter((row) => {
       const tagList = (pick(row, "tags") || []).map((tag) =>
         String(tag || "").toLowerCase(),
@@ -6426,7 +6424,9 @@
       document.querySelectorAll(".proposal-action").forEach((button) => {
         button.addEventListener("click", async () => {
           const proposalId = button.getAttribute("data-proposal-id");
-          const action = button.getAttribute("data-action");
+          const action =
+            button.getAttribute("data-proposal-action") ||
+            button.getAttribute("data-action");
           if (!proposalId || !action) {
             return;
           }
