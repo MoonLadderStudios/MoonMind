@@ -334,7 +334,7 @@ class AgentQueueRepository:
             job.finish_outcome_code = "CANCELLED"
             job.finish_outcome_stage = "unknown"
             job.finish_outcome_reason = (
-                finish_outcome_reason or "cancellation requested"
+                finish_outcome_reason or reason or "cancellation requested"
             )
             job.updated_at = now
             await self._session.flush()
