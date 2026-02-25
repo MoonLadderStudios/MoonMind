@@ -58,7 +58,7 @@ api_service/
 │   └── dashboard.css                 # Generated output via Tailwind CLI
 
 docs/
-└── TailwindStyleSystem.md            # Source contract (already updated for Phase 3)
+└── TaskDashboardStyleSystem.md            # Source contract (already updated for Phase 3)
 
 tests/
 ├── unit/api/routers/test_task_dashboard.py

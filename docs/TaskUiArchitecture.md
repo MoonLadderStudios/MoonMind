@@ -472,4 +472,4 @@ There is no generalized exponential backoff layer in current dashboard polling.
 - `docs/TaskQueueSystem.md`
 - `docs/TaskProposalQueue`
 - `docs/ManifestTaskSystem.md`
-- `docs/TailwindStyleSystem.md`
+- `docs/TaskDashboardStyleSystem.md`
