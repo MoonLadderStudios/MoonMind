@@ -15,6 +15,7 @@
   --mm-ok: 34 197 94;
   --mm-warn: 245 158 11;
   --mm-danger: 244 63 94;
+  --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
 }
 
@@ -31,6 +32,7 @@
   --mm-ok: 74 222 128;
   --mm-warn: 251 191 36;
   --mm-danger: 251 113 133;
+  --mm-action-primary: 26 153 123;
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
 }
 
@@ -569,13 +571,19 @@ button {
   background: rgb(var(--mm-accent));
   color: #fff;
   cursor: pointer;
-  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
-button:hover {
-  background: rgb(var(--mm-accent) / 0.92);
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.45), 0 14px 26px -18px rgb(var(--mm-accent));
-  transform: translateY(-1px);
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary) {
+  border-color: rgb(255 255 255 / 0.52);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+}
+
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
+  background: rgb(var(--mm-accent) / 0.88);
+  border-color: rgb(255 255 255 / 0.82);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 30px -16px rgb(var(--mm-accent) / 0.94);
+  transform: translateY(-2px);
 }
 
 button:focus-visible {
@@ -605,13 +613,19 @@ button.secondary:hover {
   background: rgb(var(--mm-accent));
   color: #fff;
   cursor: pointer;
-  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
-.button:hover {
-  background: rgb(var(--mm-accent) / 0.92);
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.45), 0 14px 26px -18px rgb(var(--mm-accent));
-  transform: translateY(-1px);
+.button:not(.secondary):not(.queue-action):not(.queue-submit-primary) {
+  border-color: rgb(255 255 255 / 0.52);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+}
+
+.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
+  background: rgb(var(--mm-accent) / 0.88);
+  border-color: rgb(255 255 255 / 0.82);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 30px -16px rgb(var(--mm-accent) / 0.94);
+  transform: translateY(-2px);
 }
 
 .button:focus-visible {
@@ -628,6 +642,41 @@ button.secondary:hover {
 .button.secondary:hover {
   background: rgb(var(--mm-accent) / 0.08);
   border-color: rgb(var(--mm-accent));
+}
+
+.queue-action,
+.queue-submit-primary {
+  --queue-action-color: var(--mm-action-primary);
+  background: linear-gradient(150deg, rgb(var(--queue-action-color) / 0.86) 0%, rgb(var(--queue-action-color)) 100%);
+  color: #fff;
+  font-weight: 400;
+  border: 1px solid rgb(255 255 255 / 0.58);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 24px -14px rgb(var(--queue-action-color) / 0.84);
+}
+
+.queue-action:hover,
+.queue-submit-primary:hover {
+  background: linear-gradient(150deg, rgb(var(--queue-action-color)) 0%, rgb(var(--queue-action-color) / 0.78) 100%);
+  border-color: rgb(255 255 255 / 0.86);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.36),
+    0 18px 34px -16px rgb(var(--queue-action-color) / 0.95);
+  transform: translateY(-2px);
+}
+
+.queue-action:focus-visible,
+.queue-submit-primary:focus-visible {
+  outline: 2px solid rgb(var(--queue-action-color));
+  outline-offset: 3px;
+}
+
+.proposal-action {
+  --queue-action-color: var(--mm-action-primary);
+}
+
+.proposal-action.danger,
+.queue-action-danger {
+  --queue-action-color: var(--mm-danger);
 }
 
 .queue-step-instructions {
@@ -712,21 +761,6 @@ button.secondary:hover {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-.queue-submit-primary {
-  background: rgb(var(--mm-accent));
-  color: #fff;
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.4), 0 14px 26px -18px rgb(var(--mm-accent));
-}
-
-.queue-submit-primary:hover {
-  background: rgb(var(--mm-accent) / 0.92);
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.55), 0 18px 28px -20px rgb(var(--mm-accent));
-}
-
-.queue-submit-primary:focus-visible {
-  outline-color: rgb(var(--mm-accent));
 }
 
 .actions {

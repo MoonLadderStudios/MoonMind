@@ -3194,11 +3194,7 @@
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          <button
-            type="submit"
-            class="queue-submit-primary"
-            style="background: rgb(var(--mm-ok)); box-shadow: 0 0 0 1px rgb(var(--mm-ok) / 0.4), 0 14px 26px -18px rgb(var(--mm-ok));"
-          >
+          <button type="submit" class="queue-submit-primary">
             Create
           </button>
         </div>
@@ -6138,10 +6134,14 @@
               <td><code>${escapeHtml(dedupShort)}</code></td>
               <td>
                 <div class="stack compact">
-                  <button type="button" class="secondary proposal-action" data-action="promote" data-proposal-id="${escapeHtml(
+                  <button
+                    type="button"
+                    class="proposal-action queue-action"
+                    data-action="promote"
+                    data-proposal-id="${escapeHtml(
                     String(id || ""),
                   )}">Promote</button>
-                  <button type="button" class="danger proposal-action" data-action="dismiss" data-proposal-id="${escapeHtml(
+                  <button type="button" class="danger proposal-action queue-action queue-action-danger" data-action="dismiss" data-proposal-id="${escapeHtml(
                     String(id || ""),
                   )}">Dismiss</button>
                 </div>
@@ -6442,9 +6442,15 @@
             ${signalMarkup}
           </section>
           <div class="actions">
-            <button type="button" id="proposal-promote-button">Promote to Task</button>
+            <button
+              type="button"
+              class="queue-action"
+              id="proposal-promote-button"
+            >
+              Promote to Task
+            </button>
             <button type="button" class="secondary" id="proposal-edit-button">Edit & Promote</button>
-            <button type="button" class="secondary" id="proposal-dismiss-button">Dismiss</button>
+            <button type="button" class="queue-action queue-action-danger" id="proposal-dismiss-button">Dismiss</button>
             <a href="/tasks/proposals"><button type="button" class="secondary">Back</button></a>
           </div>
           <section class="stack">
