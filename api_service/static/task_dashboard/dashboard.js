@@ -151,6 +151,7 @@
     expiresAtMs: 0,
     inFlight: null,
   };
+  const DASHBOARD_DETAIL_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
   const manifestsSourceConfig =
     sourceConfig.manifests && typeof sourceConfig.manifests === "object"
       ? sourceConfig.manifests
@@ -833,6 +834,30 @@
       }
     }
     return undefined;
+  }
+
+  function normalizeDashboardDetailSegment(value) {
+    const text = String(value ?? "").trim();
+    if (!text || text === "." || text === "..") {
+      return "";
+    }
+    if (!DASHBOARD_DETAIL_SEGMENT_PATTERN.test(text)) {
+      return "";
+    }
+    return text;
+  }
+
+  function resolvePromotedQueueRoute(response) {
+    const job = pick(response, "job");
+    const rawJobId =
+      job && typeof job === "object" && !Array.isArray(job)
+        ? pick(job, "id", "jobId")
+        : pick(response, "jobId");
+    const safeJobId = normalizeDashboardDetailSegment(rawJobId);
+    if (!safeJobId) {
+      return "/tasks/queue";
+    }
+    return `/tasks/queue/${safeJobId}`;
   }
 
   function formatTimestamp(value) {
@@ -1903,6 +1928,8 @@
       normalizeOrchestratorPriority,
       persistSubmitDraftsToStorage,
       submitDraftController,
+      normalizeDashboardDetailSegment,
+      resolvePromotedQueueRoute,
     };
     window.__queueLayoutTest = {
       queueFieldDefinitions,
@@ -6251,11 +6278,8 @@
           try {
             if (action === "promote") {
               const response = await apiPromoteProposal(proposalId);
-              const jobId = pick(response, "job", "id");
-              if (jobId) {
-                window.location.href = `/tasks/queue/${encodeURIComponent(String(jobId))}`;
-                return;
-              }
+              window.location.href = resolvePromotedQueueRoute(response);
+              return;
             } else if (action === "dismiss") {
               await apiDismissProposal(proposalId);
             }
@@ -6495,12 +6519,8 @@
           promoteButton.disabled = true;
           try {
             const response = await apiPromoteProposal(proposalId);
-            const jobId = pick(response, "job", "id");
-            if (jobId) {
-              window.location.href = `/tasks/queue/${encodeURIComponent(String(jobId))}`;
-              return;
-            }
-            await load(true);
+            window.location.href = resolvePromotedQueueRoute(response);
+            return;
           } catch (error) {
             console.error("proposal promote failed", error);
             setView(
@@ -6542,12 +6562,8 @@
           editButton.disabled = true;
           try {
             const response = await apiPromoteProposal(proposalId, overrides);
-            const jobId = pick(response, "job", "id");
-            if (jobId) {
-              window.location.href = `/tasks/queue/${encodeURIComponent(String(jobId))}`;
-              return;
-            }
-            await load(true);
+            window.location.href = resolvePromotedQueueRoute(response);
+            return;
           } catch (error) {
             console.error("proposal edit-promote failed", error);
             setView(

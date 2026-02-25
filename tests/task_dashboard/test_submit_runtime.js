@@ -203,3 +203,23 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.normalizeOrchestratorPriority("low"), "normal");
   assert.strictEqual(helpers.normalizeOrchestratorPriority(undefined), "normal");
 })();
+
+(function testResolvePromotedQueueRoute() {
+  const valid = helpers.resolvePromotedQueueRoute({
+    job: { id: "123e4567-e89b-12d3-a456-426614174000" },
+  });
+  assert.strictEqual(valid, "/tasks/queue/123e4567-e89b-12d3-a456-426614174000");
+
+  const fromJobIdAlias = helpers.resolvePromotedQueueRoute({
+    job: { jobId: "ABCDEF01-2345-6789-ABCD-EF0123456789" },
+  });
+  assert.strictEqual(fromJobIdAlias, "/tasks/queue/ABCDEF01-2345-6789-ABCD-EF0123456789");
+
+  const invalidEncoded = helpers.resolvePromotedQueueRoute({
+    job: { id: "%2Ftmp%2Fqueue" },
+  });
+  assert.strictEqual(invalidEncoded, "/tasks/queue");
+
+  const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
+  assert.strictEqual(missing, "/tasks/queue");
+})();
