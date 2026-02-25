@@ -3561,11 +3561,7 @@ class CodexWorker:
                 step_log_offsets.get(offset_key)
             )
             source_id = self._step_log_source_id(source_stat=source_stat)
-            if (
-                previous_source_id
-                and source_id
-                and previous_source_id != source_id
-            ):
+            if previous_source_id and source_id and previous_source_id != source_id:
                 start_offset = 0
             elif previous_offset <= source_size:
                 start_offset = previous_offset

@@ -372,7 +372,9 @@ def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWor
     )
 
 
-def _build_resolved_step(*, step_index: int, step_id: str, instructions: str) -> ResolvedTaskStep:
+def _build_resolved_step(
+    *, step_index: int, step_id: str, instructions: str
+) -> ResolvedTaskStep:
     """Construct one execute-stage step definition."""
 
     return ResolvedTaskStep(
