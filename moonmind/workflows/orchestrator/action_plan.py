@@ -90,7 +90,10 @@ def _build_skill_build_step(
     skill_id: str,
     skill_args: Mapping[str, Any] | None,
 ) -> PlanStep:
-    serialized_args = json.dumps(dict(skill_args or {}), sort_keys=True)
+    normalized_args: dict[str, Any] = dict(skill_args or {})
+    if skill_id == "update-moonmind":
+        normalized_args.setdefault("composeProject", profile.compose_project)
+    serialized_args = json.dumps(normalized_args, sort_keys=True)
     parameters = {
         "service": profile.compose_service,
         "workspace": str(profile.workspace_path),
@@ -144,41 +147,48 @@ def _build_verify_step(profile: ServiceProfile) -> PlanStep:
     return PlanStep(db_models.OrchestratorPlanStep.VERIFY, parameters)
 
 
-def _build_rollback_step(profile: ServiceProfile) -> PlanStep:
-    parameters = {
-        "service": profile.compose_service,
-        "logArtifact": "rollback.log",
-        "strategies": [
+def _build_rollback_step(
+    profile: ServiceProfile, *, include_git_reset: bool = True
+) -> PlanStep:
+    strategies: list[dict[str, Any]] = []
+    if include_git_reset:
+        strategies.append(
             {
                 "type": "git-revert",
                 "commands": [
                     ["git", "reset", "--hard", "HEAD"],
                 ],
-            },
-            {
-                "type": "rebuild",
-                "commands": [
-                    [
-                        "docker",
-                        "compose",
-                        "--project-name",
-                        profile.compose_project,
-                        "build",
-                        profile.compose_service,
-                    ],
-                    [
-                        "docker",
-                        "compose",
-                        "--project-name",
-                        profile.compose_project,
-                        "up",
-                        "-d",
-                        "--no-deps",
-                        profile.compose_service,
-                    ],
+            }
+        )
+    strategies.append(
+        {
+            "type": "rebuild",
+            "commands": [
+                [
+                    "docker",
+                    "compose",
+                    "--project-name",
+                    profile.compose_project,
+                    "build",
+                    profile.compose_service,
                 ],
-            },
-        ],
+                [
+                    "docker",
+                    "compose",
+                    "--project-name",
+                    profile.compose_project,
+                    "up",
+                    "-d",
+                    "--no-deps",
+                    profile.compose_service,
+                ],
+            ],
+        }
+    )
+    parameters = {
+        "service": profile.compose_service,
+        "logArtifact": "rollback.log",
+        "strategies": strategies,
     }
     return PlanStep(db_models.OrchestratorPlanStep.ROLLBACK, parameters)
 
@@ -234,7 +244,10 @@ def generate_skill_action_plan(
             skill_args=skill_args,
         ),
         _build_verify_step(profile),
-        _build_rollback_step(profile),
+        _build_rollback_step(
+            profile,
+            include_git_reset=normalized_skill_id != "update-moonmind",
+        ),
     ]
     generated_at = datetime.now(tz=timezone.utc)
     return ActionPlan(

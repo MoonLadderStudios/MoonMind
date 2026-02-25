@@ -5144,14 +5144,14 @@ diagrams = ["jinja2", "railroad-diagrams"]
 
 [[package]]
 name = "pypdf"
-version = "6.7.1"
+version = "6.7.2"
 description = "A pure-python PDF library capable of splitting, merging, cropping, and transforming PDF files"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "pypdf-6.7.1-py3-none-any.whl", hash = "sha256:a02ccbb06463f7c334ce1612e91b3e68a8e827f3cee100b9941771e6066b094e"},
-    {file = "pypdf-6.7.1.tar.gz", hash = "sha256:6b7a63be5563a0a35d54c6d6b550d75c00b8ccf36384be96365355e296e6b3b0"},
+    {file = "pypdf-6.7.2-py3-none-any.whl", hash = "sha256:331b63cd66f63138f152a700565b3e0cebdf4ec8bec3b7594b2522418782f1f3"},
+    {file = "pypdf-6.7.2.tar.gz", hash = "sha256:82a1a48de500ceea59a52a7d979f5095927ef802e4e4fac25ab862a73468acbb"},
 ]
 
 [package.dependencies]
@@ -6865,4 +6865,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "16ffa8e5515f499d7f93b6f587c0893b89339c56c868e05c672ca667ffee9aa4"
+content-hash = "f35024cbd39df59aba677a1c72f2fd86e99bf2d677a7c86a1230925bff882903"

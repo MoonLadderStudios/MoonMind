@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import gzip
 import hashlib
 import json
 import logging
@@ -950,6 +951,28 @@ class StepGateSpec:
 
     gate_type: str
     source_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class StepLogReadResult:
+    """Bounded step-log read output with truncation metadata."""
+
+    content: bytes
+    source_delta_bytes: int
+    truncated: bool
+    omitted_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class StepLogCopyResult:
+    """Persisted step-log snapshot details including optional companion artifacts."""
+
+    truncated: bool
+    preview_bytes: int
+    source_delta_bytes: int
+    omitted_bytes: int
+    full_log_path: Path | None = None
+    metadata_path: Path | None = None
 
 
 class QueueApiClient:
@@ -3474,17 +3497,25 @@ class CodexWorker:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
         step_log_name = f"logs/steps/step-{step.step_index:04d}.log"
+        step_log_full_name = self._step_log_full_artifact_name(step_log_name)
+        step_log_metadata_name = self._step_log_companion_metadata_artifact_name(
+            step_log_name
+        )
         step_patch_name = f"patches/steps/step-{step.step_index:04d}.patch"
         normalized: list[ArtifactUpload] = []
         has_step_log = False
         has_step_patch = False
+        step_log_copy_result: StepLogCopyResult | None = None
         for artifact in result_artifacts:
             if artifact.name in {"logs/codex_exec.log", "logs/execute.log"}:
                 if artifact.path.exists():
-                    self._copy_incremental_step_log(
+                    step_log_copy_result = self._copy_incremental_step_log(
                         source_path=artifact.path,
                         destination_path=step_log_path,
                         step_log_offsets=step_log_offsets,
+                        preview_artifact_name=step_log_name,
+                        full_artifact_name=step_log_full_name,
+                        metadata_artifact_name=step_log_metadata_name,
                     )
                     normalized.append(
                         ArtifactUpload(
@@ -3524,6 +3555,33 @@ class CodexWorker:
                     required=False,
                 )
             )
+        if step_log_copy_result is not None and step_log_copy_result.truncated:
+            if (
+                step_log_copy_result.full_log_path is not None
+                and step_log_copy_result.full_log_path.exists()
+                and step_log_copy_result.full_log_path.stat().st_size > 0
+            ):
+                normalized.append(
+                    ArtifactUpload(
+                        path=step_log_copy_result.full_log_path,
+                        name=step_log_full_name,
+                        content_type="application/gzip",
+                        required=False,
+                    )
+                )
+            if (
+                step_log_copy_result.metadata_path is not None
+                and step_log_copy_result.metadata_path.exists()
+                and step_log_copy_result.metadata_path.stat().st_size > 0
+            ):
+                normalized.append(
+                    ArtifactUpload(
+                        path=step_log_copy_result.metadata_path,
+                        name=step_log_metadata_name,
+                        content_type="application/json",
+                        required=False,
+                    )
+                )
         if (
             not has_step_patch
             and step_patch_path.exists()
@@ -3544,8 +3602,11 @@ class CodexWorker:
         *,
         source_path: Path,
         destination_path: Path,
-        step_log_offsets: MutableMapping[str, Any] | None = None,
-    ) -> None:
+        step_log_offsets: MutableMapping[str, int] | None = None,
+        preview_artifact_name: str | None = None,
+        full_artifact_name: str | None = None,
+        metadata_artifact_name: str | None = None,
+    ) -> StepLogCopyResult:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
         source_stat = source_path.lstat()
@@ -3570,14 +3631,60 @@ class CodexWorker:
                 source_id=source_id,
             )
 
-        bounded_content = self._read_bounded_step_log_bytes(
+        linkage_marker = None
+        if metadata_artifact_name:
+            linkage_marker = f"metadata={metadata_artifact_name}"
+        bounded_result = self._read_bounded_step_log_bytes(
             source_path=source_path,
             start_offset=start_offset,
             source_size=source_size,
             max_bytes=self._config.step_log_max_bytes,
+            linkage_marker=linkage_marker,
         )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        destination_path.write_bytes(bounded_content)
+        destination_path.write_bytes(bounded_result.content)
+
+        full_log_path = self._step_log_companion_path(destination_path)
+        metadata_path = self._step_log_companion_metadata_path(destination_path)
+        if not bounded_result.truncated:
+            for stale_path in (full_log_path, metadata_path):
+                with suppress(FileNotFoundError):
+                    stale_path.unlink()
+            return StepLogCopyResult(
+                truncated=False,
+                preview_bytes=len(bounded_result.content),
+                source_delta_bytes=bounded_result.source_delta_bytes,
+                omitted_bytes=0,
+            )
+
+        self._write_step_log_companion_gzip(
+            source_path=source_path,
+            start_offset=start_offset,
+            source_size=source_size,
+            destination_path=full_log_path,
+        )
+        if preview_artifact_name and full_artifact_name and metadata_artifact_name:
+            self._write_step_log_companion_metadata(
+                destination_path=metadata_path,
+                preview_artifact_name=preview_artifact_name,
+                full_artifact_name=full_artifact_name,
+                source_delta_bytes=bounded_result.source_delta_bytes,
+                preview_bytes=len(bounded_result.content),
+                omitted_bytes=bounded_result.omitted_bytes,
+                metadata_artifact_name=metadata_artifact_name,
+            )
+            written_metadata_path: Path | None = metadata_path
+        else:
+            written_metadata_path = None
+
+        return StepLogCopyResult(
+            truncated=True,
+            preview_bytes=len(bounded_result.content),
+            source_delta_bytes=bounded_result.source_delta_bytes,
+            omitted_bytes=bounded_result.omitted_bytes,
+            full_log_path=full_log_path,
+            metadata_path=written_metadata_path,
+        )
 
     def _read_bounded_step_log_bytes(
         self,
@@ -3586,22 +3693,34 @@ class CodexWorker:
         start_offset: int,
         source_size: int,
         max_bytes: int,
-    ) -> bytes:
+        linkage_marker: str | None = None,
+    ) -> StepLogReadResult:
         """Read a bounded step log snapshot without loading huge deltas in memory."""
 
         unread_bytes = max(0, source_size - start_offset)
         if unread_bytes == 0 or max_bytes <= 0:
-            return b""
+            return StepLogReadResult(
+                content=b"",
+                source_delta_bytes=unread_bytes,
+                truncated=False,
+                omitted_bytes=0,
+            )
 
         if unread_bytes <= max_bytes:
             with source_path.open("rb") as handle:
                 if start_offset:
                     handle.seek(start_offset)
-                return handle.read(unread_bytes)
+                return StepLogReadResult(
+                    content=handle.read(unread_bytes),
+                    source_delta_bytes=unread_bytes,
+                    truncated=False,
+                    omitted_bytes=0,
+                )
 
         head_bytes, tail_bytes, marker = self._compute_step_log_truncation_plan(
             total_bytes=unread_bytes,
             max_bytes=max_bytes,
+            linkage_marker=linkage_marker,
         )
         with source_path.open("rb") as handle:
             handle.seek(start_offset)
@@ -3614,10 +3733,15 @@ class CodexWorker:
         safe_tail = self._utf8_safe_suffix(tail_content)
         bounded_content = safe_head + marker + safe_tail
         if len(bounded_content) > max_bytes:
-            return self._bounded_step_log_bytes(
+            bounded_content = self._bounded_step_log_bytes(
                 content=bounded_content, max_bytes=max_bytes
             )
-        return bounded_content
+        return StepLogReadResult(
+            content=bounded_content,
+            source_delta_bytes=unread_bytes,
+            truncated=True,
+            omitted_bytes=max(0, unread_bytes - head_bytes - tail_bytes),
+        )
 
     @staticmethod
     def _resolve_log_offset_key(path: Path) -> str:
@@ -3772,7 +3896,7 @@ class CodexWorker:
 
     @staticmethod
     def _compute_step_log_truncation_plan(
-        *, total_bytes: int, max_bytes: int
+        *, total_bytes: int, max_bytes: int, linkage_marker: str | None = None
     ) -> tuple[int, int, bytes]:
         """Plan bounded log content sizes and truncation marker."""
 
@@ -3787,6 +3911,11 @@ class CodexWorker:
                 f"{omitted_bytes} bytes from the middle; "
                 f"retained first {current_head} bytes and last {current_tail} bytes "
                 f"(cap={max_bytes}).\n"
+                + (
+                    f"[moonmind] step log linkage: {linkage_marker}\n"
+                    if linkage_marker
+                    else ""
+                )
             ).encode("utf-8")
 
         marker = _marker_for_plan(head_bytes, tail_bytes)
@@ -3863,6 +3992,88 @@ class CodexWorker:
         if len(bounded) > max_bytes:
             return bounded[-max_bytes:]
         return bounded
+
+    @staticmethod
+    def _step_log_full_artifact_name(step_log_name: str) -> str:
+        """Return compressed full-fidelity companion artifact name for a preview log."""
+
+        if step_log_name.endswith(".log"):
+            return f"{step_log_name[:-4]}.full.log.gz"
+        return f"{step_log_name}.full.log.gz"
+
+    @staticmethod
+    def _step_log_companion_metadata_artifact_name(step_log_name: str) -> str:
+        """Return linkage metadata artifact name for a preview step log."""
+
+        if step_log_name.endswith(".log"):
+            return f"{step_log_name[:-4]}.full.log.metadata.json"
+        return f"{step_log_name}.full.log.metadata.json"
+
+    @staticmethod
+    def _step_log_companion_path(step_log_path: Path) -> Path:
+        """Resolve compressed full companion path for a local preview step log path."""
+
+        return step_log_path.with_suffix(".full.log.gz")
+
+    @staticmethod
+    def _step_log_companion_metadata_path(step_log_path: Path) -> Path:
+        """Resolve linkage metadata path for a local preview step log path."""
+
+        return step_log_path.with_suffix(".full.log.metadata.json")
+
+    @staticmethod
+    def _write_step_log_companion_gzip(
+        *,
+        source_path: Path,
+        start_offset: int,
+        source_size: int,
+        destination_path: Path,
+    ) -> None:
+        """Write a gzip-compressed copy of the unread step-log delta."""
+
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        remaining = max(0, source_size - start_offset)
+        with source_path.open("rb") as source_handle:
+            source_handle.seek(start_offset)
+            with gzip.open(destination_path, "wb") as compressed_handle:
+                while remaining > 0:
+                    chunk = source_handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    compressed_handle.write(chunk)
+                    remaining -= len(chunk)
+
+    @staticmethod
+    def _write_step_log_companion_metadata(
+        *,
+        destination_path: Path,
+        preview_artifact_name: str,
+        full_artifact_name: str,
+        source_delta_bytes: int,
+        preview_bytes: int,
+        omitted_bytes: int,
+        metadata_artifact_name: str,
+    ) -> None:
+        """Persist structured linkage metadata for preview/full step-log artifacts."""
+
+        payload = {
+            "kind": "moonmind.stepLogLinkage",
+            "version": 1,
+            "truncated": True,
+            "previewArtifact": preview_artifact_name,
+            "fullArtifact": full_artifact_name,
+            "fullArtifactContentType": "application/gzip",
+            "fullArtifactEncoding": "gzip",
+            "metadataArtifact": metadata_artifact_name,
+            "sourceDeltaBytes": source_delta_bytes,
+            "previewBytes": preview_bytes,
+            "omittedBytes": max(0, omitted_bytes),
+        }
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def _evaluate_step_gate(
         self,
