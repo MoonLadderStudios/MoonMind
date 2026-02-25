@@ -100,6 +100,8 @@ _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
+_MIN_STEP_LOG_MAX_BYTES = 1024
+_MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -719,16 +721,27 @@ class CodexWorkerConfig:
             "off",
             "",
         }
-        step_log_max_bytes = int(
-            str(
-                source.get(
-                    "MOONMIND_STEP_LOG_MAX_BYTES",
-                    str(_DEFAULT_STEP_LOG_MAX_BYTES),
-                )
-            ).strip()
-        )
-        if step_log_max_bytes < 1024:
-            raise ValueError("MOONMIND_STEP_LOG_MAX_BYTES must be >= 1024")
+        step_log_max_bytes_raw = str(
+            source.get(
+                "MOONMIND_STEP_LOG_MAX_BYTES",
+                str(_DEFAULT_STEP_LOG_MAX_BYTES),
+            )
+        ).strip()
+        try:
+            step_log_max_bytes = int(step_log_max_bytes_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "MOONMIND_STEP_LOG_MAX_BYTES must be an integer; "
+                f"received {step_log_max_bytes_raw!r}"
+            ) from exc
+        if step_log_max_bytes < _MIN_STEP_LOG_MAX_BYTES:
+            raise ValueError(
+                "MOONMIND_STEP_LOG_MAX_BYTES must be >= " f"{_MIN_STEP_LOG_MAX_BYTES}"
+            )
+        if step_log_max_bytes > _MAX_STEP_LOG_MAX_BYTES:
+            raise ValueError(
+                "MOONMIND_STEP_LOG_MAX_BYTES must be <= " f"{_MAX_STEP_LOG_MAX_BYTES}"
+            )
 
         return cls(
             moonmind_url=moonmind_url.rstrip("/"),
@@ -3526,7 +3539,12 @@ class CodexWorker:
     ) -> None:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
-        source_size = source_path.stat().st_size
+        source_stat = source_path.lstat()
+        if stat.S_ISLNK(source_stat.st_mode):
+            raise ValueError(
+                f"Refusing to read step log symlink: {source_path.as_posix()}"
+            )
+        source_size = source_stat.st_size
         start_offset = 0
         if step_log_offsets is not None:
             offset_key = self._resolve_log_offset_key(source_path)
@@ -3535,23 +3553,112 @@ class CodexWorker:
                 start_offset = previous_offset
             step_log_offsets[offset_key] = source_size
 
-        with source_path.open("rb") as handle:
-            if start_offset:
-                handle.seek(start_offset)
-            delta_content = handle.read()
-
-        bounded_content = self._bounded_step_log_bytes(
-            content=delta_content,
+        bounded_content = self._read_bounded_step_log_bytes(
+            source_path=source_path,
+            start_offset=start_offset,
+            source_size=source_size,
             max_bytes=self._config.step_log_max_bytes,
         )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         destination_path.write_bytes(bounded_content)
+
+    def _read_bounded_step_log_bytes(
+        self,
+        *,
+        source_path: Path,
+        start_offset: int,
+        source_size: int,
+        max_bytes: int,
+    ) -> bytes:
+        """Read a bounded step log snapshot without loading huge deltas in memory."""
+
+        unread_bytes = max(0, source_size - start_offset)
+        if unread_bytes == 0 or max_bytes <= 0:
+            return b""
+
+        if unread_bytes <= max_bytes:
+            with source_path.open("rb") as handle:
+                if start_offset:
+                    handle.seek(start_offset)
+                return handle.read(unread_bytes)
+
+        head_bytes, tail_bytes, marker = self._compute_step_log_truncation_plan(
+            total_bytes=unread_bytes,
+            max_bytes=max_bytes,
+        )
+        with source_path.open("rb") as handle:
+            handle.seek(start_offset)
+            head_content = handle.read(head_bytes)
+            tail_start = max(start_offset, source_size - tail_bytes)
+            handle.seek(tail_start)
+            tail_content = handle.read(source_size - tail_start)
+
+        safe_head = self._utf8_safe_prefix(head_content)
+        safe_tail = self._utf8_safe_suffix(tail_content)
+        bounded_content = safe_head + marker + safe_tail
+        if len(bounded_content) > max_bytes:
+            return self._bounded_step_log_bytes(
+                content=bounded_content, max_bytes=max_bytes
+            )
+        return bounded_content
 
     @staticmethod
     def _resolve_log_offset_key(path: Path) -> str:
         """Return a stable key for tracking incremental read offsets."""
 
         return str(path.resolve(strict=False))
+
+    @staticmethod
+    def _compute_step_log_truncation_plan(
+        *, total_bytes: int, max_bytes: int
+    ) -> tuple[int, int, bytes]:
+        """Plan bounded log content sizes and truncation marker."""
+
+        head_bytes = min(64 * 1024, max_bytes // 8)
+        tail_bytes = max_bytes - head_bytes
+        marker = b""
+        for _ in range(3):
+            omitted_bytes = max(0, total_bytes - head_bytes - tail_bytes)
+            marker = (
+                "\n"
+                "[moonmind] step log truncated: omitted "
+                f"{omitted_bytes} bytes from the middle; "
+                f"retained first {head_bytes} bytes and last {tail_bytes} bytes "
+                f"(cap={max_bytes}).\n"
+            ).encode("utf-8")
+            available = max_bytes - len(marker)
+            if available <= 0:
+                return (0, max_bytes, b"")
+            if head_bytes > available:
+                head_bytes = available // 2
+            tail_bytes = max(0, available - head_bytes)
+        return (head_bytes, tail_bytes, marker)
+
+    @staticmethod
+    def _utf8_safe_prefix(content: bytes) -> bytes:
+        """Trim trailing partial UTF-8 bytes from a prefix slice."""
+
+        for end_index in range(len(content), max(-1, len(content) - 4), -1):
+            candidate = content[:end_index]
+            try:
+                candidate.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            return candidate
+        return content.decode("utf-8", errors="ignore").encode("utf-8")
+
+    @staticmethod
+    def _utf8_safe_suffix(content: bytes) -> bytes:
+        """Trim leading partial UTF-8 bytes from a suffix slice."""
+
+        for start_index in range(min(4, len(content)) + 1):
+            candidate = content[start_index:]
+            try:
+                candidate.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            return candidate
+        return content.decode("utf-8", errors="ignore").encode("utf-8")
 
     @staticmethod
     def _bounded_step_log_bytes(*, content: bytes, max_bytes: int) -> bytes:
@@ -3562,41 +3669,22 @@ class CodexWorker:
         if len(content) <= max_bytes:
             return content
 
-        head_bytes = min(64 * 1024, max_bytes // 8)
-        tail_bytes = max_bytes - head_bytes
-        omitted_bytes = max(0, len(content) - head_bytes - tail_bytes)
-        marker = (
-            "\n"
-            "[moonmind] step log truncated: omitted "
-            f"{omitted_bytes} bytes from the middle; "
-            f"retained first {head_bytes} bytes and last {tail_bytes} bytes "
-            f"(cap={max_bytes}).\n"
-        ).encode("utf-8")
-
-        available = max_bytes - len(marker)
-        if available <= 0:
+        head_bytes, tail_bytes, marker = CodexWorker._compute_step_log_truncation_plan(
+            total_bytes=len(content),
+            max_bytes=max_bytes,
+        )
+        if not marker:
             return content[-max_bytes:]
-        if head_bytes > available:
-            head_bytes = available // 2
-        tail_bytes = max(0, available - head_bytes)
-        omitted_bytes = max(0, len(content) - head_bytes - tail_bytes)
-        marker = (
-            "\n"
-            "[moonmind] step log truncated: omitted "
-            f"{omitted_bytes} bytes from the middle; "
-            f"retained first {head_bytes} bytes and last {tail_bytes} bytes "
-            f"(cap={max_bytes}).\n"
-        ).encode("utf-8")
-        available = max_bytes - len(marker)
-        if available <= 0:
-            return content[-max_bytes:]
-        if head_bytes > available:
-            head_bytes = available // 2
-        tail_bytes = max(0, available - head_bytes)
-
-        if tail_bytes > 0:
-            return content[:head_bytes] + marker + content[-tail_bytes:]
-        return content[:head_bytes] + marker
+        safe_head = CodexWorker._utf8_safe_prefix(content[:head_bytes])
+        safe_tail = (
+            CodexWorker._utf8_safe_suffix(content[-tail_bytes:])
+            if tail_bytes > 0
+            else b""
+        )
+        bounded = safe_head + marker + safe_tail
+        if len(bounded) > max_bytes:
+            return bounded[-max_bytes:]
+        return bounded
 
     def _evaluate_step_gate(
         self,
