@@ -1,8 +1,8 @@
-# Tailwind Style System
+# Task Dashboard Style System
 
 Status: Active guidance (Phases 1-3 shipped, Phase 4+ planned)  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-19
+Last Updated: 2026-02-25
 
 ## 1. Purpose
 
@@ -449,26 +449,201 @@ Wrap tables in a scroll container:
 - Slight uppercase + tracking for overline labels only.
 - Avoid thin weights on glass backgrounds.
 
-### 11.3 Navigation pills
+### 11.3 Navigation pills (glass + glow + grow)
 
-- Base: translucent panel token.
-- Hover/active: purple edge glow.
-- Active text must keep strong contrast in both themes.
+Navigation pills (`.route-nav a`) should feel like small glass chips:
 
-### 11.4 Buttons (purple primary, warm highlight option)
+- Always slightly translucent so the background subtly influences the pill.
+- Hover/active should get brighter and add a restrained glow (never darker).
+- Motion uses scale (grow), not translateY (no "rising" effect).
 
-Primary:
+Recommended interaction rules:
 
-- Purple background (`--mm-accent`) with subtle glow on hover.
+- Base: translucent panel fill + thin border.
+- Hover/active: slightly higher fill alpha + edge glow + `transform: scale(1.02)`.
+- Active text must remain high-contrast in both themes.
 
-Secondary:
+### 11.4 Buttons (Glow + Grow system)
 
-- Glass surface, neutral text, accent border on hover.
+Buttons must follow one consistent interaction model across: Add Step, Apply, Create, Promote, Dismiss, Cancel, Back, and related actions.
 
-Warning/highlight action:
+#### 11.4.1 Principles
 
-- Use `--mm-warn` or `--mm-accent-warm` for yellow/orange emphasis.
-- Reserve for destructive confirmation flows or urgent operator actions.
+1. Hover gets lighter/brighter (never darker).
+2. All buttons are slightly translucent so underlying glass/gradients influence them.
+3. Glow is driven by the button's action color (purple for default, green for create/commit, red for danger).
+4. Motion is scale-based:
+   - Hover: grow (for example, `scale(1.03)`).
+   - Active/press: subtle press via scale (for example, `scale(0.99)`), still no translate.
+
+#### 11.4.2 Variants and when to use them
+
+- Default (brand action): purple (`--mm-accent`) for most actions.
+- Secondary: glass surface for safe/navigation actions (`Cancel`, `Back`, `View details`).
+- Commit/Create: green (`--mm-action-primary`) for "this will enqueue/apply a real action" flows (`Create`, `Promote-to-task`).
+- Danger: red (`--mm-danger`) for destructive actions (`Dismiss`, `Cancel job`).
+
+Implementation note (current pattern):
+
+- Commit/danger actions use a shared action-button class that sets `--queue-action-color` and derives fill/glow from it.
+- `--queue-action-color` defaults to `--mm-action-primary`; danger overrides set it to `--mm-danger`.
+
+#### 11.4.3 Interaction state contract (must hold for all variants)
+
+Base (idle):
+
+- Background uses alpha `< 1.0` (recommended `0.80-0.92`).
+- Thin outline present (1px) so the button edge stays readable on glass.
+
+Hover:
+
+- Increase brightness by increasing alpha and/or adding a subtle white highlight overlay.
+- Add a glow using the action color.
+- `transform: scale(...)` only (no `translateY`).
+
+Active (pressed):
+
+- Slight scale down (still scale only).
+- Glow can reduce slightly to feel pressed in.
+
+Focus-visible:
+
+- Keep a clear outline ring with high contrast in both themes.
+
+Disabled:
+
+- Lower opacity and disable transform/glow.
+
+#### 11.4.4 Thin outline rationale
+
+A 1px outline + edge-light inset highlight keeps buttons legible on bright glass panels, dark-mode glass, and gradient backgrounds. Without the outline, buttons visually blend into the panel surface.
+
+#### 11.4.5 Optional dynamic edge-light outline (Liquid Glass vibe)
+
+CSS cannot truly vary border width around a rectangle, but we can fake an uneven outline by varying border opacity using a gradient border overlay. This creates the impression that the outline is thinner in some corners and thicker in others.
+
+#### 11.4.6 CSS recipe (dashboard.tailwind.css guidance)
+
+Use the following selector pattern for an unambiguous "Glow + Grow (no rise)" implementation:
+
+```css
+/* Button interaction system: Glow + Grow (no translateY) */
+
+:root {
+  --mm-btn-alpha: 0.88;
+  --mm-btn-alpha-hover: 0.94;   /* hover gets brighter (more opaque), not darker */
+  --mm-btn-alpha-active: 0.90;
+  --mm-btn-scale-hover: 1.03;
+  --mm-btn-scale-active: 0.99;
+}
+
+/* Use a single action-color concept for glow/focus.
+   queue-action already uses --queue-action-color; others fall back to --mm-accent. */
+button,
+.button {
+  --mm-btn-color: var(--queue-action-color, var(--mm-accent));
+  background: rgb(var(--mm-btn-color) / var(--mm-btn-alpha));
+  transform: scale(1);
+  will-change: transform;
+}
+
+button:hover,
+.button:hover {
+  background: rgb(var(--mm-btn-color) / var(--mm-btn-alpha-hover));
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.28),
+    0 0 0 4px rgb(var(--mm-btn-color) / 0.16),
+    0 18px 34px -18px rgb(var(--mm-btn-color) / 0.60);
+  transform: scale(var(--mm-btn-scale-hover));
+}
+
+button:active,
+.button:active {
+  background: rgb(var(--mm-btn-color) / var(--mm-btn-alpha-active));
+  transform: scale(var(--mm-btn-scale-active));
+}
+
+/* Secondary stays glassy + translucent */
+button.secondary,
+.button.secondary {
+  --mm-btn-color: var(--mm-panel);
+  background: rgb(var(--mm-panel) / 0.72);
+  border-color: rgb(var(--mm-border) / 0.85);
+}
+
+button.secondary:hover,
+.button.secondary:hover {
+  background: rgb(var(--mm-panel) / 0.78);
+  border-color: rgb(var(--mm-accent) / 0.85);
+  box-shadow:
+    0 0 0 1px rgb(var(--mm-accent) / 0.28),
+    0 18px 34px -22px rgb(var(--mm-accent) / 0.40);
+}
+
+/* Action buttons (Create/Promote/Dismiss) keep their gradient,
+   but hover must get brighter + glow, and use scale not translate. */
+.queue-action,
+.queue-submit-primary {
+  background:
+    linear-gradient(150deg,
+      rgb(var(--queue-action-color) / 0.86) 0%,
+      rgb(var(--queue-action-color) / 0.96) 100%);
+}
+
+.queue-action:hover,
+.queue-submit-primary:hover {
+  background:
+    linear-gradient(150deg,
+      rgb(var(--queue-action-color) / 0.94) 0%,
+      rgb(var(--queue-action-color)) 100%);
+  transform: scale(var(--mm-btn-scale-hover));
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .button {
+    transition: none;
+    transform: none !important;
+  }
+}
+```
+
+Liquid edge outline recipe:
+
+```css
+/* Optional: perceived uneven outline via gradient border overlay */
+.mm-liquid-edge {
+  position: relative;
+}
+
+.mm-liquid-edge::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px; /* actual thickness stays 1px */
+  background: conic-gradient(
+    from 135deg,
+    rgb(255 255 255 / 0.55),
+    rgb(255 255 255 / 0.10) 25%,
+    rgb(255 255 255 / 0.55) 50%,
+    rgb(255 255 255 / 0.10) 75%,
+    rgb(255 255 255 / 0.55)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+@supports not ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  .mm-liquid-edge::before {
+    display: none;
+  }
+}
+```
 
 ### 11.5 Status chips
 
@@ -565,7 +740,7 @@ Status: Planned
 
 - Expand `mm-glass` and `mm-glass-strong` usage.
 - Tune glow and elevation hierarchy.
-- Keep motion subtle (opacity/translate only).
+- Keep motion subtle (opacity/scale only). Avoid translateY "rising" on hover/click.
 
 ## 14. Validation Checklist
 

@@ -245,7 +245,7 @@ Advance phases only when all gates are met:
 
 - `docs/TaskArchitecture.md`
 - `docs/TaskUiArchitecture.md`
-- `docs/TailwindStyleSystem.md`
+- `docs/TaskDashboardStyleSystem.md`
 - `docs/TaskQueueSystem.md`
 - `docs/UnifiedCliSingleQueueArchitecture.md`
 - `docs/WorkerGitAuth.md`
