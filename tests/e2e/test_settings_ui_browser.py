@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import threading
 import time
 
@@ -73,17 +73,23 @@ def test_submit_key(server):
 
 def _fill_queue_task_create_form(page):
     page.wait_for_selector("form#queue-submit-form")
-    page.fill("textarea[data-step-field='instructions'][data-step-index='0']", "Ship regression coverage")
+    page.fill(
+        "textarea[data-step-field='instructions'][data-step-index='0']",
+        "Ship regression coverage",
+    )
     page.fill("input[name='repository']", "moon/demo")
     return page.locator("form#queue-submit-form button[type='submit']")
 
 
 def _mock_queue_runtime_capabilities(page):
-    page.route("**/api/queue/workers/runtime-capabilities", lambda route: route.fulfill(
-        status=200,
-        content_type="application/json",
-        body=json.dumps({}),
-    ))
+    page.route(
+        "**/api/queue/workers/runtime-capabilities",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({}),
+        ),
+    )
 
 
 def _mock_queue_create_job(page, job_id=None, should_fail=False):
@@ -123,14 +129,13 @@ def test_submit_create_task_flow_successful_navigation(server):
         with page.expect_request("**/api/queue/jobs") as request_info:
             submit_button.click()
         assert (
-            submit_button.evaluate("el => (el.textContent || '').trim()") == "Submitting..."
+            submit_button.evaluate("el => (el.textContent || '').trim()")
+            == "Submitting..."
         )
         assert request_info.value.method == "POST"
         page.wait_for_url("**/tasks/queue/123e4567-e89b-12d3-a456-426614174000")
 
-        assert page.url.endswith(
-            "/tasks/queue/123e4567-e89b-12d3-a456-426614174000"
-        )
+        assert page.url.endswith("/tasks/queue/123e4567-e89b-12d3-a456-426614174000")
         browser.close()
 
 
@@ -147,10 +152,13 @@ def test_submit_create_task_flow_error_restores_label(server):
         submit_button.click()
 
         assert (
-            submit_button.evaluate("el => (el.textContent || '').trim()") == "Submitting..."
+            submit_button.evaluate("el => (el.textContent || '').trim()")
+            == "Submitting..."
         )
         expect(submit_button).to_have_text(original_label)
-        expect(page.locator("#queue-submit-message")).to_contain_text("Failed to create queue task")
+        expect(page.locator("#queue-submit-message")).to_contain_text(
+            "Failed to create queue task"
+        )
         assert page.url.endswith("/tasks/create")
 
         browser.close()
