@@ -195,7 +195,11 @@ def _run_checked_command(
             message = f"{message[:1021]}..."
         raise RuntimeError(_redact_value(message, redaction_values))
 
-    raise RuntimeError(_redact_value(f"command failed ({result.returncode}): {command_hint}", redaction_values))
+    raise RuntimeError(
+        _redact_value(
+            f"command failed ({result.returncode}): {command_hint}", redaction_values
+        )
+    )
 
 
 def _verify_speckit_cli(

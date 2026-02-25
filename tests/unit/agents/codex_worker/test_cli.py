@@ -332,7 +332,9 @@ def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
     assert observed_env["MM_NEW_VAR"] == "new"
 
 
-def test_run_checked_command_error_message_includes_return_code_and_tail(monkeypatch) -> None:
+def test_run_checked_command_error_message_includes_return_code_and_tail(
+    monkeypatch,
+) -> None:
     """Failed command diagnostics should expose return code and last stderr line."""
 
     def fake_run(command, *args, **kwargs):
@@ -355,7 +357,9 @@ def test_run_checked_command_error_message_includes_return_code_and_tail(monkeyp
     assert "fatal: bad request" in message
 
 
-def test_run_checked_command_error_message_without_detail_uses_compact_hint(monkeypatch) -> None:
+def test_run_checked_command_error_message_without_detail_uses_compact_hint(
+    monkeypatch,
+) -> None:
     """Failure without command output should still include compact command hint."""
 
     def fake_run(command, *args, **kwargs):
