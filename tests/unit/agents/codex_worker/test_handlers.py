@@ -1400,6 +1400,40 @@ async def test_run_command_error_includes_stderr_tail(
         )
 
 
+async def test_run_command_truncates_and_redacts_long_failure_messages(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Failure diagnostics should redact secrets before applying truncation."""
+
+    token = "ghp-handler-boundary-token-012345"
+    detail = "x" * 980 + token + "tail"
+    handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
+    log_path = tmp_path / "command-redaction.log"
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (b"", detail.encode("utf-8"))
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(CodexWorkerHandlerError) as exc_info:
+        await handler._run_command(
+            ["codex", "login"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert token[:16] not in message
+    assert "[REDACTED]" in message
+    assert len(message) <= 1024
+
+
 async def test_run_command_error_message_uses_compact_command_prefix(
     tmp_path: Path, monkeypatch
 ) -> None:

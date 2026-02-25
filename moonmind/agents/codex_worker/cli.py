@@ -191,14 +191,13 @@ def _run_checked_command(
     )
     if detail:
         message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
+        message = _redact_value(message, redaction_values)
         if len(message) > 1024:
             message = f"{message[:1021]}..."
-        raise RuntimeError(_redact_value(message, redaction_values))
+        raise RuntimeError(message)
 
     raise RuntimeError(
-        _redact_value(
-            f"command failed ({result.returncode}): {command_hint}", redaction_values
-        )
+        _redact_value(f"command failed ({result.returncode}): {command_hint}", redaction_values)
     )
 
 

@@ -4,6 +4,36 @@ set -euo pipefail
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 AUTH_SERVICE="${CODEX_AUTH_SERVICE:-codex-worker}"
 AUTH_COMMAND="${CODEX_AUTH_COMMAND:-codex login --device-auth && codex login status}"
+AUTH_COMMAND_TOKEN_RE='^[A-Za-z0-9._/:=-]+$'
+CODEX_TERM="${TERM:-xterm-256color}"
+
+run_auth_command() {
+  local raw_command="$1"
+  local -a command_parts=()
+
+  read -r -a command_parts <<< "$raw_command"
+  if [[ "${#command_parts[@]}" -eq 0 ]]; then
+    echo "Error: CODEX_AUTH_COMMAND contains an empty command." >&2
+    return 1
+  fi
+
+  if [[ "${command_parts[0]}" != "codex" ]]; then
+    echo "Error: CODEX_AUTH_COMMAND must invoke the codex CLI." >&2
+    return 1
+  fi
+
+  for token in "${command_parts[@]}"; do
+    if [[ ! "$token" =~ $AUTH_COMMAND_TOKEN_RE ]]; then
+      echo "Error: Invalid token in CODEX_AUTH_COMMAND: ${token}" >&2
+      return 1
+    fi
+  done
+
+  docker compose run --rm -it "${COMPOSE_NETWORK_ARGS[@]}" --user app \
+    -e TERM="${CODEX_TERM}" \
+    "$AUTH_SERVICE" \
+    "${command_parts[@]}"
+}
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker CLI is not available." >&2
@@ -14,6 +44,32 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   docker network create "$NETWORK_NAME" >/dev/null
 fi
 
-docker compose run --rm --user app \
-  "$AUTH_SERVICE" \
-  bash -lc "$AUTH_COMMAND"
+if ! [ -t 0 ] || ! [ -t 1 ]; then
+  echo "Error: Codex login requires an interactive terminal."
+  echo "Run this command from an interactive shell."
+  exit 1
+fi
+
+COMPOSE_NETWORK_ARGS=()
+if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
+  COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
+fi
+
+AUTH_COMMAND_LINES=()
+while IFS= read -r auth_command; do
+  auth_command="${auth_command#"${auth_command%%[![:space:]]*}"}"
+  auth_command="${auth_command%"${auth_command##*[![:space:]]}"}"
+  [[ -z "$auth_command" ]] && continue
+  AUTH_COMMAND_LINES+=("$auth_command")
+done < <(
+  printf '%s\n' "$AUTH_COMMAND" | sed -E 's/[[:space:]]*&&[[:space:]]*/\n/g'
+)
+
+if [[ "${#AUTH_COMMAND_LINES[@]}" -eq 0 ]]; then
+  echo "Error: CODEX_AUTH_COMMAND was empty after parsing." >&2
+  exit 1
+fi
+
+for AUTH_COMMAND_LINE in "${AUTH_COMMAND_LINES[@]}"; do
+  run_auth_command "$AUTH_COMMAND_LINE"
+done

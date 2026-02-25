@@ -357,6 +357,31 @@ def test_run_checked_command_error_message_includes_return_code_and_tail(
     assert "fatal: bad request" in message
 
 
+def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
+    """Tokenized output should be redacted before truncating diagnostic text."""
+
+    token = "ghp-redact-boundary-token-012345"
+    detail = "x" * 980 + token + "tail"
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=99,
+            stdout="",
+            stderr=detail,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._run_checked_command(["codex", "login"])
+
+    message = str(exc_info.value)
+    assert token[:16] not in message
+    assert "[REDACTED]" in message
+    assert len(message) <= 1024
+
+
 def test_run_checked_command_error_message_without_detail_uses_compact_hint(
     monkeypatch,
 ) -> None:

@@ -1167,12 +1167,15 @@ class CodexExecHandler:
                 redacted_tail = self._redact_text(
                     tail_line, extra_redaction_values=redaction_values
                 )
-                raise CodexWorkerHandlerError(
-                    f"command failed ({result.returncode}): {command_hint} | {redacted_tail}"
+                message = (
+                    f"command failed ({result.returncode}): "
+                    f"{command_hint} | {redacted_tail}"
                 )
-            raise CodexWorkerHandlerError(
-                f"command failed ({result.returncode}): {command_hint}"
-            )
+            else:
+                message = f"command failed ({result.returncode}): {command_hint}"
+            if len(message) > 1024:
+                message = f"{message[:1021]}..."
+            raise CodexWorkerHandlerError(message)
         return result
 
     def _build_codex_exec_command(
