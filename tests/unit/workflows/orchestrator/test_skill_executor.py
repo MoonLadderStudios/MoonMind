@@ -107,6 +107,26 @@ def test_resolve_skill_command_treats_false_like_false(tmp_path: Path) -> None:
     assert "--restart-orchestrator" not in command
 
 
+def test_resolve_skill_command_defaults_compose_project_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "run-update-moonmind.sh"
+    script_path.write_text("#!/usr/bin/env bash\n")
+
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "moonmind")
+
+    command, _ = skill_executor._resolve_skill_command(
+        script_path=script_path,
+        skill_id="update-moonmind",
+        repo_path=tmp_path,
+        skill_args={},
+    )
+
+    assert "--compose-project" in command
+    assert "moonmind" in command
+
+
 def test_is_runnable_skill_requires_detectable_script(tmp_path: Path) -> None:
     local_root = tmp_path / ".agents" / "skills" / "local"
     local_root.mkdir(parents=True)

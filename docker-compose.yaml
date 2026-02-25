@@ -416,7 +416,7 @@ services:
       context: .
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
-    user: app
+    user: root
     command: >-
       /workspace/tools/start-worker.sh -m moonmind.workflows.orchestrator.queue_worker
     env_file:
@@ -447,7 +447,7 @@ services:
       - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
-      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-unix:///var/run/docker.sock}
       - WORKFLOW_REPO_ROOT=${WORKFLOW_REPO_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_REPO_ROOT:-${MOONMIND_ORCHESTRATOR_SPEC_WORKFLOW_REPO_ROOT:-/workspace}}}
       - WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=${WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_SPEC_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}}}
       - WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=${WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_SPEC_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}}}
@@ -458,11 +458,10 @@ services:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - agent_workspaces:/work/agent_jobs
       - ./var/artifacts:/workspace/var/artifacts
+      - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /workspace
     depends_on:
       api:
-        condition: service_started
-      docker-proxy:
         condition: service_started
       agent-workspaces-init:
         condition: service_completed_successfully
@@ -470,7 +469,6 @@ services:
         condition: service_completed_successfully
     networks:
       - local-network
-      - docker-proxy-network
     restart: unless-stopped
 
   scheduler:

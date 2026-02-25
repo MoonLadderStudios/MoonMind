@@ -1443,8 +1443,9 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
                 ),
             )
 
+    artifact_scope = tmp_path / "var" / "artifacts" / "spec_workflows"
     handler = LocalCumulativeStepLogHandler(
-        workdir_root=tmp_path,
+        workdir_root=artifact_scope,
         segments=["step-1 output\n", "step-2 output\n"],
     )
     job = ClaimedJob(
@@ -1473,7 +1474,7 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
         worker_token=None,
         poll_interval_ms=1500,
         lease_seconds=120,
-        workdir=tmp_path,
+        workdir=artifact_scope,
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -1481,10 +1482,10 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
 
     assert processed is True
     step1_log_path = (
-        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+        artifact_scope / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
     )
     step2_log_path = (
-        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+        artifact_scope / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
     )
     assert step1_log_path.read_text(encoding="utf-8") == "step-1 output\n"
     step2_text = step2_log_path.read_text(encoding="utf-8")

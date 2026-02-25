@@ -220,9 +220,9 @@ async def test_get_queue_safeguard_snapshot_classifies_jobs(tmp_path: Path) -> N
                 payload={"repository": "Moon/Mind", "instruction": "run"},
             )
             await repo.commit()
-            for _ in (fresh, timed_out, stale):
+            for index, _ in enumerate((fresh, timed_out, stale), start=1):
                 await service.claim_job(
-                    worker_id="executor",
+                    worker_id=f"executor-{index}",
                     lease_seconds=30,
                     worker_capabilities=["codex", "git", "gh"],
                 )
