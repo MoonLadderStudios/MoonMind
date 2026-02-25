@@ -1400,6 +1400,80 @@ async def test_run_command_error_includes_stderr_tail(
         )
 
 
+async def test_run_command_error_message_uses_compact_command_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Failed command diagnostics should avoid dumping long command payloads."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "command-noise.log"
+    long_instruction = (
+        "Perform an extremely long codex instruction payload that should not appear"
+        " in failure diagnostics."
+    )
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (
+                b"",
+                b"fatal: invalid model requested while running command\n",
+            )
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(
+        CodexWorkerHandlerError,
+        match=r"command failed \(1\): codex exec .*",
+    ) as exc_info:
+        await handler._run_command(
+            ["codex", "exec", "--model", "gpt-5.3-codex-spark", long_instruction],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert "Perform an extremely long codex instruction payload" not in message
+    assert "gpt-5.3-codex-spark" not in message
+    assert "fatal: invalid model requested while running command" in message
+
+
+async def test_run_command_error_message_without_output_uses_compact_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No-output failures should still include concise command prefix."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "command-no-detail.log"
+
+    class FakeProcess:
+        returncode = 2
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(
+        CodexWorkerHandlerError, match=r"command failed \(2\): git diff"
+    ) as exc_info:
+        await handler._run_command(
+            ["git", "diff", "--check", "README.md"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert "README.md" not in message
+
+
 async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> None:
     """Handler should normalize validation failures into failed results."""
 

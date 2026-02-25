@@ -332,6 +332,52 @@ def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
     assert observed_env["MM_NEW_VAR"] == "new"
 
 
+def test_run_checked_command_error_message_includes_return_code_and_tail(monkeypatch) -> None:
+    """Failed command diagnostics should expose return code and last stderr line."""
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=2,
+            stdout="ignored stdout\n",
+            stderr="warn: step 1\nfatal: bad request\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(
+        RuntimeError, match=r"command failed \(2\): /usr/bin/codex login"
+    ) as exc_info:
+        cli._run_checked_command(["/usr/bin/codex", "login", "status"])
+
+    message = str(exc_info.value)
+    assert "warn: step 1" not in message
+    assert "fatal: bad request" in message
+
+
+def test_run_checked_command_error_message_without_detail_uses_compact_hint(monkeypatch) -> None:
+    """Failure without command output should still include compact command hint."""
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=7,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"command failed \(7\): codex exec",
+    ) as exc_info:
+        cli._run_checked_command(["codex", "exec", "run now"])
+
+    message = str(exc_info.value)
+    assert "run now" not in message
+
+
 def test_run_preflight_missing_speckit_raises(monkeypatch) -> None:
     """Preflight should fail when speckit binary is unavailable."""
 
