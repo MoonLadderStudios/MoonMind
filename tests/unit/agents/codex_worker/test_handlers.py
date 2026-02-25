@@ -619,7 +619,9 @@ async def test_retrieve_context_pack_skips_when_embedding_provider_unexecutable(
         def __init__(self, *args, **kwargs):
             raise AssertionError("retrieval service should not initialize")
 
-    monkeypatch.setattr(handlers, "ContextRetrievalService", _UnexpectedRetrievalService)
+    monkeypatch.setattr(
+        handlers, "ContextRetrievalService", _UnexpectedRetrievalService
+    )
 
     pack = handler._retrieve_context_pack(job_id=uuid4(), payload=payload)
 
