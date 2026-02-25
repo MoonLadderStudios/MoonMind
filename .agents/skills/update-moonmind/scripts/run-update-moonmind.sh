@@ -515,18 +515,27 @@ else
   run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${SERVICES_TO_RESTART[@]}"
 fi
 
-readarray -t RECONCILE_SERVICES < <(
-  printf '%s\n' "${SERVICES_TO_RESTART[@]}"
-)
-if [[ ${#RECONCILE_SERVICES[@]} -eq 0 ]]; then
+if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
   say "No selected services require reconciliation."
 else
+  readarray -t RECONCILE_SERVICES < <(
+    for target in "${SERVICES_TO_RESTART[@]}"; do
+      [[ -n "$target" ]] || continue
+      printf '%s\n' "$target"
+    done
+  )
+
+  if [[ ${#RECONCILE_SERVICES[@]} -eq 0 ]]; then
+    say "No selected services require reconciliation."
+    :
+  else
   if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
     say "Reconciling selected services for reconciliation: ${RECONCILE_SERVICES[*]}"
   else
     say "Reconciling selected services for reconciliation (excluding orchestrator): ${RECONCILE_SERVICES[*]}"
   fi
   run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${RECONCILE_SERVICES[@]}"
+  fi
 fi
 
 say "MoonMind update complete"
