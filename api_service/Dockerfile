@@ -262,6 +262,7 @@ RUN apt-get update && \
         tesseract-ocr-eng \
         git \
         gh \
+        ripgrep \
         curl \
         ca-certificates \
         openssh-client \
@@ -287,8 +288,9 @@ RUN apt-get update && \
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
     chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit /usr/local/bin/gemini /usr/local/bin/claude
 
-# Verify the non-root ``app`` user can resolve and execute the bundled CLIs.
-RUN runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version && claude --version'
+# Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
+# repository search tooling expected by Codex runtime defaults.
+RUN runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version && claude --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at
