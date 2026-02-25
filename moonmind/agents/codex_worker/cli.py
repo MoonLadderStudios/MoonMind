@@ -197,7 +197,9 @@ def _run_checked_command(
         raise RuntimeError(message)
 
     raise RuntimeError(
-        _redact_value(f"command failed ({result.returncode}): {command_hint}", redaction_values)
+        _redact_value(
+            f"command failed ({result.returncode}): {command_hint}", redaction_values
+        )
     )
 
 
