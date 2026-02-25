@@ -160,7 +160,7 @@ h1 {
   background: rgb(var(--mm-accent) / 0.14);
   color: rgb(var(--mm-ink));
   box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.35), 0 12px 30px -24px rgb(var(--mm-accent) / 0.85);
-  transform: translateY(-1px);
+  transform: scale(1.02);
 }
 
 .panel {
@@ -583,7 +583,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
   background: rgb(var(--mm-accent) / 0.88);
   border-color: rgb(255 255 255 / 0.82);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 30px -16px rgb(var(--mm-accent) / 0.94);
-  transform: translateY(-2px);
+  transform: scale(1.03);
 }
 
 button:focus-visible {
@@ -625,7 +625,7 @@ button.secondary:hover {
   background: rgb(var(--mm-accent) / 0.88);
   border-color: rgb(255 255 255 / 0.82);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 30px -16px rgb(var(--mm-accent) / 0.94);
-  transform: translateY(-2px);
+  transform: scale(1.03);
 }
 
 .button:focus-visible {
@@ -661,7 +661,7 @@ button.secondary:hover {
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.36),
     0 18px 34px -16px rgb(var(--queue-action-color) / 0.95);
-  transform: translateY(-2px);
+  transform: scale(1.03);
 }
 
 .queue-action:focus-visible,

@@ -547,7 +547,7 @@ button,
   --mm-btn-color: var(--queue-action-color, var(--mm-accent));
   background: rgb(var(--mm-btn-color) / var(--mm-btn-alpha));
   transform: scale(1);
-  will-change: transform;
+  will-change: transform; transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
 button:hover,
