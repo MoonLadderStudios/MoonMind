@@ -3708,6 +3708,10 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     )
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "$ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
 
     commit_override = "  commit title with preserved spaces  "
     pr_title_override = "  PR title with preserved spaces  "
@@ -3749,6 +3753,219 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     assert pr_command[pr_command.index("--title") + 1] == pr_title_override
     assert pr_command[pr_command.index("--body") + 1] == pr_body_override
     assert pr_call["redaction_values"] == (pr_title_override, pr_body_override)
+    assert any(
+        artifact.name == "reports/publish_preflight.json"
+        for artifact in staged_artifacts
+    )
+
+
+async def test_run_publish_stage_fails_without_verification_evidence_for_source_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Source-code changes should block publish without verification evidence/skip reason."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(
+                tuple(command),
+                0,
+                " M moonmind/agents/codex_worker/worker.py\n",
+                "",
+            )
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    with pytest.raises(RuntimeError, match="publish preflight failed"):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={"task": {"publish": {"mode": "branch"}}},
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=staged_artifacts,
+        )
+
+    preflight_path = prepared.artifacts_dir / "reports" / "publish_preflight.json"
+    assert preflight_path.exists()
+    preflight_payload = json.loads(preflight_path.read_text(encoding="utf-8"))
+    assert preflight_payload["status"] == "FAIL"
+    assert preflight_payload["verification"]["required"] is True
+    assert preflight_payload["verification"]["evidenceCount"] == 0
+    assert any(
+        artifact.name == "reports/publish_preflight.json"
+        for artifact in staged_artifacts
+    )
+
+
+async def test_run_publish_stage_allows_structured_verification_skip_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured skip reason should allow publish and propagate into PR body/artifacts."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(
+                command_tuple,
+                0,
+                " M moonmind/agents/codex_worker/worker.py\n",
+                "",
+            )
+        if command_tuple[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                command_tuple,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/777\n",
+                "",
+            )
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={
+            "task": {
+                "runtime": {"mode": "codex"},
+                "publish": {
+                    "mode": "pr",
+                    "verificationSkipReason": {
+                        "category": "infra_unavailable",
+                        "reason": "CI runner was unavailable during this queue window.",
+                        "ticket": "OPS-1234",
+                    },
+                },
+            }
+        },
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert publish_note is not None
+    assert "verification skipped (infra_unavailable)" in publish_note
+    pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
+    pr_body = pr_call[pr_call.index("--body") + 1]
+    assert "## Verification" in pr_body
+    assert "Category: infra_unavailable" in pr_body
+    assert "Reason: CI runner was unavailable during this queue window." in pr_body
+    assert "Ticket: OPS-1234" in pr_body
+
+    publish_payload = json.loads(prepared.publish_result_path.read_text(encoding="utf-8"))
+    assert publish_payload["verification"]["status"] == "skipped"
+    assert (
+        publish_payload["verification"]["skipReason"]["category"]
+        == "infra_unavailable"
+    )
+    assert any(
+        artifact.name == "reports/publish_preflight.json"
+        for artifact in staged_artifacts
+    )
 
 
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(

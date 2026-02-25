@@ -102,6 +102,67 @@ _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
+_NON_SOURCE_CHANGE_PREFIXES = (
+    ".github/",
+    ".specify/",
+    "docs/",
+    "specs/",
+    "samples/",
+)
+_NON_SOURCE_CHANGE_FILENAMES = frozenset(
+    {
+        ".dockerignore",
+        ".gitignore",
+        "changelog",
+        "changelog.md",
+        "license",
+        "license.md",
+        "license.txt",
+        "readme",
+        "readme.md",
+        "readme.rst",
+    }
+)
+_NON_SOURCE_CHANGE_EXTENSIONS = frozenset(
+    {
+        ".adoc",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".md",
+        ".pdf",
+        ".png",
+        ".rst",
+        ".svg",
+        ".txt",
+        ".webp",
+    }
+)
+_VERIFICATION_COMMAND_PATTERNS = (
+    re.compile(r"(?:^|\s)(?:\./)?tools/test_unit\.sh(?:\s|$)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:python(?:3)?\s+-m\s+pytest|pytest)(?:\s|$)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:tox|nox|ruff|flake8|pylint|mypy)(?:\s|$)", re.IGNORECASE),
+    re.compile(
+        r"(?:^|\s)(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|build)(?:\s|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|\s)(?:go\s+(?:test|vet|build)|cargo\s+(?:test|clippy|build))(?:\s|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|\s)(?:make|just)\s+(?:test|lint|build|check|verify)(?:\s|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"(?:^|\s)(?:eslint|stylelint|shellcheck|golangci-lint|hadolint|phpunit|"
+            r"vitest|jest|mocha|mvn\s+(?:test|verify)|gradle\s+test|"
+            r"\./gradlew\s+test)(?:\s|$)"
+        ),
+        re.IGNORECASE,
+    ),
+)
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -949,6 +1010,19 @@ class StepGateSpec:
 
     gate_type: str
     source_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class PublishPreflightResult:
+    """Outcome of publish quality preflight checks."""
+
+    passed: bool
+    reason: str
+    changed_paths: tuple[str, ...]
+    source_code_paths: tuple[str, ...]
+    verification_evidence: tuple[dict[str, Any], ...]
+    verification_skip_reason: dict[str, str] | None
+    report_path: Path
 
 
 class QueueApiClient:
@@ -3166,6 +3240,295 @@ class CodexWorker:
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _parse_git_status_paths(status_output: str) -> tuple[str, ...]:
+        """Extract changed paths from `git status --porcelain` output."""
+
+        paths: list[str] = []
+        for raw_line in str(status_output or "").splitlines():
+            line = raw_line.rstrip()
+            if len(line) < 4:
+                continue
+            entry = line[3:].strip()
+            if not entry:
+                continue
+            if " -> " in entry:
+                entry = entry.split(" -> ", 1)[1].strip()
+            if entry.startswith('"') and entry.endswith('"') and len(entry) >= 2:
+                entry = entry[1:-1]
+            if entry:
+                paths.append(entry)
+        return tuple(dict.fromkeys(paths))
+
+    @staticmethod
+    def _is_source_code_change_path(path_text: str) -> bool:
+        """Return True when a changed path likely impacts executable code."""
+
+        normalized = str(path_text or "").strip().lstrip("./")
+        if not normalized:
+            return False
+        lowered = normalized.lower()
+        for prefix in _NON_SOURCE_CHANGE_PREFIXES:
+            if lowered.startswith(prefix):
+                return False
+
+        filename = lowered.rsplit("/", 1)[-1]
+        if filename in _NON_SOURCE_CHANGE_FILENAMES:
+            return False
+
+        extension = Path(filename).suffix.lower()
+        if extension in _NON_SOURCE_CHANGE_EXTENSIONS:
+            return False
+        return True
+
+    @staticmethod
+    def _looks_like_verification_command(command: str) -> bool:
+        """Return True when command resembles test/lint/build verification."""
+
+        normalized = " ".join(str(command or "").split())
+        if not normalized:
+            return False
+        return any(
+            pattern.search(normalized) for pattern in _VERIFICATION_COMMAND_PATTERNS
+        )
+
+    @classmethod
+    def _artifact_name_for_path(
+        cls, *, path: Path, prepared: PreparedTaskWorkspace
+    ) -> str:
+        """Resolve artifact-relative path label for preflight evidence."""
+
+        resolved = path.resolve(strict=False)
+        artifacts_root = prepared.artifacts_dir.resolve(strict=False)
+        if cls._is_relative_to(resolved, artifacts_root):
+            relative = resolved.relative_to(artifacts_root).as_posix()
+            return relative if relative != "." else path.name
+        return path.name
+
+    @classmethod
+    def _collect_verification_evidence(
+        cls, *, prepared: PreparedTaskWorkspace
+    ) -> tuple[dict[str, Any], ...]:
+        """Collect verification-command evidence from stage log artifacts."""
+
+        candidate_paths: list[Path] = [
+            prepared.execute_log_path,
+            prepared.artifacts_dir / "logs" / "execute.log",
+            prepared.artifacts_dir / "logs" / "codex_exec.log",
+        ]
+        step_logs_dir = prepared.artifacts_dir / "logs" / "steps"
+        if step_logs_dir.is_dir():
+            candidate_paths.extend(sorted(step_logs_dir.glob("step-*.log")))
+
+        unique_paths: list[Path] = []
+        seen_paths: set[str] = set()
+        for path in candidate_paths:
+            key = path.resolve(strict=False).as_posix()
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            unique_paths.append(path)
+
+        evidence: list[dict[str, Any]] = []
+        for log_path in unique_paths:
+            if not log_path.exists() or not log_path.is_file():
+                continue
+            try:
+                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            artifact_name = cls._artifact_name_for_path(path=log_path, prepared=prepared)
+            for line_number, line in enumerate(lines, start=1):
+                if not line.startswith("$ "):
+                    continue
+                command = line[2:].strip()
+                if not cls._looks_like_verification_command(command):
+                    continue
+                evidence.append(
+                    {
+                        "command": command,
+                        "artifact": artifact_name,
+                        "line": line_number,
+                    }
+                )
+        return tuple(evidence)
+
+    @staticmethod
+    def _resolve_publish_verification_skip_reason(
+        publish: Mapping[str, Any],
+    ) -> dict[str, str] | None:
+        """Normalize optional structured verification skip reason."""
+
+        raw_skip_reason = publish.get("verificationSkipReason")
+        verification_node = publish.get("verification")
+        if raw_skip_reason is None and isinstance(verification_node, Mapping):
+            raw_skip_reason = verification_node.get("skipReason")
+        if raw_skip_reason is None:
+            return None
+        if not isinstance(raw_skip_reason, Mapping):
+            raise ValueError(
+                "task.publish.verificationSkipReason must be an object with category/reason"
+            )
+
+        category_raw = (
+            raw_skip_reason.get("category")
+            if isinstance(raw_skip_reason, Mapping)
+            else None
+        )
+        if category_raw is None and isinstance(raw_skip_reason, Mapping):
+            category_raw = raw_skip_reason.get("type")
+        reason_raw = (
+            raw_skip_reason.get("reason")
+            if isinstance(raw_skip_reason, Mapping)
+            else None
+        )
+        if reason_raw is None and isinstance(raw_skip_reason, Mapping):
+            reason_raw = (
+                raw_skip_reason.get("detail") or raw_skip_reason.get("details")
+            )
+        category = re.sub(r"[^a-z0-9_-]+", "_", str(category_raw or "").strip().lower())
+        category = category.strip("_")
+        reason = " ".join(str(reason_raw or "").split())
+        if not category:
+            raise ValueError(
+                "task.publish.verificationSkipReason.category is required for intentional verification skip"
+            )
+        if not reason:
+            raise ValueError(
+                "task.publish.verificationSkipReason.reason is required for intentional verification skip"
+            )
+        normalized = {"category": category, "reason": reason}
+        ticket = " ".join(
+            str(
+                raw_skip_reason.get("ticket")
+                or raw_skip_reason.get("issue")
+                or raw_skip_reason.get("url")
+                or ""
+            ).split()
+        )
+        if ticket:
+            normalized["ticket"] = ticket
+        return normalized
+
+    @classmethod
+    def _append_skip_reason_to_pr_body(
+        cls,
+        *,
+        pr_body: str,
+        skip_reason: Mapping[str, str],
+    ) -> str:
+        """Append structured verification skip metadata to PR body."""
+
+        category = cls._sanitize_metadata_footer_value(skip_reason.get("category"))
+        reason = cls._sanitize_metadata_footer_value(skip_reason.get("reason"))
+        ticket = cls._sanitize_metadata_footer_value(
+            skip_reason.get("ticket"), fallback=""
+        )
+        lines = [
+            "",
+            "## Verification",
+            "- Status: skipped",
+            f"- Category: {category}",
+            f"- Reason: {reason}",
+            "- Evidence artifact: reports/publish_preflight.json",
+        ]
+        if ticket:
+            lines.append(f"- Ticket: {ticket}")
+        suffix = "\n".join(lines) + "\n"
+        base = pr_body.rstrip()
+        if not base:
+            return suffix.lstrip()
+        return f"{base}\n{suffix}"
+
+    def _run_publish_preflight(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        publish: Mapping[str, Any],
+        status_output: str,
+    ) -> PublishPreflightResult:
+        """Validate publish quality requirements and persist preflight report."""
+
+        changed_paths = self._parse_git_status_paths(status_output)
+        source_code_paths = tuple(
+            path for path in changed_paths if self._is_source_code_change_path(path)
+        )
+        verification_evidence = self._collect_verification_evidence(prepared=prepared)
+
+        skip_reason: dict[str, str] | None = None
+        skip_reason_error: str | None = None
+        try:
+            skip_reason = self._resolve_publish_verification_skip_reason(publish)
+        except ValueError as exc:
+            skip_reason_error = str(exc)
+
+        verification_required = bool(source_code_paths)
+        skip_used = verification_required and not verification_evidence
+
+        if skip_used:
+            if skip_reason_error:
+                passed = False
+                reason = (
+                    "publish preflight failed: source-code changes require verification, "
+                    f"and skip reason is invalid ({skip_reason_error})"
+                )
+            elif skip_reason is None:
+                passed = False
+                reason = (
+                    "publish preflight failed: source-code changes detected but no "
+                    "verification command result was captured in artifacts; provide "
+                    "task.publish.verificationSkipReason with category/reason to skip intentionally"
+                )
+            else:
+                passed = True
+                reason = "publish preflight passed: verification intentionally skipped"
+        else:
+            passed = True
+            if verification_required:
+                reason = (
+                    "publish preflight passed: verification command evidence captured"
+                )
+            else:
+                reason = "publish preflight passed: no source-code changes detected"
+
+        effective_skip_reason = skip_reason if skip_used and skip_reason else None
+        report_payload = {
+            "schemaVersion": "v1",
+            "status": "PASS" if passed else "FAIL",
+            "reason": reason,
+            "changes": {
+                "changedPaths": list(changed_paths),
+                "sourceCodePaths": list(source_code_paths),
+            },
+            "verification": {
+                "required": verification_required,
+                "evidenceCount": len(verification_evidence),
+                "evidence": list(verification_evidence),
+                "skipped": effective_skip_reason is not None,
+                "skipReason": effective_skip_reason,
+                "skipReasonError": skip_reason_error if skip_used else None,
+            },
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        redacted = self._redact_payload(report_payload)
+        serialized_payload = redacted if isinstance(redacted, dict) else report_payload
+
+        report_path = prepared.artifacts_dir / "reports" / "publish_preflight.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(serialized_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return PublishPreflightResult(
+            passed=passed,
+            reason=reason,
+            changed_paths=tuple(changed_paths),
+            source_code_paths=tuple(source_code_paths),
+            verification_evidence=tuple(verification_evidence),
+            verification_skip_reason=effective_skip_reason,
+            report_path=report_path,
+        )
+
     async def _run_publish_stage(
         self,
         *,
@@ -3218,6 +3581,15 @@ class CodexWorker:
                 check=False,
                 env=prepared.publish_command_env,
             )
+            verification_payload: dict[str, Any] = {
+                "required": False,
+                "status": "not_required",
+                "evidenceCount": 0,
+                "evidence": [],
+                "skipReason": None,
+                "evidenceArtifact": "reports/publish_preflight.json",
+            }
+            preflight_result: PublishPreflightResult | None = None
             if not status.stdout.strip():
                 result_payload = {
                     "mode": publish_mode,
@@ -3225,6 +3597,7 @@ class CodexWorker:
                     "prUrl": None,
                     "skipped": True,
                     "reason": "no local changes",
+                    "verification": verification_payload,
                 }
                 prepared.publish_result_path.write_text(
                     json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
@@ -3266,6 +3639,35 @@ class CodexWorker:
                     },
                 )
                 return "publish skipped: no local changes"
+
+            preflight_result = self._run_publish_preflight(
+                prepared=prepared,
+                publish=publish,
+                status_output=status.stdout,
+            )
+            self._append_stage_log(prepared.publish_log_path, preflight_result.reason)
+            staged_artifacts.append(
+                ArtifactUpload(
+                    path=preflight_result.report_path,
+                    name="reports/publish_preflight.json",
+                    content_type="application/json",
+                )
+            )
+            verification_payload["required"] = bool(preflight_result.source_code_paths)
+            verification_payload["evidenceCount"] = len(
+                preflight_result.verification_evidence
+            )
+            verification_payload["evidence"] = list(
+                preflight_result.verification_evidence
+            )
+            verification_payload["skipReason"] = preflight_result.verification_skip_reason
+            if preflight_result.verification_skip_reason is not None:
+                verification_payload["status"] = "skipped"
+            elif preflight_result.source_code_paths:
+                verification_payload["status"] = "passed"
+
+            if not preflight_result.passed:
+                raise RuntimeError(preflight_result.reason)
 
             await self._run_stage_command(
                 ["git", "checkout", prepared.working_branch],
@@ -3320,6 +3722,11 @@ class CodexWorker:
                     base_branch=pr_base,
                     head_branch=prepared.working_branch,
                 )
+                if preflight_result and preflight_result.verification_skip_reason:
+                    pr_body = self._append_skip_reason_to_pr_body(
+                        pr_body=pr_body,
+                        skip_reason=preflight_result.verification_skip_reason,
+                    )
                 pr_result = await self._run_stage_command(
                     [
                         self._resolve_gh_binary(),
@@ -3345,6 +3752,12 @@ class CodexWorker:
                     if pr_url is None
                     else f"published PR {pr_url}"
                 )
+            if preflight_result and preflight_result.verification_skip_reason:
+                skip_category = preflight_result.verification_skip_reason.get("category")
+                if skip_category:
+                    publish_note = (
+                        f"{publish_note}; verification skipped ({skip_category})"
+                    )
 
             result_payload = {
                 "mode": publish_mode,
@@ -3352,6 +3765,7 @@ class CodexWorker:
                 "baseBranch": prepared.starting_branch,
                 "prUrl": pr_url,
                 "skipped": False,
+                "verification": verification_payload,
             }
             prepared.publish_result_path.write_text(
                 json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
