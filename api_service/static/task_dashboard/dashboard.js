@@ -1454,6 +1454,17 @@
         const titleBase = row.title ? row.title : "Queue Job";
         const titleWithId = row.id ? `${titleBase} · ${row.id}` : titleBase;
         const rawStatus = String(row.rawStatus || "").trim() || "-";
+        const statusField = `
+          <div>
+            <dt>Status</dt>
+            <dd>
+              <span class="queue-card-status-field">
+                ${statusBadge(row.source, row.rawStatus)}
+                <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
+              </span>
+            </dd>
+          </div>
+        `;
         return `
           <li class="queue-card">
             <div class="queue-card-header">
@@ -1461,12 +1472,9 @@
                 <a href="${linkTarget}" class="queue-card-title">${escapeHtml(titleWithId)}</a>
                 <p class="queue-card-meta">${escapeHtml(metaText)}</p>
               </div>
-              <div class="queue-card-status">
-                ${statusBadge(row.source, row.rawStatus)}
-                <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
-              </div>
             </div>
             <dl class="queue-card-fields">
+              ${statusField}
               ${fieldItems}
             </dl>
             <div class="queue-card-actions">
@@ -1575,10 +1583,11 @@
     });
   }
 
-  // Queue/table/card metadata lives in one definition list so new fields only
-  // require a single entry plus a render helper. When expanding queue metadata,
-  // update docs/TaskUiQueue.md ("Extending queue fields") and add tests that
-  // exercise the new label/value pairs.
+  // Queue metadata for table columns and card field rows is centralized here.
+  // Card status remains a fixed leading row in renderQueueCards so mobile keeps
+  // status first regardless of future queueFieldDefinitions ordering. When
+  // expanding queue metadata, update docs/TaskUiQueue.md ("Extending queue
+  // fields") and add tests that exercise the new label/value pairs.
   const queueFieldDefinitions = [
     {
       key: "queueName",
