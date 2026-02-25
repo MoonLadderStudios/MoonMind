@@ -144,41 +144,48 @@ def _build_verify_step(profile: ServiceProfile) -> PlanStep:
     return PlanStep(db_models.OrchestratorPlanStep.VERIFY, parameters)
 
 
-def _build_rollback_step(profile: ServiceProfile) -> PlanStep:
-    parameters = {
-        "service": profile.compose_service,
-        "logArtifact": "rollback.log",
-        "strategies": [
+def _build_rollback_step(
+    profile: ServiceProfile, *, include_git_reset: bool = True
+) -> PlanStep:
+    strategies: list[dict[str, Any]] = []
+    if include_git_reset:
+        strategies.append(
             {
                 "type": "git-revert",
                 "commands": [
                     ["git", "reset", "--hard", "HEAD"],
                 ],
-            },
-            {
-                "type": "rebuild",
-                "commands": [
-                    [
-                        "docker",
-                        "compose",
-                        "--project-name",
-                        profile.compose_project,
-                        "build",
-                        profile.compose_service,
-                    ],
-                    [
-                        "docker",
-                        "compose",
-                        "--project-name",
-                        profile.compose_project,
-                        "up",
-                        "-d",
-                        "--no-deps",
-                        profile.compose_service,
-                    ],
+            }
+        )
+    strategies.append(
+        {
+            "type": "rebuild",
+            "commands": [
+                [
+                    "docker",
+                    "compose",
+                    "--project-name",
+                    profile.compose_project,
+                    "build",
+                    profile.compose_service,
                 ],
-            },
-        ],
+                [
+                    "docker",
+                    "compose",
+                    "--project-name",
+                    profile.compose_project,
+                    "up",
+                    "-d",
+                    "--no-deps",
+                    profile.compose_service,
+                ],
+            ],
+        }
+    )
+    parameters = {
+        "service": profile.compose_service,
+        "logArtifact": "rollback.log",
+        "strategies": strategies,
     }
     return PlanStep(db_models.OrchestratorPlanStep.ROLLBACK, parameters)
 
@@ -234,7 +241,10 @@ def generate_skill_action_plan(
             skill_args=skill_args,
         ),
         _build_verify_step(profile),
-        _build_rollback_step(profile),
+        _build_rollback_step(
+            profile,
+            include_git_reset=normalized_skill_id != "update-moonmind",
+        ),
     ]
     generated_at = datetime.now(tz=timezone.utc)
     return ActionPlan(

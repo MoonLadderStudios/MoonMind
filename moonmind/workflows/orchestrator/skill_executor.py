@@ -173,6 +173,12 @@ def _resolve_skill_command(
         )
     if is_update_moonmind and _flag_enabled(skill_args, "allowDirty", "allow_dirty"):
         command.append("--allow-dirty")
+    if is_update_moonmind:
+        _append_flag(
+            command,
+            "--compose-project",
+            skill_args.get("composeProject") or skill_args.get("compose_project"),
+        )
     if is_update_moonmind and _flag_enabled(
         skill_args, "noComposePull", "no_compose_pull"
     ):

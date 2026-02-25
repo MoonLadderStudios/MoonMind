@@ -9,6 +9,7 @@ Options:
   --repo <path>              Target repository path (default: current directory)
   --branch <name>            Branch to checkout before pulling (default: main)
   --allow-dirty              Allow running with uncommitted git changes
+  --compose-project <name>   Explicit docker compose project name
   --no-compose-pull          Skip docker compose pull step
   --dry-run                  Print commands without executing them
   --restart-orchestrator     Include orchestrator in service restart list
@@ -203,7 +204,7 @@ mark_not_running_services_for_restart() {
     fi
 
     case "$service" in
-      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init)
+      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db)
         continue
         ;;
     esac
@@ -239,12 +240,33 @@ compose_cmd() {
   fi
 }
 
+resolve_workspace_mount_source() {
+  local repo_path="$1"
+  local mount_root=""
+  local probe
+
+  [[ "$repo_path" == /workspace/* ]] || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+
+  for probe in "${HOSTNAME:-}" moonmind-orchestrator-1 orchestrator; do
+    [[ -n "$probe" ]] || continue
+    mount_root="$(docker inspect "$probe" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+    if [[ -n "$mount_root" && -d "$mount_root" ]]; then
+      printf '%s/%s\n' "$mount_root" "${repo_path#/workspace/}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 COMPOSE_CMD=()
 read -r -a COMPOSE_CMD <<<"$(compose_cmd)"
 
 REPO_PATH="."
 BRANCH="main"
 ALLOW_DIRTY="false"
+COMPOSE_PROJECT=""
 SKIP_COMPOSE_PULL="false"
 DRY_RUN="false"
 RESTART_ORCHESTRATOR="false"
@@ -276,6 +298,11 @@ while [[ $# -gt 0 ]]; do
       ALLOW_DIRTY="true"
       shift
       ;;
+    --compose-project)
+      [[ $# -ge 2 ]] || die "--compose-project requires a value"
+      COMPOSE_PROJECT="$2"
+      shift 2
+      ;;
     --no-compose-pull)
       SKIP_COMPOSE_PULL="true"
       shift
@@ -299,6 +326,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_branch "$BRANCH"
+if [[ -n "$COMPOSE_PROJECT" ]]; then
+  [[ "$COMPOSE_PROJECT" != -* ]] || die "--compose-project must not start with '-'"
+  COMPOSE_CMD+=(--project-name "$COMPOSE_PROJECT")
+  say "Using docker compose project '$COMPOSE_PROJECT'"
+fi
+
+if [[ ! -d "$REPO_PATH" ]]; then
+  remapped_repo_path="$(resolve_workspace_mount_source "$REPO_PATH" || true)"
+  if [[ -n "$remapped_repo_path" && -d "$remapped_repo_path" ]]; then
+    warn "Repo path '$REPO_PATH' is not available in this runtime; using mounted source '$remapped_repo_path'."
+    REPO_PATH="$remapped_repo_path"
+  fi
+fi
 
 if [[ ! -d "$REPO_PATH" ]]; then
   die "Repository path does not exist: $REPO_PATH"
@@ -307,7 +347,16 @@ fi
 cd "$REPO_PATH"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  die "Path is not a git repository: $REPO_PATH"
+  git_probe_output="$(git rev-parse --is-inside-work-tree 2>&1 || true)"
+  if [[ "${git_probe_output,,}" == *"safe.directory"* ]]; then
+    warn "Git safe.directory blocked repository access; adding $REPO_PATH to git safe.directory."
+    run_cmd git config --global --add safe.directory "$REPO_PATH"
+    run_cmd git config --global --add safe.directory "$REPO_PATH/.git"
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+      die "Path is not a git repository: $REPO_PATH"
+  else
+    die "Path is not a git repository: $REPO_PATH"
+  fi
 fi
 
 if [[ "$ALLOW_DIRTY" != "true" ]]; then
@@ -424,7 +473,7 @@ for changed_file in "${CHANGED_FILES[@]}"; do
       add_all_services
       ;;
     init_db/*)
-      add_target "init-db"
+      add_target "api"
       ;;
     celery_worker/*)
       add_target "celery-worker"
@@ -445,7 +494,7 @@ done
 readarray -t SERVICES_TO_RESTART < <(
   for target in "${!target_services[@]}"; do
     case "$target" in
-      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init )
+      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
         continue
         ;;
       *)
@@ -463,10 +512,36 @@ else
   else
     say "Restarting changed services (excluding orchestrator): ${SERVICES_TO_RESTART[*]}"
   fi
-  run_cmd "${COMPOSE_CMD[@]}" up -d --remove-orphans --no-deps --force-recreate "${SERVICES_TO_RESTART[@]}"
+  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${SERVICES_TO_RESTART[@]}"
 fi
 
-say "Ensuring all default (non-profile) compose services are running."
-run_cmd "${COMPOSE_CMD[@]}" up -d
+readarray -t RUNNING_SERVICES < <(
+  "${COMPOSE_CMD[@]}" ps --services --status running 2>/dev/null || true
+)
+
+readarray -t RECONCILE_SERVICES < <(
+  for target in "${RUNNING_SERVICES[@]}"; do
+    case "$target" in
+      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
+        continue
+        ;;
+      orchestrator)
+        [[ "$RESTART_ORCHESTRATOR" == "true" ]] || continue
+        ;;
+    esac
+    printf '%s\n' "$target"
+  done | sort -u
+)
+
+if [[ ${#RECONCILE_SERVICES[@]} -eq 0 ]]; then
+  say "No running compose services required reconciliation."
+else
+  if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
+    say "Reconciling running compose services: ${RECONCILE_SERVICES[*]}"
+  else
+    say "Reconciling running compose services (excluding orchestrator): ${RECONCILE_SERVICES[*]}"
+  fi
+  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${RECONCILE_SERVICES[@]}"
+fi
 
 say "MoonMind update complete"

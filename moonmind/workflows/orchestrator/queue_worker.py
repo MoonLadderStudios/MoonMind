@@ -35,6 +35,8 @@ class QueueWorkerConfig:
     lease_seconds: int
     allowed_types: tuple[str, ...]
     worker_capabilities: tuple[str, ...]
+    queue_api_retry_attempts: int
+    queue_api_retry_delay_seconds: float
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "QueueWorkerConfig":
@@ -56,6 +58,18 @@ class QueueWorkerConfig:
         lease_seconds = int(str(source.get("MOONMIND_LEASE_SECONDS", "120")))
         if lease_seconds < 1:
             raise ValueError("MOONMIND_LEASE_SECONDS must be >= 1")
+        queue_api_retry_attempts = int(
+            str(source.get("ORCHESTRATOR_QUEUE_API_RETRY_ATTEMPTS", "60"))
+        )
+        if queue_api_retry_attempts < 1:
+            raise ValueError("ORCHESTRATOR_QUEUE_API_RETRY_ATTEMPTS must be >= 1")
+        queue_api_retry_delay_seconds = float(
+            str(source.get("ORCHESTRATOR_QUEUE_API_RETRY_DELAY_SECONDS", "1.0"))
+        )
+        if queue_api_retry_delay_seconds <= 0:
+            raise ValueError(
+                "ORCHESTRATOR_QUEUE_API_RETRY_DELAY_SECONDS must be > 0"
+            )
 
         allowed_types_csv = (
             str(source.get("MOONMIND_WORKER_ALLOWED_TYPES", "")).strip()
@@ -89,6 +103,8 @@ class QueueWorkerConfig:
             lease_seconds=lease_seconds,
             allowed_types=allowed_types,
             worker_capabilities=worker_capabilities,
+            queue_api_retry_attempts=queue_api_retry_attempts,
+            queue_api_retry_delay_seconds=queue_api_retry_delay_seconds,
         )
 
 
@@ -104,11 +120,20 @@ class ClaimedJob:
 class QueueApiClient:
     """HTTP wrapper for queue job claim/mutate endpoints."""
 
-    def __init__(self, *, base_url: str, worker_token: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        worker_token: str,
+        retry_attempts: int,
+        retry_delay_seconds: float,
+    ) -> None:
         headers = {
             "Accept": "application/json",
             "X-MoonMind-Worker-Token": worker_token,
         }
+        self._retry_attempts = retry_attempts
+        self._retry_delay_seconds = retry_delay_seconds
         self._client = httpx.AsyncClient(
             base_url=base_url, timeout=30.0, headers=headers
         )
@@ -214,15 +239,54 @@ class QueueApiClient:
         await self._post_json(f"/api/queue/jobs/{job_id}/events", json=body)
 
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
-        try:
-            response = await self._client.post(path, json=json)
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.HTTPError as exc:
-            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
-        if isinstance(payload, dict):
-            return payload
-        raise QueueClientError(f"queue API response for {path} was not a JSON object")
+        last_error: Exception | None = None
+        for attempt in range(1, self._retry_attempts + 1):
+            try:
+                response = await self._client.post(path, json=json)
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict):
+                    return payload
+                raise QueueClientError(
+                    f"queue API response for {path} was not a JSON object"
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                retryable = 500 <= status_code < 600
+                last_error = exc
+                if retryable and attempt < self._retry_attempts:
+                    logger.warning(
+                        "Queue API request %s failed with HTTP %s (attempt %s/%s); retrying in %.1fs",
+                        path,
+                        status_code,
+                        attempt,
+                        self._retry_attempts,
+                        self._retry_delay_seconds,
+                    )
+                    await asyncio.sleep(self._retry_delay_seconds)
+                    continue
+                raise QueueClientError(
+                    f"queue API request failed: {path}: {exc}"
+                ) from exc
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                last_error = exc
+                if attempt < self._retry_attempts:
+                    logger.warning(
+                        "Queue API request %s failed due to %s (attempt %s/%s); retrying in %.1fs",
+                        path,
+                        exc.__class__.__name__,
+                        attempt,
+                        self._retry_attempts,
+                        self._retry_delay_seconds,
+                    )
+                    await asyncio.sleep(self._retry_delay_seconds)
+                    continue
+                break
+            except httpx.HTTPError as exc:
+                raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
+        raise QueueClientError(
+            f"queue API request failed: {path}: {last_error}"
+        ) from last_error
 
 
 class OrchestratorQueueWorker:
@@ -236,6 +300,30 @@ class OrchestratorQueueWorker:
     ) -> None:
         self._config = config
         self._queue = queue_client
+
+    async def _append_event_best_effort(
+        self,
+        *,
+        job_id: UUID,
+        level: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            await self._queue.append_event(
+                job_id=job_id,
+                worker_id=self._config.worker_id,
+                level=level,
+                message=message,
+                payload=payload,
+            )
+        except QueueClientError:
+            logger.warning(
+                "Failed to append queue event for job %s: %s",
+                job_id,
+                message,
+                exc_info=True,
+            )
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         stopper = stop_event or asyncio.Event()
@@ -307,9 +395,8 @@ class OrchestratorQueueWorker:
             logger.exception("Invalid payload on orchestrator queue job %s", job.id)
             return
 
-        await self._queue.append_event(
+        await self._append_event_best_effort(
             job_id=job.id,
-            worker_id=self._config.worker_id,
             level="info",
             message="Executing orchestrator run from DB queue",
             payload={
@@ -330,17 +417,15 @@ class OrchestratorQueueWorker:
             for step in steps:
                 if cancel_event.is_set():
                     break
-                await self._queue.append_event(
+                await self._append_event_best_effort(
                     job_id=job.id,
-                    worker_id=self._config.worker_id,
                     level="info",
                     message="Starting orchestrator step",
                     payload={"runId": str(run_id), "step": step.value},
                 )
                 await _execute_plan_step_async(run_id, step.value)
-                await self._queue.append_event(
+                await self._append_event_best_effort(
                     job_id=job.id,
-                    worker_id=self._config.worker_id,
                     level="info",
                     message="Completed orchestrator step",
                     payload={"runId": str(run_id), "step": step.value},
@@ -355,9 +440,8 @@ class OrchestratorQueueWorker:
                 failure_message = self._INTERNAL_FAILURE_MESSAGE
                 if include_rollback:
                     try:
-                        await self._queue.append_event(
+                        await self._append_event_best_effort(
                             job_id=job.id,
-                            worker_id=self._config.worker_id,
                             level="warn",
                             message="Attempting rollback after orchestrator step failure",
                             payload={"runId": str(run_id)},
@@ -480,7 +564,10 @@ def _build_parser() -> argparse.ArgumentParser:
 async def _run(args: argparse.Namespace) -> int:
     config = QueueWorkerConfig.from_env()
     client = QueueApiClient(
-        base_url=config.moonmind_url, worker_token=config.worker_token
+        base_url=config.moonmind_url,
+        worker_token=config.worker_token,
+        retry_attempts=config.queue_api_retry_attempts,
+        retry_delay_seconds=config.queue_api_retry_delay_seconds,
     )
     worker = OrchestratorQueueWorker(config=config, queue_client=client)
     try:
