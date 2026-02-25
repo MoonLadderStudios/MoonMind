@@ -4451,6 +4451,16 @@
         maxAttempts,
       };
 
+      const submitButton = form.querySelector('button[type="submit"]');
+      const originalSubmitLabel =
+        submitButton instanceof HTMLButtonElement
+          ? submitButton.textContent || "Create"
+          : "Create";
+      if (submitButton instanceof HTMLButtonElement) {
+        submitButton.disabled = true;
+        submitButton.textContent = "Submitting...";
+      }
+
       try {
         const created = await fetchJson("/api/queue/jobs", {
           method: "POST",
@@ -4466,6 +4476,10 @@
         }
         window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
       } catch (error) {
+        if (submitButton instanceof HTMLButtonElement) {
+          submitButton.disabled = false;
+          submitButton.textContent = originalSubmitLabel;
+        }
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
         message.textContent =
