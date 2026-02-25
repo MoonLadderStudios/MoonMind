@@ -327,6 +327,65 @@ class CumulativeStepLogHandler(FakeHandler):
         )
 
 
+def _build_execute_stage_payloads() -> tuple[dict[str, object], dict[str, object]]:
+    """Return minimal payloads for direct execute-stage tests."""
+
+    canonical_payload: dict[str, object] = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex",
+        "task": {
+            "instructions": "run",
+            "skill": {"id": "auto", "args": {}},
+            "runtime": {"mode": "codex"},
+            "publish": {"mode": "none"},
+        },
+    }
+    source_payload: dict[str, object] = {"workdirMode": "reuse"}
+    return canonical_payload, source_payload
+
+
+def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWorkspace:
+    """Create a minimal prepared workspace for direct execute-stage invocation."""
+
+    job_root = tmp_path / str(job_id)
+    repo_dir = job_root / "repo"
+    artifacts_dir = job_root / "artifacts"
+    logs_dir = artifacts_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    return PreparedTaskWorkspace(
+        job_root=job_root,
+        repo_dir=repo_dir,
+        artifacts_dir=artifacts_dir,
+        prepare_log_path=logs_dir / "prepare.log",
+        execute_log_path=logs_dir / "execute.log",
+        publish_log_path=logs_dir / "publish.log",
+        task_context_path=artifacts_dir / "task_context.json",
+        publish_result_path=artifacts_dir / "publish_result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="main",
+        workdir_mode="reuse",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+
+def _build_resolved_step(*, step_index: int, step_id: str, instructions: str) -> ResolvedTaskStep:
+    """Construct one execute-stage step definition."""
+
+    return ResolvedTaskStep(
+        step_index=step_index,
+        step_id=step_id,
+        title=None,
+        instructions=instructions,
+        effective_skill_id="auto",
+        effective_skill_args={},
+        has_step_instructions=True,
+    )
+
+
 async def test_run_once_returns_false_when_no_job() -> None:
     """No claim should produce a no-work cycle."""
 
@@ -1490,6 +1549,170 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     step2_text = step2_log_path.read_text(encoding="utf-8")
     assert step2_text == "step-2 output\n"
     assert "step-1 output" not in step2_text
+
+
+async def test_run_execute_stage_step_log_deltas_survive_worker_restart(
+    tmp_path: Path,
+) -> None:
+    """Restarted workers should keep per-step log boundaries from persisted offsets."""
+
+    job_id = uuid4()
+    step_one_segment = "== SESSION HEADER step-1 ==\nstep-one output\n"
+    step_two_segment = "== SESSION HEADER step-2 ==\nstep-two output\n"
+    queue = FakeQueueClient()
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    canonical_payload, source_payload = _build_execute_stage_payloads()
+
+    first_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_one_segment],
+        ),
+    )
+    first_result = await first_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=0,
+                step_id="step-1",
+                instructions="First",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert first_result.succeeded is True
+
+    second_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_two_segment],
+        ),
+    )
+    second_result = await second_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=1,
+                step_id="step-2",
+                instructions="Second",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert second_result.succeeded is True
+
+    step_one_log = (
+        tmp_path / str(job_id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step_two_log = (
+        tmp_path / str(job_id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    checkpoint_path = (
+        tmp_path / str(job_id) / "artifacts" / "state" / "step_log_offsets.json"
+    )
+    assert step_one_log.read_text(encoding="utf-8") == step_one_segment
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert step_two_text == step_two_segment
+    assert "SESSION HEADER step-1" not in step_two_text
+    assert checkpoint_path.exists()
+
+
+async def test_run_execute_stage_step_log_deltas_handle_source_truncation_on_resume(
+    tmp_path: Path,
+) -> None:
+    """Truncation before the next step should not duplicate prior step bytes."""
+
+    job_id = uuid4()
+    step_one_segment = "== SESSION HEADER step-1 ==\nalpha\n"
+    step_two_segment = "== SESSION HEADER step-2 ==\nbeta\n"
+    queue = FakeQueueClient()
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    canonical_payload, source_payload = _build_execute_stage_payloads()
+
+    first_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_one_segment],
+        ),
+    )
+    first_result = await first_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=0,
+                step_id="step-1",
+                instructions="First",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert first_result.succeeded is True
+
+    source_log = tmp_path / str(job_id) / "artifacts" / "codex_exec.log"
+    source_log.write_text("", encoding="utf-8")
+
+    second_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_two_segment],
+        ),
+    )
+    second_result = await second_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=1,
+                step_id="step-2",
+                instructions="Second",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert second_result.succeeded is True
+
+    step_two_log = (
+        tmp_path / str(job_id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert step_two_text == step_two_segment
+    assert "SESSION HEADER step-1" not in step_two_text
+    assert source_log.read_text(encoding="utf-8") == step_two_segment
 
 
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(

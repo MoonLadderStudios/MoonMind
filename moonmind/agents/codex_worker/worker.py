@@ -102,6 +102,7 @@ _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
+_STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -3468,7 +3469,7 @@ class CodexWorker:
         result_artifacts: Sequence[ArtifactUpload],
         step_log_path: Path,
         step_patch_path: Path,
-        step_log_offsets: MutableMapping[str, int] | None = None,
+        step_log_offsets: MutableMapping[str, Any] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3543,7 +3544,7 @@ class CodexWorker:
         *,
         source_path: Path,
         destination_path: Path,
-        step_log_offsets: MutableMapping[str, int] | None = None,
+        step_log_offsets: MutableMapping[str, Any] | None = None,
     ) -> None:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
@@ -3556,10 +3557,22 @@ class CodexWorker:
         start_offset = 0
         if step_log_offsets is not None:
             offset_key = self._resolve_log_offset_key(source_path)
-            previous_offset = max(0, int(step_log_offsets.get(offset_key, 0)))
-            if previous_offset <= source_size:
+            previous_offset, previous_source_id = self._coerce_step_log_offset_entry(
+                step_log_offsets.get(offset_key)
+            )
+            source_id = self._step_log_source_id(source_stat=source_stat)
+            if (
+                previous_source_id
+                and source_id
+                and previous_source_id != source_id
+            ):
+                start_offset = 0
+            elif previous_offset <= source_size:
                 start_offset = previous_offset
-            step_log_offsets[offset_key] = source_size
+            step_log_offsets[offset_key] = self._build_step_log_offset_entry(
+                offset=source_size,
+                source_id=source_id,
+            )
 
         bounded_content = self._read_bounded_step_log_bytes(
             source_path=source_path,
@@ -3615,6 +3628,151 @@ class CodexWorker:
         """Return a stable key for tracking incremental read offsets."""
 
         return str(path.resolve(strict=False))
+
+    @staticmethod
+    def _step_log_source_id(*, source_stat: os.stat_result) -> str | None:
+        """Return a stable source identifier for rotation detection."""
+
+        device = int(getattr(source_stat, "st_dev", 0) or 0)
+        inode = int(getattr(source_stat, "st_ino", 0) or 0)
+        if device == 0 and inode == 0:
+            return None
+        return f"{device}:{inode}"
+
+    @staticmethod
+    def _coerce_step_log_offset_entry(raw: object) -> tuple[int, str | None]:
+        """Normalize checkpoint entries from int or mapping forms."""
+
+        offset_raw = raw
+        source_id: str | None = None
+        if isinstance(raw, Mapping):
+            offset_raw = raw.get("offset")
+            source_id_raw = raw.get("sourceId")
+            if source_id_raw is not None:
+                candidate = str(source_id_raw).strip()
+                source_id = candidate or None
+        try:
+            offset_value = int(offset_raw if offset_raw is not None else 0)
+        except (TypeError, ValueError):
+            offset_value = 0
+        return (max(0, offset_value), source_id)
+
+    @staticmethod
+    def _build_step_log_offset_entry(
+        *, offset: int, source_id: str | None
+    ) -> dict[str, int | str]:
+        """Build a normalized checkpoint entry for one source log path."""
+
+        entry: dict[str, int | str] = {"offset": max(0, int(offset))}
+        if source_id:
+            entry["sourceId"] = source_id
+        return entry
+
+    @staticmethod
+    def _step_log_offsets_checkpoint_path(*, artifacts_dir: Path) -> Path:
+        """Return the persisted offset checkpoint path for execute-stage logs."""
+
+        return artifacts_dir / "state" / "step_log_offsets.json"
+
+    def _load_step_log_offsets_checkpoint(
+        self, *, artifacts_dir: Path
+    ) -> dict[str, dict[str, int | str]]:
+        """Load persisted step-log offsets for resume-safe delta capture."""
+
+        checkpoint_path = self._step_log_offsets_checkpoint_path(
+            artifacts_dir=artifacts_dir
+        )
+        if not checkpoint_path.exists():
+            return {}
+        try:
+            stat_result = checkpoint_path.lstat()
+            if stat.S_ISLNK(stat_result.st_mode):
+                logger.warning(
+                    "Ignoring step log offset checkpoint symlink: %s",
+                    checkpoint_path,
+                )
+                return {}
+            payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            logger.warning(
+                "Failed reading step log offset checkpoint at %s",
+                checkpoint_path,
+                exc_info=True,
+            )
+            return {}
+
+        if not isinstance(payload, Mapping):
+            return {}
+
+        raw_entries = payload.get("sources")
+        if raw_entries is None:
+            raw_entries = payload.get("offsets")
+        if raw_entries is None:
+            raw_entries = payload
+        if not isinstance(raw_entries, Mapping):
+            return {}
+
+        normalized: dict[str, dict[str, int | str]] = {}
+        for raw_key, raw_entry in raw_entries.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if raw_entries is payload and key in {"version", "sources", "offsets"}:
+                continue
+            offset, source_id = self._coerce_step_log_offset_entry(raw_entry)
+            normalized[key] = self._build_step_log_offset_entry(
+                offset=offset,
+                source_id=source_id,
+            )
+        return normalized
+
+    def _persist_step_log_offsets_checkpoint(
+        self,
+        *,
+        artifacts_dir: Path,
+        step_log_offsets: Mapping[str, object],
+    ) -> None:
+        """Persist resume checkpoints for step-log offset boundaries."""
+
+        if not step_log_offsets:
+            return
+
+        checkpoint_path = self._step_log_offsets_checkpoint_path(
+            artifacts_dir=artifacts_dir
+        )
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+        entries: dict[str, dict[str, int | str]] = {}
+        for raw_key, raw_entry in step_log_offsets.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            offset, source_id = self._coerce_step_log_offset_entry(raw_entry)
+            entries[key] = self._build_step_log_offset_entry(
+                offset=offset,
+                source_id=source_id,
+            )
+        if not entries:
+            return
+
+        payload = {
+            "version": _STEP_LOG_OFFSET_CHECKPOINT_VERSION,
+            "sources": entries,
+        }
+        temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temp_path, checkpoint_path)
+        except OSError:
+            temp_path.unlink(missing_ok=True)
+            logger.warning(
+                "Failed writing step log offset checkpoint at %s",
+                checkpoint_path,
+                exc_info=True,
+            )
 
     @staticmethod
     def _compute_step_log_truncation_plan(
@@ -5128,7 +5286,9 @@ class CodexWorker:
         cancel_event = getattr(self, "_active_cancel_event", None)
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
-        step_log_offsets: dict[str, int] = {}
+        step_log_offsets = self._load_step_log_offsets_checkpoint(
+            artifacts_dir=prepared.artifacts_dir
+        )
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5305,6 +5465,10 @@ class CodexWorker:
                 result_artifacts=step_result.artifacts,
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
+                step_log_offsets=step_log_offsets,
+            )
+            self._persist_step_log_offsets_checkpoint(
+                artifacts_dir=prepared.artifacts_dir,
                 step_log_offsets=step_log_offsets,
             )
             step_artifacts.extend(normalized_step_artifacts)
