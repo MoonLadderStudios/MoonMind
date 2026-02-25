@@ -473,6 +473,145 @@ async def test_run_command_streaming_forwards_output_chunks(
     assert ("stderr", None) in callback_events
 
 
+async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Replay chunks from the same stream should only persist once in logs."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-dedupe.log"
+    replay_a = (
+        "Implemented the runtime capability fix and regression coverage.\n"
+        "**What changed**\n"
+        "- Added regression tests.\n"
+    )
+    replay_b = (
+        "**Validation**\n"
+        "- Ran required unit test script: `./tools/test_unit.sh`\n"
+        "- Result: `802 passed, 8 subtests passed`.\n"
+    )
+    callback_events: list[tuple[str, str | None]] = []
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(
+                ["thinking\n", replay_a, replay_b, replay_a, replay_b, "file update:\n"]
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert (
+        text.count(
+            "Implemented the runtime capability fix and regression coverage."
+        )
+        == 1
+    )
+    assert text.count("Ran required unit test script: `./tools/test_unit.sh`") == 1
+    assert text.count("Result: `802 passed, 8 subtests passed`.") == 1
+    assert "file update:" in text
+    callback_text = "".join(
+        chunk for stream, chunk in callback_events if stream == "stdout" and chunk
+    )
+    assert (
+        callback_text.count(
+            "Implemented the runtime capability fix and regression coverage."
+        )
+        == 1
+    )
+
+
+async def test_run_command_streaming_keeps_repeated_output_across_turn_boundaries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Intentionally repeated lines across separate turns should be preserved."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-repeat.log"
+    repeated_line = "- Ran required unit test script: `./tools/test_unit.sh`\n"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(
+                [
+                    "assistant\n",
+                    repeated_line,
+                    "user\nPlease repeat the same test line exactly.\n",
+                    repeated_line,
+                    "done\n",
+                ]
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("Ran required unit test script: `./tools/test_unit.sh`") == 2
+
+
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     """Handler should run core codex_exec command sequence."""
 

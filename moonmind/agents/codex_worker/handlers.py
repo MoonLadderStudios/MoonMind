@@ -811,6 +811,14 @@ class CodexExecHandler:
                     await process.wait()
 
         stream_log_buffers: dict[str, str] = {"stdout": "", "stderr": ""}
+        stream_chunk_history: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        replay_candidate: dict[str, tuple[int, str] | None] = {
+            "stdout": None,
+            "stderr": None,
+        }
+        replay_cursor: dict[str, int | None] = {"stdout": None, "stderr": None}
+        max_replay_history_chunks = 512
+        min_replay_candidate_chars = 32
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -837,14 +845,87 @@ class CodexExecHandler:
             if flush_text:
                 _write_redacted_log_block(flush_text)
 
+        def _append_chunk_history(stream: str, text: str) -> None:
+            history = stream_chunk_history[stream]
+            history.append(text)
+            overflow = len(history) - max_replay_history_chunks
+            if overflow <= 0:
+                return
+            del history[:overflow]
+            cursor = replay_cursor.get(stream)
+            if cursor is not None:
+                adjusted = cursor - overflow
+                replay_cursor[stream] = adjusted if adjusted >= 0 else None
+            candidate = replay_candidate.get(stream)
+            if candidate is None:
+                return
+            index, pending_text = candidate
+            adjusted_index = index - overflow
+            if adjusted_index < 0:
+                replay_candidate[stream] = None
+                return
+            replay_candidate[stream] = (adjusted_index, pending_text)
+
+        def _dedupe_replayed_stream_chunk(stream: str, text: str) -> str:
+            if not text:
+                return ""
+            history = stream_chunk_history[stream]
+            cursor = replay_cursor.get(stream)
+            if cursor is not None:
+                if cursor < len(history) and text == history[cursor]:
+                    replay_cursor[stream] = cursor + 1
+                    return ""
+                replay_cursor[stream] = None
+
+            emitted_prefix = ""
+            candidate = replay_candidate.get(stream)
+            if candidate is not None:
+                replay_candidate[stream] = None
+                start_index, pending_text = candidate
+                expected_index = start_index + 1
+                if expected_index < len(history) and text == history[expected_index]:
+                    replay_cursor[stream] = expected_index + 1
+                    return ""
+                emitted_prefix = pending_text
+                _append_chunk_history(stream, pending_text)
+
+            if (
+                len(text) >= min_replay_candidate_chars
+                and "\n" in text
+                and len(history) >= 2
+            ):
+                for index in range(len(history) - 2, -1, -1):
+                    if history[index] == text:
+                        replay_candidate[stream] = (index, text)
+                        return emitted_prefix
+
+            _append_chunk_history(stream, text)
+            return f"{emitted_prefix}{text}"
+
+        async def _flush_pending_replay_candidate(stream: str) -> None:
+            candidate = replay_candidate.get(stream)
+            if candidate is None:
+                return
+            replay_candidate[stream] = None
+            _index, pending_text = candidate
+            _append_chunk_history(stream, pending_text)
+            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + pending_text
+            if output_chunk_callback is not None:
+                with suppress(Exception):
+                    await output_chunk_callback(stream, pending_text)
+
         async def _emit_output(stream: str, text: str) -> None:
-            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + text
+            deduped_text = _dedupe_replayed_stream_chunk(stream, text)
+            if not deduped_text:
+                return
+            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + deduped_text
             _flush_stream_log_buffer(stream, force=False)
             if output_chunk_callback is not None:
                 with suppress(Exception):
-                    await output_chunk_callback(stream, text)
+                    await output_chunk_callback(stream, deduped_text)
 
         async def _emit_stream_closed(stream: str) -> None:
+            await _flush_pending_replay_candidate(stream)
             _flush_stream_log_buffer(stream, force=True)
             if output_chunk_callback is not None:
                 with suppress(Exception):
