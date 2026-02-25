@@ -3529,18 +3529,17 @@ class CodexWorker:
 
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         if current_size <= previous_size:
-            destination_path.write_text("", encoding="utf-8")
+            destination_path.write_bytes(b"")
             byte_checkpoints[source_key] = current_size
             return
 
-        with source_path.open("rb") as source_handle:
+        with source_path.open("rb") as source_handle, destination_path.open(
+            "wb"
+        ) as destination_handle:
             source_handle.seek(previous_size)
-            delta_bytes = source_handle.read()
+            shutil.copyfileobj(source_handle, destination_handle, length=64 * 1024)
 
-        with destination_path.open("wb") as destination_handle:
-            destination_handle.write(delta_bytes)
-
-        byte_checkpoints[source_key] = current_size
+            byte_checkpoints[source_key] = source_handle.tell()
 
     def _evaluate_step_gate(
         self,
