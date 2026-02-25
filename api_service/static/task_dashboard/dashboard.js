@@ -1183,6 +1183,41 @@
     return `<span class="status status-${statusClassToken}">${escapeHtml(normalized)}</span>`;
   }
 
+  const FINISH_OUTCOME_LABELS = {
+    PUBLISHED_PR: "Published PR",
+    PUBLISHED_BRANCH: "Published Branch",
+    NO_CHANGES: "No Changes",
+    PUBLISH_DISABLED: "Publish Disabled",
+    FAILED: "Failed",
+    CANCELLED: "Cancelled",
+  };
+
+  function normalizeFinishOutcomeCode(rawCode) {
+    const code = String(rawCode || "")
+      .trim()
+      .toUpperCase();
+    return code || "";
+  }
+
+  function finishOutcomeLabel(rawCode) {
+    const code = normalizeFinishOutcomeCode(rawCode);
+    if (!code) {
+      return "-";
+    }
+    return FINISH_OUTCOME_LABELS[code] || code;
+  }
+
+  function finishOutcomeBadge(rawCode) {
+    const code = normalizeFinishOutcomeCode(rawCode);
+    if (!code) {
+      return "-";
+    }
+    const token = sanitizeCssToken(code.toLowerCase(), "queued");
+    return `<span class="status status-${token}">${escapeHtml(
+      finishOutcomeLabel(code),
+    )}</span>`;
+  }
+
   function endpoint(template, replacements) {
     let resolved = template;
     Object.entries(replacements).forEach(([key, value]) => {
@@ -1499,6 +1534,9 @@
         runtimeMode: extractRuntimeFromPayload(payload),
         skillId: extractSkillFromPayload(payload),
         rawStatus: pick(item, "status") || "queued",
+        finishOutcomeCode: pick(item, "finishOutcomeCode") || "",
+        finishOutcomeStage: pick(item, "finishOutcomeStage") || "",
+        finishOutcomeReason: pick(item, "finishOutcomeReason") || "",
         title: summarizedTitle || pick(item, "type") || "Queue Job",
         createdAt: pick(item, "createdAt"),
         startedAt: pick(item, "startedAt"),
@@ -1517,6 +1555,18 @@
       key: "queueName",
       label: "Queue",
       render: (row) => escapeHtml(row.queueName || defaultQueueName),
+      tableSection: "primary",
+    },
+    {
+      key: "finishOutcome",
+      label: "Outcome",
+      render: (row) => {
+        const stage = String(row.finishOutcomeStage || "").trim();
+        const reason = String(row.finishOutcomeReason || "").trim();
+        const tooltipParts = [stage, reason].filter(Boolean);
+        const title = tooltipParts.length ? ` title="${escapeHtml(tooltipParts.join(" | "))}"` : "";
+        return `<span${title}>${finishOutcomeBadge(row.finishOutcomeCode)}</span>`;
+      },
       tableSection: "primary",
     },
     {
@@ -4506,6 +4556,49 @@
       const runtimeModel = extractRuntimeModelFromPayload(payload) || "default";
       const runtimeEffort = extractRuntimeEffortFromPayload(payload) || "default";
       const selectedSkill = extractSkillFromPayload(payload) || "auto";
+      const finishSummaryNode = pick(job, "finishSummary");
+      const finishSummary =
+        finishSummaryNode &&
+        typeof finishSummaryNode === "object" &&
+        !Array.isArray(finishSummaryNode)
+          ? finishSummaryNode
+          : {};
+      const finishOutcomeNode = pick(finishSummary, "finishOutcome");
+      const finishOutcome =
+        finishOutcomeNode &&
+        typeof finishOutcomeNode === "object" &&
+        !Array.isArray(finishOutcomeNode)
+          ? finishOutcomeNode
+          : {};
+      const finishOutcomeCode =
+        pick(job, "finishOutcomeCode") || pick(finishOutcome, "code") || "";
+      const finishOutcomeStage =
+        pick(job, "finishOutcomeStage") || pick(finishOutcome, "stage") || "-";
+      const finishOutcomeReason =
+        pick(job, "finishOutcomeReason") || pick(finishOutcome, "reason") || "-";
+      const publishSummaryNode = pick(finishSummary, "publish");
+      const publishSummary =
+        publishSummaryNode &&
+        typeof publishSummaryNode === "object" &&
+        !Array.isArray(publishSummaryNode)
+          ? publishSummaryNode
+          : {};
+      const publishStatus = String(pick(publishSummary, "status") || "-");
+      const publishReason = String(pick(publishSummary, "reason") || "-");
+      const publishBranch = String(pick(publishSummary, "workingBranch") || "-");
+      const publishPrUrl = sanitizeExternalHttpUrl(pick(publishSummary, "prUrl"));
+      const proposalsSummaryNode = pick(finishSummary, "proposals");
+      const proposalsSummary =
+        proposalsSummaryNode &&
+        typeof proposalsSummaryNode === "object" &&
+        !Array.isArray(proposalsSummaryNode)
+          ? proposalsSummaryNode
+          : {};
+      const proposalsSubmitted = Number(pick(proposalsSummary, "submittedCount") || 0);
+      const proposalsGenerated = Number(pick(proposalsSummary, "generatedCount") || 0);
+      const proposalsLink = `/tasks/proposals?originSource=queue&originId=${encodeURIComponent(
+        String(pick(job, "id") || ""),
+      )}`;
       summaryNode.innerHTML = `
         <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
           pick(job, "queueName") || defaultQueueName,
@@ -4528,7 +4621,33 @@
           <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
             pick(job, "leaseExpiresAt"),
           )}</div>
+          <div class="card"><strong>Outcome:</strong> ${finishOutcomeBadge(
+            finishOutcomeCode,
+          )}<br/><span class="small">${escapeHtml(
+            `${finishOutcomeStage}: ${finishOutcomeReason}`,
+          )}</span></div>
         </div>
+        <section>
+          <h3>Finish Summary</h3>
+          <div class="grid-2">
+            <div class="card"><strong>Publish Status:</strong> ${escapeHtml(publishStatus)}</div>
+            <div class="card"><strong>Publish Reason:</strong> ${escapeHtml(publishReason)}</div>
+            <div class="card"><strong>Working Branch:</strong> ${escapeHtml(publishBranch)}</div>
+            <div class="card"><strong>Pull Request:</strong> ${
+              publishPrUrl
+                ? `<a href="${escapeHtml(publishPrUrl)}" target="_blank" rel="noreferrer">${escapeHtml(
+                    publishPrUrl,
+                  )}</a>`
+                : "-"
+            }</div>
+            <div class="card"><strong>Proposals:</strong> ${escapeHtml(
+              `${proposalsSubmitted} submitted / ${proposalsGenerated} generated`,
+            )}</div>
+            <div class="card"><strong>Proposal Link:</strong> <a href="${escapeHtml(
+              proposalsLink,
+            )}">View run proposals</a></div>
+          </div>
+        </section>
       `;
     };
 
@@ -5470,12 +5589,19 @@
 
   async function renderProposalsListPage() {
     const repoStorageKey = "task-dashboard-proposals-repo";
+    const initialQuery = new URLSearchParams(window.location.search || "");
+    const initialOriginSource = String(initialQuery.get("originSource") || "")
+      .trim()
+      .toLowerCase();
+    const initialOriginId = String(initialQuery.get("originId") || "").trim();
     const state = {
       status: "open",
       repository: localStorage.getItem(repoStorageKey) || "",
       category: "",
       tag: "",
       includeSnoozed: false,
+      originSource: initialOriginSource,
+      originId: initialOriginId,
       rows: [],
       notice: "",
     };
@@ -5514,6 +5640,18 @@
               state.category,
             )}" />
           </label>
+          <div class="grid-2">
+            <label>Origin Source
+              <input name="originSource" placeholder="queue" value="${escapeHtml(
+                state.originSource,
+              )}" />
+            </label>
+            <label>Origin ID
+              <input name="originId" placeholder="job UUID" value="${escapeHtml(
+                state.originId,
+              )}" />
+            </label>
+          </div>
           <label>Signal Tag
             <input name="tag" placeholder="loop_detected" value="${escapeHtml(
               state.tag,
@@ -5645,6 +5783,8 @@
       const statusField = filterForm.elements.namedItem("status");
       const repositoryField = filterForm.elements.namedItem("repository");
       const categoryField = filterForm.elements.namedItem("category");
+      const originSourceField = filterForm.elements.namedItem("originSource");
+      const originIdField = filterForm.elements.namedItem("originId");
       const tagField = filterForm.elements.namedItem("tag");
       const includeSnoozedField = filterForm.elements.namedItem("includeSnoozed");
       if (statusField) {
@@ -5663,6 +5803,20 @@
       if (categoryField) {
         categoryField.addEventListener("change", () => {
           state.category = String(categoryField.value || "").trim();
+          load();
+        });
+      }
+      if (originSourceField) {
+        originSourceField.addEventListener("change", () => {
+          state.originSource = String(originSourceField.value || "")
+            .trim()
+            .toLowerCase();
+          load();
+        });
+      }
+      if (originIdField) {
+        originIdField.addEventListener("change", () => {
+          state.originId = String(originIdField.value || "").trim();
           load();
         });
       }
@@ -5734,6 +5888,12 @@
         }
         if (state.category) {
           params.set("category", state.category);
+        }
+        if (state.originSource) {
+          params.set("originSource", state.originSource);
+        }
+        if (state.originId) {
+          params.set("originId", state.originId);
         }
         if (state.includeSnoozed) {
           params.set("includeSnoozed", "true");

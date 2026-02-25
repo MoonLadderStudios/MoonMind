@@ -114,6 +114,7 @@ const {
   const keys = queueFieldDefinitions.map((definition) => definition.key);
   const expectedKeys = [
     "queueName",
+    "finishOutcome",
     "runtimeMode",
     "skillId",
     "createdAt",
@@ -124,6 +125,7 @@ const {
   assert.strictEqual(keys.join(","), expectedKeys.join(","));
   const labels = queueFieldDefinitions.map((definition) => definition.label);
   assert(labels.includes("Queue"));
+  assert(labels.includes("Outcome"));
   assert(labels.includes("Finished"));
   const rendered = renderQueueFieldValue(
     {

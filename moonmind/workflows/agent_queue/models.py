@@ -134,6 +134,18 @@ class AgentJob(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     result_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    finish_outcome_code: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    finish_outcome_stage: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    finish_outcome_reason: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+    finish_summary_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True, default=None
+    )
     artifacts_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

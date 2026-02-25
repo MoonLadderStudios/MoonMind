@@ -925,6 +925,84 @@ async def test_load_events_by_job_sets_truncation_flag(tmp_path: Path) -> None:
     assert len(events_by_job.get(job.id, [])) == 1
 
 
+async def test_complete_job_truncates_finish_outcome_fields(tmp_path: Path) -> None:
+    """Finish outcome metadata should be bounded to storage-safe lengths."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+            claimed = await service.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            assert claimed.job is not None
+
+            completed = await service.complete_job(
+                job_id=claimed.job.id,
+                worker_id="worker-1",
+                finish_outcome_code="C" * 80,
+                finish_outcome_stage="S" * 40,
+                finish_outcome_reason="R" * 300,
+            )
+
+    assert completed.finish_outcome_code == "C" * 64
+    assert completed.finish_outcome_stage == "S" * 32
+    assert completed.finish_outcome_reason == "R" * 256
+
+
+async def test_ack_cancel_truncates_finish_reason(tmp_path: Path) -> None:
+    """Cancellation acknowledgements should truncate oversized finish reasons."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "runtime": {"mode": "codex"},
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+            await service.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["codex", "git"],
+            )
+            await service.request_cancel(
+                job_id=job.id,
+                requested_by_user_id=uuid4(),
+                reason="operator",
+            )
+
+            acknowledged = await service.ack_cancel(
+                job_id=job.id,
+                worker_id="worker-1",
+                finish_outcome_reason="X" * 999,
+            )
+
+    assert acknowledged.finish_outcome_reason == "X" * 256
+
+
 async def test_request_cancel_queued_job_adds_terminal_event(tmp_path: Path) -> None:
     """Queued cancellation should terminalize job and append cancellation event."""
 
@@ -953,6 +1031,9 @@ async def test_request_cancel_queued_job_adds_terminal_event(tmp_path: Path) -> 
             events = await service.list_events(job_id=job.id, limit=20)
 
     assert cancelled.status is models.AgentJobStatus.CANCELLED
+    assert cancelled.finish_outcome_code == "CANCELLED"
+    assert cancelled.finish_outcome_stage == "unknown"
+    assert cancelled.finish_outcome_reason == "operator request"
     assert any(event.message == "Job cancelled" for event in events)
 
 

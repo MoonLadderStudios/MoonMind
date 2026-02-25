@@ -139,14 +139,24 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock]) -
     test_client, service = client
     proposal = _build_proposal()
     service.list_proposals.return_value = ([proposal], None)
+    origin_id = uuid4()
 
     response = test_client.get(
         "/api/proposals",
-        params={"status": "open", "repository": "Moon/Repo", "category": "tests"},
+        params={
+            "status": "open",
+            "repository": "Moon/Repo",
+            "category": "tests",
+            "originSource": "queue",
+            "originId": str(origin_id),
+        },
     )
 
     assert response.status_code == 200
     service.list_proposals.assert_awaited()
+    kwargs = service.list_proposals.await_args.kwargs
+    assert kwargs["origin_source"] == TaskProposalOriginSource.QUEUE
+    assert kwargs["origin_id"] == origin_id
     payload = response.json()
     assert payload["items"]
 

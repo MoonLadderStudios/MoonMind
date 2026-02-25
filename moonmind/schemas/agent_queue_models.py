@@ -54,6 +54,16 @@ class CompleteJobRequest(BaseModel):
 
     worker_id: str = Field(..., alias="workerId")
     result_summary: Optional[str] = Field(None, alias="resultSummary")
+    finish_outcome_code: Optional[str] = Field(
+        None, alias="finishOutcomeCode", max_length=64
+    )
+    finish_outcome_stage: Optional[str] = Field(
+        None, alias="finishOutcomeStage", max_length=32
+    )
+    finish_outcome_reason: Optional[str] = Field(
+        None, alias="finishOutcomeReason", max_length=256
+    )
+    finish_summary: Optional[dict[str, Any]] = Field(None, alias="finishSummary")
 
 
 class FailJobRequest(BaseModel):
@@ -64,6 +74,16 @@ class FailJobRequest(BaseModel):
     worker_id: str = Field(..., alias="workerId")
     error_message: str = Field(..., alias="errorMessage")
     retryable: bool = Field(False, alias="retryable")
+    finish_outcome_code: Optional[str] = Field(
+        None, alias="finishOutcomeCode", max_length=64
+    )
+    finish_outcome_stage: Optional[str] = Field(
+        None, alias="finishOutcomeStage", max_length=32
+    )
+    finish_outcome_reason: Optional[str] = Field(
+        None, alias="finishOutcomeReason", max_length=256
+    )
+    finish_summary: Optional[dict[str, Any]] = Field(None, alias="finishSummary")
 
 
 class CancelJobRequest(BaseModel):
@@ -81,6 +101,16 @@ class CancelJobAckRequest(BaseModel):
 
     worker_id: str = Field(..., alias="workerId")
     message: Optional[str] = Field(None, alias="message")
+    finish_outcome_code: Optional[str] = Field(
+        None, alias="finishOutcomeCode", max_length=64
+    )
+    finish_outcome_stage: Optional[str] = Field(
+        None, alias="finishOutcomeStage", max_length=32
+    )
+    finish_outcome_reason: Optional[str] = Field(
+        None, alias="finishOutcomeReason", max_length=256
+    )
+    finish_summary: Optional[dict[str, Any]] = Field(None, alias="finishSummary")
 
 
 class ManifestSecretResolutionRequest(BaseModel):
@@ -215,6 +245,16 @@ class JobModel(BaseModel):
     max_attempts: int = Field(..., alias="maxAttempts")
     result_summary: Optional[str] = Field(None, alias="resultSummary")
     error_message: Optional[str] = Field(None, alias="errorMessage")
+    finish_outcome_code: Optional[str] = Field(
+        None, alias="finishOutcomeCode", max_length=64
+    )
+    finish_outcome_stage: Optional[str] = Field(
+        None, alias="finishOutcomeStage", max_length=32
+    )
+    finish_outcome_reason: Optional[str] = Field(
+        None, alias="finishOutcomeReason", max_length=256
+    )
+    finish_summary: Optional[dict[str, Any]] = Field(None, alias="finishSummary")
     artifacts_path: Optional[str] = Field(None, alias="artifactsPath")
     started_at: Optional[datetime] = Field(None, alias="startedAt")
     finished_at: Optional[datetime] = Field(None, alias="finishedAt")

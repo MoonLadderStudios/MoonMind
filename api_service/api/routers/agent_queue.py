@@ -185,6 +185,10 @@ def _build_job_model(
         max_attempts=job.max_attempts,
         result_summary=job.result_summary,
         error_message=job.error_message,
+        finish_outcome_code=getattr(job, "finish_outcome_code", None),
+        finish_outcome_stage=getattr(job, "finish_outcome_stage", None),
+        finish_outcome_reason=getattr(job, "finish_outcome_reason", None),
+        finish_summary=getattr(job, "finish_summary_json", None),
         artifacts_path=job.artifacts_path,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -751,7 +755,11 @@ async def create_job_with_attachments(
     )
 
 
-@router.get("/jobs", response_model=JobListResponse)
+@router.get(
+    "/jobs",
+    response_model=JobListResponse,
+    response_model_exclude={"items": {"__all__": {"finish_summary"}}},
+)
 async def list_jobs(
     *,
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -866,6 +874,29 @@ async def get_job(
     return _serialize_job(job)
 
 
+@router.get("/jobs/{job_id}/finish-summary", response_model=dict[str, Any])
+async def get_job_finish_summary(
+    job_id: UUID,
+    service: AgentQueueService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Return structured finish summary for a queue job when available."""
+
+    job = await service.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "job_not_found",
+                "message": f"Job {job_id} was not found",
+            },
+        )
+    summary = getattr(job, "finish_summary_json", None)
+    if isinstance(summary, dict):
+        return summary
+    return {}
+
+
 @router.post("/jobs/claim", response_model=ClaimJobResponse)
 async def claim_job(
     payload: ClaimJobRequest,
@@ -941,6 +972,10 @@ async def complete_job(
             job_id=job_id,
             worker_id=payload.worker_id,
             result_summary=payload.result_summary,
+            finish_outcome_code=payload.finish_outcome_code,
+            finish_outcome_stage=payload.finish_outcome_stage,
+            finish_outcome_reason=payload.finish_outcome_reason,
+            finish_summary=payload.finish_summary,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -963,6 +998,10 @@ async def fail_job(
             worker_id=payload.worker_id,
             error_message=payload.error_message,
             retryable=payload.retryable,
+            finish_outcome_code=payload.finish_outcome_code,
+            finish_outcome_stage=payload.finish_outcome_stage,
+            finish_outcome_reason=payload.finish_outcome_reason,
+            finish_summary=payload.finish_summary,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1005,6 +1044,10 @@ async def ack_cancel_job(
             job_id=job_id,
             worker_id=payload.worker_id,
             message=payload.message,
+            finish_outcome_code=payload.finish_outcome_code,
+            finish_outcome_stage=payload.finish_outcome_stage,
+            finish_outcome_reason=payload.finish_outcome_reason,
+            finish_summary=payload.finish_summary,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc

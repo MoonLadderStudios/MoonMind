@@ -68,6 +68,7 @@ class TaskProposalRepository:
         category: str | None = None,
         repository: str | None = None,
         origin_source: models.TaskProposalOriginSource | None = None,
+        origin_id: UUID | None = None,
         cursor: tuple[datetime, UUID] | None = None,
         limit: int = 50,
         now: datetime | None = None,
@@ -91,6 +92,8 @@ class TaskProposalRepository:
             stmt = stmt.where(models.TaskProposal.repository == repository)
         if origin_source is not None:
             stmt = stmt.where(models.TaskProposal.origin_source == origin_source)
+        if origin_id is not None:
+            stmt = stmt.where(models.TaskProposal.origin_id == origin_id)
         if cursor is not None:
             cursor_time, cursor_id = cursor
             stmt = stmt.where(

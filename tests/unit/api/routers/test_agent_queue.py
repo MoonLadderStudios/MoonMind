@@ -60,6 +60,10 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         max_attempts=3,
         result_summary=None,
         error_message=None,
+        finish_outcome_code=None,
+        finish_outcome_stage=None,
+        finish_outcome_reason=None,
+        finish_summary_json=None,
         artifacts_path=None,
         started_at=None,
         finished_at=None,
@@ -835,6 +839,35 @@ def test_complete_job_state_conflict_maps_409(
     assert response.json()["detail"]["code"] == "job_state_conflict"
 
 
+def test_complete_job_forwards_finish_metadata(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Complete endpoint should forward finish metadata to service layer."""
+
+    test_client, service = client
+    job = _build_job(status=models.AgentJobStatus.SUCCEEDED)
+    service.complete_job.return_value = job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/complete",
+        json={
+            "workerId": "worker-1",
+            "resultSummary": "done",
+            "finishOutcomeCode": "NO_CHANGES",
+            "finishOutcomeStage": "publish",
+            "finishOutcomeReason": "publish skipped: no local changes",
+            "finishSummary": {"schemaVersion": "v1"},
+        },
+    )
+
+    assert response.status_code == 200
+    kwargs = service.complete_job.await_args.kwargs
+    assert kwargs["finish_outcome_code"] == "NO_CHANGES"
+    assert kwargs["finish_outcome_stage"] == "publish"
+    assert kwargs["finish_outcome_reason"] == "publish skipped: no local changes"
+    assert kwargs["finish_summary"] == {"schemaVersion": "v1"}
+
+
 def test_heartbeat_ownership_conflict_maps_409(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -898,6 +931,50 @@ def test_list_jobs_with_summary_returns_compact_payload(
         == "This is a long instruction that should be trimmed for list responses."
     )
     assert "unrelated" not in payload
+
+
+def test_list_jobs_omits_finish_summary_by_default(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Queue list payload should include outcome metadata but omit finish summary."""
+
+    test_client, service = client
+    job = _build_job()
+    job.finish_outcome_code = "NO_CHANGES"
+    job.finish_outcome_stage = "publish"
+    job.finish_outcome_reason = "publish skipped: no local changes"
+    job.finish_summary_json = {
+        "schemaVersion": "v1",
+        "finishOutcome": {"code": "NO_CHANGES"},
+    }
+    service.list_jobs.return_value = [job]
+
+    response = test_client.get("/api/queue/jobs?limit=50")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["finishOutcomeCode"] == "NO_CHANGES"
+    assert item["finishOutcomeStage"] == "publish"
+    assert "finishSummary" not in item
+
+
+def test_get_job_finish_summary_returns_json_payload(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Dedicated finish-summary endpoint should return stored summary JSON."""
+
+    test_client, service = client
+    job = _build_job()
+    job.finish_summary_json = {
+        "schemaVersion": "v1",
+        "finishOutcome": {"code": "NO_CHANGES"},
+    }
+    service.get_job.return_value = job
+
+    response = test_client.get(f"/api/queue/jobs/{job.id}/finish-summary")
+
+    assert response.status_code == 200
+    assert response.json()["schemaVersion"] == "v1"
 
 
 def test_list_jobs_with_summary_preserves_legacy_publish_mode(

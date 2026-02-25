@@ -670,6 +670,9 @@ async def test_request_cancel_queued_job_is_immediate_and_idempotent(tmp_path):
     assert cancelled.finished_at is not None
     assert cancelled.cancel_requested_at is not None
     assert cancelled.cancel_reason == "operator request"
+    assert cancelled.finish_outcome_code == "CANCELLED"
+    assert cancelled.finish_outcome_stage == "unknown"
+    assert cancelled.finish_outcome_reason == "operator request"
     assert action == "queued_cancelled"
     assert repeated.status is models.AgentJobStatus.CANCELLED
     assert repeated_action == "noop_cancelled"
