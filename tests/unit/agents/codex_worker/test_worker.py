@@ -3985,11 +3985,17 @@ def test_is_source_code_change_path_preserves_dotfile_classes() -> None:
     assert (
         CodexWorker._is_source_code_change_path(".github/workflows/test.yml") is False
     )
-    assert CodexWorker._is_source_code_change_path("./.github/workflows/test.yml") is False
-    assert CodexWorker._is_source_code_change_path(".specify/specs/overview.md") is False
+    assert (
+        CodexWorker._is_source_code_change_path("./.github/workflows/test.yml") is False
+    )
+    assert (
+        CodexWorker._is_source_code_change_path(".specify/specs/overview.md") is False
+    )
     assert CodexWorker._is_source_code_change_path(".gitignore") is False
     assert (
-        CodexWorker._is_source_code_change_path("moonmind/agents/codex_worker/worker.py")
+        CodexWorker._is_source_code_change_path(
+            "moonmind/agents/codex_worker/worker.py"
+        )
         is True
     )
 
@@ -3998,7 +4004,12 @@ def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> Non
     """Only `verificationSkipReason.category`/`reason` should be accepted."""
 
     assert CodexWorker._resolve_publish_verification_skip_reason(
-        {"verificationSkipReason": {"category": "ops", "reason": "scheduled maintenance"}}
+        {
+            "verificationSkipReason": {
+                "category": "ops",
+                "reason": "scheduled maintenance",
+            }
+        }
     ) == {"category": "ops", "reason": "scheduled maintenance"}
 
     with pytest.raises(ValueError, match="task.publish.verificationSkipReason.reason"):
@@ -4011,7 +4022,9 @@ def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> Non
             }
         )
 
-    with pytest.raises(ValueError, match="task.publish.verificationSkipReason.category"):
+    with pytest.raises(
+        ValueError, match="task.publish.verificationSkipReason.category"
+    ):
         CodexWorker._resolve_publish_verification_skip_reason(
             {
                 "verificationSkipReason": {
@@ -4027,7 +4040,9 @@ def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> Non
         )
 
 
-def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(tmp_path: Path) -> None:
+def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
+    tmp_path: Path,
+) -> None:
     """Evidence collection should ignore plain `$`-prefixed output text."""
 
     prepared = PreparedTaskWorkspace(
@@ -4048,9 +4063,7 @@ def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(tmp_pat
         publish_command_env=None,
     )
     prepared.execute_log_path.write_text(
-        "$ pytest\n"
-        "[command] $ ./tools/test_unit.sh\n"
-        "[command] $ npm run build\n",
+        "$ pytest\n" "[command] $ ./tools/test_unit.sh\n" "[command] $ npm run build\n",
         encoding="utf-8",
     )
     evidence = CodexWorker._collect_verification_evidence(prepared=prepared)
@@ -4279,7 +4292,10 @@ async def test_run_publish_stage_fails_without_verification_evidence_for_source_
         prepared.publish_result_path.read_text(encoding="utf-8")
     )
     assert publish_payload["verification"]["status"] == "failed"
-    assert "publish preflight failed: source-code changes detected" in publish_payload["reason"]
+    assert (
+        "publish preflight failed: source-code changes detected"
+        in publish_payload["reason"]
+    )
 
 
 async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_artifact(
