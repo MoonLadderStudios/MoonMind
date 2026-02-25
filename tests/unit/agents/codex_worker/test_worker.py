@@ -1275,9 +1275,8 @@ async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
     """Truncated previews should emit a gzip full-fidelity companion and linkage."""
 
     source_content = (
-        ("prefix-line\n" * 200)
-        + "ERROR: critical failure context that must be preserved\n"
-    )
+        "prefix-line\n" * 200
+    ) + "ERROR: critical failure context that must be preserved\n"
     source_step_log = tmp_path / "truncated-step.log"
     source_step_log.write_text(source_content, encoding="utf-8")
 
@@ -1357,10 +1356,7 @@ async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
     assert metadata["truncated"] is True
     assert metadata["previewArtifact"] == "logs/steps/step-0000.log"
     assert metadata["fullArtifact"] == "logs/steps/step-0000.full.log.gz"
-    assert (
-        metadata["metadataArtifact"]
-        == "logs/steps/step-0000.full.log.metadata.json"
-    )
+    assert metadata["metadataArtifact"] == "logs/steps/step-0000.full.log.metadata.json"
     assert metadata["sourceDeltaBytes"] == len(source_content.encode("utf-8"))
     assert metadata["omittedBytes"] > 0
 
@@ -1428,9 +1424,7 @@ async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
     step_log_content = step_log_path.read_text(encoding="utf-8")
     assert step_log_path.stat().st_size <= 320
     assert "[moonmind] step log truncated" in step_log_content
-    assert (
-        "ERROR: critical failure context that must be preserved" in step_log_content
-    )
+    assert "ERROR: critical failure context that must be preserved" in step_log_content
 
 
 async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
