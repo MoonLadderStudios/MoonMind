@@ -67,7 +67,7 @@ def upgrade() -> None:
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column(
             "schedule_type",
-            sa.Enum(name="recurringtaskscheduletype", create_type=False),
+            postgresql.ENUM(name="recurringtaskscheduletype", create_type=False),
             nullable=False,
             server_default=sa.text("'cron'"),
         ),
@@ -80,7 +80,7 @@ def upgrade() -> None:
         sa.Column("owner_user_id", sa.Uuid(), nullable=True),
         sa.Column(
             "scope_type",
-            sa.Enum(name="recurringtaskscopetype", create_type=False),
+            postgresql.ENUM(name="recurringtaskscopetype", create_type=False),
             nullable=False,
             server_default=sa.text("'personal'"),
         ),
@@ -130,13 +130,13 @@ def upgrade() -> None:
         sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "trigger",
-            sa.Enum(name="recurringtaskruntrigger", create_type=False),
+            postgresql.ENUM(name="recurringtaskruntrigger", create_type=False),
             nullable=False,
             server_default=sa.text("'schedule'"),
         ),
         sa.Column(
             "outcome",
-            sa.Enum(name="recurringtaskrunoutcome", create_type=False),
+            postgresql.ENUM(name="recurringtaskrunoutcome", create_type=False),
             nullable=False,
             server_default=sa.text("'pending_dispatch'"),
         ),

@@ -480,7 +480,7 @@ services:
     image: ghcr.io/moonladderstudios/moonmind:latest
     user: app
     command: >-
-      poetry run moonmind-scheduler
+      moonmind-scheduler
     env_file:
       - .env
     environment:
