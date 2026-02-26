@@ -59,10 +59,6 @@ def _build_proposal() -> SimpleNamespace:
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        snoozed_until=None,
-        snoozed_by_user_id=None,
-        snooze_note=None,
-        snooze_history=[],
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         origin_source=TaskProposalOriginSource.QUEUE,
@@ -159,24 +155,6 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock]) -
     assert kwargs["origin_id"] == origin_id
     payload = response.json()
     assert payload["items"]
-
-
-def test_list_proposals_supports_snoozed_filter(
-    client: tuple[TestClient, AsyncMock],
-) -> None:
-    test_client, service = client
-    proposal = _build_proposal()
-    service.list_proposals.return_value = ([proposal], None)
-
-    response = test_client.get(
-        "/api/proposals",
-        params={"status": "snoozed", "includeSnoozed": "true"},
-    )
-
-    assert response.status_code == 200
-    kwargs = service.list_proposals.await_args.kwargs
-    assert kwargs["include_snoozed"] is True
-    assert kwargs["only_snoozed"] is True
 
 
 def test_promote_proposal_returns_job(client: tuple[TestClient, AsyncMock]) -> None:
@@ -291,25 +269,3 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock]) -> None:
 
     assert response.status_code == 200
     service.update_review_priority.assert_awaited()
-
-
-def test_snooze_and_unsnooze_endpoints(client: tuple[TestClient, AsyncMock]) -> None:
-    test_client, service = client
-    proposal = _build_proposal()
-    service.snooze_proposal.return_value = proposal
-    service.unsnooze_proposal.return_value = proposal
-    until = datetime.now(UTC).isoformat()
-
-    response = test_client.post(
-        f"/api/proposals/{proposal.id}/snooze",
-        json={"until": until, "note": "later"},
-    )
-    assert response.status_code == 200
-    service.snooze_proposal.assert_awaited()
-
-    response_unsnooze = test_client.post(
-        f"/api/proposals/{proposal.id}/unsnooze",
-        json={},
-    )
-    assert response_unsnooze.status_code == 200
-    service.unsnooze_proposal.assert_awaited()
