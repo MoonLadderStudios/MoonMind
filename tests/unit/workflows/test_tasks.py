@@ -839,7 +839,7 @@ async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monke
     codex_client = DummyCodexClient()
     monkeypatch.setattr(tasks, "_build_codex_client", lambda: codex_client)
 
-    def fake_poll(*_, artifacts_dir, **__):
+    async def fake_poll(*_, artifacts_dir, **__):
         patch_path = artifacts_dir / "codex-retry-123.patch"
         patch_path.write_text("patch data", encoding="utf-8")
         return tasks.CodexDiffResult(

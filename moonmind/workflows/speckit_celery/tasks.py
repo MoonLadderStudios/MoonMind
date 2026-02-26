@@ -941,7 +941,7 @@ def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
     return condensed
 
 
-def _poll_for_codex_diff(
+async def _poll_for_codex_diff(
     codex_client: CodexClient,
     *,
     task_id: str,
@@ -958,7 +958,8 @@ def _poll_for_codex_diff(
 
     while True:
         try:
-            return codex_client.retrieve_patch(
+            return await asyncio.to_thread(
+                codex_client.retrieve_patch,
                 task_id=task_id,
                 artifacts_dir=artifacts_dir,
                 task_identifier=task_identifier,
@@ -970,7 +971,7 @@ def _poll_for_codex_diff(
                 raise RuntimeError(
                     "Timed out while polling Codex for diff availability"
                 ) from exc
-            time.sleep(poll_interval)
+            await asyncio.sleep(poll_interval)
 
     raise RuntimeError("Unexpected Codex polling exit") from last_error
 
@@ -2244,7 +2245,7 @@ def apply_and_publish(context: dict[str, Any]) -> dict[str, Any]:
                         has_changes=True,
                     )
                 else:
-                    diff = _poll_for_codex_diff(
+                    diff = await _poll_for_codex_diff(
                         codex_client,
                         task_id=codex_task_id,
                         artifacts_dir=artifacts_dir,
