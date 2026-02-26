@@ -93,3 +93,56 @@ def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     assert infer_repo("") is None
     assert infer_repo("not a url") is None
     assert infer_repo("https://github.com/org") is None
+
+
+def test_review_comment_from_bot_is_not_actionable_by_default(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    is_comment_actionable = pr_resolve_snapshot_module["_is_comment_actionable"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "dependabot[bot]",
+        "body": "Automated reminder",
+    }
+
+    assert is_comment_actionable(comment) is False
+
+
+def test_review_comment_from_bot_can_be_included_when_requested(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    is_comment_actionable = pr_resolve_snapshot_module["_is_comment_actionable"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "dependabot[bot]",
+        "body": "Automated reminder",
+    }
+
+    assert (
+        is_comment_actionable(comment, include_bot_review_comments=True) is True
+    )
+
+
+def test_summarize_comments_counts_only_human_actionables_by_default(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "review_comment",
+            "user": "dependabot[bot]",
+            "body": "Automated reminder",
+        },
+        {
+            "type": "review_comment",
+            "user": "human-reviewer",
+            "body": "Please rename this variable",
+        },
+    ]
+
+    summary = summarize_comments(comments)
+    assert summary["actionableCommentCount"] == 1
+    assert summary["hasActionableComments"] is True

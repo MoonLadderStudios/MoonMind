@@ -47,6 +47,34 @@ def run_command(
             sys.exit(1)
 
 
+def run_text_command(
+    cmd,
+    failure_hint="",
+    max_attempts=3,
+    initial_delay_seconds=1.0,
+    max_delay_seconds=8.0,
+):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            if attempt < max_attempts:
+                delay = min(
+                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                )
+                print(
+                    f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            print(
+                f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{e.output}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def infer_repo_from_pr_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -72,12 +100,15 @@ def is_bot_user(login: str | None) -> bool:
     return user.endswith("[bot]") or user == "github-actions[bot]"
 
 
-def _is_comment_actionable(comment: dict) -> bool:
+def _is_comment_actionable(
+    comment: dict, *, include_bot_review_comments: bool = False
+) -> bool:
     """Determine whether a comment requires action.
 
     - Must have non-empty body text (baseline).
     - review_comment: NOT actionable if thread_resolved or thread_outdated.
       Falls back to actionable if thread status keys are absent (GraphQL failed).
+      Bot-authored review comments are ignored by default.
     - issue_comment: NOT actionable if from a bot user.
     """
     if not (comment.get("body") or "").strip():
@@ -86,6 +117,8 @@ def _is_comment_actionable(comment: dict) -> bool:
     comment_type = comment.get("type")
 
     if comment_type == "review_comment":
+        if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
+            return False
         if "thread_resolved" in comment:
             if comment["thread_resolved"] or comment.get("thread_outdated", False):
                 return False
@@ -97,7 +130,9 @@ def _is_comment_actionable(comment: dict) -> bool:
     return True
 
 
-def summarize_comments(comments: list[dict]) -> dict:
+def summarize_comments(
+    comments: list[dict], *, include_bot_review_comments: bool = False
+) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
     review_bodies = [c for c in comments if c.get("type") == "review"]
@@ -108,7 +143,13 @@ def summarize_comments(comments: list[dict]) -> dict:
     ]
     bot_comments = [c for c in all_inline_comments if is_bot_user(c.get("user") or "")]
 
-    actionable_comments = [c for c in all_inline_comments if _is_comment_actionable(c)]
+    actionable_comments = [
+        c
+        for c in all_inline_comments
+        if _is_comment_actionable(
+            c, include_bot_review_comments=include_bot_review_comments
+        )
+    ]
 
     return {
         "total": len(comments),
@@ -122,11 +163,28 @@ def summarize_comments(comments: list[dict]) -> dict:
     }
 
 
+def build_working_tree_summary() -> dict:
+    status_output = run_text_command(
+        ["git", "status", "--porcelain"],
+        "Failed to inspect working tree state.",
+    )
+    status_lines = [line for line in status_output.splitlines() if line.strip()]
+    return {
+        "isClean": len(status_lines) == 0,
+        "changedFileCount": len(status_lines),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Snapshot PR state for pr-resolver skill"
     )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
+    parser.add_argument(
+        "--include-bot-review-comments",
+        action="store_true",
+        help="Treat bot-authored review comments as actionable.",
+    )
     args = parser.parse_args()
 
     # 1. Fetch PR Metadata
@@ -203,7 +261,10 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
-    comments_summary = summarize_comments(comments)
+    comments_summary = summarize_comments(
+        comments, include_bot_review_comments=args.include_bot_review_comments
+    )
+    working_tree_summary = build_working_tree_summary()
 
     # 4. Construct Snapshot
     snapshot = {
@@ -215,6 +276,7 @@ def main():
         },
         "comments": comments,
         "commentsSummary": comments_summary,
+        "workingTree": working_tree_summary,
     }
 
     # Save to artifacts/pr_resolver_snapshot.json
@@ -234,6 +296,7 @@ def main():
         "ci": snapshot["ci"],
         "comment_count": len(snapshot["comments"]),
         "actionable_comment_count": comments_summary.get("actionableCommentCount", 0),
+        "working_tree_clean": working_tree_summary.get("isClean"),
     }
     print(json.dumps(summary, indent=2))
 

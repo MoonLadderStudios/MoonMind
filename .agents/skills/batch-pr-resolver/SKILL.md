@@ -17,6 +17,7 @@ Create one queue task per open pull request so each PR branch can be resolved by
 - `skipExistingOnly` (boolean, optional): Legacy alias kept for compatibility. If set, skip PRs from fork repositories. **Note:** this name is counter-intuitive; `true` means forks are skipped.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
+- `publishMode` (string, optional): Child `pr-resolver` task publish mode (`none|branch|pr`). Default `branch`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
 - `maxIterations` (number, optional): `pr-resolver` loop cap. Default `3`.
 
@@ -31,6 +32,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
   --skip-existing-only \
   --max-attempts 3 \
   --priority 0 \
+  --publish-mode branch \
   --merge-method squash \
   --max-iterations 3
 ```
@@ -42,6 +44,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - `includeForks` -> `--include-forks` (currently rejected at runtime)
    - `maxAttempts` -> `--max-attempts`
    - `priority` -> `--priority`
+   - `publishMode` -> `--publish-mode`
    - `mergeMethod` -> `--merge-method`
    - `maxIterations` -> `--max-iterations`
 
@@ -51,7 +54,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `type: "task"`
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
-     - `payload.task.publish.mode`: `branch`
+     - `payload.task.publish.mode`: `publishMode` input (default `branch`)
      - `payload.task.skill.id`: `pr-resolver`
      - `payload.task.skill.args`: `{ repo, pr, branch, mergeMethod, maxIterations }`
    - Submit via internal queue service (`AgentQueueService`).

@@ -66,6 +66,7 @@ def test_build_queue_request_sets_branch_publish_with_matching_branches():
         "MoonLadderStudios/MoonMind",
         pr_number=42,
         branch="feature/example",
+        publish_mode="branch",
         merge_method="squash",
         max_iterations=3,
         priority=0,
@@ -78,3 +79,22 @@ def test_build_queue_request_sets_branch_publish_with_matching_branches():
     assert task["publish"]["mode"] == "branch"
     assert git["startingBranch"] == "feature/example"
     assert git["newBranch"] == "feature/example"
+
+
+def test_build_queue_request_honors_requested_publish_mode():
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=99,
+        branch="feature/example",
+        publish_mode="none",
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+
+    task = request["payload"]["task"]
+    assert task["publish"]["mode"] == "none"

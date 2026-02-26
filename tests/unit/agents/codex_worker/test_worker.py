@@ -25,6 +25,7 @@ from moonmind.agents.codex_worker.worker import (
     ClaimedJob,
     CodexWorker,
     CodexWorkerConfig,
+    FinishOutcome,
     PreparedTaskWorkspace,
     QueueClaimResult,
     QueueHeartbeatResult,
@@ -1136,6 +1137,51 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
     finish_summary = queue.completed_finish_payloads[0]["finishSummary"]
     assert isinstance(finish_summary, dict)
     assert finish_summary["publish"]["status"] == "not_run"
+
+
+async def test_run_once_pr_resolver_task_synthesizes_result_artifact(
+    tmp_path: Path,
+) -> None:
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR",
+                "skill": {"id": "pr-resolver", "args": {"pr": "123"}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "develop", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True, summary="resolver completed", error_message=None
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert "pr_resolver_result.json" in queue.uploaded
+    assert any(
+        event["message"] == "moonmind.task.prResolverResultSynthesized"
+        for event in queue.events
+    )
 
 
 async def test_run_once_task_steps_execute_in_order_with_step_events(
@@ -2637,6 +2683,163 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
         "(same as task objective; no additional step-specific instructions)"
         not in instruction
     )
+
+
+async def test_compose_step_instruction_allows_pr_resolver_commits_for_publish_none(
+    tmp_path: Path,
+) -> None:
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Resolve PR.",
+                "publish": {"mode": "none"},
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title=None,
+            instructions="Resolve PR issues",
+            effective_skill_id="pr-resolver",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    assert "Task publish mode: none." in instruction
+    assert (
+        "Commit/push/merge are allowed when required by the pr-resolver workflow."
+        in instruction
+    )
+
+
+async def test_ensure_pr_resolver_result_artifact_synthesizes_when_missing(
+    tmp_path: Path,
+) -> None:
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    job_id = uuid4()
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    artifact, synthesis_reason = worker._ensure_pr_resolver_result_artifact(
+        canonical_payload={"task": {"skill": {"id": "pr-resolver"}}},
+        resolved_steps=(),
+        prepared=prepared,
+        result=WorkerExecutionResult(
+            succeeded=True,
+            summary="pr resolved",
+            error_message=None,
+        ),
+        finish_outcome=FinishOutcome(
+            code="PUBLISH_DISABLED",
+            stage="publish",
+            reason="publish skipped: mode=none",
+        ),
+        publish_mode="none",
+        publish_status="not_run",
+        publish_reason="publish mode is none",
+        publish_pr_url=None,
+        publish_base_branch="main",
+        publish_working_branch="feature/example",
+    )
+
+    assert artifact is not None
+    assert synthesis_reason is not None
+    assert "missing artifacts/pr_resolver_result.json" in synthesis_reason
+
+    payload = json.loads(artifact.path.read_text(encoding="utf-8"))
+    assert payload["generatedBy"] == "moonmind-worker"
+    assert payload["synthesized"] is True
+    assert payload["summary"] == "pr resolved"
+    assert payload["finishOutcome"]["code"] == "PUBLISH_DISABLED"
+
+
+async def test_ensure_pr_resolver_result_artifact_copies_existing_payload(
+    tmp_path: Path,
+) -> None:
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    job_id = uuid4()
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    existing_result_path = prepared.repo_dir / "artifacts" / "pr_resolver_result.json"
+    existing_result_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_result_path.write_text(
+        json.dumps({"status": "merged", "synthesized": False}),
+        encoding="utf-8",
+    )
+
+    artifact, synthesis_reason = worker._ensure_pr_resolver_result_artifact(
+        canonical_payload={"task": {"skill": {"id": "pr-resolver"}}},
+        resolved_steps=(),
+        prepared=prepared,
+        result=WorkerExecutionResult(
+            succeeded=True,
+            summary="pr resolved",
+            error_message=None,
+        ),
+        finish_outcome=FinishOutcome(
+            code="PUBLISH_DISABLED",
+            stage="publish",
+            reason="publish skipped: mode=none",
+        ),
+        publish_mode="none",
+        publish_status="not_run",
+        publish_reason="publish mode is none",
+        publish_pr_url=None,
+        publish_base_branch="main",
+        publish_working_branch="feature/example",
+    )
+
+    assert artifact is not None
+    assert synthesis_reason is None
+    payload = json.loads(artifact.path.read_text(encoding="utf-8"))
+    assert payload["status"] == "merged"
+    assert payload["synthesized"] is False
 
 
 async def test_run_once_task_steps_fail_fast_on_first_failed_step(

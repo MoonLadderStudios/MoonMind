@@ -167,6 +167,7 @@ def _build_queue_request(
     pr_number: int | str,
     branch: str,
     *,
+    publish_mode: str,
     merge_method: str,
     max_iterations: int,
     priority: int,
@@ -196,7 +197,7 @@ def _build_queue_request(
                     "startingBranch": branch,
                     "newBranch": branch,
                 },
-                "publish": {"mode": "branch"},
+                "publish": {"mode": publish_mode},
             },
         },
     }
@@ -230,6 +231,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--priority", type=int, default=0)
+    parser.add_argument(
+        "--publish-mode",
+        choices=("none", "branch", "pr"),
+        default="branch",
+        help="Publish mode for queued pr-resolver tasks (default: branch).",
+    )
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument(
@@ -307,6 +314,7 @@ def _build_request_records(
             repo,
             number,
             branch,
+            publish_mode=args.publish_mode,
             merge_method=args.merge_method,
             max_iterations=args.max_iterations,
             priority=args.priority,
@@ -341,6 +349,7 @@ async def main() -> int:
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "repository": repo,
         "state": args.state,
+        "publishMode": args.publish_mode,
         "requested": len(open_prs),
         "created": len(created),
         "queued": created,

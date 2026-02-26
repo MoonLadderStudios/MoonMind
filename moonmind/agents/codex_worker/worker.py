@@ -1794,6 +1794,38 @@ class CodexWorker:
                 else self._config.workdir / str(job.id) / "artifacts"
             )
             try:
+                resolver_artifact, resolver_synthesis_reason = (
+                    self._ensure_pr_resolver_result_artifact(
+                        canonical_payload=canonical_payload,
+                        resolved_steps=resolved_steps,
+                        prepared=prepared,
+                        result=result,
+                        finish_outcome=finish_outcome,
+                        publish_mode=publish_mode,
+                        publish_status=publish_status,
+                        publish_reason=publish_reason,
+                        publish_pr_url=publish_pr_url,
+                        publish_base_branch=publish_base_branch,
+                        publish_working_branch=publish_working_branch,
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist pr_resolver_result.json for job %s",
+                    job.id,
+                    exc_info=True,
+                )
+            else:
+                if resolver_artifact is not None:
+                    staged_artifacts.append(resolver_artifact)
+                if resolver_synthesis_reason:
+                    await self._emit_event(
+                        job_id=job.id,
+                        level="warn",
+                        message="moonmind.task.prResolverResultSynthesized",
+                        payload={"reason": resolver_synthesis_reason},
+                    )
+            try:
                 staged_artifacts.extend(
                     self._write_finish_reports(
                         artifacts_dir=artifacts_dir,
@@ -3917,6 +3949,120 @@ class CodexWorker:
                 content_type="application/json",
             ),
         ]
+
+    @staticmethod
+    def _is_pr_resolver_task(
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+    ) -> bool:
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        skill_node = task.get("skill")
+        skill = skill_node if isinstance(skill_node, Mapping) else {}
+        task_skill_id = str(skill.get("id") or "").strip()
+        if task_skill_id == "pr-resolver":
+            return True
+        return any(step.effective_skill_id == "pr-resolver" for step in resolved_steps)
+
+    def _ensure_pr_resolver_result_artifact(
+        self,
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+        prepared: PreparedTaskWorkspace | None,
+        result: WorkerExecutionResult | None,
+        finish_outcome: FinishOutcome,
+        publish_mode: str,
+        publish_status: str,
+        publish_reason: str | None,
+        publish_pr_url: str | None,
+        publish_base_branch: str | None,
+        publish_working_branch: str | None,
+    ) -> tuple[ArtifactUpload | None, str | None]:
+        """Ensure pr-resolver jobs always emit a deterministic result artifact."""
+
+        if prepared is None or not self._is_pr_resolver_task(
+            canonical_payload=canonical_payload, resolved_steps=resolved_steps
+        ):
+            return (None, None)
+
+        canonical_path = prepared.artifacts_dir / "pr_resolver_result.json"
+        source_candidates = (
+            prepared.repo_dir / "artifacts" / "pr_resolver_result.json",
+            canonical_path,
+        )
+        existing_payload: dict[str, Any] | None = None
+        invalid_source_path: Path | None = None
+        for candidate in source_candidates:
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                invalid_source_path = candidate
+                continue
+            if isinstance(payload, Mapping):
+                existing_payload = dict(payload)
+                break
+            invalid_source_path = candidate
+
+        synthesis_reason: str | None = None
+        if existing_payload is None:
+            if invalid_source_path is not None:
+                try:
+                    invalid_source_label = invalid_source_path.relative_to(
+                        prepared.job_root
+                    ).as_posix()
+                except ValueError:
+                    invalid_source_label = str(invalid_source_path)
+                synthesis_reason = (
+                    "invalid JSON at "
+                    + self._redact_text(invalid_source_label)
+                )
+            else:
+                synthesis_reason = (
+                    "missing artifacts/pr_resolver_result.json from pr-resolver run"
+                )
+            payload: dict[str, Any] = {
+                "schemaVersion": "v1",
+                "generatedBy": "moonmind-worker",
+                "synthesized": True,
+                "synthesisReason": synthesis_reason,
+                "summary": result.summary if result is not None else None,
+                "succeeded": bool(result is not None and result.succeeded),
+                "finishOutcome": {
+                    "code": finish_outcome.code,
+                    "stage": finish_outcome.stage,
+                    "reason": finish_outcome.reason,
+                },
+                "publish": {
+                    "mode": publish_mode,
+                    "status": publish_status,
+                    "reason": publish_reason,
+                    "workingBranch": publish_working_branch,
+                    "baseBranch": publish_base_branch,
+                    "prUrl": publish_pr_url,
+                },
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            redacted = self._redact_payload(payload)
+            existing_payload = redacted if isinstance(redacted, dict) else payload
+
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        canonical_path.write_text(
+            json.dumps(existing_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return (
+            ArtifactUpload(
+                path=canonical_path,
+                name="pr_resolver_result.json",
+                content_type="application/json",
+                required=False,
+            ),
+            synthesis_reason,
+        )
 
     def _normalize_execute_artifacts(
         self,
@@ -6727,6 +6873,9 @@ class CodexWorker:
     ) -> str:
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = publish_node if isinstance(publish_node, Mapping) else {}
+        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
         objective = str(task.get("instructions") or "").strip()
         step_title = f" {step.title}" if step.title else ""
         normalized_objective = _normalize_instruction_text_for_comparison(objective)
@@ -6749,6 +6898,14 @@ class CodexWorker:
                 step_instruction_value
                 or "(no step-specific instructions; continue based on objective)"
             )
+        commit_policy_line = (
+            "- Do NOT commit or push. Publish is handled by MoonMind publish stage.\n"
+        )
+        if step.effective_skill_id == "pr-resolver" and publish_mode == "none":
+            commit_policy_line = (
+                "- Commit/push/merge are allowed when required by the pr-resolver "
+                "workflow.\n"
+            )
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"
             f"{objective}\n\n"
@@ -6758,7 +6915,8 @@ class CodexWorker:
             f"{step.effective_skill_id}\n\n"
             "WORKSPACE:\n"
             "- Repo is already checked out on the working branch.\n"
-            "- Do NOT commit or push. Publish is handled by MoonMind publish stage.\n"
+            f"- Task publish mode: {publish_mode}.\n"
+            f"{commit_policy_line}"
             "- Skills are available via .agents/skills and .gemini/skills links.\n"
             "- Selected skills are always materialized under ../skills_active/<skill-id>/.\n"
             "- Write logs to stdout/stderr; MoonMind captures them.\n\n"

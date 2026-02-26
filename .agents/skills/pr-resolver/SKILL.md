@@ -15,9 +15,11 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
 - inputs.mergeMethod (merge|squash|rebase)
 - inputs.maxIterations (default 3)
 - inputs.failFastIfCiRunning (default true)
+- inputs.includeBotReviewComments (default false)
 
 ## Workflow
 1. Run `python3 .agents/skills/pr-resolver/bin/pr_resolve_snapshot.py` to generate `artifacts/pr_resolver_snapshot.json`.
+   - If `includeBotReviewComments=true`, pass `--include-bot-review-comments`.
 2. Inspect the snapshot output.
 3. Apply fixes in this strict priority order:
    - **Merge Conflicts:** If `mergeable` indicates conflict (`false`, `CONFLICTING`, or `DIRTY`) or `mergeStateStatus` is exactly `DIRTY`, you MUST read `.agents/skills/fix-merge-conflicts/SKILL.md`. Follow its procedure exactly to resolve the conflict before attempting CI fixes or waiting for CI.
@@ -26,11 +28,13 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
      - `commentsSummary.hasActionableComments` is true.
      Proceed with comment fixes even if CI is still running.
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
-   - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `"CLEAN"`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
+   - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `"CLEAN"`, `workingTree.isClean` is true, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
    - **Blocked:** If CI is running and no failures while `mergeable` is clean (not in conflict), and `mergeStateStatus` is exactly `CLEAN`, exit and state the PR is blocked waiting for CI.
+   - **Blocked (dirty tree):** If checks are green but `workingTree.isClean` is false, do not merge yet. Re-run snapshot after the pending changes are committed/pushed (or after worker publish when publish mode is `branch`/`pr`).
 4. After applying ANY fix (conflict, review comments, CI), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`.
 5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
 
 ## Constraints
 - Do NOT try to invent your own conflict resolution or CI fixing workflow. Always load and follow the specialized sub-skill instructions.
-- This skill is allowed to commit/push and merge (task.publish.mode MUST be none).
+- If task publish mode is `none`, this skill may commit/push and merge directly.
+- If task publish mode is `branch` or `pr`, leave commit/push to MoonMind publish stage and only merge on a later clean rerun.
