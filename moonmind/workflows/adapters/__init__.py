@@ -3,8 +3,8 @@
 from .codex_client import (
     CodexClient,
     CodexDiffNotReadyError,
-    CodexDiffRetrievalError,
     CodexDiffResult,
+    CodexDiffRetrievalError,
     CodexSubmissionResult,
 )
 from .github_client import GitHubClient, GitHubPublishResult

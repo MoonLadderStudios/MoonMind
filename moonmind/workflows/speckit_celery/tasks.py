@@ -26,8 +26,8 @@ from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
 from moonmind.workflows.adapters import (
     CodexClient,
-    CodexDiffResult,
     CodexDiffNotReadyError,
+    CodexDiffResult,
     CodexDiffRetrievalError,
     CodexSubmissionResult,
     GitHubClient,
@@ -977,7 +977,9 @@ async def _poll_for_codex_diff(
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive logging
-            raise CodexDiffRetrievalError(f"failed to poll for Codex diff: {exc}") from exc
+            raise CodexDiffRetrievalError(
+                f"failed to poll for Codex diff: {exc}"
+            ) from exc
 
     raise RuntimeError("Unexpected Codex polling exit") from last_error
 

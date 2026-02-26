@@ -1083,7 +1083,9 @@ async def test_poll_for_codex_diff_fails_fast_for_non_transient_errors(tmp_path)
             calls["count"] += 1
             raise RuntimeError("not implemented for real codex mode")
 
-    with pytest.raises(tasks.CodexDiffRetrievalError, match="failed to poll for Codex diff"):
+    with pytest.raises(
+        tasks.CodexDiffRetrievalError, match="failed to poll for Codex diff"
+    ):
         await tasks._poll_for_codex_diff(
             DummyClient(),
             task_id="task-002",
