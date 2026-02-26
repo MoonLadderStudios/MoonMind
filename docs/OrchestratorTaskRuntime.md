@@ -2,7 +2,7 @@
 
 Status: Draft
 Owners: MoonMind Engineering
-Last Updated: 2026-02-25
+Last Updated: 2026-02-26
 
 ## 1. Purpose
 
@@ -10,43 +10,54 @@ Align the MoonMind Orchestrator with the existing task system so that:
 
 * Orchestrator work is surfaced as **Tasks** (not “runs”).
 * Orchestrator tasks are created with a **similar steps + skills authoring experience** to queue tasks.
-* Orchestrator tasks appear in the **same task list and task detail experience** as other tasks (with runtime category `orchestrator`), eliminating the dedicated orchestrator pages currently described in the dashboard route map L74-L88.
-* The orchestrator can **continue executing** even if Postgres (and other “support services”) become unavailable mid-execution, which is intended to be a key differentiator from normal queue workers.
+* Orchestrator tasks appear in the **same task list and task detail experience** as other tasks (with runtime category `orchestrator`), eliminating the dedicated orchestrator pages currently described in the dashboard route map.
+* The orchestrator can continue execution through transient support-service failures when queue lease/heartbeat safety is intact, with artifact-backed state capture and later reconciliation.
 
 ## 2. Current State (Relevant Snapshot)
 
 ### 2.1 Dashboard surface is split by “source”
 
-MoonMind’s docs explicitly call out **separate orchestrator runs** alongside queue jobs L17-L24, with orchestrator runs “tracked and managed through `/orchestrator/*` APIs and dashboard pages” L86-L90. The UI route map currently includes `/tasks/orchestrator` and `/tasks/orchestrator/:runId` L84-L88.
+MoonMind’s docs explicitly call out **separate orchestrator runs** alongside queue jobs, with orchestrator runs “tracked and managed through `/orchestrator/*` APIs and dashboard pages”. The UI route map currently includes `/tasks/orchestrator` and `/tasks/orchestrator/:runId`.
 
 ### 2.2 Orchestrator submit does not use steps/skills like queue tasks
 
-The UI contract currently treats orchestrator submit as a small separate shape: `instruction`, `targetService`, `priority`, optional `approvalToken` posting to `POST /orchestrator/runs` L28-L41.
+The UI contract currently treats orchestrator submit as a small separate shape: `instruction`, `targetService`, `priority`, optional `approvalToken` posting to `POST /orchestrator/runs`.
 
 ### 2.3 Orchestrator is already a queue-consumed workload, but “run” is the canonical record
 
-The orchestrator API creates a run record (`/orchestrator/runs`) and then enqueues an **agent queue job** of type `orchestrator_run` with payload `{ runId, steps, includeRollback, requiredCapabilities: ["orchestrator"] }` L39-L57, where `orchestrator_run` is a first-class supported queue job type L7-L17.
+The orchestrator API creates a run record (`/orchestrator/runs`) and then enqueues an **agent queue job** of type `orchestrator_run` with payload `{ runId, steps, includeRollback, requiredCapabilities: ["orchestrator"] }`, where `orchestrator_run` is a first-class supported queue job type.
 
 ### 2.4 Orchestrator plan steps are currently constrained to a fixed enum and unique state rows
 
-The orchestrator plan-step enum is fixed (`analyze/patch/build/restart/verify/rollback`) L73-L82, and step-state persistence enforces uniqueness per plan step + attempt (e.g. `uq_orchestrator_task_state_attempt` on `orchestrator_run_id, plan_step, attempt`) L65-L69. This makes “arbitrary N steps” impossible without a model change.
+The orchestrator plan-step enum is fixed (`analyze/patch/build/restart/verify/rollback`), and step-state persistence enforces uniqueness per plan step + attempt (e.g. `uq_orchestrator_task_state_attempt` on `orchestrator_run_id, plan_step, attempt`). This makes “arbitrary N steps” impossible without a model change.
 
 ### 2.5 Orchestrator already has a “skill” concept (script-backed)
 
-`OrchestratorCreateRunRequest` includes `skillId` and `skillArgs` L390-L402, and the API validates runnable skill scripts via `list_runnable_skill_names()` / `is_runnable_skill()` L17-L35. The runnable skill discovery comes from the orchestrator skill executor, which can list runnable skills from mirrors L43-L61.
+`OrchestratorCreateRunRequest` includes `skillId` and `skillArgs`, and the API validates runnable skill scripts via `list_runnable_skill_names()` / `is_runnable_skill()`. The runnable skill discovery comes from the orchestrator skill executor, which can list runnable skills from mirrors.
+
+
+### 2.6 Source references for current-state claims
+
+The current-state observations above are based on these repository artifacts:
+
+* `docs/TaskSystem.md` (dashboard route map and split queue/orchestrator surfaces).
+* `api_service/api/routers/task_dashboard_view_model.py` (dashboard API contract for queue/orchestrator endpoints and runtime metadata).
+* `moonmind/schemas/workflow_models.py` (orchestrator create request schema, including `skillId`/`skillArgs`).
+* `moonmind/orchestrator/api.py` and `moonmind/orchestrator/skill_executor.py` (orchestrator run dispatch and runnable skill validation/discovery).
+* `moonmind/orchestrator/models.py` (fixed orchestrator plan-step enum and state uniqueness constraints).
 
 ## 3. Goals
 
 1. **Unified naming**: “Orchestrator Runs” become **Orchestrator Tasks** everywhere user-facing, and API contracts begin migrating from `runId` → `taskId`.
 2. **Unified authoring**: Orchestrator tasks can be authored with a **step list** and **skill selection** that feels like queue task authoring (steps editor + skill ids + args).
 3. **Unified monitoring**: Remove dedicated orchestrator list/detail pages and render orchestrator tasks in the same list/detail UX as queue tasks.
-4. **Degraded execution**: If Postgres becomes unreachable during an orchestrator task, the orchestrator should continue execution and still produce artifacts (and later reconcile state if/when DB returns).
+4. **Degraded execution**: If Postgres becomes unreachable during an orchestrator task, the orchestrator should preserve progress via artifact-backed state and continue only while queue lease/heartbeat safety remains valid; otherwise it must halt and require explicit operator resume.
 
 ## 4. Non-Goals (for this iteration)
 
 * Replacing the Agent Queue DB backing entirely (queue workers still depend on it for claiming jobs).
 * Reworking the entire dashboard to a new frontend framework (remain within the existing thin-dashboard architecture).
-* Building a generalized “workflow engine” that unifies every workload type into a single DB table immediately (the current UI explicitly called that out as out-of-scope L41-L43; this design introduces a constrained unification focused on Orchestrator).
+* Building a generalized “workflow engine” that unifies every workload type into a single DB table immediately (the current UI explicitly called that out as out-of-scope; this design introduces a constrained unification focused on Orchestrator).
 
 ## 5. Proposed Design
 
@@ -56,13 +67,13 @@ The orchestrator plan-step enum is fixed (`analyze/patch/build/restart/verify/ro
 
 * Rename “Run” → “Task”
 * Rename “Orchestrator run” → “Orchestrator task”
-* Runtime category for these items is `orchestrator` (the dashboard already treats “orchestrator” as a runtime option label L53-L63).
+* Runtime category for these items is `orchestrator` (the dashboard already treats “orchestrator” as a runtime option label).
 
 **API compatibility**:
 
 * Keep existing endpoints operational for now:
 
-  * `POST /orchestrator/runs`, `GET /orchestrator/runs`, `GET /orchestrator/runs/{id}`, approvals, retry L40-L48
+  * `POST /orchestrator/runs`, `GET /orchestrator/runs`, `GET /orchestrator/runs/{id}`, approvals, retry
 * Add aliases with new names (thin wrappers):
 
   * `POST /orchestrator/tasks` → same handler as `POST /orchestrator/runs`
@@ -79,7 +90,7 @@ The orchestrator plan-step enum is fixed (`analyze/patch/build/restart/verify/ro
 
 #### 5.2.1 Route consolidation
 
-Current dashboard routes include `/tasks/orchestrator` and `/tasks/orchestrator/:runId` L84-L88 and the server allowlist explicitly includes `orchestrator` paths L26-L35.
+Current dashboard routes include `/tasks/orchestrator` and `/tasks/orchestrator/:runId` and the server allowlist explicitly includes `orchestrator` paths.
 
 **Change**:
 
@@ -93,14 +104,14 @@ Current dashboard routes include `/tasks/orchestrator` and `/tasks/orchestrator/
 
 **Compatibility redirects**:
 
-* `/tasks/orchestrator` → `/tasks/list?filterRuntime=orchestrator` (client-side redirect)
-* `/tasks/orchestrator/:runId` → `/tasks/:runId?source=orchestrator` (client-side redirect)
-* `/tasks/queue` → `/tasks/list?source=queue` (client-side redirect)
+* `/tasks/orchestrator` → `/tasks/list?filterRuntime=orchestrator` (server-side redirect preferred; client-side fallback acceptable during transition)
+* `/tasks/orchestrator/:runId` → `/tasks/:runId?source=orchestrator` (server-side redirect preferred; client-side fallback acceptable during transition)
+* `/tasks/queue` → `/tasks/list?source=queue` (server-side redirect preferred; client-side fallback acceptable during transition)
 * `/tasks/queue/:jobId` → `/tasks/:jobId?source=queue` (optional; can keep existing for a while)
 
 #### 5.2.2 Unified list data model (client-side first)
 
-The dashboard already supports a “fan-out” pattern and consolidated pages L60-L68. We’ll reuse that approach:
+The dashboard already supports a “fan-out” pattern and consolidated pages. We’ll reuse that approach:
 
 * Fetch queue jobs:
 
@@ -126,7 +137,7 @@ type UnifiedTaskRow = {
 }
 ```
 
-**Status normalization** remains consistent with the dashboard contract L40-L44, but orchestration items will now be labeled “task” and “taskId” in UI.
+**Status normalization** remains consistent with the dashboard contract, but orchestration items will now be labeled “task” and “taskId” in UI.
 
 #### 5.2.3 Unified detail page
 
@@ -148,8 +159,8 @@ type UnifiedTaskRow = {
 
 **Source-specific tab behavior**:
 
-* Queue tasks: use existing queue event stream and artifacts endpoints L17-L38.
-* Orchestrator tasks: show action plan step states and orchestrator artifacts (existing) L6-L40.
+* Queue tasks: use existing queue event stream and artifacts endpoints.
+* Orchestrator tasks: show action plan step states and orchestrator artifacts (existing).
 
 ### 5.3 Unified Authoring: Orchestrator Tasks Use “Steps + Skill” Like Queue Tasks
 
@@ -157,11 +168,11 @@ This is the core alignment change.
 
 #### 5.3.1 Submit form behavior
 
-The dashboard already has a runtime selector and a shared submit form scaffold, with an Orchestrator runtime option L53-L70.
+The dashboard already has a runtime selector and a shared submit form scaffold, with an Orchestrator runtime option.
 
 **Change the orchestrator authoring mode**:
 
-Instead of hiding the step editor when runtime is `orchestrator` (as the current UI contract does L28-L41), we make the orchestrator mode show:
+Instead of hiding the step editor when runtime is `orchestrator` (as the current UI contract does), we make the orchestrator mode show:
 
 * Step editor (same component/data structure as queue tasks)
 * Skill selection per step
@@ -174,12 +185,12 @@ Instead of hiding the step editor when runtime is `orchestrator` (as the current
 
 We **do not hide** queue-specific fields. Orchestrator tasks should be able to do anything normal worker tasks can do if desired:
 
-* publish mode, PR fields, max attempts (though orchestrator tasks are maxAttempts=1 today via dispatch L75-L81, they will be expanded)
+* publish mode, PR fields, max attempts (though orchestrator tasks are maxAttempts=1 today via dispatch, they will be expanded)
 * repo/new branch fields
 
 #### 5.3.2 Orchestrator skill catalog surfaced to the dashboard
 
-Today the dashboard skill endpoint is used for queue submit suggestions L11-L15. Orchestrator has its own runnable skill listing via `list_runnable_skill_names()` L43-L61.
+Today the dashboard skill endpoint is used for queue submit suggestions. Orchestrator has its own runnable skill listing via `list_runnable_skill_names()`.
 
 **Change**:
 
@@ -198,7 +209,7 @@ This keeps a single “skills discovery” concept but lets the UI switch lists 
 
 #### 5.3.3 Backend contract: new optional `steps` for orchestrator create
 
-Today `OrchestratorCreateRunRequest` only supports a single `skillId/skillArgs` pair L390-L402.
+Today `OrchestratorCreateRunRequest` only supports a single `skillId/skillArgs` pair.
 
 **Extend it** (backwards-compatible):
 
@@ -222,11 +233,11 @@ Today `OrchestratorCreateRunRequest` only supports a single `skillId/skillArgs` 
 
   * Generate a *skill-driven action plan* where each step maps to one orchestrator skill execution (script-backed) **in order**.
 
-> Why this requires data model work: current orchestrator step state is keyed by a fixed enum and enforces uniqueness per plan_step+attempt L65-L69, so arbitrary step sequences can’t be represented without change.
+> Why this requires data model work: current orchestrator step state is keyed by a fixed enum and enforces uniqueness per plan_step+attempt, so arbitrary step sequences can’t be represented without change.
 
 ### 5.4 Orchestrator Step Tracking v2 (to support “N steps”)
 
-To truly match queue-like “add steps” behavior, we need step state tracking that is not limited to the fixed `OrchestratorPlanStep` enum L73-L82.
+To truly match queue-like “add steps” behavior, we need step state tracking that is not limited to the fixed `OrchestratorPlanStep` enum.
 
 #### 5.4.1 New tables (recommended)
 
@@ -280,7 +291,7 @@ This mirrors the “steps list” mental model the user wants, without fighting 
 
 #### 5.5.2 Orchestrator queue worker updates
 
-The existing queue worker is dedicated to `orchestrator_run` jobs L7-L16 and parses payload `{runId, steps}` L51-L71.
+The existing queue worker is dedicated to `orchestrator_run` jobs and parses payload `{runId, steps}`.
 
 **Update**:
 
@@ -319,18 +330,21 @@ When DB is down:
 
 #### 5.6.2 Queue-worker lease/heartbeat behavior when DB is down
 
-If Postgres drops, the queue API will fail heartbeats; leases may expire, causing reclaims later.
+If Postgres drops, queue API heartbeats will fail and leases can expire. Because expired running jobs can be requeued and claimed again, continuing execution after heartbeat loss risks duplicate side effects for mutating steps.
 
-Mitigation options:
+**Required behavior**:
 
-* **Best-effort**: keep executing locally; if queue API calls fail, log locally and continue. On reconnect, attempt to `fail_job` or `complete_job` once the API is reachable again.
-* **Operator safeguard**: encourage enabling “Worker Pause” before planned DB maintenance (MoonMind already has a worker pause system, but that’s orthogonal).
+* Treat heartbeat persistence failure as a terminal safety boundary for active orchestrator task execution.
+* Pause/abort the in-flight orchestrator task when lease renewal is no longer possible, and persist a local artifact record explaining that execution was halted due to lease loss.
+* Only resume execution through an explicit operator action (retry/requeue/restart) once queue persistence is healthy again.
+
+This keeps degraded mode focused on transient state-write failures while the queue lease remains valid, and avoids split-brain execution across workers.
 
 ### 5.7 Security and Policy Alignment
 
 * Preserve orchestrator approval gates (existing policy helpers validate tokens and expiry) .
-* Keep orchestrator skill execution restrictions (no arbitrary commands; skill executor rejects `skill_args.command`) L67-L70.
-* Update dashboard auth consistency: Task UI docs note `/orchestrator/*` does not yet enforce the same auth pattern as queue routes L76-L79. As part of consolidation, align orchestrator routes to require the same `get_current_user()` dependency approach as other dashboard-facing APIs.
+* Keep orchestrator skill execution restrictions (no arbitrary commands; skill executor rejects `skill_args.command`).
+* Update dashboard auth consistency: Task UI docs note `/orchestrator/*` does not yet enforce the same auth pattern as queue routes. As part of consolidation, align orchestrator routes to require the same `get_current_user()` dependency approach as other dashboard-facing APIs.
 
 ## 6. Migration Plan (Phased)
 
@@ -340,9 +354,10 @@ Mitigation options:
 
    * Remove `/tasks/orchestrator` and `/tasks/orchestrator/:runId` from the client route map.
    * Add unified `/tasks/list` list (all tasks) + `/tasks/:id` detail.
-2. Update server allowlist:
+2. Update server allowlist in two stages:
 
-   * Remove `orchestrator` paths from `api_service/api/routers/task_dashboard.py` allowlist L26-L35 and only allow unified routes (`/tasks/list`, etc).
+   * Phase 1: keep legacy `/tasks/orchestrator*` and `/tasks/queue*` allowlist entries so direct visits/bookmarks remain server-reachable during migration.
+   * Phase 2: after server-side redirects (or equivalent server handling) are live and verified, remove legacy allowlist entries and retain only unified routes (`/tasks/list`, `/tasks/:taskId`).
 3. Rename UI labels:
 
    * Replace “Orchestrator Runs” with “Orchestrator Tasks”
