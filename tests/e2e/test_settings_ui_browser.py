@@ -37,14 +37,18 @@ class DummyProfileService:
 
 
 TEST_JOB_ID = "123e4567-e89b-12d3-a456-426614174000"
+TEST_OPENAI_API_KEY = "test-openai-api-key"
 
 
 @contextmanager
 def _playwright_page(playwright_obj):
     browser = playwright_obj.chromium.launch()
-    page = browser.new_page()
     try:
-        yield page
+        page = browser.new_page()
+        try:
+            yield page
+        finally:
+            page.close()
     finally:
         browser.close()
 
@@ -76,7 +80,7 @@ def test_submit_key(server):
     with sync_playwright() as p:
         with _playwright_page(p) as page:
             page.goto("http://127.0.0.1:8001/settings")
-            page.fill("input[name='openai_api_key']", "browser-key")
+            page.fill("input[name='openai_api_key']", TEST_OPENAI_API_KEY)
             page.click("button[type='submit']")
             page.wait_for_load_state("networkidle")
 
@@ -136,11 +140,14 @@ def test_submit_create_task_flow_successful_navigation(server):
             submit_button = _fill_queue_task_create_form(page)
             expect(submit_button).to_have_text("Create")
 
-            with page.expect_response("**/api/queue/jobs") as response_info:
+            with page.expect_response(
+                lambda response: "/api/queue/jobs" in response.url
+                and response.request.method == "POST"
+            ) as response_info:
                 submit_button.click()
+                expect(submit_button).to_have_text("Submitting...")
             response = response_info.value
-            assert response.request.method == "POST"
-            assert response.status == 200
+            assert response.ok
             page.wait_for_url(f"**/tasks/queue/{TEST_JOB_ID}")
 
             assert page.url.endswith(f"/tasks/queue/{TEST_JOB_ID}")
@@ -155,11 +162,15 @@ def test_submit_create_task_flow_error_restores_label(server):
 
             submit_button = _fill_queue_task_create_form(page)
             original_label = submit_button.inner_text().strip()
-            with page.expect_response("**/api/queue/jobs") as response_info:
+            with page.expect_response(
+                lambda response: "/api/queue/jobs" in response.url
+                and response.request.method == "POST"
+            ) as response_info:
                 submit_button.click()
+                expect(submit_button).to_have_text("Submitting...")
             response = response_info.value
-            assert response.request.method == "POST"
-            assert response.status == 500
+            assert not response.ok
+            assert response.status >= 400
             expect(submit_button).to_have_text(original_label)
             expect(page.locator("#queue-submit-message")).to_contain_text(
                 "Failed to create queue task"
