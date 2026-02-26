@@ -269,4 +269,3 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock]) -> None:
 
     assert response.status_code == 200
     service.update_review_priority.assert_awaited()
-
