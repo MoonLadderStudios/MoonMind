@@ -64,12 +64,12 @@ After building a new image, run the following commands to ensure the bundled Cod
 
 ```bash
 docker run --rm moonmind/api-service:tooling \
-  bash -lc 'whoami && which codex && command -v rg && codex --version'
+  bash -lc 'whoami && which codex && codex --version'
 ```
 
 - `which codex` must resolve to `/usr/local/bin/codex`.
-- `command -v rg` should return success so shell bootstrap diagnostics can use `rg` consistently.
 - The `codex --version` output should match `CODEX_CLI_VERSION` passed to the Docker build.
+
 When the Celery worker starts it now logs the detected Codex CLI path and version. Tail the worker logs to confirm the health check succeeds before triggering automation runs:
 
 ```bash

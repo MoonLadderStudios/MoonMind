@@ -1181,8 +1181,6 @@ class CodexExecHandler:
                 redacted_tail = self._redact_text(
                     tail_line, extra_redaction_values=redaction_values
                 )
-                if len(redacted_tail) > 240:
-                    redacted_tail = f"{redacted_tail[:237]}..."
                 message = (
                     f"command failed ({result.returncode}): "
                     f"{command_hint} | {redacted_tail}"

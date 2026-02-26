@@ -206,7 +206,7 @@ mark_not_running_services_for_restart() {
     fi
 
     case "$service" in
-      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db)
+      agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db)
         continue
         ;;
     esac
@@ -574,7 +574,7 @@ readarray -t SERVICES_TO_RESTART < <(
   for target in "${!target_services[@]}"; do
     [[ -n "${target//[[:space:]]/}" ]] || continue
     case "$target" in
-      docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
+      agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
         continue
         ;;
       *)

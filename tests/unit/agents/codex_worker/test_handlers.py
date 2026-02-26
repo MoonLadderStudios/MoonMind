@@ -1400,46 +1400,13 @@ async def test_run_command_error_includes_stderr_tail(
         )
 
 
-async def test_run_command_error_message_is_compact_and_actionable(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Failure errors should stay compact to reduce fallback-noise in logs."""
-
-    handler = CodexExecHandler(workdir_root=tmp_path)
-    log_path = tmp_path / "command.log"
-    noise = "x" * 512
-
-    class FakeProcess:
-        returncode = 1
-
-        async def communicate(self):
-            return (b"", noise.encode("utf-8"))
-
-    async def fake_exec(*args, **kwargs):
-        return FakeProcess()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-
-    with pytest.raises(CodexWorkerHandlerError) as exc_info:
-        await handler._run_command(
-            ["git", "status"],
-            cwd=tmp_path,
-            log_path=log_path,
-        )
-
-    message = str(exc_info.value)
-    assert "command failed (1):" in message
-    assert "git status" in message
-    assert len(message) < 280
-
-
 async def test_run_command_truncates_and_redacts_long_failure_messages(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Failure diagnostics should redact secrets before applying truncation."""
 
     token = "ghp-handler-boundary-token-012345"
-    detail = "x" * 900 + token + "x" * 80
+    detail = "x" * 980 + token + "tail"
     handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
     log_path = tmp_path / "command-redaction.log"
 
