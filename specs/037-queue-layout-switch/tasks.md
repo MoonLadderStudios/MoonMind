@@ -85,8 +85,8 @@
 
 **Purpose**: Finalize docs, bundle metrics, and full-test coverage across all stories.
 
-- [X] T022 [P] Update `docs/TailwindStyleSystem.md` with the new `.queue-layouts` / `.queue-card-*` classes, breakpoint contract, and "no feature flag" rollout note (DOC-REQ-006, DOC-REQ-008).
-- [ ] T023 [P] Rebuild dashboard CSS via `npm run dashboard:css:min`, capture gzip size with `gzip -c api_service/static/task_dashboard/dashboard.css | wc -c`, and log before/after numbers plus <3 KB delta inside `docs/TailwindStyleSystem.md` and `specs/037-queue-layout-switch/quickstart.md` (DOC-REQ-006, DOC-REQ-008).
+- [X] T022 [P] Update `docs/TaskDashboardStyleSystem.md` with the new `.queue-layouts` / `.queue-card-*` classes, breakpoint contract, and "no feature flag" rollout note (DOC-REQ-006, DOC-REQ-008).
+- [ ] T023 [P] Rebuild dashboard CSS via `npm run dashboard:css:min`, capture gzip size with `gzip -c api_service/static/task_dashboard/dashboard.css | wc -c`, and log before/after numbers plus <3 KB delta inside `docs/TaskDashboardStyleSystem.md` and `specs/037-queue-layout-switch/quickstart.md` (DOC-REQ-006, DOC-REQ-008).
 - [ ] T024 [P] Run `./tools/test_unit.sh` after all code changes, attach the passing summary (command + date) to `specs/037-queue-layout-switch/quickstart.md`, and ensure CI-critical tests cover new helpers (DOC-REQ-008).
 - [ ] T025 [P] Final pass to confirm `docs/TaskUiQueue.md`, `specs/037-queue-layout-switch/spec.md`, and implemented code remain aligned (metadata, breakpoints, no feature flag) before handoff (DOC-REQ-008).
 

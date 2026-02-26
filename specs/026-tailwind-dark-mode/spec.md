@@ -9,16 +9,16 @@
 
 | Requirement ID | Source Citation | Requirement Summary |
 | --- | --- | --- |
-| DOC-REQ-001 | `docs/TailwindStyleSystem.md:231` | The dashboard must define and apply a full dark-theme token override set so dark mode has distinct background, surface, text, border, accent, status, and shadow values. |
-| DOC-REQ-002 | `docs/TailwindStyleSystem.md:313` | The dashboard must provide a user-facing theme toggle control within the dashboard shell. |
-| DOC-REQ-003 | `docs/TailwindStyleSystem.md:320` | Theme selection must prioritize explicit user preference over system preference. |
-| DOC-REQ-004 | `docs/TailwindStyleSystem.md:347` | When no explicit user preference exists, the dashboard must follow system color-scheme preference changes. |
-| DOC-REQ-005 | `docs/TailwindStyleSystem.md:357` | The selected theme must be applied before first visual paint to avoid theme flash. |
-| DOC-REQ-006 | `docs/TailwindStyleSystem.md:307` | The dashboard viewport metadata must include safe-area support for modern mobile displays. |
-| DOC-REQ-007 | `docs/TailwindStyleSystem.md:573` | Dark mode must preserve readability for tables, forms, and live output surfaces. |
-| DOC-REQ-008 | `docs/TailwindStyleSystem.md:574` | Dark mode must keep purple as the primary accent while using yellow/orange highlights in a restrained, intentional way. |
-| DOC-REQ-009 | `docs/TailwindStyleSystem.md:133` | Theme behavior must remain token-driven so semantic dashboard surfaces adapt consistently by theme. |
-| DOC-REQ-010 | `docs/TailwindStyleSystem.md:532` | Phase 3 scope must include dark token overrides, theme toggle + preference persistence, and no-flash theme boot behavior. |
+| DOC-REQ-001 | `docs/TaskDashboardStyleSystem.md:231` | The dashboard must define and apply a full dark-theme token override set so dark mode has distinct background, surface, text, border, accent, status, and shadow values. |
+| DOC-REQ-002 | `docs/TaskDashboardStyleSystem.md:313` | The dashboard must provide a user-facing theme toggle control within the dashboard shell. |
+| DOC-REQ-003 | `docs/TaskDashboardStyleSystem.md:320` | Theme selection must prioritize explicit user preference over system preference. |
+| DOC-REQ-004 | `docs/TaskDashboardStyleSystem.md:347` | When no explicit user preference exists, the dashboard must follow system color-scheme preference changes. |
+| DOC-REQ-005 | `docs/TaskDashboardStyleSystem.md:357` | The selected theme must be applied before first visual paint to avoid theme flash. |
+| DOC-REQ-006 | `docs/TaskDashboardStyleSystem.md:307` | The dashboard viewport metadata must include safe-area support for modern mobile displays. |
+| DOC-REQ-007 | `docs/TaskDashboardStyleSystem.md:573` | Dark mode must preserve readability for tables, forms, and live output surfaces. |
+| DOC-REQ-008 | `docs/TaskDashboardStyleSystem.md:574` | Dark mode must keep purple as the primary accent while using yellow/orange highlights in a restrained, intentional way. |
+| DOC-REQ-009 | `docs/TaskDashboardStyleSystem.md:133` | Theme behavior must remain token-driven so semantic dashboard surfaces adapt consistently by theme. |
+| DOC-REQ-010 | `docs/TaskDashboardStyleSystem.md:532` | Phase 3 scope must include dark token overrides, theme toggle + preference persistence, and no-flash theme boot behavior. |
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -107,7 +107,7 @@ In dark mode, key operational surfaces remain readable and the color hierarchy p
 
 - Existing tokenized style baseline established in Phases 1-2.
 - Existing semantic class model used by dashboard-rendered surfaces.
-- Source document requirements in `docs/TailwindStyleSystem.md` remain the governing contract for Phase 3 scope.
+- Source document requirements in `docs/TaskDashboardStyleSystem.md` remain the governing contract for Phase 3 scope.
 
 ## Success Criteria *(mandatory)*
 
