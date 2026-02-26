@@ -9,7 +9,7 @@ import os
 import subprocess
 from typing import Mapping, Sequence
 
-from moonmind.utils.logging import scrub_github_tokens
+from moonmind.utils import logging as moonmind_logging
 from celery_worker.runtime_mode import (
     format_invalid_gemini_cli_auth_mode_error,
     inspect_gemini_home_for_auth_mode,
@@ -159,7 +159,7 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
-    redacted = scrub_github_tokens(redacted)
+    redacted = moonmind_logging.scrub_github_tokens(redacted)
     return redacted
 
 
