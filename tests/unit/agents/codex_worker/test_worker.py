@@ -687,6 +687,50 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     assert "ragCommand" not in rag_payload
 
 
+async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) -> None:
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "runtime": {
+                    "mode": "codex",
+                    "model": "gpt-5-codex",
+                    "effort": "high",
+                },
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    task_context = json.loads(task_context_path.read_text(encoding="utf-8"))
+    runtime_config = task_context["runtimeConfig"]
+    assert runtime_config["mode"] == "codex"
+    assert runtime_config["model"] == "gpt-5-codex"
+    assert runtime_config["effort"] == "high"
+
+
 async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     """Zero-byte artifacts should be skipped to avoid upload validation failures."""
 
@@ -2641,6 +2685,55 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
     assert f"STEP 1/1 step-1:\n{step_text}" in instruction
     assert (
         "(same as task objective; no additional step-specific instructions)"
+        not in instruction
+    )
+
+
+async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_publish_none(
+    tmp_path: Path,
+) -> None:
+    """`pr-resolver` should be told to commit/push directly when publish is disabled."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Resolve PR #999",
+                "publish": {"mode": "none"},
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title=None,
+            instructions="Follow pr-resolver workflow",
+            effective_skill_id="pr-resolver",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    assert (
+        "Commit/push/merge directly when required by this skill. Publish stage is disabled for this task."
+        in instruction
+    )
+    assert (
+        "Do NOT commit or push. Publish is handled by MoonMind publish stage."
         not in instruction
     )
 

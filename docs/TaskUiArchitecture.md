@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-19
+Last Updated: 2026-02-26
 
 ## 1. Purpose
 
@@ -80,7 +80,7 @@ Current dashboard routes rendered by `dashboard.js`:
 | `/tasks` | Unified active view across queue + orchestrator running/queued workloads |
 | `/tasks/queue` | Queue job list with runtime/skill/status/publish filters |
 | `/tasks/new` | Unified submit page (worker runtimes + orchestrator; defaults to queue runtime) |
-| `/tasks/queue/new` | Alias to `/tasks/new` with worker default runtime |
+| `/tasks/queue/new` | Alias to `/tasks/new` with worker default runtime; edit mode uses `?editJobId=<jobId>` |
 | `/tasks/queue/:jobId` | Queue job detail (summary, events, live output, artifacts, controls) |
 | `/tasks/orchestrator` | Orchestrator run list |
 | `/tasks/orchestrator/new` | Alias to `/tasks/new?runtime=orchestrator` |
@@ -106,6 +106,7 @@ Used by dashboard pages:
 - `POST /api/queue/jobs`
 - `GET /api/queue/jobs`
 - `GET /api/queue/jobs/{job_id}`
+- `PUT /api/queue/jobs/{job_id}`
 - `POST /api/queue/jobs/{job_id}/cancel`
 - `GET /api/queue/jobs/{job_id}/events`
 - `GET /api/queue/jobs/{job_id}/events/stream`
@@ -229,6 +230,13 @@ Security constraint:
 
 - The dashboard form must remain token-free.
 - Optional auth references are backend-governed; raw credentials are never entered in dashboard fields.
+
+### 5.4 Queue edit mode (`/tasks/queue/new?editJobId=<jobId>`)
+
+- Queue detail shows an Edit action only for editable queued task jobs.
+- Edit mode preloads job detail and reuses the submit form with an `Update` primary action.
+- Submit uses `PUT /api/queue/jobs/{job_id}` and includes `expectedUpdatedAt` when available.
+- Attachment edits are out of scope for v1 and are not exposed in the edit form.
 
 Example emitted request body:
 

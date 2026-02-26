@@ -1,0 +1,181 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Task Editing API Contract
+  version: 0.1.0
+  description: |
+    Queue API contract additions/requirements for editing eligible queued task jobs
+    in place while preserving job identity and conflict safety.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /api/queue/jobs/{jobId}:
+    get:
+      summary: Fetch one queue job for detail and edit prefill.
+      operationId: getQueueJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Queue job detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+        '404':
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      summary: Update an eligible queued task job in place.
+      operationId: updateQueuedJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateQueuedJobRequest'
+      responses:
+        '200':
+          description: Updated queued job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+        '400':
+          description: Runtime gate or malformed request context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Authenticated user is not authorized to edit this job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Target job does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Job is not editable or concurrency token is stale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Update payload failed queue contract validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    UpdateQueuedJobRequest:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          description: Must remain `task` for v1 editable jobs.
+        priority:
+          type: integer
+          default: 0
+        maxAttempts:
+          type: integer
+          minimum: 1
+          default: 3
+        affinityKey:
+          type: string
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true
+          description: Canonical task payload, normalized using create-path rules.
+        expectedUpdatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional optimistic concurrency token from prior job fetch.
+        note:
+          type: string
+          maxLength: 256
+          nullable: true
+          description: Optional audit note stored only in queue event payload.
+    JobModel:
+      type: object
+      required:
+        - id
+        - type
+        - status
+        - priority
+        - payload
+        - maxAttempts
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        priority:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+        affinityKey:
+          type: string
+          nullable: true
+        maxAttempts:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - job_not_found
+                - job_not_authorized
+                - job_state_conflict
+                - invalid_queue_payload
+                - claude_runtime_disabled
+                - queue_internal_error
+            message:
+              type: string
