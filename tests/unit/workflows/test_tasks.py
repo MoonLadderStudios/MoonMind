@@ -921,7 +921,7 @@ async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monke
     codex_client = DummyCodexClient()
     monkeypatch.setattr(tasks, "_build_codex_client", lambda: codex_client)
 
-    def fake_poll(*_, artifacts_dir, **__):
+    async def fake_poll(*_, artifacts_dir, **__):
         patch_path = artifacts_dir / "codex-retry-123.patch"
         patch_path.write_text("patch data", encoding="utf-8")
         return tasks.CodexDiffResult(
@@ -1021,6 +1021,81 @@ async def test_retry_resumes_failed_publish_and_reuses_artifacts(tmp_path, monke
         assert len(codex_client.submit_calls) == 1
         assert len(publish_calls) == 2
         assert refreshed.codex_logs_path is not None
+
+
+@pytest.mark.asyncio
+async def test_poll_for_codex_diff_retries_only_on_not_ready_error(tmp_path):
+    """Retry only transient poll failures and return as soon as diff becomes ready."""
+
+    calls = {"count": 0}
+
+    class DummyClient:
+        def retrieve_patch(
+            self,
+            *,
+            task_id: str,
+            artifacts_dir: Path,
+            task_identifier: str,
+            task_summary: str,
+        ) -> tasks.CodexDiffResult:
+            calls["count"] += 1
+            if calls["count"] < 2:
+                raise tasks.CodexDiffNotReadyError("patch not ready")
+
+            patch_path = artifacts_dir / f"{task_id}.patch"
+            patch_path.write_text(
+                (
+                    "--- a/README.md\n"
+                    "+++ b/README.md\n"
+                    "@@\n"
+                    f"-Before {task_identifier}\n"
+                    f"+After {task_summary}\n"
+                ),
+                encoding="utf-8",
+            )
+            return tasks.CodexDiffResult(
+                patch_path=patch_path,
+                description="patch now available",
+                has_changes=True,
+            )
+
+    result = await tasks._poll_for_codex_diff(
+        DummyClient(),
+        task_id="task-001",
+        artifacts_dir=tmp_path,
+        task_identifier="T123",
+        task_summary="some work",
+        poll_interval=0,
+    )
+
+    assert result.description == "patch now available"
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_for_codex_diff_fails_fast_for_non_transient_errors(tmp_path):
+    """Non-transient polling errors should fail immediately without additional retries."""
+
+    calls = {"count": 0}
+
+    class DummyClient:
+        def retrieve_patch(self, **_kwargs) -> tasks.CodexDiffResult:
+            calls["count"] += 1
+            raise RuntimeError("not implemented for real codex mode")
+
+    with pytest.raises(
+        tasks.CodexDiffRetrievalError, match="failed to poll for Codex diff"
+    ):
+        await tasks._poll_for_codex_diff(
+            DummyClient(),
+            task_id="task-002",
+            artifacts_dir=tmp_path,
+            task_identifier="T124",
+            task_summary="some other work",
+            poll_interval=0,
+        )
+
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio

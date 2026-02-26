@@ -10,8 +10,6 @@ import re
 import subprocess
 from typing import Mapping, Sequence
 
-_MAX_COMMAND_ERROR_MESSAGE_BYTES = 1024
-
 from celery_worker.runtime_mode import (
     format_invalid_gemini_cli_auth_mode_error,
     inspect_gemini_home_for_auth_mode,
@@ -38,6 +36,15 @@ from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
 
 logger = logging.getLogger(__name__)
+
+_MAX_ERROR_MESSAGE_CHARS = 1024
+_TOKEN_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"gh[pousr][-_][A-Za-z0-9_-]{8,}"),
+    re.compile(r"github_pat[_-][A-Za-z0-9_-]{8,}", re.IGNORECASE),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bATATT[0-9A-Za-z_-]+\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -160,20 +167,19 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
-    # Include heuristic redaction for common secret-like tokens that may not yet be
-    # supplied in ``secrets`` but should still be suppressed in diagnostics.
-    redacted = re.sub(
-        r"(?:ghp|gho|ghu|ghs|ghr)[-_][A-Za-z0-9._-]{20,}",
-        "[REDACTED]",
-        redacted,
-    )
+    for pattern in _TOKEN_REDACTION_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
 
 
-def _compact_command_hint(command: Sequence[str]) -> str:
-    parts = [str(part).strip() for part in command]
-    compact_parts = [part for part in parts if part]
-    return " ".join(compact_parts[:2] or compact_parts)
+def _truncate_error_message(
+    message: str, *, max_chars: int = _MAX_ERROR_MESSAGE_CHARS
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 def _run_checked_command(
@@ -201,28 +207,21 @@ def _run_checked_command(
     if result.returncode == 0:
         return
 
-    command_hint = _compact_command_hint(command)
-    failure_output = result.stderr.strip() or result.stdout.strip()
-    failure_output = _redact_value(failure_output, redaction_values)
-    failure_tail = ""
-    if failure_output:
-        lines = [line for line in failure_output.splitlines() if line.strip()]
-        if lines:
-            failure_tail = lines[-1].strip()
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+    command_hint = (
+        " ".join(command[:2]) if len(command) > 1 else " ".join(command) or "<empty>"
+    )
+    if detail:
+        message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
+        message = _redact_value(message, redaction_values)
+        message = _truncate_error_message(message)
+        raise RuntimeError(message)
 
-    message = f"command failed ({result.returncode}): {command_hint}"
-    if failure_tail:
-        message = f"{message}\n{failure_tail}"
-
-    if failure_tail and len(message) > _MAX_COMMAND_ERROR_MESSAGE_BYTES:
-        prefix = f"command failed ({result.returncode}): {command_hint}\n"
-        tail_limit = max(0, _MAX_COMMAND_ERROR_MESSAGE_BYTES - len(prefix))
-        if tail_limit == 0:
-            message = prefix.rstrip("\n")
-        else:
-            message = prefix + failure_tail[-tail_limit:]
-
-    raise RuntimeError(message)
+    raise RuntimeError(
+        _redact_value(
+            f"command failed ({result.returncode}): {command_hint}", redaction_values
+        )
+    )
 
 
 def _verify_speckit_cli(

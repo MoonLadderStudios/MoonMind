@@ -313,7 +313,6 @@ Reason: attachments were designed to be uploaded in the same request as job crea
 
   * Add the new endpoint to `docs/TaskQueueSystem.md` API surface list (which currently enumerates create/get/claim/heartbeat/etc. but no update) .
   * Add the endpoint to `docs/TaskUiArchitecture.md` “Queue endpoints” list .
-
 ### 11.1 Current v1 state
 
 * Queue update endpoint is additive and available at `PUT /api/queue/jobs/{jobId}`.
