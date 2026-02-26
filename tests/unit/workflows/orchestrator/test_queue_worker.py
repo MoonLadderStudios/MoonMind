@@ -14,13 +14,13 @@ from moonmind.workflows.agent_queue.job_types import (
     ORCHESTRATOR_RUN_JOB_TYPE,
     ORCHESTRATOR_TASK_JOB_TYPE,
 )
+from moonmind.workflows.orchestrator import queue_worker
 from moonmind.workflows.orchestrator.queue_worker import (
     ClaimedJob,
     OrchestratorQueueWorker,
     QueueWorkerConfig,
     TaskRuntimeStep,
 )
-from moonmind.workflows.orchestrator import queue_worker
 
 
 class _FakeQueueClient:
@@ -470,9 +470,7 @@ def test_execute_task_runtime_step_uses_env_for_step_payload(monkeypatch) -> Non
     command = captured["command"]
     assert command is not None
     assert "--skill-args-json" not in command
-    context = json.loads(
-        str(captured["env"][queue_worker._TASK_STEP_EXECUTION_ENV])
-    )
+    context = json.loads(str(captured["env"][queue_worker._TASK_STEP_EXECUTION_ENV]))
     assert context["skillArgs"] == {"repo": "."}
     assert context["instructions"] == "Use safe command"
     assert context["stepIndex"] == 2

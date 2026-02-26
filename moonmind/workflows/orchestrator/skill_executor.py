@@ -295,9 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             skill_args_raw = step_payload.get("skillArgs")
             skill_args = (
-                dict(skill_args_raw)
-                if isinstance(skill_args_raw, dict)
-                else {}
+                dict(skill_args_raw) if isinstance(skill_args_raw, dict) else {}
             )
         skill_path = _resolve_skill_path(normalized_skill_id, workspace_root)
         repo_path = _resolve_repo_path(workspace_root, skill_args)

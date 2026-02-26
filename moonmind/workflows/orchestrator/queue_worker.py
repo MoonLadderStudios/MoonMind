@@ -868,7 +868,9 @@ class OrchestratorQueueWorker:
             if not step_id:
                 raise ValueError("stepId is required for task runtime steps")
             try:
-                step_index = int(step_index_raw if step_index_raw is not None else index)
+                step_index = int(
+                    step_index_raw if step_index_raw is not None else index
+                )
             except (TypeError, ValueError) as exc:
                 raise ValueError(
                     f"step '{step_id}' stepIndex must be an integer"
