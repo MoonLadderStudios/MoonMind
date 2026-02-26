@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.task_proposals import models
@@ -71,11 +70,7 @@ class TaskProposalRepository:
         origin_id: UUID | None = None,
         cursor: tuple[datetime, UUID] | None = None,
         limit: int = 50,
-        now: datetime | None = None,
-        include_snoozed: bool = False,
-        only_snoozed: bool = False,
     ) -> tuple[list[models.TaskProposal], bool]:
-        now = now or datetime.now(UTC)
         stmt: Select[tuple[models.TaskProposal]] = (
             select(models.TaskProposal)
             .order_by(
@@ -103,18 +98,6 @@ class TaskProposalRepository:
                         models.TaskProposal.created_at == cursor_time,
                         models.TaskProposal.id < cursor_id,
                     ),
-                )
-            )
-        if only_snoozed:
-            stmt = stmt.where(
-                models.TaskProposal.snoozed_until.is_not(None),
-                models.TaskProposal.snoozed_until > now,
-            )
-        elif not include_snoozed:
-            stmt = stmt.where(
-                or_(
-                    models.TaskProposal.snoozed_until.is_(None),
-                    models.TaskProposal.snoozed_until <= now,
                 )
             )
         result = await self._session.execute(stmt)
@@ -153,21 +136,6 @@ class TaskProposalRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
-    async def expire_snoozed(self, *, now: datetime | None = None) -> int:
-        """Clear snoozed flags for proposals whose snooze has elapsed."""
-
-        now = now or datetime.now(UTC)
-        stmt = (
-            update(models.TaskProposal)
-            .where(
-                models.TaskProposal.snoozed_until.is_not(None),
-                models.TaskProposal.snoozed_until <= now,
-            )
-            .values(snoozed_until=None, snoozed_by_user_id=None, snooze_note=None)
-        )
-        result = await self._session.execute(stmt)
-        return int(result.rowcount or 0)
-
     async def update_priority(
         self,
         *,
@@ -178,41 +146,6 @@ class TaskProposalRepository:
         proposal.review_priority = priority
         proposal.priority_override_reason = None
         proposal.decided_by_user_id = user_id
-        await self._session.flush()
-        return proposal
-
-    async def snooze(
-        self,
-        *,
-        proposal: models.TaskProposal,
-        until: datetime,
-        user_id: UUID,
-        note: str | None,
-    ) -> models.TaskProposal:
-        proposal.snoozed_until = until
-        proposal.snoozed_by_user_id = user_id
-        proposal.snooze_note = note
-        history = list(proposal.snooze_history or [])
-        history.append(
-            {
-                "until": until.isoformat(),
-                "note": note,
-                "snoozedBy": str(user_id),
-            }
-        )
-        proposal.snooze_history = history[-20:]
-        await self._session.flush()
-        return proposal
-
-    async def unsnooze(
-        self,
-        *,
-        proposal: models.TaskProposal,
-        user_id: UUID,
-    ) -> models.TaskProposal:
-        proposal.snoozed_until = None
-        proposal.snoozed_by_user_id = user_id
-        proposal.snooze_note = None
         await self._session.flush()
         return proposal
 

@@ -411,7 +411,7 @@ class StreamingReplayStepHandler(FakeHandler):
             ["codex", "exec", "simulate"],
             cwd=self._workdir_root,
             log_path=log_path,
-            check=False,
+            check=True,
             output_chunk_callback=output_chunk_callback,
             enable_replay_dedupe=True,
         )
@@ -421,6 +421,36 @@ class StreamingReplayStepHandler(FakeHandler):
             error_message=None,
             artifacts=(ArtifactUpload(path=log_path, name="logs/codex_exec.log"),),
         )
+
+
+class _FakeStreamingReader:
+    def __init__(self, chunks: Sequence[str]) -> None:
+        self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+    async def read(self, _size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+class _FakeStreamingProcess:
+    def __init__(self, chunks: Sequence[str]) -> None:
+        self.returncode = 0
+        self.stdout = _FakeStreamingReader(chunks)
+        self.stderr = _FakeStreamingReader(())
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+        del input
+        return (b"", b"")
 
 
 async def test_run_once_returns_false_when_no_job() -> None:
@@ -1940,33 +1970,9 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     )
     repeated_turn_line = "- Final answer status: tests already green.\n"
 
-    class FakeReader:
-        def __init__(self, chunks: Sequence[str]) -> None:
-            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
-
-        async def read(self, _size: int) -> bytes:
-            if not self._chunks:
-                return b""
-            return self._chunks.pop(0)
-
-    class FakeProcess:
-        def __init__(self, chunks: Sequence[str]) -> None:
-            self.returncode = 0
-            self.stdout = FakeReader(chunks)
-            self.stderr = FakeReader(())
-
-        async def wait(self) -> int:
-            return self.returncode
-
-        def terminate(self) -> None:
-            return None
-
-        def kill(self) -> None:
-            return None
-
     async def fake_exec(*args, **kwargs):
         del args, kwargs
-        return FakeProcess(
+        return _FakeStreamingProcess(
             (
                 "thinking\n",
                 completion_block,
@@ -4397,10 +4403,64 @@ def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
         "$ pytest\n" "[command] $ ./tools/test_unit.sh\n" "[command] $ npm run build\n",
         encoding="utf-8",
     )
-    evidence = CodexWorker._collect_verification_evidence(prepared=prepared)
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
     assert len(evidence) == 2
+    assert len(read_errors) == 0
     assert evidence[0]["command"] == "./tools/test_unit.sh"
     assert evidence[1]["command"] == "npm run build"
+
+
+def test_collect_verification_evidence_records_log_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unreadable verification logs should surface errors while preserving other evidence."""
+
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path,
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    (prepared.artifacts_dir / "logs").mkdir(exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\n", encoding="utf-8"
+    )
+    readable_log_path = prepared.artifacts_dir / "logs" / "codex_exec.log"
+    readable_log_path.write_text("[command] $ npm run build\n", encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def _raise_read_text(self, encoding=None, errors=None):
+        if self == prepared.execute_log_path:
+            raise OSError("permission denied")
+        return original_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", _raise_read_text)
+
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
+    assert len(evidence) == 1
+    assert evidence[0]["command"] == "npm run build"
+    assert len(read_errors) == 1
+    assert (
+        read_errors[0]
+        == "could not read one or more verification logs; check worker logs for details"
+    )
 
 
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(

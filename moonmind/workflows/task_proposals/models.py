@@ -15,7 +15,6 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -67,11 +66,6 @@ class TaskProposal(Base):
         Index("ix_task_proposals_repository", "repository"),
         Index("ix_task_proposals_dedup_hash_status", "dedup_hash", "status"),
         Index("ix_task_proposals_priority_created", "review_priority", "created_at"),
-        Index(
-            "ix_task_proposals_snoozed_until",
-            "snoozed_until",
-            postgresql_where=text("snoozed_until IS NOT NULL"),
-        ),
         UniqueConstraint("promoted_job_id", name="uq_task_proposals_promoted_job_id"),
     )
 
@@ -153,16 +147,6 @@ class TaskProposal(Base):
         nullable=True,
     )
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    snoozed_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    snoozed_by_user_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
-    snooze_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    snooze_history: Mapped[list[dict[str, object]]] = mapped_column(
-        mutable_json_list(), nullable=False, default=list
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -168,6 +168,8 @@ async def create_orchestrator_run(
     task_steps = list(payload.steps or [])
     try:
         available_skills = set(list_runnable_skill_names())
+        requested_skill = (payload.skill_id or "").strip()
+        instruction = payload.instruction or ""
         if task_steps:
             if payload.target_service != "orchestrator":
                 raise ValueError(
@@ -203,9 +205,8 @@ async def create_orchestrator_run(
                 step.skill.id = normalized_skill_id
                 seen_step_ids.add(normalized_step_id)
             # Preserve action-plan compatibility while task runtime steps execute from dedicated rows.
-            plan = generate_action_plan(payload.instruction, profile)
+            plan = generate_action_plan(instruction, profile)
         else:
-            requested_skill = (payload.skill_id or "").strip()
             if requested_skill:
                 if payload.target_service != "orchestrator":
                     raise ValueError(
@@ -224,13 +225,13 @@ async def create_orchestrator_run(
                         f"Selected skill '{requested_skill}' does not expose a runnable script."
                     )
                 plan = generate_skill_action_plan(
-                    payload.instruction,
+                    instruction,
                     profile,
                     skill_id=requested_skill,
                     skill_args=payload.skill_args,
                 )
             else:
-                plan = generate_action_plan(payload.instruction, profile)
+                plan = generate_action_plan(instruction, profile)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

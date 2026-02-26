@@ -1704,8 +1704,6 @@
         const priorityBadge = `<span class="badge priority-${escapeHtml(
           priority.toLowerCase(),
         )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
-        const snoozedUntil = pick(row, "snoozedUntil");
-        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
         const dedupHash = (pick(row, "dedupHash") || "").toString();
         const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
         return `
@@ -1721,8 +1719,7 @@
             <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
             <td>${originLink}</td>
             <td>${escapeHtml(tags || "-")}</td>
-            <td>${escapeHtml(snoozedDisplay)}</td>
-            <td><code>${escapeHtml(dedupShort)}</code></td>
+                <td><code>${escapeHtml(dedupShort)}</code></td>
             <td>
               <div class="stack compact">
                 <button
@@ -1786,8 +1783,6 @@
         const priorityBadge = `<span class="badge priority-${escapeHtml(
           priority.toLowerCase(),
         )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
-        const snoozedUntil = pick(row, "snoozedUntil");
-        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
         const dedupHash = (pick(row, "dedupHash") || "").toString();
         const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
         const rowId = String(id || "");
@@ -1843,10 +1838,6 @@
                 <dd>${escapeHtml(tags || "-")}</dd>
               </div>
               <div>
-                <dt>Snoozed Until</dt>
-                <dd>${escapeHtml(snoozedDisplay)}</dd>
-              </div>
-              <div>
                 <dt>Dedup</dt>
                 <dd><code>${escapeHtml(dedupShort)}</code></dd>
               </div>
@@ -1900,7 +1891,6 @@
                 <th>Created</th>
                 <th>Origin</th>
                 <th>Tags</th>
-                <th>Snoozed Until</th>
                 <th>Dedup</th>
                 <th>Actions</th>
               </tr>
@@ -2069,7 +2059,9 @@
       };
     }
     const instruction = String(draft.instruction || "").trim();
-    if (!instruction) {
+    const rawSkillId = String(draft.skillId || "").trim();
+    const hasExplicitSkill = Boolean(rawSkillId) && rawSkillId !== "auto";
+    if (!hasExplicitSkill && !instruction) {
       return {
         ok: false,
         error: "Instruction is required.",
@@ -2082,6 +2074,12 @@
         error: "Target service is required.",
       };
     }
+    if (hasExplicitSkill && targetService !== "orchestrator") {
+      return {
+        ok: false,
+        error: "Explicit skill runs must targetService=orchestrator.",
+      };
+    }
     const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
     const value = normalizeSubmissionDraftForTest(draft);
     value.instruction = instruction;
@@ -2089,10 +2087,9 @@
     value.priority = ["normal", "high"].includes(normalizedPriority)
       ? normalizedPriority
       : "normal";
-    const skillId = String(draft.skillId || "").trim();
     const skillArgsRaw = String(draft.skillArgs || "").trim();
-    if (skillId) {
-      value.skillId = skillId;
+    if (rawSkillId) {
+      value.skillId = rawSkillId;
     } else {
       delete value.skillId;
     }
@@ -2316,28 +2313,6 @@
     return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
       method: "POST",
       body: JSON.stringify({ priority }),
-    });
-  }
-
-  async function apiSnoozeProposal(proposalId, until, note = null) {
-    const endpointTemplate =
-      proposalsSourceConfig.snooze || "/api/proposals/{id}/snooze";
-    const payload = { until };
-    if (note) {
-      payload.note = note;
-    }
-    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async function apiUnsnoozeProposal(proposalId) {
-    const endpointTemplate =
-      proposalsSourceConfig.unsnooze || "/api/proposals/{id}/unsnooze";
-    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
-      method: "POST",
-      body: JSON.stringify({}),
     });
   }
 
@@ -5225,7 +5200,7 @@
           </select>
         </label>
         <label>Instruction
-          <textarea name="instruction" required placeholder="Describe what should be changed and verified.">${escapeHtml(
+          <textarea name="instruction" placeholder="Describe what should be changed and verified.">${escapeHtml(
             String(sanitizedOrchestratorDraft.instruction || "").trim(),
           )}</textarea>
         </label>
@@ -6713,7 +6688,6 @@
       repository: localStorage.getItem(repoStorageKey) || "",
       category: "",
       tag: "",
-      includeSnoozed: false,
       originSource: initialOriginSource,
       originId: initialOriginId,
       rows: [],
@@ -6728,7 +6702,6 @@
         ["dismissed", "dismissed"],
         ["accepted", "accepted"],
         ["rejected", "rejected"],
-        ["snoozed", "snoozed"],
       ]
         .map(
           ([value, label]) =>
@@ -6771,14 +6744,6 @@
               state.tag,
             )}" />
           </label>
-          <label class="checkbox stack">
-            <span>
-              <input type="checkbox" name="includeSnoozed" ${
-                state.includeSnoozed ? "checked" : ""
-              } />
-              Include snoozed proposals
-            </span>
-          </label>
         </form>
       `;
     };
@@ -6798,7 +6763,6 @@
       const originSourceField = filterForm.elements.namedItem("originSource");
       const originIdField = filterForm.elements.namedItem("originId");
       const tagField = filterForm.elements.namedItem("tag");
-      const includeSnoozedField = filterForm.elements.namedItem("includeSnoozed");
       if (statusField) {
         statusField.addEventListener("change", () => {
           state.status = String(statusField.value || "").trim();
@@ -6835,12 +6799,6 @@
       if (tagField) {
         tagField.addEventListener("change", () => {
           state.tag = String(tagField.value || "").trim();
-          load();
-        });
-      }
-      if (includeSnoozedField) {
-        includeSnoozedField.addEventListener("change", () => {
-          state.includeSnoozed = Boolean(includeSnoozedField.checked);
           load();
         });
       }
@@ -6904,9 +6862,6 @@
         if (state.originId) {
           params.set("originId", state.originId);
         }
-        if (state.includeSnoozed) {
-          params.set("includeSnoozed", "true");
-        }
         const listEndpoint = proposalsSourceConfig.list || "/api/proposals";
         const payload = await fetchJson(`${listEndpoint}?${params.toString()}`);
         state.rows = payload?.items || [];
@@ -6960,15 +6915,12 @@
       const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
       const priorityOverride = pick(row, "priorityOverrideReason") || "";
       const dedupHash = pick(row, "dedupHash") || "-";
-      const snoozedUntil = pick(row, "snoozedUntil");
-      const snoozeNote = pick(row, "snoozeNote") || "";
       const triggerRepo = pick(metadata, "triggerRepo") || "-";
       const triggerJobId = pick(metadata, "triggerJobId") || "-";
       const signalMetadata = pick(metadata, "signal");
       const signalMarkup = signalMetadata
         ? `<pre>${escapeHtml(JSON.stringify(signalMetadata, null, 2))}</pre>`
         : "<p class='small'>No signal metadata supplied.</p>";
-      const snoozedDisplay = snoozedUntil ? formatTimestamp(snoozedUntil) : "-";
       const similar = pick(row, "similar") || [];
       const similarMarkup = similar.length
         ? `<ul class="stack">${similar
@@ -7020,9 +6972,6 @@
             <div class="card"><strong>Dedup Hash:</strong> <code>${escapeHtml(
               dedupHash,
             )}</code></div>
-            <div class="card"><strong>Snoozed Until:</strong> ${escapeHtml(
-              snoozedDisplay,
-            )}</div>
             <div class="card"><strong>Trigger Repo:</strong> ${escapeHtml(
               triggerRepo,
             )}</div>
@@ -7055,32 +7004,13 @@
             <a href="/tasks/proposals"><button type="button" class="secondary">Back</button></a>
           </div>
           <section class="stack">
-            <h3>Priority & Snooze</h3>
+            <h3>Priority</h3>
             <div class="grid-2">
               <form id="proposal-priority-form" class="stack card">
                 <label>Priority
                   <select name="priority">${priorityOptions}</select>
                 </label>
                 <button type="submit">Update Priority</button>
-              </form>
-              <form id="proposal-snooze-form" class="stack card">
-                <label>Snooze Until
-                  <input type="datetime-local" name="until" />
-                </label>
-                <label>Note
-                  <input type="text" name="note" placeholder="Optional context" />
-                </label>
-                <div class="stack compact">
-                  <button type="submit">Snooze</button>
-                  <button type="button" class="secondary" id="proposal-unsnooze-button"${
-                    snoozedUntil ? "" : " disabled"
-                  }>Unsnooze</button>
-                </div>
-                ${
-                  snoozeNote
-                    ? `<p class="small">Latest note: ${escapeHtml(snoozeNote)}</p>`
-                    : ""
-                }
               </form>
             </div>
           </section>
@@ -7171,49 +7101,6 @@
             alert("Failed to update priority.");
           } finally {
             priorityForm.classList.remove("loading");
-          }
-        });
-      }
-      const snoozeForm = document.getElementById("proposal-snooze-form");
-      if (snoozeForm) {
-        snoozeForm.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const untilField = snoozeForm.elements.namedItem("until");
-          const noteField = snoozeForm.elements.namedItem("note");
-          const rawValue = untilField ? untilField.value : "";
-          if (!rawValue) {
-            alert("Select a snooze timestamp first.");
-            return;
-          }
-          const isoValue = new Date(rawValue).toISOString();
-          snoozeForm.classList.add("loading");
-          try {
-            await apiSnoozeProposal(
-              proposalId,
-              isoValue,
-              noteField ? noteField.value : null,
-            );
-            await load(true);
-          } catch (error) {
-            console.error("snooze failed", error);
-            alert("Failed to snooze proposal.");
-          } finally {
-            snoozeForm.classList.remove("loading");
-          }
-        });
-      }
-      const unsnoozeButton = document.getElementById("proposal-unsnooze-button");
-      if (unsnoozeButton) {
-        unsnoozeButton.addEventListener("click", async () => {
-          unsnoozeButton.disabled = true;
-          try {
-            await apiUnsnoozeProposal(proposalId);
-            await load(true);
-          } catch (error) {
-            console.error("unsnooze failed", error);
-            alert("Failed to unsnooze proposal.");
-          } finally {
-            unsnoozeButton.disabled = false;
           }
         });
       }
