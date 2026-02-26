@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from api_service.db.base import get_async_session
+from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
     OrchestratorApprovalRequest,
@@ -101,6 +102,7 @@ def _queue_service(session: AsyncSession) -> AgentQueueService:
 )
 async def create_orchestrator_run(
     payload: OrchestratorCreateRunRequest,
+    _user: db_models.User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
 ) -> OrchestratorRunSummaryModel:
     """Create a new orchestrator run and enqueue the plan for execution."""
@@ -117,8 +119,8 @@ async def create_orchestrator_run(
         ) from exc
 
     try:
-        requested_skill = str(payload.skill_id or "").strip().lower()
-        instruction = str(payload.instruction or "").strip()
+        requested_skill = payload.skill_id
+        instruction = "" if payload.instruction is None else str(payload.instruction)
         if requested_skill:
             if payload.target_service != "orchestrator":
                 raise ValueError(
@@ -137,8 +139,6 @@ async def create_orchestrator_run(
                 raise ValueError(
                     f"Selected skill '{requested_skill}' does not expose a runnable script."
                 )
-            if not instruction:
-                instruction = f"Execute orchestrator skill '{requested_skill}'."
             plan = generate_skill_action_plan(
                 instruction,
                 profile,
@@ -146,8 +146,6 @@ async def create_orchestrator_run(
                 skill_args=payload.skill_args,
             )
         else:
-            if not instruction:
-                raise ValueError("Instruction must not be empty.")
             plan = generate_action_plan(instruction, profile)
     except ValueError as exc:
         raise HTTPException(

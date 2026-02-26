@@ -402,18 +402,15 @@ class OrchestratorCreateRunRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _require_objective_for_default_path(
+    def _require_instruction_when_skill_not_explicit(
         self,
     ) -> "OrchestratorCreateRunRequest":
-        normalized_skill = str(self.skill_id or "").strip().lower()
-        normalized_instruction = str(self.instruction or "").strip()
-        if normalized_skill and normalized_skill != "auto":
+        if self.skill_id and self.skill_id != "auto":
             return self
-        if not normalized_instruction:
+        if self.instruction is None or not str(self.instruction).strip():
             raise ValueError(
                 "instruction is required when skillId is not provided or is auto"
             )
-        self.instruction = normalized_instruction
         return self
 
 

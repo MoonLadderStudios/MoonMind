@@ -1768,8 +1768,8 @@
       };
     }
     const instruction = String(draft.instruction || "").trim();
-    const skillId = String(draft.skillId || "").trim().toLowerCase();
-    const hasExplicitSkill = Boolean(skillId) && skillId !== "auto";
+    const rawSkillId = String(draft.skillId || "").trim();
+    const hasExplicitSkill = Boolean(rawSkillId) && rawSkillId !== "auto";
     if (!hasExplicitSkill && !instruction) {
       return {
         ok: false,
@@ -1783,6 +1783,12 @@
         error: "Target service is required.",
       };
     }
+    if (hasExplicitSkill && targetService !== "orchestrator") {
+      return {
+        ok: false,
+        error: "Explicit skill runs must targetService=orchestrator.",
+      };
+    }
     const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
     const value = normalizeSubmissionDraftForTest(draft);
     value.instruction = instruction;
@@ -1790,7 +1796,7 @@
     value.priority = ["normal", "high"].includes(normalizedPriority)
       ? normalizedPriority
       : "normal";
-    const skillId = String(draft.skillId || "").trim();
+    const skillId = rawSkillId;
     const skillArgsRaw = String(draft.skillArgs || "").trim();
     if (skillId) {
       value.skillId = skillId;
