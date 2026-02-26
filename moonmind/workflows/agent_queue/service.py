@@ -725,17 +725,21 @@ class AgentQueueService:
         status: Optional[models.AgentJobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[models.AgentJob]:
         """List queue jobs with optional filters."""
 
-        if limit < 1 or limit > 200:
-            raise AgentQueueValidationError("limit must be between 1 and 200")
+        if limit < 1 or limit > 201:
+            raise AgentQueueValidationError("limit must be between 1 and 201")
+        if offset < 0:
+            raise AgentQueueValidationError("offset must be >= 0")
 
         normalized_type = job_type.strip() if job_type else None
         return await self._repository.list_jobs(
             status=status,
             job_type=normalized_type if normalized_type else None,
             limit=limit,
+            offset=offset,
         )
 
     async def claim_job(

@@ -169,11 +169,14 @@ class AgentQueueRepository:
         status: Optional[models.AgentJobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[models.AgentJob]:
         """Return jobs filtered by optional status and type."""
 
         if limit < 1:
             raise ValueError("limit must be at least 1")
+        if offset < 0:
+            raise ValueError("offset must be at least 0")
 
         stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob)
         if status is not None:
@@ -184,7 +187,7 @@ class AgentQueueRepository:
         stmt = stmt.order_by(
             models.AgentJob.created_at.desc(),
             models.AgentJob.id.desc(),
-        ).limit(limit)
+        ).offset(offset).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

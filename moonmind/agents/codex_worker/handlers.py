@@ -21,6 +21,8 @@ from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
 
+_MAX_ERROR_MESSAGE_CHARS = 1024
+
 
 class CodexWorkerHandlerError(RuntimeError):
     """Raised when handler payloads or command execution are invalid."""
@@ -218,6 +220,18 @@ class CodexSkillPayload:
             publish_mode=publish_mode,
             publish_base_branch=publish_base_branch,
         )
+
+
+def _truncate_error_message(
+    message: str,
+    *,
+    max_chars: int = _MAX_ERROR_MESSAGE_CHARS,
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 class CodexExecHandler:
@@ -1173,8 +1187,7 @@ class CodexExecHandler:
                 )
             else:
                 message = f"command failed ({result.returncode}): {command_hint}"
-            if len(message) > 1024:
-                message = f"{message[:1021]}..."
+            message = _truncate_error_message(message)
             raise CodexWorkerHandlerError(message)
         return result
 

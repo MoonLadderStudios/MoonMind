@@ -770,6 +770,7 @@ async def list_jobs(
     status_filter: Optional[str] = Query(None, alias="status"),
     type_filter: Optional[str] = Query(None, alias="type"),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     summary: bool = Query(False, alias="summary"),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -790,16 +791,23 @@ async def list_jobs(
             ) from exc
 
     try:
+        fetch_limit = limit + 1
         jobs = await service.list_jobs(
             status=parsed_status,
             job_type=type_filter,
-            limit=limit,
+            limit=fetch_limit,
+            offset=offset,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
 
+    has_more = len(jobs) > limit
+    items = jobs[:limit]
     return JobListResponse(
-        items=[_serialize_job_for_list(job, compact_payload=summary) for job in jobs]
+        items=[_serialize_job_for_list(job, compact_payload=summary) for job in items],
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
     )
 
 
