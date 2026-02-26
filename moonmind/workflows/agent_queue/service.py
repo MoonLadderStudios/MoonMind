@@ -661,9 +661,7 @@ class AgentQueueService:
         job.max_attempts = max_attempts
         job.updated_at = now
         event_payload: dict[str, Any] = {
-            "actorUserId": (
-                str(actor_user_id) if actor_user_id is not None else None
-            ),
+            "actorUserId": (str(actor_user_id) if actor_user_id is not None else None),
             "changedFields": changed_fields,
         }
         if clean_note is not None:
