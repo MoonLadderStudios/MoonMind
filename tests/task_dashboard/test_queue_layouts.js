@@ -108,7 +108,34 @@ const {
   renderQueueLayouts,
   renderActivePageContent,
   renderRowsTable,
+  renderProposalTable,
+  renderProposalCards,
+  renderProposalLayouts,
+  filterProposalsByTag,
 } = helpers;
+
+function createProposalRow(overrides = {}) {
+  return {
+    id: "proposal-123",
+    title: "Add coverage for proposals list",
+    repository: "moonmind/moonmind",
+    category: "run_quality",
+    reviewPriority: "high",
+    status: "open",
+    createdAt: "2026-02-23T12:00:00Z",
+    origin: {
+      source: "queue",
+      id: "job-abc-123",
+    },
+    tags: ["loop_detected", "ci"],
+    dedupHash: "abcd1234efgh5678",
+    taskPreview: {
+      instructions: "Tighten validation around proposals output.",
+      repository: "moonmind/moonmind",
+    },
+    ...overrides,
+  };
+}
 
 (function testQueueFieldDefinitionsProvideSingleSourceOfTruth() {
   const keys = queueFieldDefinitions.map((definition) => definition.key);
@@ -228,4 +255,44 @@ const {
   } finally {
     queueFieldDefinitions.pop();
   }
+})();
+
+(function testRenderProposalLayoutsIncludeDesktopTableAndMobileCards() {
+  const rows = [createProposalRow()];
+  const html = renderProposalLayouts(rows);
+  assert(html.includes('data-layout="table"'));
+  assert(html.includes('data-layout="card"'));
+  assert(html.includes('queue-table-wrapper'));
+  assert(html.includes('queue-card-list'));
+})();
+
+(function testProposalCardsExposeStableFieldsAndActions() {
+  const rows = [
+    createProposalRow({
+      id: "proposal-456",
+      title: "Improve CI validation",
+      dedupHash: "1234abcd5678efgh",
+    }),
+  ];
+  const html = renderProposalCards(rows);
+  assert(html.includes('data-proposal-id="proposal-456"'));
+  assert(html.includes('data-proposal-title'));
+  assert(html.includes('data-proposal-repo'));
+  assert(html.includes('data-field="id"'));
+  assert(html.includes('data-field="category"'));
+  assert(html.includes('data-field="priority"'));
+  assert(html.includes('data-proposal-action="promote"'));
+  assert(html.includes('data-proposal-action="dismiss"'));
+})();
+
+(function testProposalTableUsesStableRowAndActionSelectors() {
+  const rows = [createProposalRow({ id: "proposal-789" })];
+  const html = renderProposalTable(rows);
+  const tagged = filterProposalsByTag(rows, "loop_detected");
+  const none = filterProposalsByTag(rows, "missing-tag");
+  assert.strictEqual(tagged.length, 1);
+  assert.strictEqual(none.length, 0);
+  assert(html.includes('data-proposal-id="proposal-789"'));
+  assert(html.includes('data-proposal-action="promote"'));
+  assert(html.includes('data-proposal-action="dismiss"'));
 })();
