@@ -3765,6 +3765,48 @@ class CodexWorker:
             metadata_path=written_metadata_path,
         )
 
+        full_log_path = self._step_log_companion_path(destination_path)
+        metadata_path = self._step_log_companion_metadata_path(destination_path)
+        if not bounded_result.truncated:
+            for stale_path in (full_log_path, metadata_path):
+                with suppress(FileNotFoundError):
+                    stale_path.unlink()
+            return StepLogCopyResult(
+                truncated=False,
+                preview_bytes=len(bounded_result.content),
+                source_delta_bytes=bounded_result.source_delta_bytes,
+                omitted_bytes=0,
+            )
+
+        self._write_step_log_companion_gzip(
+            source_path=source_path,
+            start_offset=dedupe_start_offset,
+            source_size=source_size,
+            destination_path=full_log_path,
+        )
+        if preview_artifact_name and full_artifact_name and metadata_artifact_name:
+            self._write_step_log_companion_metadata(
+                destination_path=metadata_path,
+                preview_artifact_name=preview_artifact_name,
+                full_artifact_name=full_artifact_name,
+                source_delta_bytes=bounded_result.source_delta_bytes,
+                preview_bytes=len(bounded_result.content),
+                omitted_bytes=bounded_result.omitted_bytes,
+                metadata_artifact_name=metadata_artifact_name,
+            )
+            written_metadata_path: Path | None = metadata_path
+        else:
+            written_metadata_path = None
+
+        return StepLogCopyResult(
+            truncated=True,
+            preview_bytes=len(bounded_result.content),
+            source_delta_bytes=bounded_result.source_delta_bytes,
+            omitted_bytes=bounded_result.omitted_bytes,
+            full_log_path=full_log_path,
+            metadata_path=written_metadata_path,
+        )
+
     def _read_bounded_step_log_bytes(
         self,
         *,

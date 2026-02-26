@@ -70,7 +70,6 @@ docker run --rm moonmind/api-service:tooling \
 - `which codex` must resolve to `/usr/local/bin/codex`.
 - `command -v rg` should return success so shell bootstrap diagnostics can use `rg` consistently.
 - The `codex --version` output should match `CODEX_CLI_VERSION` passed to the Docker build.
-
 When the Celery worker starts it now logs the detected Codex CLI path and version. Tail the worker logs to confirm the health check succeeds before triggering automation runs:
 
 ```bash
@@ -126,8 +125,7 @@ logs that the approval policy is incorrect, follow these steps:
 From the repository root, authenticate the Codex volume once, then start supporting services so the worker can accept automation jobs:
 
 ```bash
-docker compose run --rm celery_codex_worker \
-  bash -lc 'command -v rg && codex login --device-auth && codex login status'
+./tools/auth-codex-volume.sh
 ```
 
 ```bash

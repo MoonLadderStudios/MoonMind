@@ -1172,11 +1172,10 @@ class CodexExecHandler:
             stderr=stderr,
         )
         if check and result.returncode != 0:
-            command_summary = self._redact_text(
-                " ".join(command),
-                extra_redaction_values=redaction_values,
-            )
             detail = (stderr or stdout).strip()
+            command_hint = (
+                " ".join(command[:2]) if len(command) > 1 else " ".join(command)
+            ) or "<empty>"
             if detail:
                 tail_line = detail.splitlines()[-1]
                 redacted_tail = self._redact_text(
@@ -1184,12 +1183,14 @@ class CodexExecHandler:
                 )
                 if len(redacted_tail) > 240:
                     redacted_tail = f"{redacted_tail[:237]}..."
-                raise CodexWorkerHandlerError(
-                    f"command failed ({result.returncode}): {command_summary}: {redacted_tail}"
+                message = (
+                    f"command failed ({result.returncode}): "
+                    f"{command_hint} | {redacted_tail}"
                 )
-            raise CodexWorkerHandlerError(
-                f"command failed ({result.returncode}): {command_summary}"
-            )
+            else:
+                message = f"command failed ({result.returncode}): {command_hint}"
+            message = _truncate_error_message(message)
+            raise CodexWorkerHandlerError(message)
         return result
 
     def _build_codex_exec_command(
