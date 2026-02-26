@@ -1319,25 +1319,28 @@
           .filter((entry) => entry.slug && entry.version)
       : [];
 
+    const draftPublishMode = Object.prototype.hasOwnProperty.call(
+      publishNode,
+      "mode",
+    )
+      ? publishNode.mode
+      : payload.publishMode || extractPublishModeFromPayload(payload);
+
     return {
-      runtime: runtime ? String(runtime).trim() : defaultTaskRuntime,
+      runtime: runtime == null ? "" : String(runtime),
       model:
         Object.prototype.hasOwnProperty.call(runtimeNode, "model")
-          ? String(runtimeNode.model || "")
+          ? String(runtimeNode.model ?? "")
           : "",
       effort:
         Object.prototype.hasOwnProperty.call(runtimeNode, "effort")
-          ? String(runtimeNode.effort || "")
+          ? String(runtimeNode.effort ?? "")
           : "",
       repository: String(payload.repository || "").trim(),
       startingBranch: String(gitNode.startingBranch || "").trim(),
       newBranch: String(gitNode.newBranch || "").trim(),
       publishMode: (() => {
-        const draftMode = String(
-          Object.prototype.hasOwnProperty.call(publishNode, "mode")
-            ? publishNode.mode
-            : payload.publishMode || extractPublishModeFromPayload(payload),
-        ).trim();
+        const draftMode = String(draftPublishMode ?? "");
         if (draftMode) {
           return draftMode;
         }
@@ -3702,21 +3705,36 @@
     const effectiveWorkerDraft = isEditMode
       ? editContext.draft || {}
       : sanitizedWorkerDraft;
+    const draftRuntimeSource = presetRuntime ?? effectiveWorkerDraft.runtime;
     const selectedWorkerRuntime = resolveSubmitRuntime(
-      presetRuntime ?? effectiveWorkerDraft.runtime,
-      defaultTaskRuntime,
+      draftRuntimeSource,
+      isEditMode ? null : defaultTaskRuntime,
     );
-    let activeWorkerRuntime = selectedWorkerRuntime;
-    const queueDraftModel = String(
-      Object.prototype.hasOwnProperty.call(effectiveWorkerDraft, "model")
-        ? effectiveWorkerDraft.model || ""
-        : defaultTaskModel,
-    ).trim();
-    const queueDraftEffort = String(
-      Object.prototype.hasOwnProperty.call(effectiveWorkerDraft, "effort")
-        ? effectiveWorkerDraft.effort || ""
-        : defaultTaskEffort,
-    ).trim();
+    if (
+      isEditMode &&
+      !selectedWorkerRuntime &&
+      String(draftRuntimeSource || "").trim()
+    ) {
+      setView(
+        "Edit queued task",
+        `Job ${editContext.jobId}`,
+        `<div class="notice error">Unsupported task runtime for edit mode: ${escapeHtml(String(draftRuntimeSource))}.</div><div class="actions"><a href="/tasks/queue"><button type="button" class="secondary">Back to queue</button></a></div>`,
+      );
+      return;
+    }
+    let activeWorkerRuntime = selectedWorkerRuntime || defaultTaskRuntime;
+    const queueDraftModel = Object.prototype.hasOwnProperty.call(
+      effectiveWorkerDraft,
+      "model",
+    )
+      ? String(effectiveWorkerDraft.model ?? "")
+      : defaultTaskModel;
+    const queueDraftEffort = Object.prototype.hasOwnProperty.call(
+      effectiveWorkerDraft,
+      "effort",
+    )
+      ? String(effectiveWorkerDraft.effort ?? "")
+      : defaultTaskEffort;
     const queueDraftRepository = String(effectiveWorkerDraft.repository || "").trim();
     const queueDraftStartingBranch = String(
       effectiveWorkerDraft.startingBranch || "",
@@ -3758,10 +3776,7 @@
       ? effectiveWorkerDraft.appliedTemplateState
       : [];
 
-    const runtimeOptions = renderRuntimeOptions(
-      submitRuntimeOptions,
-      selectedWorkerRuntime,
-    );
+    const runtimeOptions = renderRuntimeOptions(submitRuntimeOptions, activeWorkerRuntime);
     const repositoryFallback = queueDraftRepository || defaultRepository;
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`

@@ -329,3 +329,25 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(draft.model, "");
   assert.strictEqual(draft.effort, "");
 })();
+
+(function testBuildQueueSubmissionDraftFromJobPreservesRawEditFields() {
+  const draft = helpers.buildQueueSubmissionDraftFromJob({
+    payload: {
+      repository: "Moon/Test",
+      task: {
+        runtime: {
+          mode: "CustomRuntime",
+          model: " model-with-space ",
+          effort: " fast ",
+        },
+        publish: {
+          mode: " PR ",
+        },
+      },
+    },
+  });
+  assert.strictEqual(draft.runtime, "CustomRuntime");
+  assert.strictEqual(draft.model, " model-with-space ");
+  assert.strictEqual(draft.effort, " fast ");
+  assert.strictEqual(draft.publishMode, " PR ");
+})();
