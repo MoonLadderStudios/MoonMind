@@ -11,9 +11,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.auth_providers import get_current_user
 from api_service.db import models as db_models
 from api_service.db.base import get_async_session
-from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
     OrchestratorApprovalRequest,
