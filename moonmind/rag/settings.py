@@ -187,10 +187,18 @@ class RagRuntimeSettings:
 
         provider = self.embedding_provider.lower()
         if provider == "google":
-            google_key = (_get_env(source, "GOOGLE_API_KEY") or "").strip()
+            google_key = (
+                str(source.get("GOOGLE_API_KEY") or "")
+                if source is not None
+                else os.getenv("GOOGLE_API_KEY", "")
+            ).strip()
             return bool(google_key)
         elif provider == "openai":
-            openai_key = (_get_env(source, "OPENAI_API_KEY") or "").strip()
+            openai_key = (
+                str(source.get("OPENAI_API_KEY") or "")
+                if source is not None
+                else os.getenv("OPENAI_API_KEY", "")
+            ).strip()
             return bool(openai_key)
         elif provider == "ollama":
             return ollama_dependency_available()
