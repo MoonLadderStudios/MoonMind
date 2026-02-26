@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import shutil
 import socket
 import stat
@@ -104,68 +103,8 @@ _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
-_NON_SOURCE_CHANGE_PREFIXES = (
-    ".github/",
-    ".specify/",
-    "docs/",
-    "specs/",
-    "samples/",
-)
-_NON_SOURCE_CHANGE_FILENAMES = frozenset(
-    {
-        ".dockerignore",
-        ".gitignore",
-        "changelog",
-        "changelog.md",
-        "license",
-        "license.md",
-        "license.txt",
-        "readme",
-        "readme.md",
-        "readme.rst",
-    }
-)
-_NON_SOURCE_CHANGE_EXTENSIONS = frozenset(
-    {
-        ".adoc",
-        ".gif",
-        ".jpeg",
-        ".jpg",
-        ".md",
-        ".pdf",
-        ".png",
-        ".rst",
-        ".svg",
-        ".txt",
-        ".webp",
-    }
-)
-_VERIFICATION_COMMAND_PATTERNS = (
-    re.compile(r"(?:^|\s)(?:\./)?tools/test_unit\.sh(?:\s|$)", re.IGNORECASE),
-    re.compile(r"(?:^|\s)(?:python(?:3)?\s+-m\s+pytest|pytest)(?:\s|$)", re.IGNORECASE),
-    re.compile(r"(?:^|\s)(?:tox|nox|ruff|flake8|pylint|mypy)(?:\s|$)", re.IGNORECASE),
-    re.compile(
-        r"(?:^|\s)(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|build)(?:\s|$)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:^|\s)(?:go\s+(?:test|vet|build)|cargo\s+(?:test|clippy|build))(?:\s|$)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:^|\s)(?:make|just)\s+(?:test|lint|build|check|verify)(?:\s|$)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        (
-            r"(?:^|\s)(?:eslint|stylelint|shellcheck|golangci-lint|hadolint|phpunit|"
-            r"vitest|jest|mocha|mvn\s+(?:test|verify)|gradle\s+test|"
-            r"\./gradlew\s+test)(?:\s|$)"
-        ),
-        re.IGNORECASE,
-    ),
-)
-_VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
+_MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES = 128
+_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES = 8 * 1024 * 1024
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -1013,19 +952,6 @@ class StepGateSpec:
 
     gate_type: str
     source_path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class PublishPreflightResult:
-    """Outcome of publish quality preflight checks."""
-
-    passed: bool
-    reason: str
-    changed_paths: tuple[str, ...]
-    source_code_paths: tuple[str, ...]
-    verification_evidence: tuple[dict[str, Any], ...]
-    verification_skip_reason: dict[str, str] | None
-    report_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -3265,318 +3191,6 @@ class CodexWorker:
         ]
         return "\n".join(lines)
 
-    @staticmethod
-    def _parse_git_status_paths(status_output: str) -> tuple[str, ...]:
-        """Extract changed paths from `git status --porcelain` output."""
-
-        def _split_rename_paths(
-            entry: str,
-            *,
-            is_renamed: bool,
-        ) -> tuple[str, ...]:
-            if not is_renamed or " -> " not in entry:
-                return (entry,)
-            try:
-                tokens = tuple(shlex.split(entry))
-            except ValueError:
-                return (entry,)
-            if len(tokens) == 3 and tokens[1] == "->":
-                return (tokens[0], tokens[2])
-            return (entry,)
-
-        def _normalize_path(path_text: str) -> str:
-            text = str(path_text or "").strip()
-            if text.startswith('"') and text.endswith('"') and len(text) >= 2:
-                return text[1:-1]
-            return text
-
-        paths: list[str] = []
-        for raw_line in str(status_output or "").splitlines():
-            line = raw_line.rstrip()
-            if len(line) < 4:
-                continue
-            status = line[:2]
-            is_renamed = ("R" in status) or ("C" in status)
-            entry = line[3:].strip()
-            if not entry:
-                continue
-            for path in _split_rename_paths(entry, is_renamed=is_renamed):
-                normalized_path = _normalize_path(path)
-                if normalized_path:
-                    paths.append(normalized_path)
-        return tuple(dict.fromkeys(paths))
-
-    @staticmethod
-    def _is_source_code_change_path(path_text: str) -> bool:
-        """Return True when a changed path likely impacts executable code."""
-
-        normalized = str(path_text or "").strip()
-        if normalized.startswith("./"):
-            normalized = normalized.removeprefix("./")
-        if not normalized:
-            return False
-        lowered = normalized.lower()
-        for prefix in _NON_SOURCE_CHANGE_PREFIXES:
-            if lowered.startswith(prefix):
-                return False
-
-        filename = lowered.rsplit("/", 1)[-1]
-        if filename in _NON_SOURCE_CHANGE_FILENAMES:
-            return False
-
-        extension = Path(filename).suffix.lower()
-        if extension in _NON_SOURCE_CHANGE_EXTENSIONS:
-            return False
-        return True
-
-    @staticmethod
-    def _looks_like_verification_command(command: str) -> bool:
-        """Return True when command resembles test/lint/build verification."""
-
-        normalized = " ".join(str(command or "").split())
-        if not normalized:
-            return False
-        return any(
-            pattern.search(normalized) for pattern in _VERIFICATION_COMMAND_PATTERNS
-        )
-
-    @classmethod
-    def _artifact_name_for_path(
-        cls, *, path: Path, prepared: PreparedTaskWorkspace
-    ) -> str:
-        """Resolve artifact-relative path label for preflight evidence."""
-
-        resolved = path.resolve(strict=False)
-        artifacts_root = prepared.artifacts_dir.resolve(strict=False)
-        if cls._is_relative_to(resolved, artifacts_root):
-            relative = resolved.relative_to(artifacts_root).as_posix()
-            return relative if relative != "." else path.name
-        return path.name
-
-    @classmethod
-    def _collect_verification_evidence(
-        cls, *, prepared: PreparedTaskWorkspace
-    ) -> tuple[dict[str, Any], ...]:
-        """Collect verification-command evidence from stage log artifacts."""
-
-        candidate_paths: list[Path] = [
-            prepared.execute_log_path,
-            prepared.artifacts_dir / "logs" / "execute.log",
-            prepared.artifacts_dir / "logs" / "codex_exec.log",
-        ]
-        step_logs_dir = prepared.artifacts_dir / "logs" / "steps"
-        if step_logs_dir.is_dir():
-            candidate_paths.extend(sorted(step_logs_dir.glob("step-*.log")))
-
-        unique_paths: list[Path] = []
-        seen_paths: set[str] = set()
-        for path in candidate_paths:
-            key = path.resolve(strict=False).as_posix()
-            if key in seen_paths:
-                continue
-            seen_paths.add(key)
-            unique_paths.append(path)
-
-        evidence: list[dict[str, Any]] = []
-        for log_path in unique_paths:
-            if not log_path.exists() or not log_path.is_file():
-                continue
-            try:
-                lines = log_path.read_text(
-                    encoding="utf-8", errors="replace"
-                ).splitlines()
-            except OSError as exc:
-                logger.warning(
-                    "failed to collect verification evidence from stage log %s: %s",
-                    log_path,
-                    exc,
-                )
-                continue
-            artifact_name = cls._artifact_name_for_path(
-                path=log_path, prepared=prepared
-            )
-            for line_number, line in enumerate(lines, start=1):
-                if not line.startswith(_VERIFICATION_COMMAND_LOG_PREFIX):
-                    continue
-                command = line[len(_VERIFICATION_COMMAND_LOG_PREFIX) :].strip()
-                if not cls._looks_like_verification_command(command):
-                    continue
-                evidence.append(
-                    {
-                        "command": command,
-                        "artifact": artifact_name,
-                        "line": line_number,
-                    }
-                )
-        return tuple(evidence)
-
-    @staticmethod
-    def _resolve_publish_verification_skip_reason(
-        publish: Mapping[str, Any],
-    ) -> dict[str, str] | None:
-        """Normalize optional structured verification skip reason."""
-
-        raw_skip_reason = publish.get("verificationSkipReason")
-        if raw_skip_reason is None:
-            legacy_verification = publish.get("verification")
-            if isinstance(legacy_verification, Mapping) and (
-                "skipReason" in legacy_verification
-            ):
-                raise ValueError(
-                    "task.publish.verification.skipReason is not supported; "
-                    "use task.publish.verificationSkipReason instead"
-                )
-            return None
-        if not isinstance(raw_skip_reason, Mapping):
-            raise ValueError(
-                "task.publish.verificationSkipReason must be an object with category/reason"
-            )
-
-        category_raw = raw_skip_reason.get("category")
-        reason_raw = raw_skip_reason.get("reason")
-        category = re.sub(r"[^a-z0-9_-]+", "_", str(category_raw or "").strip().lower())
-        category = category.strip("_")
-        reason = " ".join(str(reason_raw or "").split())
-        if not category:
-            raise ValueError(
-                "task.publish.verificationSkipReason.category is required for intentional verification skip"
-            )
-        if not reason:
-            raise ValueError(
-                "task.publish.verificationSkipReason.reason is required for intentional verification skip"
-            )
-        normalized = {"category": category, "reason": reason}
-        ticket = " ".join(
-            str(
-                raw_skip_reason.get("ticket")
-                or raw_skip_reason.get("issue")
-                or raw_skip_reason.get("url")
-                or ""
-            ).split()
-        )
-        if ticket:
-            normalized["ticket"] = ticket
-        return normalized
-
-    @classmethod
-    def _append_skip_reason_to_pr_body(
-        cls,
-        *,
-        pr_body: str,
-        skip_reason: Mapping[str, str],
-    ) -> str:
-        """Append structured verification skip metadata to PR body."""
-
-        category = cls._sanitize_metadata_footer_value(skip_reason.get("category"))
-        reason = cls._sanitize_metadata_footer_value(skip_reason.get("reason"))
-        ticket = cls._sanitize_metadata_footer_value(
-            skip_reason.get("ticket"), fallback=""
-        )
-        lines = [
-            "",
-            "## Verification",
-            "- Status: skipped",
-            f"- Category: {category}",
-            f"- Reason: {reason}",
-            "- Evidence artifact: reports/publish_preflight.json",
-        ]
-        if ticket:
-            lines.append(f"- Ticket: {ticket}")
-        suffix = "\n".join(lines) + "\n"
-        base = pr_body.rstrip()
-        if not base:
-            return suffix.lstrip()
-        return f"{base}\n{suffix}"
-
-    def _run_publish_preflight(
-        self,
-        *,
-        prepared: PreparedTaskWorkspace,
-        publish: Mapping[str, Any],
-        status_output: str,
-    ) -> PublishPreflightResult:
-        """Validate publish quality requirements and persist preflight report."""
-
-        changed_paths = self._parse_git_status_paths(status_output)
-        source_code_paths = tuple(
-            path for path in changed_paths if self._is_source_code_change_path(path)
-        )
-        verification_evidence = self._collect_verification_evidence(prepared=prepared)
-
-        skip_reason: dict[str, str] | None = None
-        skip_reason_error: str | None = None
-        try:
-            skip_reason = self._resolve_publish_verification_skip_reason(publish)
-        except ValueError as exc:
-            skip_reason_error = str(exc)
-
-        verification_required = bool(source_code_paths)
-        skip_used = verification_required and not verification_evidence
-
-        if skip_used:
-            if skip_reason_error:
-                passed = False
-                reason = (
-                    "publish preflight failed: source-code changes require verification, "
-                    f"and skip reason is invalid ({skip_reason_error})"
-                )
-            elif skip_reason is None:
-                passed = False
-                reason = (
-                    "publish preflight failed: source-code changes detected but no "
-                    "verification command result was captured in artifacts; provide "
-                    "task.publish.verificationSkipReason with category/reason to skip intentionally"
-                )
-            else:
-                passed = True
-                reason = "publish preflight passed: verification intentionally skipped"
-        else:
-            passed = True
-            if verification_required:
-                reason = (
-                    "publish preflight passed: verification command evidence captured"
-                )
-            else:
-                reason = "publish preflight passed: no source-code changes detected"
-
-        effective_skip_reason = skip_reason if skip_used and skip_reason else None
-        report_payload = {
-            "schemaVersion": "v1",
-            "status": "PASS" if passed else "FAIL",
-            "reason": reason,
-            "changes": {
-                "changedPaths": list(changed_paths),
-                "sourceCodePaths": list(source_code_paths),
-            },
-            "verification": {
-                "required": verification_required,
-                "evidenceCount": len(verification_evidence),
-                "evidence": list(verification_evidence),
-                "skipped": effective_skip_reason is not None,
-                "skipReason": effective_skip_reason,
-                "skipReasonError": skip_reason_error if skip_used else None,
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        redacted = self._redact_payload(report_payload)
-        serialized_payload = redacted if isinstance(redacted, dict) else report_payload
-
-        report_path = prepared.artifacts_dir / "reports" / "publish_preflight.json"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(
-            json.dumps(serialized_payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        return PublishPreflightResult(
-            passed=passed,
-            reason=reason,
-            changed_paths=tuple(changed_paths),
-            source_code_paths=tuple(source_code_paths),
-            verification_evidence=tuple(verification_evidence),
-            verification_skip_reason=effective_skip_reason,
-            report_path=report_path,
-        )
-
     async def _run_publish_stage(
         self,
         *,
@@ -3629,14 +3243,6 @@ class CodexWorker:
                 check=False,
                 env=prepared.publish_command_env,
             )
-            verification_payload: dict[str, Any] = {
-                "required": False,
-                "status": "not_required",
-                "evidenceCount": 0,
-                "evidence": [],
-                "skipReason": None,
-            }
-            preflight_result: PublishPreflightResult | None = None
             if not status.stdout.strip():
                 result_payload = {
                     "mode": publish_mode,
@@ -3644,7 +3250,6 @@ class CodexWorker:
                     "prUrl": None,
                     "skipped": True,
                     "reason": "no local changes",
-                    "verification": verification_payload,
                 }
                 prepared.publish_result_path.write_text(
                     json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
@@ -3686,65 +3291,6 @@ class CodexWorker:
                     },
                 )
                 return "publish skipped: no local changes"
-
-            preflight_result = self._run_publish_preflight(
-                prepared=prepared,
-                publish=publish,
-                status_output=status.stdout,
-            )
-            self._append_stage_log(prepared.publish_log_path, preflight_result.reason)
-            staged_artifacts.append(
-                ArtifactUpload(
-                    path=preflight_result.report_path,
-                    name="reports/publish_preflight.json",
-                    content_type="application/json",
-                )
-            )
-            verification_payload["required"] = bool(preflight_result.source_code_paths)
-            verification_payload["evidenceCount"] = len(
-                preflight_result.verification_evidence
-            )
-            verification_payload["evidence"] = list(
-                preflight_result.verification_evidence
-            )
-            verification_payload["skipReason"] = (
-                preflight_result.verification_skip_reason
-            )
-            if preflight_result.verification_skip_reason is not None:
-                verification_payload["status"] = "skipped"
-            elif preflight_result.source_code_paths:
-                verification_payload["status"] = "passed"
-
-            if not preflight_result.passed:
-                verification_payload["status"] = "failed"
-                failure_payload = {
-                    "mode": publish_mode,
-                    "branch": prepared.working_branch,
-                    "baseBranch": prepared.starting_branch,
-                    "prUrl": None,
-                    "skipped": False,
-                    "reason": preflight_result.reason,
-                    "verification": verification_payload,
-                }
-                prepared.publish_result_path.write_text(
-                    json.dumps(failure_payload, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-                staged_artifacts.extend(
-                    [
-                        ArtifactUpload(
-                            path=prepared.publish_log_path,
-                            name="logs/publish.log",
-                            content_type="text/plain",
-                        ),
-                        ArtifactUpload(
-                            path=prepared.publish_result_path,
-                            name="publish_result.json",
-                            content_type="application/json",
-                        ),
-                    ]
-                )
-                raise RuntimeError(preflight_result.reason)
 
             await self._run_stage_command(
                 ["git", "checkout", prepared.working_branch],
@@ -3799,11 +3345,6 @@ class CodexWorker:
                     base_branch=pr_base,
                     head_branch=prepared.working_branch,
                 )
-                if preflight_result and preflight_result.verification_skip_reason:
-                    pr_body = self._append_skip_reason_to_pr_body(
-                        pr_body=pr_body,
-                        skip_reason=preflight_result.verification_skip_reason,
-                    )
                 pr_result = await self._run_stage_command(
                     [
                         self._resolve_gh_binary(),
@@ -3829,14 +3370,6 @@ class CodexWorker:
                     if pr_url is None
                     else f"published PR {pr_url}"
                 )
-            if preflight_result and preflight_result.verification_skip_reason:
-                skip_category = preflight_result.verification_skip_reason.get(
-                    "category"
-                )
-                if skip_category:
-                    publish_note = (
-                        f"{publish_note}; verification skipped ({skip_category})"
-                    )
 
             result_payload = {
                 "mode": publish_mode,
@@ -3844,7 +3377,6 @@ class CodexWorker:
                 "baseBranch": prepared.starting_branch,
                 "prUrl": pr_url,
                 "skipped": False,
-                "verification": verification_payload,
             }
             prepared.publish_result_path.write_text(
                 json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
@@ -3962,6 +3494,7 @@ class CodexWorker:
         step_log_path: Path,
         step_patch_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
+        step_log_checkpoints: MutableMapping[str, tuple[bytes, int]] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3982,6 +3515,7 @@ class CodexWorker:
                         source_path=artifact.path,
                         destination_path=step_log_path,
                         step_log_offsets=step_log_offsets,
+                        step_log_checkpoints=step_log_checkpoints,
                         preview_artifact_name=step_log_name,
                         full_artifact_name=step_log_full_name,
                         metadata_artifact_name=step_log_metadata_name,
@@ -4075,6 +3609,7 @@ class CodexWorker:
         preview_artifact_name: str | None = None,
         full_artifact_name: str | None = None,
         metadata_artifact_name: str | None = None,
+        step_log_checkpoints: MutableMapping[str, tuple[bytes, int]] | None = None,
     ) -> StepLogCopyResult:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
@@ -4085,25 +3620,108 @@ class CodexWorker:
             )
         source_size = source_stat.st_size
         start_offset = 0
+        dedupe_start_offset = 0
+        offset_key: str | None = None
         if step_log_offsets is not None:
             offset_key = self._resolve_log_offset_key(source_path)
             previous_offset = max(0, int(step_log_offsets.get(offset_key, 0)))
             if previous_offset <= source_size:
                 start_offset = previous_offset
             step_log_offsets[offset_key] = source_size
+            dedupe_start_offset = start_offset
+            original_start_offset = start_offset
+        else:
+            original_start_offset = 0
 
+        source_delta_bytes = max(0, source_size - original_start_offset)
         linkage_marker = None
         if metadata_artifact_name:
             linkage_marker = f"metadata={metadata_artifact_name}"
         bounded_result = self._read_bounded_step_log_bytes(
             source_path=source_path,
-            start_offset=start_offset,
+            start_offset=dedupe_start_offset,
             source_size=source_size,
             max_bytes=self._config.step_log_max_bytes,
             linkage_marker=linkage_marker,
         )
+        bounded_content = bounded_result.content
+        if step_log_checkpoints is not None:
+            if offset_key is None:
+                offset_key = self._resolve_log_offset_key(source_path)
+            previous_checkpoint: tuple[bytes, int] | None = step_log_checkpoints.get(
+                offset_key
+            )
+            if dedupe_start_offset > 0 and previous_checkpoint is not None:
+                replay_checkpoint, replay_source_size = previous_checkpoint
+                if (
+                    replay_checkpoint
+                    and replay_source_size >= _MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES
+                ):
+                    while True:
+                        remaining_bytes = max(0, source_size - dedupe_start_offset)
+                        if remaining_bytes <= replay_source_size:
+                            break
+
+                        prefix_len = min(
+                            len(replay_checkpoint),
+                            _MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES,
+                        )
+                        if prefix_len == 0:
+                            break
+
+                        source_prefix = self._read_step_log_prefix_bytes(
+                            source_path=source_path,
+                            start_offset=dedupe_start_offset,
+                            max_bytes=prefix_len,
+                        )
+                        if len(source_prefix) < prefix_len:
+                            break
+                        if not source_prefix.startswith(replay_checkpoint[:prefix_len]):
+                            break
+                        dedupe_start_offset += replay_source_size
+
+                    if dedupe_start_offset != original_start_offset:
+                        bounded_content = self._read_bounded_step_log_bytes(
+                            source_path=source_path,
+                            start_offset=dedupe_start_offset,
+                            source_size=source_size,
+                            max_bytes=self._config.step_log_max_bytes,
+                            linkage_marker=linkage_marker,
+                        )
+                        bounded_content = bounded_content.content
+
+            current_checkpoint = self._checkpoint_step_log_bytes(
+                self._read_step_log_prefix_bytes(
+                    source_path=source_path,
+                    start_offset=original_start_offset,
+                    max_bytes=_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES,
+                )
+            )
+            if current_checkpoint:
+                step_log_checkpoints[offset_key] = (
+                    current_checkpoint,
+                    source_delta_bytes,
+                )
+
+            bounded_content = self._dedupe_replayed_step_log_bytes(
+                content=bounded_content,
+                replay_checkpoint=current_checkpoint,
+            )
+            bounded_result = StepLogReadResult(
+                content=bounded_content,
+                source_delta_bytes=max(0, source_size - dedupe_start_offset),
+                truncated=bounded_result.truncated,
+                omitted_bytes=bounded_result.omitted_bytes,
+            )
+        elif dedupe_start_offset > 0:
+            bounded_result = StepLogReadResult(
+                content=bounded_content,
+                source_delta_bytes=max(0, source_size - dedupe_start_offset),
+                truncated=bounded_result.truncated,
+                omitted_bytes=bounded_result.omitted_bytes,
+            )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        destination_path.write_bytes(bounded_result.content)
+        destination_path.write_bytes(bounded_content)
 
         full_log_path = self._step_log_companion_path(destination_path)
         metadata_path = self._step_log_companion_metadata_path(destination_path)
@@ -4120,7 +3738,7 @@ class CodexWorker:
 
         self._write_step_log_companion_gzip(
             source_path=source_path,
-            start_offset=start_offset,
+            start_offset=dedupe_start_offset,
             source_size=source_size,
             destination_path=full_log_path,
         )
@@ -4209,6 +3827,49 @@ class CodexWorker:
         """Return a stable key for tracking incremental read offsets."""
 
         return str(path.resolve(strict=False))
+
+    @staticmethod
+    def _checkpoint_step_log_bytes(content: bytes) -> bytes:
+        """Capture a bounded replay checkpoint from the current source snapshot."""
+
+        return content[:_MAX_STEP_LOG_REPLAY_CHECKPOINT_BYTES]
+
+    @staticmethod
+    def _read_step_log_prefix_bytes(
+        *,
+        source_path: Path,
+        start_offset: int,
+        max_bytes: int,
+    ) -> bytes:
+        """Read a bounded source log prefix without applying truncation markers."""
+
+        if max_bytes <= 0:
+            return b""
+        with source_path.open("rb") as handle:
+            handle.seek(start_offset)
+            return handle.read(max_bytes)
+
+    @staticmethod
+    def _dedupe_replayed_step_log_bytes(
+        *, content: bytes, replay_checkpoint: bytes | None
+    ) -> bytes:
+        """Strip prefixed replay blocks from per-step log snapshots."""
+
+        if (
+            not content
+            or not replay_checkpoint
+            or len(content) <= len(replay_checkpoint)
+            or len(replay_checkpoint) < _MIN_STEP_LOG_REPLAY_CHECKPOINT_BYTES
+        ):
+            return content
+        prefix_length = len(replay_checkpoint)
+        cut_index = 0
+        while True:
+            if content.startswith(replay_checkpoint, cut_index):
+                cut_index += prefix_length
+            else:
+                break
+        return content[cut_index:]
 
     @staticmethod
     def _compute_step_log_truncation_plan(
@@ -4924,9 +4585,7 @@ class CodexWorker:
         redacted_command = self._redact_command_for_log(
             command, redaction_values=merged_redaction_values
         )
-        self._append_stage_log(
-            log_path, f"{_VERIFICATION_COMMAND_LOG_PREFIX}{' '.join(redacted_command)}"
-        )
+        self._append_stage_log(log_path, f"$ {' '.join(redacted_command)}")
         raise RuntimeError("Codex execution handler is missing command runner")
 
     @staticmethod
@@ -5812,6 +5471,7 @@ class CodexWorker:
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
         step_log_offsets: dict[str, int] = {}
+        step_log_checkpoints: dict[str, tuple[bytes, int]] = {}
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5989,6 +5649,7 @@ class CodexWorker:
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
                 step_log_offsets=step_log_offsets,
+                step_log_checkpoints=step_log_checkpoints,
             )
             step_artifacts.extend(normalized_step_artifacts)
             if artifact_callback is not None and normalized_step_artifacts:
