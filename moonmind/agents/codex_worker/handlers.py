@@ -21,6 +21,34 @@ from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
 
+_MAX_ERROR_MESSAGE_LENGTH = 1024
+_TRUNCATION_SUFFIX = "..."
+_REDACTED_MARKER = "[REDACTED]"
+_REDACTED_PREFIX = "[RED"
+
+
+def _truncate_error_message(
+    message: str, *, max_length: int = _MAX_ERROR_MESSAGE_LENGTH
+) -> str:
+    if len(message) <= max_length:
+        return message
+
+    if max_length <= len(_TRUNCATION_SUFFIX):
+        return message[:max_length]
+
+    available = max_length - len(_TRUNCATION_SUFFIX)
+    truncated = message[:available]
+    marker_start = truncated.rfind("[")
+    if (
+        marker_start != -1
+        and truncated[marker_start:].startswith(_REDACTED_PREFIX)
+        and _REDACTED_MARKER.startswith(truncated[marker_start:])
+        and truncated[marker_start:] != _REDACTED_MARKER
+    ):
+        keep_prefix = max(0, available - len(_REDACTED_MARKER))
+        truncated = f"{truncated[:keep_prefix]}{_REDACTED_MARKER}"
+    return f"{truncated}{_TRUNCATION_SUFFIX}"
+
 
 class CodexWorkerHandlerError(RuntimeError):
     """Raised when handler payloads or command execution are invalid."""
@@ -550,6 +578,7 @@ class CodexExecHandler:
             log_path,
             f"[rag] retrieval completed via {pack.transport}; items={items_count}",
         )
+
         if items_count < 1:
             return PromptContextResolution(
                 instruction=payload.instruction,
@@ -1173,8 +1202,7 @@ class CodexExecHandler:
                 )
             else:
                 message = f"command failed ({result.returncode}): {command_hint}"
-            if len(message) > 1024:
-                message = f"{message[:1021]}..."
+            message = _truncate_error_message(message)
             raise CodexWorkerHandlerError(message)
         return result
 
