@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import gzip
 import hashlib
 import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -102,6 +104,70 @@ _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
+_MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES = 64 * 1024
+_STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
+_NON_SOURCE_CHANGE_PREFIXES = (
+    ".github/",
+    ".specify/",
+    "docs/",
+    "specs/",
+    "samples/",
+)
+_NON_SOURCE_CHANGE_FILENAMES = frozenset(
+    {
+        ".dockerignore",
+        ".gitignore",
+        "changelog",
+        "changelog.md",
+        "license",
+        "license.md",
+        "license.txt",
+        "readme",
+        "readme.md",
+        "readme.rst",
+    }
+)
+_NON_SOURCE_CHANGE_EXTENSIONS = frozenset(
+    {
+        ".adoc",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".md",
+        ".pdf",
+        ".png",
+        ".rst",
+        ".svg",
+        ".txt",
+        ".webp",
+    }
+)
+_VERIFICATION_COMMAND_PATTERNS = (
+    re.compile(r"(?:^|\s)(?:\./)?tools/test_unit\.sh(?:\s|$)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:python(?:3)?\s+-m\s+pytest|pytest)(?:\s|$)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:tox|nox|ruff|flake8|pylint|mypy)(?:\s|$)", re.IGNORECASE),
+    re.compile(
+        r"(?:^|\s)(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|build)(?:\s|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|\s)(?:go\s+(?:test|vet|build)|cargo\s+(?:test|clippy|build))(?:\s|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|\s)(?:make|just)\s+(?:test|lint|build|check|verify)(?:\s|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"(?:^|\s)(?:eslint|stylelint|shellcheck|golangci-lint|hadolint|phpunit|"
+            r"vitest|jest|mocha|mvn\s+(?:test|verify)|gradle\s+test|"
+            r"\./gradlew\s+test)(?:\s|$)"
+        ),
+        re.IGNORECASE,
+    ),
+)
+_VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -949,6 +1015,41 @@ class StepGateSpec:
 
     gate_type: str
     source_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class PublishPreflightResult:
+    """Outcome of publish quality preflight checks."""
+
+    passed: bool
+    reason: str
+    changed_paths: tuple[str, ...]
+    source_code_paths: tuple[str, ...]
+    verification_evidence: tuple[dict[str, Any], ...]
+    verification_skip_reason: dict[str, str] | None
+    report_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class StepLogReadResult:
+    """Bounded step-log read output with truncation metadata."""
+
+    content: bytes
+    source_delta_bytes: int
+    truncated: bool
+    omitted_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class StepLogCopyResult:
+    """Persisted step-log snapshot details including optional companion artifacts."""
+
+    truncated: bool
+    preview_bytes: int
+    source_delta_bytes: int
+    omitted_bytes: int
+    full_log_path: Path | None = None
+    metadata_path: Path | None = None
 
 
 class QueueApiClient:
@@ -3166,6 +3267,318 @@ class CodexWorker:
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _parse_git_status_paths(status_output: str) -> tuple[str, ...]:
+        """Extract changed paths from `git status --porcelain` output."""
+
+        def _split_rename_paths(
+            entry: str,
+            *,
+            is_renamed: bool,
+        ) -> tuple[str, ...]:
+            if not is_renamed or " -> " not in entry:
+                return (entry,)
+            try:
+                tokens = tuple(shlex.split(entry))
+            except ValueError:
+                return (entry,)
+            if len(tokens) == 3 and tokens[1] == "->":
+                return (tokens[0], tokens[2])
+            return (entry,)
+
+        def _normalize_path(path_text: str) -> str:
+            text = str(path_text or "").strip()
+            if text.startswith('"') and text.endswith('"') and len(text) >= 2:
+                return text[1:-1]
+            return text
+
+        paths: list[str] = []
+        for raw_line in str(status_output or "").splitlines():
+            line = raw_line.rstrip()
+            if len(line) < 4:
+                continue
+            status = line[:2]
+            is_renamed = ("R" in status) or ("C" in status)
+            entry = line[3:].strip()
+            if not entry:
+                continue
+            for path in _split_rename_paths(entry, is_renamed=is_renamed):
+                normalized_path = _normalize_path(path)
+                if normalized_path:
+                    paths.append(normalized_path)
+        return tuple(dict.fromkeys(paths))
+
+    @staticmethod
+    def _is_source_code_change_path(path_text: str) -> bool:
+        """Return True when a changed path likely impacts executable code."""
+
+        normalized = str(path_text or "").strip()
+        if normalized.startswith("./"):
+            normalized = normalized.removeprefix("./")
+        if not normalized:
+            return False
+        lowered = normalized.lower()
+        for prefix in _NON_SOURCE_CHANGE_PREFIXES:
+            if lowered.startswith(prefix):
+                return False
+
+        filename = lowered.rsplit("/", 1)[-1]
+        if filename in _NON_SOURCE_CHANGE_FILENAMES:
+            return False
+
+        extension = Path(filename).suffix.lower()
+        if extension in _NON_SOURCE_CHANGE_EXTENSIONS:
+            return False
+        return True
+
+    @staticmethod
+    def _looks_like_verification_command(command: str) -> bool:
+        """Return True when command resembles test/lint/build verification."""
+
+        normalized = " ".join(str(command or "").split())
+        if not normalized:
+            return False
+        return any(
+            pattern.search(normalized) for pattern in _VERIFICATION_COMMAND_PATTERNS
+        )
+
+    @classmethod
+    def _artifact_name_for_path(
+        cls, *, path: Path, prepared: PreparedTaskWorkspace
+    ) -> str:
+        """Resolve artifact-relative path label for preflight evidence."""
+
+        resolved = path.resolve(strict=False)
+        artifacts_root = prepared.artifacts_dir.resolve(strict=False)
+        if cls._is_relative_to(resolved, artifacts_root):
+            relative = resolved.relative_to(artifacts_root).as_posix()
+            return relative if relative != "." else path.name
+        return path.name
+
+    @classmethod
+    def _collect_verification_evidence(
+        cls, *, prepared: PreparedTaskWorkspace
+    ) -> tuple[dict[str, Any], ...]:
+        """Collect verification-command evidence from stage log artifacts."""
+
+        candidate_paths: list[Path] = [
+            prepared.execute_log_path,
+            prepared.artifacts_dir / "logs" / "execute.log",
+            prepared.artifacts_dir / "logs" / "codex_exec.log",
+        ]
+        step_logs_dir = prepared.artifacts_dir / "logs" / "steps"
+        if step_logs_dir.is_dir():
+            candidate_paths.extend(sorted(step_logs_dir.glob("step-*.log")))
+
+        unique_paths: list[Path] = []
+        seen_paths: set[str] = set()
+        for path in candidate_paths:
+            key = path.resolve(strict=False).as_posix()
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            unique_paths.append(path)
+
+        evidence: list[dict[str, Any]] = []
+        for log_path in unique_paths:
+            if not log_path.exists() or not log_path.is_file():
+                continue
+            try:
+                lines = log_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+            except OSError as exc:
+                logger.warning(
+                    "failed to collect verification evidence from stage log %s: %s",
+                    log_path,
+                    exc,
+                )
+                continue
+            artifact_name = cls._artifact_name_for_path(
+                path=log_path, prepared=prepared
+            )
+            for line_number, line in enumerate(lines, start=1):
+                if not line.startswith(_VERIFICATION_COMMAND_LOG_PREFIX):
+                    continue
+                command = line[len(_VERIFICATION_COMMAND_LOG_PREFIX) :].strip()
+                if not cls._looks_like_verification_command(command):
+                    continue
+                evidence.append(
+                    {
+                        "command": command,
+                        "artifact": artifact_name,
+                        "line": line_number,
+                    }
+                )
+        return tuple(evidence)
+
+    @staticmethod
+    def _resolve_publish_verification_skip_reason(
+        publish: Mapping[str, Any],
+    ) -> dict[str, str] | None:
+        """Normalize optional structured verification skip reason."""
+
+        raw_skip_reason = publish.get("verificationSkipReason")
+        if raw_skip_reason is None:
+            legacy_verification = publish.get("verification")
+            if isinstance(legacy_verification, Mapping) and (
+                "skipReason" in legacy_verification
+            ):
+                raise ValueError(
+                    "task.publish.verification.skipReason is not supported; "
+                    "use task.publish.verificationSkipReason instead"
+                )
+            return None
+        if not isinstance(raw_skip_reason, Mapping):
+            raise ValueError(
+                "task.publish.verificationSkipReason must be an object with category/reason"
+            )
+
+        category_raw = raw_skip_reason.get("category")
+        reason_raw = raw_skip_reason.get("reason")
+        category = re.sub(r"[^a-z0-9_-]+", "_", str(category_raw or "").strip().lower())
+        category = category.strip("_")
+        reason = " ".join(str(reason_raw or "").split())
+        if not category:
+            raise ValueError(
+                "task.publish.verificationSkipReason.category is required for intentional verification skip"
+            )
+        if not reason:
+            raise ValueError(
+                "task.publish.verificationSkipReason.reason is required for intentional verification skip"
+            )
+        normalized = {"category": category, "reason": reason}
+        ticket = " ".join(
+            str(
+                raw_skip_reason.get("ticket")
+                or raw_skip_reason.get("issue")
+                or raw_skip_reason.get("url")
+                or ""
+            ).split()
+        )
+        if ticket:
+            normalized["ticket"] = ticket
+        return normalized
+
+    @classmethod
+    def _append_skip_reason_to_pr_body(
+        cls,
+        *,
+        pr_body: str,
+        skip_reason: Mapping[str, str],
+    ) -> str:
+        """Append structured verification skip metadata to PR body."""
+
+        category = cls._sanitize_metadata_footer_value(skip_reason.get("category"))
+        reason = cls._sanitize_metadata_footer_value(skip_reason.get("reason"))
+        ticket = cls._sanitize_metadata_footer_value(
+            skip_reason.get("ticket"), fallback=""
+        )
+        lines = [
+            "",
+            "## Verification",
+            "- Status: skipped",
+            f"- Category: {category}",
+            f"- Reason: {reason}",
+            "- Evidence artifact: reports/publish_preflight.json",
+        ]
+        if ticket:
+            lines.append(f"- Ticket: {ticket}")
+        suffix = "\n".join(lines) + "\n"
+        base = pr_body.rstrip()
+        if not base:
+            return suffix.lstrip()
+        return f"{base}\n{suffix}"
+
+    def _run_publish_preflight(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        publish: Mapping[str, Any],
+        status_output: str,
+    ) -> PublishPreflightResult:
+        """Validate publish quality requirements and persist preflight report."""
+
+        changed_paths = self._parse_git_status_paths(status_output)
+        source_code_paths = tuple(
+            path for path in changed_paths if self._is_source_code_change_path(path)
+        )
+        verification_evidence = self._collect_verification_evidence(prepared=prepared)
+
+        skip_reason: dict[str, str] | None = None
+        skip_reason_error: str | None = None
+        try:
+            skip_reason = self._resolve_publish_verification_skip_reason(publish)
+        except ValueError as exc:
+            skip_reason_error = str(exc)
+
+        verification_required = bool(source_code_paths)
+        skip_used = verification_required and not verification_evidence
+
+        if skip_used:
+            if skip_reason_error:
+                passed = False
+                reason = (
+                    "publish preflight failed: source-code changes require verification, "
+                    f"and skip reason is invalid ({skip_reason_error})"
+                )
+            elif skip_reason is None:
+                passed = False
+                reason = (
+                    "publish preflight failed: source-code changes detected but no "
+                    "verification command result was captured in artifacts; provide "
+                    "task.publish.verificationSkipReason with category/reason to skip intentionally"
+                )
+            else:
+                passed = True
+                reason = "publish preflight passed: verification intentionally skipped"
+        else:
+            passed = True
+            if verification_required:
+                reason = (
+                    "publish preflight passed: verification command evidence captured"
+                )
+            else:
+                reason = "publish preflight passed: no source-code changes detected"
+
+        effective_skip_reason = skip_reason if skip_used and skip_reason else None
+        report_payload = {
+            "schemaVersion": "v1",
+            "status": "PASS" if passed else "FAIL",
+            "reason": reason,
+            "changes": {
+                "changedPaths": list(changed_paths),
+                "sourceCodePaths": list(source_code_paths),
+            },
+            "verification": {
+                "required": verification_required,
+                "evidenceCount": len(verification_evidence),
+                "evidence": list(verification_evidence),
+                "skipped": effective_skip_reason is not None,
+                "skipReason": effective_skip_reason,
+                "skipReasonError": skip_reason_error if skip_used else None,
+            },
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        redacted = self._redact_payload(report_payload)
+        serialized_payload = redacted if isinstance(redacted, dict) else report_payload
+
+        report_path = prepared.artifacts_dir / "reports" / "publish_preflight.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(serialized_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return PublishPreflightResult(
+            passed=passed,
+            reason=reason,
+            changed_paths=tuple(changed_paths),
+            source_code_paths=tuple(source_code_paths),
+            verification_evidence=tuple(verification_evidence),
+            verification_skip_reason=effective_skip_reason,
+            report_path=report_path,
+        )
+
     async def _run_publish_stage(
         self,
         *,
@@ -3218,6 +3631,14 @@ class CodexWorker:
                 check=False,
                 env=prepared.publish_command_env,
             )
+            verification_payload: dict[str, Any] = {
+                "required": False,
+                "status": "not_required",
+                "evidenceCount": 0,
+                "evidence": [],
+                "skipReason": None,
+            }
+            preflight_result: PublishPreflightResult | None = None
             if not status.stdout.strip():
                 result_payload = {
                     "mode": publish_mode,
@@ -3225,6 +3646,7 @@ class CodexWorker:
                     "prUrl": None,
                     "skipped": True,
                     "reason": "no local changes",
+                    "verification": verification_payload,
                 }
                 prepared.publish_result_path.write_text(
                     json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
@@ -3266,6 +3688,65 @@ class CodexWorker:
                     },
                 )
                 return "publish skipped: no local changes"
+
+            preflight_result = self._run_publish_preflight(
+                prepared=prepared,
+                publish=publish,
+                status_output=status.stdout,
+            )
+            self._append_stage_log(prepared.publish_log_path, preflight_result.reason)
+            staged_artifacts.append(
+                ArtifactUpload(
+                    path=preflight_result.report_path,
+                    name="reports/publish_preflight.json",
+                    content_type="application/json",
+                )
+            )
+            verification_payload["required"] = bool(preflight_result.source_code_paths)
+            verification_payload["evidenceCount"] = len(
+                preflight_result.verification_evidence
+            )
+            verification_payload["evidence"] = list(
+                preflight_result.verification_evidence
+            )
+            verification_payload["skipReason"] = (
+                preflight_result.verification_skip_reason
+            )
+            if preflight_result.verification_skip_reason is not None:
+                verification_payload["status"] = "skipped"
+            elif preflight_result.source_code_paths:
+                verification_payload["status"] = "passed"
+
+            if not preflight_result.passed:
+                verification_payload["status"] = "failed"
+                failure_payload = {
+                    "mode": publish_mode,
+                    "branch": prepared.working_branch,
+                    "baseBranch": prepared.starting_branch,
+                    "prUrl": None,
+                    "skipped": False,
+                    "reason": preflight_result.reason,
+                    "verification": verification_payload,
+                }
+                prepared.publish_result_path.write_text(
+                    json.dumps(failure_payload, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                staged_artifacts.extend(
+                    [
+                        ArtifactUpload(
+                            path=prepared.publish_log_path,
+                            name="logs/publish.log",
+                            content_type="text/plain",
+                        ),
+                        ArtifactUpload(
+                            path=prepared.publish_result_path,
+                            name="publish_result.json",
+                            content_type="application/json",
+                        ),
+                    ]
+                )
+                raise RuntimeError(preflight_result.reason)
 
             await self._run_stage_command(
                 ["git", "checkout", prepared.working_branch],
@@ -3320,6 +3801,11 @@ class CodexWorker:
                     base_branch=pr_base,
                     head_branch=prepared.working_branch,
                 )
+                if preflight_result and preflight_result.verification_skip_reason:
+                    pr_body = self._append_skip_reason_to_pr_body(
+                        pr_body=pr_body,
+                        skip_reason=preflight_result.verification_skip_reason,
+                    )
                 pr_result = await self._run_stage_command(
                     [
                         self._resolve_gh_binary(),
@@ -3345,6 +3831,14 @@ class CodexWorker:
                     if pr_url is None
                     else f"published PR {pr_url}"
                 )
+            if preflight_result and preflight_result.verification_skip_reason:
+                skip_category = preflight_result.verification_skip_reason.get(
+                    "category"
+                )
+                if skip_category:
+                    publish_note = (
+                        f"{publish_note}; verification skipped ({skip_category})"
+                    )
 
             result_payload = {
                 "mode": publish_mode,
@@ -3352,6 +3846,7 @@ class CodexWorker:
                 "baseBranch": prepared.starting_branch,
                 "prUrl": pr_url,
                 "skipped": False,
+                "verification": verification_payload,
             }
             prepared.publish_result_path.write_text(
                 json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
@@ -3468,22 +3963,30 @@ class CodexWorker:
         result_artifacts: Sequence[ArtifactUpload],
         step_log_path: Path,
         step_patch_path: Path,
-        step_log_offsets: MutableMapping[str, int] | None = None,
+        step_log_offsets: MutableMapping[str, Any] | None = None,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
         step_log_name = f"logs/steps/step-{step.step_index:04d}.log"
+        step_log_full_name = self._step_log_full_artifact_name(step_log_name)
+        step_log_metadata_name = self._step_log_companion_metadata_artifact_name(
+            step_log_name
+        )
         step_patch_name = f"patches/steps/step-{step.step_index:04d}.patch"
         normalized: list[ArtifactUpload] = []
         has_step_log = False
         has_step_patch = False
+        step_log_copy_result: StepLogCopyResult | None = None
         for artifact in result_artifacts:
             if artifact.name in {"logs/codex_exec.log", "logs/execute.log"}:
                 if artifact.path.exists():
-                    self._copy_incremental_step_log(
+                    step_log_copy_result = self._copy_incremental_step_log(
                         source_path=artifact.path,
                         destination_path=step_log_path,
                         step_log_offsets=step_log_offsets,
+                        preview_artifact_name=step_log_name,
+                        full_artifact_name=step_log_full_name,
+                        metadata_artifact_name=step_log_metadata_name,
                     )
                     normalized.append(
                         ArtifactUpload(
@@ -3523,6 +4026,33 @@ class CodexWorker:
                     required=False,
                 )
             )
+        if step_log_copy_result is not None and step_log_copy_result.truncated:
+            if (
+                step_log_copy_result.full_log_path is not None
+                and step_log_copy_result.full_log_path.exists()
+                and step_log_copy_result.full_log_path.stat().st_size > 0
+            ):
+                normalized.append(
+                    ArtifactUpload(
+                        path=step_log_copy_result.full_log_path,
+                        name=step_log_full_name,
+                        content_type="application/gzip",
+                        required=False,
+                    )
+                )
+            if (
+                step_log_copy_result.metadata_path is not None
+                and step_log_copy_result.metadata_path.exists()
+                and step_log_copy_result.metadata_path.stat().st_size > 0
+            ):
+                normalized.append(
+                    ArtifactUpload(
+                        path=step_log_copy_result.metadata_path,
+                        name=step_log_metadata_name,
+                        content_type="application/json",
+                        required=False,
+                    )
+                )
         if (
             not has_step_patch
             and step_patch_path.exists()
@@ -3544,7 +4074,10 @@ class CodexWorker:
         source_path: Path,
         destination_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
-    ) -> None:
+        preview_artifact_name: str | None = None,
+        full_artifact_name: str | None = None,
+        metadata_artifact_name: str | None = None,
+    ) -> StepLogCopyResult:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
         source_stat = source_path.lstat()
@@ -3556,19 +4089,76 @@ class CodexWorker:
         start_offset = 0
         if step_log_offsets is not None:
             offset_key = self._resolve_log_offset_key(source_path)
-            previous_offset = max(0, int(step_log_offsets.get(offset_key, 0)))
-            if previous_offset <= source_size:
+            previous_offset, previous_source_id = self._coerce_step_log_offset_entry(
+                step_log_offsets.get(offset_key)
+            )
+            source_id = self._step_log_source_id(source_stat=source_stat)
+            if (
+                not (
+                    previous_source_id and source_id and previous_source_id != source_id
+                )
+                and previous_offset <= source_size
+            ):
                 start_offset = previous_offset
-            step_log_offsets[offset_key] = source_size
+            step_log_offsets[offset_key] = self._build_step_log_offset_entry(
+                offset=source_size,
+                source_id=source_id,
+            )
 
-        bounded_content = self._read_bounded_step_log_bytes(
+        linkage_marker = None
+        if metadata_artifact_name:
+            linkage_marker = f"metadata={metadata_artifact_name}"
+        bounded_result = self._read_bounded_step_log_bytes(
             source_path=source_path,
             start_offset=start_offset,
             source_size=source_size,
             max_bytes=self._config.step_log_max_bytes,
+            linkage_marker=linkage_marker,
         )
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        destination_path.write_bytes(bounded_content)
+        destination_path.write_bytes(bounded_result.content)
+
+        full_log_path = self._step_log_companion_path(destination_path)
+        metadata_path = self._step_log_companion_metadata_path(destination_path)
+        if not bounded_result.truncated:
+            for stale_path in (full_log_path, metadata_path):
+                with suppress(FileNotFoundError):
+                    stale_path.unlink()
+            return StepLogCopyResult(
+                truncated=False,
+                preview_bytes=len(bounded_result.content),
+                source_delta_bytes=bounded_result.source_delta_bytes,
+                omitted_bytes=0,
+            )
+
+        self._write_step_log_companion_gzip(
+            source_path=source_path,
+            start_offset=start_offset,
+            source_size=source_size,
+            destination_path=full_log_path,
+        )
+        if preview_artifact_name and full_artifact_name and metadata_artifact_name:
+            self._write_step_log_companion_metadata(
+                destination_path=metadata_path,
+                preview_artifact_name=preview_artifact_name,
+                full_artifact_name=full_artifact_name,
+                source_delta_bytes=bounded_result.source_delta_bytes,
+                preview_bytes=len(bounded_result.content),
+                omitted_bytes=bounded_result.omitted_bytes,
+                metadata_artifact_name=metadata_artifact_name,
+            )
+            written_metadata_path: Path | None = metadata_path
+        else:
+            written_metadata_path = None
+
+        return StepLogCopyResult(
+            truncated=True,
+            preview_bytes=len(bounded_result.content),
+            source_delta_bytes=bounded_result.source_delta_bytes,
+            omitted_bytes=bounded_result.omitted_bytes,
+            full_log_path=full_log_path,
+            metadata_path=written_metadata_path,
+        )
 
     def _read_bounded_step_log_bytes(
         self,
@@ -3577,22 +4167,34 @@ class CodexWorker:
         start_offset: int,
         source_size: int,
         max_bytes: int,
-    ) -> bytes:
+        linkage_marker: str | None = None,
+    ) -> StepLogReadResult:
         """Read a bounded step log snapshot without loading huge deltas in memory."""
 
         unread_bytes = max(0, source_size - start_offset)
         if unread_bytes == 0 or max_bytes <= 0:
-            return b""
+            return StepLogReadResult(
+                content=b"",
+                source_delta_bytes=unread_bytes,
+                truncated=False,
+                omitted_bytes=0,
+            )
 
         if unread_bytes <= max_bytes:
             with source_path.open("rb") as handle:
                 if start_offset:
                     handle.seek(start_offset)
-                return handle.read(unread_bytes)
+                return StepLogReadResult(
+                    content=handle.read(unread_bytes),
+                    source_delta_bytes=unread_bytes,
+                    truncated=False,
+                    omitted_bytes=0,
+                )
 
         head_bytes, tail_bytes, marker = self._compute_step_log_truncation_plan(
             total_bytes=unread_bytes,
             max_bytes=max_bytes,
+            linkage_marker=linkage_marker,
         )
         with source_path.open("rb") as handle:
             handle.seek(start_offset)
@@ -3605,10 +4207,15 @@ class CodexWorker:
         safe_tail = self._utf8_safe_suffix(tail_content)
         bounded_content = safe_head + marker + safe_tail
         if len(bounded_content) > max_bytes:
-            return self._bounded_step_log_bytes(
+            bounded_content = self._bounded_step_log_bytes(
                 content=bounded_content, max_bytes=max_bytes
             )
-        return bounded_content
+        return StepLogReadResult(
+            content=bounded_content,
+            source_delta_bytes=unread_bytes,
+            truncated=True,
+            omitted_bytes=max(0, unread_bytes - head_bytes - tail_bytes),
+        )
 
     @staticmethod
     def _resolve_log_offset_key(path: Path) -> str:
@@ -3617,8 +4224,206 @@ class CodexWorker:
         return str(path.resolve(strict=False))
 
     @staticmethod
+    def _step_log_source_id(*, source_stat: os.stat_result) -> str | None:
+        """Return a stable source identifier for rotation detection."""
+
+        device = getattr(source_stat, "st_dev", 0)
+        inode = getattr(source_stat, "st_ino", 0)
+        if device == 0 and inode == 0:
+            return None
+        return f"{device}:{inode}"
+
+    @staticmethod
+    def _coerce_step_log_offset_entry(raw: object) -> tuple[int, str | None]:
+        """Normalize checkpoint entries from int or mapping forms."""
+
+        offset_raw = raw
+        source_id: str | None = None
+        if isinstance(raw, Mapping):
+            offset_raw = raw.get("offset")
+            source_id_raw = raw.get("sourceId")
+            if source_id_raw is not None:
+                candidate = str(source_id_raw).strip()
+                source_id = candidate or None
+        try:
+            offset_value = int(offset_raw if offset_raw is not None else 0)
+        except (TypeError, ValueError):
+            offset_value = 0
+        return (max(0, offset_value), source_id)
+
+    @staticmethod
+    def _build_step_log_offset_entry(
+        *, offset: int, source_id: str | None
+    ) -> dict[str, int | str]:
+        """Build a normalized checkpoint entry for one source log path."""
+
+        entry: dict[str, int | str] = {"offset": max(0, int(offset))}
+        if source_id:
+            entry["sourceId"] = source_id
+        return entry
+
+    @staticmethod
+    def _step_log_offsets_checkpoint_path(*, artifacts_dir: Path) -> Path:
+        """Return the persisted offset checkpoint path for execute-stage logs."""
+
+        checkpoint_state_dir = artifacts_dir / "state"
+        checkpoint_state_dir.mkdir(parents=True, exist_ok=True)
+        return checkpoint_state_dir / "step_log_offsets.json"
+
+    def _load_step_log_offsets_checkpoint(
+        self, *, artifacts_dir: Path
+    ) -> dict[str, dict[str, int | str]]:
+        """Load persisted step-log offsets for resume-safe delta capture."""
+
+        checkpoint_path = self._step_log_offsets_checkpoint_path(
+            artifacts_dir=artifacts_dir
+        )
+        try:
+            stat_result = checkpoint_path.lstat()
+            if (
+                stat_result.st_size < 0
+                or stat_result.st_size > _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES
+            ):
+                logger.warning(
+                    "Ignoring step log offset checkpoint with unexpected size (%d bytes): %s",
+                    stat_result.st_size,
+                    checkpoint_path,
+                )
+                return {}
+        except OSError:
+            return {}
+        if stat.S_ISLNK(stat_result.st_mode):
+            logger.warning(
+                "Ignoring step log offset checkpoint symlink: %s",
+                checkpoint_path,
+            )
+            return {}
+        try:
+            payload_text = checkpoint_path.read_text(encoding="utf-8")
+            payload = json.loads(payload_text)
+        except (
+            OSError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+            UnicodeDecodeError,
+        ):
+            logger.warning(
+                "Failed reading step log offset checkpoint at %s",
+                checkpoint_path,
+                exc_info=True,
+            )
+            return {}
+
+        if not isinstance(payload, Mapping):
+            return {}
+
+        raw_entries = payload.get("sources")
+        if raw_entries is None:
+            raw_entries = payload.get("offsets")
+        if raw_entries is None:
+            raw_entries = payload
+        if not isinstance(raw_entries, Mapping):
+            return {}
+
+        normalized: dict[str, dict[str, int | str]] = {}
+        for raw_key, raw_entry in raw_entries.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if raw_entries is payload and key in {"version", "sources", "offsets"}:
+                continue
+            offset, source_id = self._coerce_step_log_offset_entry(raw_entry)
+            normalized[key] = self._build_step_log_offset_entry(
+                offset=offset,
+                source_id=source_id,
+            )
+        return normalized
+
+    def _persist_step_log_offsets_checkpoint(
+        self,
+        *,
+        artifacts_dir: Path,
+        step_log_offsets: Mapping[str, object],
+    ) -> None:
+        """Persist resume checkpoints for step-log offset boundaries."""
+
+        if not step_log_offsets:
+            return
+
+        checkpoint_path = self._step_log_offsets_checkpoint_path(
+            artifacts_dir=artifacts_dir
+        )
+        temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
+        entries: dict[str, dict[str, int | str]] = {}
+        for raw_key, raw_entry in step_log_offsets.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            offset, source_id = self._coerce_step_log_offset_entry(raw_entry)
+            entries[key] = self._build_step_log_offset_entry(
+                offset=offset,
+                source_id=source_id,
+            )
+        if not entries:
+            return
+
+        payload = {
+            "version": _STEP_LOG_OFFSET_CHECKPOINT_VERSION,
+            "sources": entries,
+        }
+        try:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            parent_stat = checkpoint_path.parent.lstat()
+            if stat.S_ISLNK(parent_stat.st_mode):
+                logger.warning(
+                    "Ignoring step log offset checkpoint write to symlinked directory: %s",
+                    checkpoint_path.parent,
+                )
+                return
+
+            with suppress(OSError):
+                if stat.S_ISLNK(checkpoint_path.lstat().st_mode):
+                    logger.warning(
+                        "Ignoring step log offset checkpoint write to symlinked file: %s",
+                        checkpoint_path,
+                    )
+                    return
+
+            try:
+                temp_stat = temp_path.lstat()
+            except OSError:
+                temp_stat = None
+            else:
+                if stat.S_ISLNK(temp_stat.st_mode):
+                    logger.warning(
+                        "Ignoring step log offset checkpoint temp symlink: %s",
+                        temp_path,
+                    )
+                    return
+
+            open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            if hasattr(os, "O_NOFOLLOW"):
+                open_flags |= os.O_NOFOLLOW
+            with os.fdopen(
+                os.open(temp_path, open_flags, 0o644), "w", encoding="utf-8"
+            ) as temp_handle:
+                temp_handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            os.replace(temp_path, checkpoint_path)
+        except OSError:
+            with suppress(OSError):
+                temp_stat = temp_path.lstat()
+                if not stat.S_ISDIR(temp_stat.st_mode):
+                    temp_path.unlink()
+            logger.warning(
+                "Failed writing step log offset checkpoint at %s",
+                checkpoint_path,
+                exc_info=True,
+            )
+
+    @staticmethod
     def _compute_step_log_truncation_plan(
-        *, total_bytes: int, max_bytes: int
+        *, total_bytes: int, max_bytes: int, linkage_marker: str | None = None
     ) -> tuple[int, int, bytes]:
         """Plan bounded log content sizes and truncation marker."""
 
@@ -3633,6 +4438,11 @@ class CodexWorker:
                 f"{omitted_bytes} bytes from the middle; "
                 f"retained first {current_head} bytes and last {current_tail} bytes "
                 f"(cap={max_bytes}).\n"
+                + (
+                    f"[moonmind] step log linkage: {linkage_marker}\n"
+                    if linkage_marker
+                    else ""
+                )
             ).encode("utf-8")
 
         marker = _marker_for_plan(head_bytes, tail_bytes)
@@ -3709,6 +4519,88 @@ class CodexWorker:
         if len(bounded) > max_bytes:
             return bounded[-max_bytes:]
         return bounded
+
+    @staticmethod
+    def _step_log_full_artifact_name(step_log_name: str) -> str:
+        """Return compressed full-fidelity companion artifact name for a preview log."""
+
+        if step_log_name.endswith(".log"):
+            return f"{step_log_name[:-4]}.full.log.gz"
+        return f"{step_log_name}.full.log.gz"
+
+    @staticmethod
+    def _step_log_companion_metadata_artifact_name(step_log_name: str) -> str:
+        """Return linkage metadata artifact name for a preview step log."""
+
+        if step_log_name.endswith(".log"):
+            return f"{step_log_name[:-4]}.full.log.metadata.json"
+        return f"{step_log_name}.full.log.metadata.json"
+
+    @staticmethod
+    def _step_log_companion_path(step_log_path: Path) -> Path:
+        """Resolve compressed full companion path for a local preview step log path."""
+
+        return step_log_path.with_suffix(".full.log.gz")
+
+    @staticmethod
+    def _step_log_companion_metadata_path(step_log_path: Path) -> Path:
+        """Resolve linkage metadata path for a local preview step log path."""
+
+        return step_log_path.with_suffix(".full.log.metadata.json")
+
+    @staticmethod
+    def _write_step_log_companion_gzip(
+        *,
+        source_path: Path,
+        start_offset: int,
+        source_size: int,
+        destination_path: Path,
+    ) -> None:
+        """Write a gzip-compressed copy of the unread step-log delta."""
+
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        remaining = max(0, source_size - start_offset)
+        with source_path.open("rb") as source_handle:
+            source_handle.seek(start_offset)
+            with gzip.open(destination_path, "wb") as compressed_handle:
+                while remaining > 0:
+                    chunk = source_handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    compressed_handle.write(chunk)
+                    remaining -= len(chunk)
+
+    @staticmethod
+    def _write_step_log_companion_metadata(
+        *,
+        destination_path: Path,
+        preview_artifact_name: str,
+        full_artifact_name: str,
+        source_delta_bytes: int,
+        preview_bytes: int,
+        omitted_bytes: int,
+        metadata_artifact_name: str,
+    ) -> None:
+        """Persist structured linkage metadata for preview/full step-log artifacts."""
+
+        payload = {
+            "kind": "moonmind.stepLogLinkage",
+            "version": 1,
+            "truncated": True,
+            "previewArtifact": preview_artifact_name,
+            "fullArtifact": full_artifact_name,
+            "fullArtifactContentType": "application/gzip",
+            "fullArtifactEncoding": "gzip",
+            "metadataArtifact": metadata_artifact_name,
+            "sourceDeltaBytes": source_delta_bytes,
+            "previewBytes": preview_bytes,
+            "omittedBytes": max(0, omitted_bytes),
+        }
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        destination_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def _evaluate_step_gate(
         self,
@@ -4243,7 +5135,9 @@ class CodexWorker:
         redacted_command = self._redact_command_for_log(
             command, redaction_values=merged_redaction_values
         )
-        self._append_stage_log(log_path, f"$ {' '.join(redacted_command)}")
+        self._append_stage_log(
+            log_path, f"{_VERIFICATION_COMMAND_LOG_PREFIX}{' '.join(redacted_command)}"
+        )
         raise RuntimeError("Codex execution handler is missing command runner")
 
     @staticmethod
@@ -5128,7 +6022,9 @@ class CodexWorker:
         cancel_event = getattr(self, "_active_cancel_event", None)
         pause_event = getattr(self, "_active_pause_event", None)
         step_artifacts: list[ArtifactUpload] = []
-        step_log_offsets: dict[str, int] = {}
+        step_log_offsets = self._load_step_log_offsets_checkpoint(
+            artifacts_dir=prepared.artifacts_dir
+        )
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -5305,6 +6201,10 @@ class CodexWorker:
                 result_artifacts=step_result.artifacts,
                 step_log_path=step_log_path,
                 step_patch_path=step_patch_path,
+                step_log_offsets=step_log_offsets,
+            )
+            self._persist_step_log_offsets_checkpoint(
+                artifacts_dir=prepared.artifacts_dir,
                 step_log_offsets=step_log_offsets,
             )
             step_artifacts.extend(normalized_step_artifacts)
@@ -5700,13 +6600,16 @@ class CodexWorker:
                 cwd=prepared.repo_dir,
                 log_path=prepared.execute_log_path,
             )
-            run_command, container_name, artifact_dir_in_container, run_env = (
-                self._build_container_run_command(
-                    job_id=job_id,
-                    repository=repository,
-                    prepared=prepared,
-                    container_spec=container_spec,
-                )
+            (
+                run_command,
+                container_name,
+                artifact_dir_in_container,
+                run_env,
+            ) = self._build_container_run_command(
+                job_id=job_id,
+                repository=repository,
+                prepared=prepared,
+                container_spec=container_spec,
             )
             run_command_env = dict(environ)
             run_command_env.update(run_env)

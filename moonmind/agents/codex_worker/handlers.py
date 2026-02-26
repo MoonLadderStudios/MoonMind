@@ -21,33 +21,19 @@ from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
 
-_MAX_ERROR_MESSAGE_LENGTH = 1024
-_TRUNCATION_SUFFIX = "..."
-_REDACTED_MARKER = "[REDACTED]"
-_REDACTED_PREFIX = "[RED"
+_MAX_ERROR_MESSAGE_CHARS = 1024
 
 
 def _truncate_error_message(
-    message: str, *, max_length: int = _MAX_ERROR_MESSAGE_LENGTH
+    message: str,
+    *,
+    max_chars: int = _MAX_ERROR_MESSAGE_CHARS,
 ) -> str:
-    if len(message) <= max_length:
+    if len(message) <= max_chars:
         return message
-
-    if max_length <= len(_TRUNCATION_SUFFIX):
-        return message[:max_length]
-
-    available = max_length - len(_TRUNCATION_SUFFIX)
-    truncated = message[:available]
-    marker_start = truncated.rfind("[")
-    if (
-        marker_start != -1
-        and truncated[marker_start:].startswith(_REDACTED_PREFIX)
-        and _REDACTED_MARKER.startswith(truncated[marker_start:])
-        and truncated[marker_start:] != _REDACTED_MARKER
-    ):
-        keep_prefix = max(0, available - len(_REDACTED_MARKER))
-        truncated = f"{truncated[:keep_prefix]}{_REDACTED_MARKER}"
-    return f"{truncated}{_TRUNCATION_SUFFIX}"
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -246,6 +232,18 @@ class CodexSkillPayload:
             publish_mode=publish_mode,
             publish_base_branch=publish_base_branch,
         )
+
+
+def _truncate_error_message(
+    message: str,
+    *,
+    max_chars: int = _MAX_ERROR_MESSAGE_CHARS,
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 class CodexExecHandler:
@@ -827,7 +825,7 @@ class CodexExecHandler:
         self._append_log(
             log_path,
             self._redact_text(
-                f"$ {' '.join(command)}",
+                f"[command] $ {' '.join(command)}",
                 extra_redaction_values=redaction_values,
             ),
         )

@@ -1,6 +1,6 @@
 import io
 import logging
-import os
+from pathlib import Path
 
 
 def insert_text_file(
@@ -11,15 +11,21 @@ def insert_text_file(
         logger.debug("No file path provided for text.")
         return False
     try:
-        if not os.path.exists(file_path):
-            logger.warning(f"File not found: {file_path}")
+        file_path_obj = Path(file_path)
+
+        if any(part == ".." for part in file_path_obj.parts):
+            logger.warning(f"Potential path traversal detected: {file_path}")
             return False
-        if not os.path.isfile(file_path):
-            logger.warning(f"Path is not a file: {file_path}")
+
+        if not file_path_obj.exists():
+            logger.warning(f"File not found: {file_path_obj}")
+            return False
+        if not file_path_obj.is_file():
+            logger.warning(f"Path is not a file: {file_path_obj}")
             return False
 
         # Read current content
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path_obj, "r", encoding="utf-8") as f:
             current_lines = f.readlines()
 
         # Determine the 0-indexed insertion point, clamped
@@ -57,7 +63,7 @@ def insert_text_file(
             f.writelines(modified_content_lines)
 
         logger.info(
-            f"Successfully inserted text in file: {file_path} at line {line_number}"
+            f"Successfully inserted text in file: {file_path_obj} at line {line_number}"
         )
         return True
     except Exception as e:

@@ -21,6 +21,9 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueJobAuthorizationError,
     AgentQueueService,
     AgentQueueValidationError,
+    QueueSystemMetadata,
+    WorkerPauseMetrics,
+    WorkerPauseSnapshot,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
@@ -110,6 +113,108 @@ async def test_claim_job_short_circuits_when_paused() -> None:
     repo.claim_job.assert_not_awaited()
 
 
+async def test_resume_worker_pause_drops_unknown_actor_user_id() -> None:
+    """Resume should still work when actor id no longer exists."""
+
+    repo = AsyncMock()
+    actor_user_id = uuid4()
+    now = datetime.now(UTC)
+    pause_state = models.SystemWorkerPauseState(
+        id=1,
+        paused=True,
+        mode=models.WorkerPauseMode.DRAIN,
+        reason="maintenance",
+        requested_at=now,
+        updated_at=now,
+        version=3,
+    )
+    repo.get_pause_state.return_value = pause_state
+    repo.user_exists.return_value = False
+    service = AgentQueueService(repo)
+    service._build_worker_pause_metrics = AsyncMock(
+        return_value=WorkerPauseMetrics(queued=2, running=1, stale_running=0)
+    )
+    service._build_worker_pause_snapshot = AsyncMock(
+        return_value=WorkerPauseSnapshot(
+            system=QueueSystemMetadata(
+                workers_paused=False,
+                mode=None,
+                reason="resume",
+                version=4,
+                requested_by_user_id=None,
+                requested_at=None,
+                updated_at=now,
+            ),
+            metrics=WorkerPauseMetrics(queued=2, running=1, stale_running=0),
+            audit_events=(),
+        )
+    )
+
+    await service.apply_worker_pause_action(
+        action="resume",
+        mode=None,
+        reason="deploy complete",
+        actor_user_id=actor_user_id,
+        force_resume=True,
+    )
+
+    update_kwargs = repo.update_pause_state.await_args.kwargs
+    assert update_kwargs["requested_by_user_id"] is None
+    event_kwargs = repo.append_system_control_event.await_args.kwargs
+    assert event_kwargs["actor_user_id"] is None
+
+
+async def test_resume_worker_pause_preserves_known_actor_user_id() -> None:
+    """Resume should retain actor metadata when the user row exists."""
+
+    repo = AsyncMock()
+    actor_user_id = uuid4()
+    now = datetime.now(UTC)
+    pause_state = models.SystemWorkerPauseState(
+        id=1,
+        paused=True,
+        mode=models.WorkerPauseMode.DRAIN,
+        reason="maintenance",
+        requested_at=now,
+        updated_at=now,
+        version=3,
+    )
+    repo.get_pause_state.return_value = pause_state
+    repo.user_exists.return_value = True
+    service = AgentQueueService(repo)
+    service._build_worker_pause_metrics = AsyncMock(
+        return_value=WorkerPauseMetrics(queued=0, running=0, stale_running=0)
+    )
+    service._build_worker_pause_snapshot = AsyncMock(
+        return_value=WorkerPauseSnapshot(
+            system=QueueSystemMetadata(
+                workers_paused=False,
+                mode=None,
+                reason="resume",
+                version=4,
+                requested_by_user_id=actor_user_id,
+                requested_at=None,
+                updated_at=now,
+            ),
+            metrics=WorkerPauseMetrics(queued=0, running=0, stale_running=0),
+            audit_events=(),
+        )
+    )
+
+    await service.apply_worker_pause_action(
+        action="resume",
+        mode=None,
+        reason="deploy complete",
+        actor_user_id=actor_user_id,
+        force_resume=False,
+    )
+
+    update_kwargs = repo.update_pause_state.await_args.kwargs
+    assert update_kwargs["requested_by_user_id"] == actor_user_id
+    event_kwargs = repo.append_system_control_event.await_args.kwargs
+    assert event_kwargs["actor_user_id"] == actor_user_id
+
+
 async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
     """Retryable failures should back off then dead-letter after exhaustion."""
 
@@ -129,7 +234,7 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
             await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
 
             first = await service.fail_job(
@@ -148,7 +253,7 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
             await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
             second = await service.fail_job(
                 job_id=job.id,
@@ -179,7 +284,7 @@ async def test_heartbeat_triggers_runtime_timeout(tmp_path: Path) -> None:
             claim = await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
             claimed = claim.job
             assert claimed is not None
@@ -220,11 +325,11 @@ async def test_get_queue_safeguard_snapshot_classifies_jobs(tmp_path: Path) -> N
                 payload={"repository": "Moon/Mind", "instruction": "run"},
             )
             await repo.commit()
-            for _ in (fresh, timed_out, stale):
+            for index, _ in enumerate((fresh, timed_out, stale), start=1):
                 await service.claim_job(
-                    worker_id="executor",
+                    worker_id=f"executor-{index}",
                     lease_seconds=30,
-                    worker_capabilities=["codex", "git"],
+                    worker_capabilities=["codex", "git", "gh"],
                 )
             fresh.started_at = datetime.now(UTC)
             timed_out.started_at = datetime.now(UTC) - timedelta(seconds=10)
@@ -255,7 +360,7 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
             claim = await service.claim_job(
                 worker_id="executor",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
             claimed = claim.job
             assert claimed is not None
@@ -292,7 +397,7 @@ async def test_recover_job_requires_owner_or_operator(tmp_path: Path) -> None:
             await service.claim_job(
                 worker_id="executor",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
 
             with pytest.raises(AgentQueueJobAuthorizationError):
@@ -873,10 +978,10 @@ async def test_migration_telemetry_reports_volume_by_type(
     assert "publishedRate" in telemetry.publish_outcomes
 
 
-async def test_extract_publish_mode_defaults_to_none_when_absent() -> None:
-    """Telemetry parser should not count missing publish metadata as requested."""
+async def test_extract_publish_mode_defaults_to_pr_when_absent() -> None:
+    """Telemetry parser should use the publish default when metadata is missing."""
 
-    assert AgentQueueService._extract_publish_mode({}) == "none"
+    assert AgentQueueService._extract_publish_mode({}) == "pr"
     assert (
         AgentQueueService._extract_publish_mode(
             {"task": {"publish": {"mode": "branch"}}}

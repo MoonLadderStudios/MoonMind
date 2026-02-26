@@ -10,7 +10,7 @@ from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI, status
+from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.agent_queue import (
@@ -556,12 +556,34 @@ async def test_require_worker_auth_rejects_missing_credentials_when_oidc_enabled
     """Missing worker token and missing OIDC user should fail authentication."""
 
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
-    with pytest.raises(AgentQueueAuthenticationError):
+    with pytest.raises(HTTPException) as exc_info:
         await _require_worker_auth(
             worker_token=None,
             service=AsyncMock(),
             user=None,
         )
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.detail["code"] == "worker_auth_failed"
+
+
+@pytest.mark.asyncio
+async def test_require_worker_auth_maps_invalid_token_to_401() -> None:
+    """Invalid worker tokens should map to HTTP 401 instead of bubbling as 500."""
+
+    mock_service = AsyncMock()
+    mock_service.resolve_worker_token.side_effect = AgentQueueAuthenticationError(
+        "invalid worker token"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _require_worker_auth(
+            worker_token="mmwt_invalid",
+            service=mock_service,
+            user=None,
+        )
+
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.detail["code"] == "worker_auth_failed"
 
 
 def test_heartbeat_job_includes_system_metadata(
@@ -920,7 +942,8 @@ def test_list_jobs_with_summary_returns_compact_payload(
     response = test_client.get("/api/queue/jobs?summary=true&limit=50")
 
     assert response.status_code == 200
-    payload = response.json()["items"][0]["payload"]
+    body = response.json()
+    payload = body["items"][0]["payload"]
     assert payload["runtime"] == "codex"
     assert payload["task"]["runtime"]["mode"] == "codex"
     assert payload["task"]["skill"]["id"] == "speckit-run"
@@ -931,6 +954,15 @@ def test_list_jobs_with_summary_returns_compact_payload(
         == "This is a long instruction that should be trimmed for list responses."
     )
     assert "unrelated" not in payload
+    assert body["offset"] == 0
+    assert body["limit"] == 50
+    assert body["hasMore"] is False
+    service.list_jobs.assert_awaited_once_with(
+        status=None,
+        job_type=None,
+        limit=51,
+        offset=0,
+    )
 
 
 def test_list_jobs_omits_finish_summary_by_default(
@@ -956,6 +988,31 @@ def test_list_jobs_omits_finish_summary_by_default(
     assert item["finishOutcomeCode"] == "NO_CHANGES"
     assert item["finishOutcomeStage"] == "publish"
     assert "finishSummary" not in item
+
+
+def test_list_jobs_includes_has_more_and_offset_metadata(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """List responses should expose pagination metadata for queue dashboards."""
+
+    test_client, service = client
+    jobs = [_build_job() for _ in range(51)]
+    service.list_jobs.return_value = jobs
+
+    response = test_client.get("/api/queue/jobs?limit=50&offset=100")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 50
+    assert body["offset"] == 100
+    assert body["limit"] == 50
+    assert body["hasMore"] is True
+    service.list_jobs.assert_awaited_once_with(
+        status=None,
+        job_type=None,
+        limit=51,
+        offset=100,
+    )
 
 
 def test_get_job_finish_summary_returns_json_payload(

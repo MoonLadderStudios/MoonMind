@@ -107,7 +107,7 @@
 
 **Purpose**: Finalize docs/testing and validate implementation scope.
 
-- [X] T025 [P] Update dashboard implementation references in `docs/TaskUiArchitecture.md` and `docs/TailwindStyleSystem.md` with implemented route/style details.
+- [X] T025 [P] Update dashboard implementation references in `docs/TaskUiArchitecture.md` and `docs/TaskDashboardStyleSystem.md` with implemented route/style details.
 - [X] T026 Run unit validation via `./tools/test_unit.sh`.
 - [X] T027 Run manual implementation scope validation against tasks and git diff (repository does not include `.specify/scripts/bash/validate-implementation-scope.sh`).
 

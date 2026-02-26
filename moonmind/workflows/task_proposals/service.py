@@ -171,12 +171,6 @@ class TaskProposalService:
         dedup_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
         return dedup_key[:512], dedup_hash
 
-    @staticmethod
-    def _normalize_datetime(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
-
     def _normalize_category(self, value: object) -> str | None:
         text = self._clean_str(value).lower()
         if not text:
@@ -583,17 +577,12 @@ class TaskProposalService:
         origin_id: UUID | None,
         cursor: str | None,
         limit: int,
-        include_snoozed: bool = False,
-        only_snoozed: bool = False,
     ) -> tuple[list[TaskProposal], str | None]:
         if limit < 1 or limit > 200:
             raise TaskProposalValidationError("limit must be between 1 and 200")
         normalized_category = self._normalize_category(category)
         normalized_repository = self._clean_str(repository) or None
         cursor_tuple = self._decode_cursor(cursor) if cursor else None
-        now = datetime.now(UTC)
-        await self._repository.expire_snoozed(now=now)
-        await self._repository.commit()
         proposals, has_more = await self._repository.list_proposals(
             status=status,
             category=normalized_category,
@@ -602,9 +591,6 @@ class TaskProposalService:
             origin_id=origin_id,
             cursor=cursor_tuple,
             limit=limit,
-            now=now,
-            include_snoozed=include_snoozed,
-            only_snoozed=only_snoozed,
         )
         next_cursor = None
         if has_more and proposals:
@@ -763,51 +749,4 @@ class TaskProposalService:
         logger.info(
             "Updated proposal %s review priority to %s", proposal.id, value.value
         )
-        return proposal
-
-    async def snooze_proposal(
-        self,
-        *,
-        proposal_id: UUID,
-        until: datetime,
-        note: str | None,
-        user_id: UUID,
-    ) -> TaskProposal:
-        proposal = await self._repository.get_proposal_for_update(proposal_id)
-        if proposal.status is not TaskProposalStatus.OPEN:
-            raise TaskProposalStatusError(
-                f"proposal status {proposal.status.value} cannot be snoozed"
-            )
-        normalized_until = self._normalize_datetime(until)
-        if normalized_until <= datetime.now(UTC):
-            raise TaskProposalValidationError("snooze expiration must be in the future")
-        cleaned_note = self._scrub_text(self._clean_str(note)) or None
-        await self._repository.snooze(
-            proposal=proposal,
-            until=normalized_until,
-            user_id=user_id,
-            note=cleaned_note,
-        )
-        await self._repository.commit()
-        await self._repository.refresh(proposal)
-        logger.info(
-            "Snoozed proposal %s until %s", proposal.id, normalized_until.isoformat()
-        )
-        return proposal
-
-    async def unsnooze_proposal(
-        self,
-        *,
-        proposal_id: UUID,
-        user_id: UUID,
-    ) -> TaskProposal:
-        proposal = await self._repository.get_proposal_for_update(proposal_id)
-        if proposal.status is not TaskProposalStatus.OPEN:
-            raise TaskProposalStatusError(
-                f"proposal status {proposal.status.value} cannot be unsnoozed"
-            )
-        await self._repository.unsnooze(proposal=proposal, user_id=user_id)
-        await self._repository.commit()
-        await self._repository.refresh(proposal)
-        logger.info("Unsnoozed proposal %s", proposal.id)
         return proposal

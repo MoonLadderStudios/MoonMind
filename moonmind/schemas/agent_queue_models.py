@@ -284,6 +284,9 @@ class JobListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[JobModel] = Field(default_factory=list, alias="items")
+    offset: int = Field(0, alias="offset", ge=0)
+    limit: int = Field(0, alias="limit", ge=0)
+    has_more: bool = Field(False, alias="hasMore")
 
 
 class ArtifactModel(BaseModel):

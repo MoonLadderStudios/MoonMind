@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from typing import Mapping, Sequence
 
@@ -62,6 +63,15 @@ def _truncate_error_message(
         keep_prefix = max(0, available - len(marker))
         truncated = f"{truncated[:keep_prefix]}{marker}"
     return f"{truncated}{_TRUNCATION_SUFFIX}"
+
+_MAX_ERROR_MESSAGE_CHARS = 1024
+_TOKEN_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"gh[pousr][-_][A-Za-z0-9_-]{8,}"),
+    re.compile(r"github_pat[_-][A-Za-z0-9_-]{8,}", re.IGNORECASE),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bATATT[0-9A-Za-z_-]+\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -184,7 +194,19 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
+    for pattern in _TOKEN_REDACTION_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
+
+
+def _truncate_error_message(
+    message: str, *, max_chars: int = _MAX_ERROR_MESSAGE_CHARS
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 def _run_checked_command(
@@ -277,6 +299,21 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     )
 
 
+def _verify_codex_search_cli(source: Mapping[str, str]) -> str:
+    """Validate ripgrep availability for Codex-first repository search defaults."""
+
+    binary = str(source.get("MOONMIND_RG_BINARY", "rg")).strip() or "rg"
+    try:
+        return verify_cli_is_executable(binary)
+    except CliVerificationError as exc:
+        raise RuntimeError(
+            "Codex runtime requires ripgrep (`rg`) for first-pass repository "
+            "search commands. Install ripgrep in the execution environment (or "
+            "set MOONMIND_RG_BINARY to a compatible `rg` executable on PATH). "
+            f"Details: {exc}"
+        ) from exc
+
+
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
 
@@ -288,6 +325,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         "codex": None,
         "gemini": None,
         "claude": None,
+        "rg": None,
     }
 
     for runtime_name in runtime_verification_order:
@@ -325,6 +363,9 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
+    if "codex" in capabilities:
+        resolved_paths["rg"] = _verify_codex_search_cli(source)
+
     _validate_embedding_profile(source)
     try:
         ensure_rag_ready(RagRuntimeSettings.from_env(source))
@@ -344,6 +385,12 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     if speckit_path is not None:
         _verify_speckit_cli(
             speckit_path,
+            redaction_values=redaction_values,
+        )
+
+    if resolved_paths["rg"] is not None:
+        _run_checked_command(
+            [resolved_paths["rg"], "--version"],
             redaction_values=redaction_values,
         )
 

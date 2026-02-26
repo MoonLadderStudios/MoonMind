@@ -204,7 +204,7 @@ Notes:
    - Update `renderActivePage()` (and optionally manifest list) to wrap queue rows using the helper while keeping orchestrator/manifests table-only until they have card designs.
 2. **CSS (`api_service/static/task_dashboard/dashboard.tailwind.css`)**
    - Add the `.queue-layouts`, `.queue-table-wrapper`, `.queue-card-*` styles using Tailwind directives (e.g., `@apply grid gap-3 md:block` etc.) so the generated CSS inherits tokens and dark-mode behavior.
-   - Rebuild `dashboard.css` via the existing toolchain (already documented in `docs/TailwindStyleSystem.md`).
+   - Rebuild `dashboard.css` via the existing toolchain (already documented in `docs/TaskDashboardStyleSystem.md`).
 3. **Template (`api_service/templates/task_dashboard.html`)**
    - No markup changes needed; ensure the stylesheet link stays untouched.
 4. **Testing**
@@ -215,7 +215,7 @@ Notes:
 ## 6. Rollout Considerations
 
 - Ship behind nothing: card layout is pure CSS/markup and safe to land without feature flags.
-- Update `docs/TailwindStyleSystem.md` once implemented to mark "Mobile-specific nav/table refinements" as shipped.
+- Update `docs/TaskDashboardStyleSystem.md` once implemented to mark "Mobile-specific nav/table refinements" as shipped.
 - Monitor dashboard bundle size; string templates add <3 KB gzip so no action expected.
 
 ## 7. Future Work

@@ -7,7 +7,7 @@ MoonMind needs a responsive queue layout that keeps the trusted dense table on m
 
 ## Summary
 
-Render queue data through a single `queueFieldDefinitions` array, refactor the dashboard helpers to emit both a `.queue-table-wrapper` and `.queue-card-list`, drive both `/tasks/queue` and "Active" queue subsets through the shared `renderQueueLayouts`, gate cards to queue rows only, and add Tailwind utility blocks so CSS hides cards on `md+` breakpoints. Update docs/tests (`docs/TailwindStyleSystem.md`, dashboard unit specs, manual QA notes) and keep bundle growth under the 3 KB gzip target.
+Render queue data through a single `queueFieldDefinitions` array, refactor the dashboard helpers to emit both a `.queue-table-wrapper` and `.queue-card-list`, drive both `/tasks/queue` and "Active" queue subsets through the shared `renderQueueLayouts`, gate cards to queue rows only, and add Tailwind utility blocks so CSS hides cards on `md+` breakpoints. Update docs/tests (`docs/TaskDashboardStyleSystem.md`, dashboard unit specs, manual QA notes) and keep bundle growth under the 3 KB gzip target.
 
 ## Technical Context
 
@@ -54,7 +54,7 @@ api_service/
 └── tests/task_dashboard/
     └── queue_layouts.test.js          # extend existing JS tests or add new ones
 
-docs/TailwindStyleSystem.md            # update tokens + bundle delta note
+docs/TaskDashboardStyleSystem.md            # update tokens + bundle delta note
 package.json                           # contains dashboard build/test scripts
 ```
 
@@ -86,7 +86,7 @@ package.json                           # contains dashboard build/test scripts
 - Run `./tools/test_unit.sh` locally before handoff.
 
 ### 5. Documentation + rollout (FR-010)
-- Update `docs/TailwindStyleSystem.md` with the new classes, responsive contract, and measured bundle delta. Mention no feature flag is required.
+- Update `docs/TaskDashboardStyleSystem.md` with the new classes, responsive contract, and measured bundle delta. Mention no feature flag is required.
 - Capture bundle measurement methodology (e.g., `du -h api_service/static/task_dashboard/dashboard.css`) in the quickstart to keep ops and docs aligned.
 - Confirm `/docs/TaskUiQueue.md` and `spec.md` remain synchronized post-implementation.
 
