@@ -4066,7 +4066,9 @@ def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
         "$ pytest\n" "[command] $ ./tools/test_unit.sh\n" "[command] $ npm run build\n",
         encoding="utf-8",
     )
-    evidence, read_errors = CodexWorker._collect_verification_evidence(prepared=prepared)
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
     assert len(evidence) == 2
     assert len(read_errors) == 0
     assert evidence[0]["command"] == "./tools/test_unit.sh"
@@ -4112,7 +4114,9 @@ def test_collect_verification_evidence_records_log_read_errors(
 
     monkeypatch.setattr(Path, "read_text", _raise_read_text)
 
-    evidence, read_errors = CodexWorker._collect_verification_evidence(prepared=prepared)
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
     assert len(evidence) == 1
     assert evidence[0]["command"] == "npm run build"
     assert len(read_errors) == 1
