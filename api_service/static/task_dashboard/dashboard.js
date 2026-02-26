@@ -6449,20 +6449,55 @@
       })
       .join("");
 
-    const renderTable = () => {
-      if (!state.rows.length) {
+    const filterProposalsByTag = (rows, tag) => {
+      const normalizedTag = String(tag || "").trim().toLowerCase();
+      if (!normalizedTag) {
+        return rows;
+      }
+      return rows.filter((row) => {
+        const tagList = (pick(row, "tags") || []).map((rowTag) =>
+          String(rowTag || "").trim().toLowerCase(),
+        );
+        return tagList.includes(normalizedTag);
+      });
+    };
+
+    const renderProposalLayouts = (rows = []) => {
+      const normalizedRows = (rows || []).filter(Boolean);
+      if (!normalizedRows.length) {
         return "<p class='small'>No proposals found for the current filters.</p>";
       }
-      const filteredRows = state.rows.filter((row) => {
-        if (!state.tag) {
-          return true;
-        }
-        const tagNeedle = state.tag.toLowerCase();
-        const tagList = (pick(row, "tags") || []).map((tag) =>
-          String(tag || "").toLowerCase(),
-        );
-        return tagList.includes(tagNeedle);
-      });
+      if (!state.tag) {
+        return `
+          <div class="queue-layouts">
+            <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Repository</th>
+                    <th>Category</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Origin</th>
+                    <th>Tags</th>
+                    <th>Snoozed Until</th>
+                    <th>Dedup</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>${renderProposalTable(normalizedRows)}</tbody>
+              </table>
+            </div>
+            <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
+              normalizedRows,
+            )}</ul>
+          </div>
+        `;
+      }
+      const filteredRows = filterProposalsByTag(normalizedRows, state.tag);
       if (!filteredRows.length) {
         return "<p class='small'>No proposals found for the current filters.</p>";
       }
@@ -6495,6 +6530,33 @@
         </div>
       `;
     };
+
+    const renderTable = () => {
+      if (!state.rows.length) {
+        return "<p class='small'>No proposals found for the current filters.</p>";
+      }
+      const filteredRows = state.rows.filter((row) => {
+        if (!state.tag) {
+          return true;
+        }
+        const tagNeedle = state.tag.toLowerCase();
+        const tagList = (pick(row, "tags") || []).map((tag) =>
+          String(tag || "").toLowerCase(),
+        );
+        return tagList.includes(tagNeedle);
+      });
+      if (!filteredRows.length) {
+        return "<p class='small'>No proposals found for the current filters.</p>";
+      }
+      return renderProposalLayouts(filteredRows);
+    };
+
+    Object.assign(window.__queueLayoutTest, {
+      renderProposalTable,
+      renderProposalCards,
+      renderProposalLayouts,
+      filterProposalsByTag,
+    });
 
     const attachHandlers = () => {
       const filterForm = document.getElementById("proposals-filter-form");
