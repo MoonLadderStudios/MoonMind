@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 CONFLICTING_MERGEABLE = {"CONFLICTING", "DIRTY"}
 DIRECT_MERGE_STATE = {"CLEAN"}
 
@@ -107,7 +106,9 @@ def _write_result(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Finalize PR merge/auto-merge decisions")
+    parser = argparse.ArgumentParser(
+        description="Finalize PR merge/auto-merge decisions"
+    )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
     parser.add_argument(
         "--merge-method",
