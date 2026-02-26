@@ -184,10 +184,14 @@ class AgentQueueRepository:
         if job_type is not None:
             stmt = stmt.where(models.AgentJob.type == job_type)
 
-        stmt = stmt.order_by(
-            models.AgentJob.created_at.desc(),
-            models.AgentJob.id.desc(),
-        ).offset(offset).limit(limit)
+        stmt = (
+            stmt.order_by(
+                models.AgentJob.created_at.desc(),
+                models.AgentJob.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

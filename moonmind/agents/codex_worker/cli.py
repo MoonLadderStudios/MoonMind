@@ -172,7 +172,9 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     return redacted
 
 
-def _truncate_error_message(message: str, *, max_chars: int = _MAX_ERROR_MESSAGE_CHARS) -> str:
+def _truncate_error_message(
+    message: str, *, max_chars: int = _MAX_ERROR_MESSAGE_CHARS
+) -> str:
     if len(message) <= max_chars:
         return message
     head_chars = min(768, max_chars - 4)
