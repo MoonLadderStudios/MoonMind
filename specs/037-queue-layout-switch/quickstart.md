@@ -21,7 +21,7 @@ npm run dashboard:css:min
   ```bash
   gzip -c api_service/static/task_dashboard/dashboard.css | wc -c
   ```
-  Capture the number inside your release notes or `docs/TailwindStyleSystem.md` update.
+  Capture the number inside your release notes or `docs/TaskDashboardStyleSystem.md` update.
 
 ## 3. Verify `/tasks/queue` on mobile widths (≤414 px)
 1. Open the dashboard at `https://localhost:8443/tasks/queue`.
@@ -44,7 +44,7 @@ npm run dashboard:css:min
 - Tab through cards to ensure `View details` buttons focus properly and status badges retain ARIA-friendly markup.
 
 ## 7. Document findings
-- Update `docs/TailwindStyleSystem.md` with the new classes, breakpoint behavior, and recorded bundle delta.
+- Update `docs/TaskDashboardStyleSystem.md` with the new classes, breakpoint behavior, and recorded bundle delta.
 - If QA uncovered manual nuances (e.g., layout tweaks needed for >200 rows), append them to `specs/037-queue-layout-switch/checklists/` or ops runbook before handoff.
 
 ## Appendix A - Measurement + QA log template

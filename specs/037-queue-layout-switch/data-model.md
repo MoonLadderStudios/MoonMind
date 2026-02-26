@@ -58,6 +58,6 @@ Each queue row maps to the following semantic structure:
 | `.queue-table-wrapper[data-sticky-table]` | Attribute flag | When `true`, CSS keeps the table visible even on mobile to surface non-queue sources.
 | `.queue-card-list[data-layout="card"]` | Semantic hint | Allows future JS/tests to assert that cards are rendered even when hidden on desktop.
 | `.queue-card-status-field` | Status wrapper class | Enforces vertical stacking (`badge` above `raw status`) after status moved into card definition list.
-| Media queries | `@media (min-width:768px)` / `@media (max-width:767px)` | Toggle visibility per DOC-REQ-001; identical breakpoints documented in TailwindStyleSystem.md.
+| Media queries | `@media (min-width:768px)` / `@media (max-width:767px)` | Toggle visibility per DOC-REQ-001; identical breakpoints documented in TaskDashboardStyleSystem.md.
 
 These structures ensure layout switching remains data-driven and extensible.
