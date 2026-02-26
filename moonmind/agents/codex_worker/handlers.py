@@ -1173,8 +1173,8 @@ class CodexExecHandler:
                 )
             else:
                 message = f"command failed ({result.returncode}): {command_hint}"
-            if len(message) > 1024:
-                message = f"{message[:1021]}..."
+            if len(message) > 4096:
+                message = f"{message[:4093]}..."
             raise CodexWorkerHandlerError(message)
         return result
 
