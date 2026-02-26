@@ -425,6 +425,10 @@
   const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
   const TASK_LIST_TITLE_MAX_CHARS = 400;
+  const ACTIVE_QUEUE_FETCH_LIMIT = 50;
+  const ACTIVE_ORCHESTRATOR_FETCH_LIMIT = 50;
+  const QUEUE_PAGE_SIZE_OPTIONS = [20, 50];
+  const DEFAULT_QUEUE_PAGE_SIZE = 50;
   const pollers = [];
   const disposers = [];
   const persistentPollers = [];
@@ -601,7 +605,19 @@
     const runImmediately = options.runImmediately !== false;
     const skipAutoRefresh = options.skipAutoRefresh === true;
     const persistent = options.persistent === true;
+    let inFlight = null;
+    let rerunRequested = false;
+    let disposed = false;
+
+    registerDisposer(() => {
+      disposed = true;
+      rerunRequested = false;
+    }, { persistent });
+
     const run = (forced = false) => {
+      if (disposed) {
+        return;
+      }
       if (!forced) {
         if (!skipAutoRefresh && !isAutoRefreshActive()) {
           return;
@@ -610,9 +626,24 @@
           return;
         }
       }
-      task().catch((error) => {
-        console.error("polling task failed", error);
-      });
+      if (inFlight) {
+        rerunRequested = true;
+        return;
+      }
+      inFlight = Promise.resolve()
+        .then(() => task())
+        .catch((error) => {
+          console.error("polling task failed", error);
+        })
+        .finally(() => {
+          inFlight = null;
+          if (!rerunRequested || disposed) {
+            rerunRequested = false;
+            return;
+          }
+          rerunRequested = false;
+          run(false);
+        });
     };
 
     if (runImmediately) {
@@ -1583,6 +1614,243 @@
     });
   }
 
+  function filterProposalsByTag(rows, tag) {
+    const normalizedTag = String(tag || "").trim().toLowerCase();
+    const candidates = Array.isArray(rows) ? rows : [];
+    if (!normalizedTag) {
+      return candidates;
+    }
+    return candidates.filter((row) => {
+      const tagList = (pick(row, "tags") || []).map((candidateTag) =>
+        String(candidateTag || "").trim().toLowerCase(),
+      );
+      return tagList.includes(normalizedTag);
+    });
+  }
+
+  function renderProposalTable(rows) {
+    const candidates = (rows || []).filter(Boolean);
+    return candidates
+      .map((row) => {
+        const id = pick(row, "id");
+        const preview = pick(row, "taskPreview") || {};
+        const origin = pick(row, "origin") || {};
+        const originSource = pick(origin, "source") || "-";
+        const originLink =
+          originSource === "queue" && pick(origin, "id")
+            ? `<a href="/tasks/queue/${encodeURIComponent(
+                String(pick(origin, "id") || ""),
+              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            : escapeHtml(originSource);
+        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const instructions = pick(preview, "instructions") || "";
+        const tags = (pick(row, "tags") || []).join(", ");
+        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+        const overrideReason = pick(row, "priorityOverrideReason");
+        const priorityBadge = `<span class="badge priority-${escapeHtml(
+          priority.toLowerCase(),
+        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
+        const dedupHash = (pick(row, "dedupHash") || "").toString();
+        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+        return `
+          <tr data-proposal-id="${escapeHtml(String(id || ""))}">
+            <td><a href="/tasks/proposals/${encodeURIComponent(
+              String(id || ""),
+            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
+            <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
+            <td>${escapeHtml(repo)}</td>
+            <td>${escapeHtml(pick(row, "category") || "-")}</td>
+            <td>${priorityBadge}</td>
+            <td>${statusBadge("proposals", pick(row, "status"))}</td>
+            <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
+            <td>${originLink}</td>
+            <td>${escapeHtml(tags || "-")}</td>
+                <td><code>${escapeHtml(dedupShort)}</code></td>
+            <td>
+              <div class="stack compact">
+                <button
+                  type="button"
+                  class="proposal-action queue-action"
+                  data-action="promote"
+                  data-proposal-action="promote"
+                  data-proposal-id="${escapeHtml(
+                  String(id || ""),
+                )}">Promote</button>
+                <button
+                  type="button"
+                  class="danger proposal-action queue-action queue-action-danger"
+                  data-action="dismiss"
+                  data-proposal-action="dismiss"
+                  data-proposal-id="${escapeHtml(
+                  String(id || ""),
+                )}">Dismiss</button>
+              </div>
+            </td>
+          </tr>
+          ${
+            instructions
+              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+                  instructions,
+                )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
+                  dedupHash || "-",
+                )}</code></span></td></tr>`
+              : ""
+          }
+        `;
+      })
+      .join("");
+  }
+
+  function renderProposalCards(rows) {
+    const candidates = (rows || []).filter(Boolean);
+    return candidates
+      .map((row) => {
+        const id = pick(row, "id");
+        const preview = pick(row, "taskPreview") || {};
+        const origin = pick(row, "origin") || {};
+        const originSource = pick(origin, "source") || "-";
+        const originLink =
+          originSource === "queue" && pick(origin, "id")
+            ? `<a href="/tasks/queue/${encodeURIComponent(
+                String(pick(origin, "id") || ""),
+              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            : escapeHtml(originSource);
+        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const instructions = pick(preview, "instructions") || "";
+        const instructionText = String(instructions || "").trim();
+        const instructionPreview = instructionText
+          ? `${escapeHtml(instructionText.slice(0, 140))}${
+              instructionText.length > 140 ? "..." : ""
+            }`
+          : "-";
+        const tags = (pick(row, "tags") || []).join(", ");
+        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+        const overrideReason = pick(row, "priorityOverrideReason");
+        const priorityBadge = `<span class="badge priority-${escapeHtml(
+          priority.toLowerCase(),
+        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
+        const dedupHash = (pick(row, "dedupHash") || "").toString();
+        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+        const rowId = String(id || "");
+        const title = pick(row, "title") || "(untitled)";
+        const titleWithId = rowId ? `${title} · ${rowId}` : title;
+        const encodedRowId = encodeURIComponent(String(id || ""));
+        return `
+          <li class="queue-card">
+            <div data-proposal-id="${escapeHtml(rowId)}"
+              data-proposal-title="${escapeHtml(title)}"
+              data-proposal-repo="${escapeHtml(repo)}"></div>
+            <div class="queue-card-header">
+              <div>
+                <a href="/tasks/proposals/${encodedRowId}" class="queue-card-title">${escapeHtml(
+                  titleWithId,
+                )}</a>
+                <p class="queue-card-meta">${escapeHtml(repo)}</p>
+              </div>
+              <div class="queue-card-status">
+                ${statusBadge("proposals", pick(row, "status"))}
+                <span class="queue-card-status-raw small">${escapeHtml(
+                  String(pick(row, "status") || "-").trim(),
+                )}</span>
+              </div>
+            </div>
+            <dl class="queue-card-fields">
+              <div data-field="id">
+                <dt>ID</dt>
+                <dd><code>${escapeHtml(rowId.slice(0, 8) || "-")}</code></dd>
+              </div>
+              <div data-field="category">
+                <dt>Category</dt>
+                <dd>${escapeHtml(pick(row, "category") || "-")}</dd>
+              </div>
+              <div data-field="priority">
+                <dt>Priority</dt>
+                <dd>${priorityBadge}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>${statusBadge("proposals", pick(row, "status"))}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</dd>
+              </div>
+              <div>
+                <dt>Origin</dt>
+                <dd>${originLink}</dd>
+              </div>
+              <div>
+                <dt>Tags</dt>
+                <dd>${escapeHtml(tags || "-")}</dd>
+              </div>
+              <div>
+                <dt>Dedup</dt>
+                <dd><code>${escapeHtml(dedupShort)}</code></dd>
+              </div>
+              <div>
+                <dt>Instructions</dt>
+                <dd><span class="small">${instructionPreview}</span></dd>
+              </div>
+            </dl>
+            <div class="queue-card-actions">
+              <a href="/tasks/proposals/${encodedRowId}" class="button secondary" role="button">View details</a>
+              <button
+                type="button"
+                class="proposal-action queue-action"
+                data-action="promote"
+                data-proposal-action="promote"
+                data-proposal-id="${escapeHtml(String(id || ""))}">Promote</button>
+              <button
+                type="button"
+                class="danger proposal-action queue-action queue-action-danger"
+                data-action="dismiss"
+                data-proposal-action="dismiss"
+                data-proposal-id="${escapeHtml(String(id || ""))}">Dismiss</button>
+            </div>
+          </li>
+        `;
+      })
+      .join("");
+  }
+
+  function renderProposalLayouts(rows = [], tag = "") {
+    const normalizedRows = (rows || []).filter(Boolean);
+    if (!normalizedRows.length) {
+      return "<p class='small'>No proposals found for the current filters.</p>";
+    }
+    const filteredRows = filterProposalsByTag(normalizedRows, tag);
+    if (!filteredRows.length) {
+      return "<p class='small'>No proposals found for the current filters.</p>";
+    }
+    return `
+      <div class="queue-layouts">
+        <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Repository</th>
+                <th>Category</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Origin</th>
+                <th>Tags</th>
+                <th>Dedup</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>${renderProposalTable(filteredRows)}</tbody>
+          </table>
+        </div>
+        <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
+          filteredRows,
+        )}</ul>
+      </div>
+    `;
+  }
+
   // Queue metadata for table columns and card field rows is centralized here.
   // Card status remains a fixed leading row in renderQueueCards so mobile keeps
   // status first regardless of future queueFieldDefinitions ordering. When
@@ -1737,7 +2005,9 @@
       };
     }
     const instruction = String(draft.instruction || "").trim();
-    if (!instruction) {
+    const rawSkillId = String(draft.skillId || "").trim();
+    const hasExplicitSkill = Boolean(rawSkillId) && rawSkillId !== "auto";
+    if (!hasExplicitSkill && !instruction) {
       return {
         ok: false,
         error: "Instruction is required.",
@@ -1750,6 +2020,12 @@
         error: "Target service is required.",
       };
     }
+    if (hasExplicitSkill && targetService !== "orchestrator") {
+      return {
+        ok: false,
+        error: "Explicit skill runs must targetService=orchestrator.",
+      };
+    }
     const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
     const value = normalizeSubmissionDraftForTest(draft);
     value.instruction = instruction;
@@ -1757,10 +2033,9 @@
     value.priority = ["normal", "high"].includes(normalizedPriority)
       ? normalizedPriority
       : "normal";
-    const skillId = String(draft.skillId || "").trim();
     const skillArgsRaw = String(draft.skillArgs || "").trim();
-    if (skillId) {
-      value.skillId = skillId;
+    if (rawSkillId) {
+      value.skillId = rawSkillId;
     } else {
       delete value.skillId;
     }
@@ -1948,6 +2223,10 @@
       renderQueueLayouts,
       renderActivePageContent,
       renderRowsTable,
+      filterProposalsByTag,
+      renderProposalTable,
+      renderProposalCards,
+      renderProposalLayouts,
       toQueueRows,
     };
   }
@@ -1980,28 +2259,6 @@
     return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
       method: "POST",
       body: JSON.stringify({ priority }),
-    });
-  }
-
-  async function apiSnoozeProposal(proposalId, until, note = null) {
-    const endpointTemplate =
-      proposalsSourceConfig.snooze || "/api/proposals/{id}/snooze";
-    const payload = { until };
-    if (note) {
-      payload.note = note;
-    }
-    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async function apiUnsnoozeProposal(proposalId) {
-    const endpointTemplate =
-      proposalsSourceConfig.unsnooze || "/api/proposals/{id}/unsnooze";
-    return fetchJson(endpoint(endpointTemplate, { id: proposalId }), {
-      method: "POST",
-      body: JSON.stringify({}),
     });
   }
 
@@ -2127,6 +2384,11 @@
       { showAutoRefreshControls: true },
     );
 
+    let pageActive = true;
+    registerDisposer(() => {
+      pageActive = false;
+    });
+
     const loader = async () => {
       const errors = [];
       const rows = [];
@@ -2135,29 +2397,45 @@
         {
           source: "queue-running",
           call: () =>
-            fetchJson(withQueueSummaryFlag("/api/queue/jobs?status=running&limit=200")),
+            fetchJson(
+              withQueueSummaryFlag(
+                `/api/queue/jobs?status=running&limit=${ACTIVE_QUEUE_FETCH_LIMIT}`,
+              ),
+            ),
           transform: (payload) => toQueueRows(payload?.items || []),
         },
         {
           source: "queue-queued",
           call: () =>
-            fetchJson(withQueueSummaryFlag("/api/queue/jobs?status=queued&limit=200")),
+            fetchJson(
+              withQueueSummaryFlag(
+                `/api/queue/jobs?status=queued&limit=${ACTIVE_QUEUE_FETCH_LIMIT}`,
+              ),
+            ),
           transform: (payload) => toQueueRows(payload?.items || []),
         },
         {
           source: "orchestrator-running",
-          call: () => fetchJson("/orchestrator/runs?status=running&limit=100"),
+          call: () =>
+            fetchJson(
+              `/orchestrator/runs?status=running&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
         {
           source: "orchestrator-pending",
-          call: () => fetchJson("/orchestrator/runs?status=pending&limit=100"),
+          call: () =>
+            fetchJson(
+              `/orchestrator/runs?status=pending&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
         {
           source: "orchestrator-awaiting",
           call: () =>
-            fetchJson("/orchestrator/runs?status=awaiting_approval&limit=100"),
+            fetchJson(
+              `/orchestrator/runs?status=awaiting_approval&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
       ];
@@ -2173,7 +2451,9 @@
         }
       });
 
-      root.querySelector(".panel")?.remove();
+      if (!pageActive) {
+        return;
+      }
       setView(
         "Active Tasks",
         `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
@@ -2210,6 +2490,11 @@
     let telemetryInFlight = null;
     let telemetryLastRequestedAt = 0;
     let currentRows = [];
+    const paginationState = {
+      limit: DEFAULT_QUEUE_PAGE_SIZE,
+      offset: 0,
+      hasMore: false,
+    };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -2255,6 +2540,12 @@
         supportedTaskRuntimes,
         filterState.runtime,
       );
+      const pageSizeOptions = QUEUE_PAGE_SIZE_OPTIONS.map(
+        (value) =>
+          `<option value="${escapeHtml(value)}" ${
+            paginationState.limit === value ? "selected" : ""
+          }>${escapeHtml(value)}</option>`,
+      ).join("");
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -2300,6 +2591,11 @@
                 ${stageStatusOptions}
               </select>
             </label>
+            <label>Page Size
+              <select name="pageSize">
+                ${pageSizeOptions}
+              </select>
+            </label>
           </div>
           <label>Publish Mode
             <select name="publishMode">
@@ -2308,6 +2604,28 @@
             </select>
           </label>
         </form>
+      `;
+    }
+
+    function renderQueuePaginationSummary(rows, filteredRows) {
+      const page = Math.floor(paginationState.offset / paginationState.limit) + 1;
+      const hasRows = rows.length > 0;
+      return `
+        <div class="actions">
+          <div class="small">
+            Page ${escapeHtml(page)} · showing ${escapeHtml(filteredRows.length)} of ${escapeHtml(
+              rows.length,
+            )} jobs in this page.
+          </div>
+          <div>
+            <button type="button" class="secondary" data-queue-page-prev ${
+              paginationState.offset <= 0 || !hasRows ? "disabled" : ""
+            }>Previous</button>
+            <button type="button" class="secondary" data-queue-page-next ${
+              paginationState.hasMore ? "" : "disabled"
+            }>Next</button>
+          </div>
+        </div>
       `;
     }
 
@@ -2340,10 +2658,13 @@
       }
       const filteredRows = applyQueueFilters(rows);
       const telemetryHtml = renderTelemetrySummary(telemetryPayload);
+      const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
       setView(
         "Queue Jobs",
         `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-        `${telemetryHtml}${renderQueueFilters()}${renderQueueLayouts(filteredRows)}`,
+        `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
+          filteredRows,
+        )}`,
         { showAutoRefreshControls: true },
       );
       attachFilterHandlers(rows);
@@ -2358,6 +2679,9 @@
       const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
+      const pageSizeField = filterForm.elements.namedItem("pageSize");
+      const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
+      const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
       const rerender = () => {
         renderQueueList(rows);
@@ -2387,6 +2711,43 @@
           rerender();
         });
       }
+      if (pageSizeField) {
+        pageSizeField.addEventListener("change", () => {
+          const parsed = Number(pageSizeField.value || DEFAULT_QUEUE_PAGE_SIZE);
+          if (!QUEUE_PAGE_SIZE_OPTIONS.includes(parsed)) {
+            return;
+          }
+          paginationState.limit = parsed;
+          paginationState.offset = 0;
+          load().catch((error) => {
+            console.error("queue page size update failed", error);
+          });
+        });
+      }
+
+      prevButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (paginationState.offset <= 0) {
+            return;
+          }
+          paginationState.offset = Math.max(0, paginationState.offset - paginationState.limit);
+          load().catch((error) => {
+            console.error("queue previous page load failed", error);
+          });
+        });
+      });
+
+      nextButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (!paginationState.hasMore) {
+            return;
+          }
+          paginationState.offset += paginationState.limit;
+          load().catch((error) => {
+            console.error("queue next page load failed", error);
+          });
+        });
+      });
     }
 
     async function refreshTelemetryIfStale() {
@@ -2420,11 +2781,27 @@
     }
 
     const load = async () => {
-      const payload = await fetchJson(withQueueSummaryFlag("/api/queue/jobs?limit=200"));
+      const params = new URLSearchParams();
+      params.set("limit", String(paginationState.limit));
+      params.set("offset", String(paginationState.offset));
+      const payload = await fetchJson(
+        withQueueSummaryFlag(`/api/queue/jobs?${params.toString()}`),
+      );
       if (!pageActive) {
         return;
       }
-      currentRows = sortRows(toQueueRows(payload?.items || []));
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const payloadHasMore = payload && typeof payload === "object"
+        && Object.prototype.hasOwnProperty.call(payload, "hasMore")
+          ? Boolean(payload.hasMore)
+          : items.length >= paginationState.limit;
+      paginationState.hasMore = payloadHasMore;
+      if (paginationState.offset > 0 && items.length === 0) {
+        paginationState.offset = Math.max(0, paginationState.offset - paginationState.limit);
+        await load();
+        return;
+      }
+      currentRows = sortRows(toQueueRows(items));
       renderQueueList(currentRows);
       refreshTelemetryIfStale().catch(() => {
         console.warn("queue telemetry refresh failed");
@@ -4566,7 +4943,7 @@
           </select>
         </label>
         <label>Instruction
-          <textarea name="instruction" required placeholder="Describe what should be changed and verified.">${escapeHtml(
+          <textarea name="instruction" placeholder="Describe what should be changed and verified.">${escapeHtml(
             String(sanitizedOrchestratorDraft.instruction || "").trim(),
           )}</textarea>
         </label>
@@ -6047,7 +6424,6 @@
       repository: localStorage.getItem(repoStorageKey) || "",
       category: "",
       tag: "",
-      includeSnoozed: false,
       originSource: initialOriginSource,
       originId: initialOriginId,
       rows: [],
@@ -6062,7 +6438,6 @@
         ["dismissed", "dismissed"],
         ["accepted", "accepted"],
         ["rejected", "rejected"],
-        ["snoozed", "snoozed"],
       ]
         .map(
           ([value, label]) =>
@@ -6105,244 +6480,12 @@
               state.tag,
             )}" />
           </label>
-          <label class="checkbox stack">
-            <span>
-              <input type="checkbox" name="includeSnoozed" ${
-                state.includeSnoozed ? "checked" : ""
-              } />
-              Include snoozed proposals
-            </span>
-          </label>
         </form>
       `;
     };
 
-    const renderProposalTable = (rows) => rows
-      .map((row) => {
-        const id = pick(row, "id");
-        const preview = pick(row, "taskPreview") || {};
-        const origin = pick(row, "origin") || {};
-        const originSource = pick(origin, "source") || "-";
-        const originLink =
-          originSource === "queue" && pick(origin, "id")
-            ? `<a href="/tasks/queue/${encodeURIComponent(
-                String(pick(origin, "id") || ""),
-              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
-            : escapeHtml(originSource);
-        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
-        const instructions = pick(preview, "instructions") || "";
-        const tags = (pick(row, "tags") || []).join(", ");
-        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
-        const overrideReason = pick(row, "priorityOverrideReason");
-        const priorityBadge = `<span class="badge priority-${escapeHtml(
-          priority.toLowerCase(),
-        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
-        const snoozedUntil = pick(row, "snoozedUntil");
-        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
-        const dedupHash = (pick(row, "dedupHash") || "").toString();
-        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
-        return `
-          <tr>
-            <td><a href="/tasks/proposals/${encodeURIComponent(
-              String(id || ""),
-            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
-            <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
-            <td>${escapeHtml(repo)}</td>
-            <td>${escapeHtml(pick(row, "category") || "-")}</td>
-            <td>${priorityBadge}</td>
-            <td>${statusBadge("proposals", pick(row, "status"))}</td>
-            <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
-            <td>${originLink}</td>
-            <td>${escapeHtml(tags || "-")}</td>
-            <td>${escapeHtml(snoozedDisplay)}</td>
-            <td><code>${escapeHtml(dedupShort)}</code></td>
-            <td>
-              <div class="stack compact">
-                <button
-                  type="button"
-                  class="proposal-action queue-action"
-                  data-action="promote"
-                  data-proposal-id="${escapeHtml(
-                  String(id || ""),
-                )}">Promote</button>
-                <button
-                  type="button"
-                  class="danger proposal-action queue-action queue-action-danger"
-                  data-action="dismiss"
-                  data-proposal-id="${escapeHtml(
-                  String(id || ""),
-                )}">Dismiss</button>
-              </div>
-            </td>
-          </tr>
-          ${
-            instructions
-              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
-                  instructions,
-                )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
-                  dedupHash || "-",
-                )}</code></span></td></tr>`
-              : ""
-          }
-        `;
-      })
-      .join("");
-
-    const renderProposalCards = (rows) => rows
-      .map((row) => {
-        const id = pick(row, "id");
-        const preview = pick(row, "taskPreview") || {};
-        const origin = pick(row, "origin") || {};
-        const originSource = pick(origin, "source") || "-";
-        const originLink =
-          originSource === "queue" && pick(origin, "id")
-            ? `<a href="/tasks/queue/${encodeURIComponent(
-                String(pick(origin, "id") || ""),
-              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
-            : escapeHtml(originSource);
-        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
-        const instructions = pick(preview, "instructions") || "";
-        const instructionText = String(instructions || "").trim();
-        const instructionPreview = instructionText
-          ? `${escapeHtml(instructionText.slice(0, 140))}${
-              instructionText.length > 140 ? "..." : ""
-            }`
-          : "-";
-        const tags = (pick(row, "tags") || []).join(", ");
-        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
-        const overrideReason = pick(row, "priorityOverrideReason");
-        const priorityBadge = `<span class="badge priority-${escapeHtml(
-          priority.toLowerCase(),
-        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
-        const snoozedUntil = pick(row, "snoozedUntil");
-        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
-        const dedupHash = (pick(row, "dedupHash") || "").toString();
-        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
-        const rowId = String(id || "");
-        const title = pick(row, "title") || "(untitled)";
-        const titleWithId = rowId ? `${title} · ${rowId}` : title;
-        const encodedRowId = encodeURIComponent(String(id || ""));
-        return `
-          <li class="queue-card">
-            <div class="queue-card-header">
-              <div>
-                <a href="/tasks/proposals/${encodedRowId}" class="queue-card-title">${escapeHtml(
-                  titleWithId,
-                )}</a>
-                <p class="queue-card-meta">${escapeHtml(repo)}</p>
-              </div>
-              <div class="queue-card-status">
-                ${statusBadge("proposals", pick(row, "status"))}
-                <span class="queue-card-status-raw small">${escapeHtml(
-                  String(pick(row, "status") || "-").trim(),
-                )}</span>
-              </div>
-            </div>
-            <dl class="queue-card-fields">
-              <div>
-                <dt>ID</dt>
-                <dd><code>${escapeHtml(rowId.slice(0, 8) || "-")}</code></dd>
-              </div>
-              <div>
-                <dt>Category</dt>
-                <dd>${escapeHtml(pick(row, "category") || "-")}</dd>
-              </div>
-              <div>
-                <dt>Priority</dt>
-                <dd>${priorityBadge}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>${statusBadge("proposals", pick(row, "status"))}</dd>
-              </div>
-              <div>
-                <dt>Created</dt>
-                <dd>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</dd>
-              </div>
-              <div>
-                <dt>Origin</dt>
-                <dd>${originLink}</dd>
-              </div>
-              <div>
-                <dt>Tags</dt>
-                <dd>${escapeHtml(tags || "-")}</dd>
-              </div>
-              <div>
-                <dt>Snoozed Until</dt>
-                <dd>${escapeHtml(snoozedDisplay)}</dd>
-              </div>
-              <div>
-                <dt>Dedup</dt>
-                <dd><code>${escapeHtml(dedupShort)}</code></dd>
-              </div>
-              <div>
-                <dt>Instructions</dt>
-                <dd><span class="small">${instructionPreview}</span></dd>
-              </div>
-            </dl>
-            <div class="queue-card-actions">
-              <a href="/tasks/proposals/${encodedRowId}" class="button secondary" role="button">View details</a>
-              <button
-                type="button"
-                class="proposal-action queue-action"
-                data-action="promote"
-                data-proposal-id="${escapeHtml(String(id || ""))}">Promote</button>
-              <button
-                type="button"
-                class="danger proposal-action queue-action queue-action-danger"
-                data-action="dismiss"
-                data-proposal-id="${escapeHtml(String(id || ""))}">Dismiss</button>
-            </div>
-          </li>
-        `;
-      })
-      .join("");
-
     const renderTable = () => {
-      if (!state.rows.length) {
-        return "<p class='small'>No proposals found for the current filters.</p>";
-      }
-      const filteredRows = state.rows.filter((row) => {
-        if (!state.tag) {
-          return true;
-        }
-        const tagNeedle = state.tag.toLowerCase();
-        const tagList = (pick(row, "tags") || []).map((tag) =>
-          String(tag || "").toLowerCase(),
-        );
-        return tagList.includes(tagNeedle);
-      });
-      if (!filteredRows.length) {
-        return "<p class='small'>No proposals found for the current filters.</p>";
-      }
-      return `
-        <div class="queue-layouts">
-          <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Title</th>
-                  <th>Repository</th>
-                  <th>Category</th>
-                  <th>Priority</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                  <th>Origin</th>
-                  <th>Tags</th>
-                  <th>Snoozed Until</th>
-                  <th>Dedup</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>${renderProposalTable(filteredRows)}</tbody>
-            </table>
-          </div>
-          <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
-            filteredRows,
-          )}</ul>
-        </div>
-      `;
+      return renderProposalLayouts(state.rows, state.tag);
     };
 
     const attachHandlers = () => {
@@ -6356,7 +6499,6 @@
       const originSourceField = filterForm.elements.namedItem("originSource");
       const originIdField = filterForm.elements.namedItem("originId");
       const tagField = filterForm.elements.namedItem("tag");
-      const includeSnoozedField = filterForm.elements.namedItem("includeSnoozed");
       if (statusField) {
         statusField.addEventListener("change", () => {
           state.status = String(statusField.value || "").trim();
@@ -6393,12 +6535,6 @@
       if (tagField) {
         tagField.addEventListener("change", () => {
           state.tag = String(tagField.value || "").trim();
-          load();
-        });
-      }
-      if (includeSnoozedField) {
-        includeSnoozedField.addEventListener("change", () => {
-          state.includeSnoozed = Boolean(includeSnoozedField.checked);
           load();
         });
       }
@@ -6462,9 +6598,6 @@
         if (state.originId) {
           params.set("originId", state.originId);
         }
-        if (state.includeSnoozed) {
-          params.set("includeSnoozed", "true");
-        }
         const listEndpoint = proposalsSourceConfig.list || "/api/proposals";
         const payload = await fetchJson(`${listEndpoint}?${params.toString()}`);
         state.rows = payload?.items || [];
@@ -6518,15 +6651,12 @@
       const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
       const priorityOverride = pick(row, "priorityOverrideReason") || "";
       const dedupHash = pick(row, "dedupHash") || "-";
-      const snoozedUntil = pick(row, "snoozedUntil");
-      const snoozeNote = pick(row, "snoozeNote") || "";
       const triggerRepo = pick(metadata, "triggerRepo") || "-";
       const triggerJobId = pick(metadata, "triggerJobId") || "-";
       const signalMetadata = pick(metadata, "signal");
       const signalMarkup = signalMetadata
         ? `<pre>${escapeHtml(JSON.stringify(signalMetadata, null, 2))}</pre>`
         : "<p class='small'>No signal metadata supplied.</p>";
-      const snoozedDisplay = snoozedUntil ? formatTimestamp(snoozedUntil) : "-";
       const similar = pick(row, "similar") || [];
       const similarMarkup = similar.length
         ? `<ul class="stack">${similar
@@ -6578,9 +6708,6 @@
             <div class="card"><strong>Dedup Hash:</strong> <code>${escapeHtml(
               dedupHash,
             )}</code></div>
-            <div class="card"><strong>Snoozed Until:</strong> ${escapeHtml(
-              snoozedDisplay,
-            )}</div>
             <div class="card"><strong>Trigger Repo:</strong> ${escapeHtml(
               triggerRepo,
             )}</div>
@@ -6613,32 +6740,13 @@
             <a href="/tasks/proposals"><button type="button" class="secondary">Back</button></a>
           </div>
           <section class="stack">
-            <h3>Priority & Snooze</h3>
+            <h3>Priority</h3>
             <div class="grid-2">
               <form id="proposal-priority-form" class="stack card">
                 <label>Priority
                   <select name="priority">${priorityOptions}</select>
                 </label>
                 <button type="submit">Update Priority</button>
-              </form>
-              <form id="proposal-snooze-form" class="stack card">
-                <label>Snooze Until
-                  <input type="datetime-local" name="until" />
-                </label>
-                <label>Note
-                  <input type="text" name="note" placeholder="Optional context" />
-                </label>
-                <div class="stack compact">
-                  <button type="submit">Snooze</button>
-                  <button type="button" class="secondary" id="proposal-unsnooze-button"${
-                    snoozedUntil ? "" : " disabled"
-                  }>Unsnooze</button>
-                </div>
-                ${
-                  snoozeNote
-                    ? `<p class="small">Latest note: ${escapeHtml(snoozeNote)}</p>`
-                    : ""
-                }
               </form>
             </div>
           </section>
@@ -6729,49 +6837,6 @@
             alert("Failed to update priority.");
           } finally {
             priorityForm.classList.remove("loading");
-          }
-        });
-      }
-      const snoozeForm = document.getElementById("proposal-snooze-form");
-      if (snoozeForm) {
-        snoozeForm.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const untilField = snoozeForm.elements.namedItem("until");
-          const noteField = snoozeForm.elements.namedItem("note");
-          const rawValue = untilField ? untilField.value : "";
-          if (!rawValue) {
-            alert("Select a snooze timestamp first.");
-            return;
-          }
-          const isoValue = new Date(rawValue).toISOString();
-          snoozeForm.classList.add("loading");
-          try {
-            await apiSnoozeProposal(
-              proposalId,
-              isoValue,
-              noteField ? noteField.value : null,
-            );
-            await load(true);
-          } catch (error) {
-            console.error("snooze failed", error);
-            alert("Failed to snooze proposal.");
-          } finally {
-            snoozeForm.classList.remove("loading");
-          }
-        });
-      }
-      const unsnoozeButton = document.getElementById("proposal-unsnooze-button");
-      if (unsnoozeButton) {
-        unsnoozeButton.addEventListener("click", async () => {
-          unsnoozeButton.disabled = true;
-          try {
-            await apiUnsnoozeProposal(proposalId);
-            await load(true);
-          } catch (error) {
-            console.error("unsnooze failed", error);
-            alert("Failed to unsnooze proposal.");
-          } finally {
-            unsnoozeButton.disabled = false;
           }
         });
       }

@@ -3,7 +3,7 @@
 ## Implementation Highlights
 - Added Tailwind/PostCSS config (`tailwind.config.cjs`, `postcss.config.cjs`) plus npm scripts for `dashboard.css` builds.
 - Tokenized the dashboard stylesheet via `dashboard.tailwind.css` and regenerated `dashboard.css` through the Tailwind CLI, aligning gradients/buttons/status chips with the MoonMind palette.
-- Added developer tooling docs (`docs/TailwindStyleSystem.md`, `docs/TaskUiArchitecture.md`) and the screenshot drop zone at automation artifacts.
+- Added developer tooling docs (`docs/TaskDashboardStyleSystem.md`, `docs/TaskUiArchitecture.md`) and the screenshot drop zone at automation artifacts.
 - Updated contracts (`contracts/theme-tokens.md`) + quickstart instructions.
 
 ## Validation

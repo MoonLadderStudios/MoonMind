@@ -942,7 +942,8 @@ def test_list_jobs_with_summary_returns_compact_payload(
     response = test_client.get("/api/queue/jobs?summary=true&limit=50")
 
     assert response.status_code == 200
-    payload = response.json()["items"][0]["payload"]
+    body = response.json()
+    payload = body["items"][0]["payload"]
     assert payload["runtime"] == "codex"
     assert payload["task"]["runtime"]["mode"] == "codex"
     assert payload["task"]["skill"]["id"] == "speckit-run"
@@ -953,6 +954,15 @@ def test_list_jobs_with_summary_returns_compact_payload(
         == "This is a long instruction that should be trimmed for list responses."
     )
     assert "unrelated" not in payload
+    assert body["offset"] == 0
+    assert body["limit"] == 50
+    assert body["hasMore"] is False
+    service.list_jobs.assert_awaited_once_with(
+        status=None,
+        job_type=None,
+        limit=51,
+        offset=0,
+    )
 
 
 def test_list_jobs_omits_finish_summary_by_default(
@@ -978,6 +988,31 @@ def test_list_jobs_omits_finish_summary_by_default(
     assert item["finishOutcomeCode"] == "NO_CHANGES"
     assert item["finishOutcomeStage"] == "publish"
     assert "finishSummary" not in item
+
+
+def test_list_jobs_includes_has_more_and_offset_metadata(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """List responses should expose pagination metadata for queue dashboards."""
+
+    test_client, service = client
+    jobs = [_build_job() for _ in range(51)]
+    service.list_jobs.return_value = jobs
+
+    response = test_client.get("/api/queue/jobs?limit=50&offset=100")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 50
+    assert body["offset"] == 100
+    assert body["limit"] == 50
+    assert body["hasMore"] is True
+    service.list_jobs.assert_awaited_once_with(
+        status=None,
+        job_type=None,
+        limit=51,
+        offset=100,
+    )
 
 
 def test_get_job_finish_summary_returns_json_payload(

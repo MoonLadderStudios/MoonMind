@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
+from api_service.db.models import Base, User
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import (
     AgentJobOwnershipError,
@@ -261,6 +261,29 @@ async def test_pause_state_seed_and_update(tmp_path):
     assert updated.paused is True
     assert updated.mode is models.WorkerPauseMode.DRAIN
     assert updated.version == initial_version + 1
+
+
+async def test_user_exists_checks_user_table(tmp_path):
+    """Actor existence helper should match actual user rows."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            existing_user_id = uuid4()
+            session.add(
+                User(
+                    id=existing_user_id,
+                    email="operator@example.com",
+                    hashed_password=None,
+                    is_active=True,
+                    is_superuser=True,
+                    is_verified=True,
+                )
+            )
+            await repo.commit()
+
+            assert await repo.user_exists(existing_user_id) is True
+            assert await repo.user_exists(uuid4()) is False
 
 
 async def test_append_system_control_event_and_list(tmp_path):

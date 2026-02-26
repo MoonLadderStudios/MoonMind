@@ -177,7 +177,7 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.ok(/Target service/i.test(missingService.error));
   const valid = helpers.validateOrchestratorSubmission({
     instruction: "Ship",
-    targetService: "deploy",
+    targetService: "orchestrator",
     priority: "HIGH",
     skillId: "speckit-orchestrate",
     skillArgs: '{"feature":"drafts"}',
@@ -196,6 +196,21 @@ const helpers = loadSubmitRuntimeHelpers();
   });
   assert.strictEqual(invalidSkillArgs.ok, false);
   assert.ok(/Skill Args/i.test(invalidSkillArgs.error));
+
+  const noInstructionWithWrongService = helpers.validateOrchestratorSubmission({
+    targetService: "deploy",
+    skillId: "speckit-orchestrate",
+  });
+  assert.strictEqual(noInstructionWithWrongService.ok, false);
+  assert.ok(/Target service/i.test(noInstructionWithWrongService.error));
+
+  const noInstructionWithSkill = helpers.validateOrchestratorSubmission({
+    targetService: "orchestrator",
+    skillId: "speckit-orchestrate",
+  });
+  assert.strictEqual(noInstructionWithSkill.ok, true);
+  assert.strictEqual(noInstructionWithSkill.value.skillId, "speckit-orchestrate");
+  assert.strictEqual(noInstructionWithSkill.value.instruction, "");
 })();
 
 (function testNormalizeOrchestratorPriority() {

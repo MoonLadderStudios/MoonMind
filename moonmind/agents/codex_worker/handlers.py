@@ -22,7 +22,7 @@ from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
 from moonmind.utils.logging import scrub_github_tokens
 
-_MAX_COMMAND_ERROR_MESSAGE_LENGTH = 1024
+_MAX_ERROR_MESSAGE_CHARS = 1024
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -221,6 +221,18 @@ class CodexSkillPayload:
             publish_mode=publish_mode,
             publish_base_branch=publish_base_branch,
         )
+
+
+def _truncate_error_message(
+    message: str,
+    *,
+    max_chars: int = _MAX_ERROR_MESSAGE_CHARS,
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 class CodexExecHandler:
@@ -801,7 +813,7 @@ class CodexExecHandler:
         self._append_log(
             log_path,
             self._redact_text(
-                f"$ {' '.join(command)}",
+                f"[command] $ {' '.join(command)}",
                 extra_redaction_values=redaction_values,
             ),
         )
@@ -1176,8 +1188,7 @@ class CodexExecHandler:
                 )
             else:
                 message = f"command failed ({result.returncode}): {command_hint}"
-            if len(message) > _MAX_COMMAND_ERROR_MESSAGE_LENGTH:
-                message = f"{message[:_MAX_COMMAND_ERROR_MESSAGE_LENGTH - 3]}..."
+            message = _truncate_error_message(message)
             raise CodexWorkerHandlerError(message)
         return result
 
