@@ -72,16 +72,19 @@ if __name__ == "__main__":
                             f"DB lookup for {provider} API key failed: {exc}"
                         )
 
+            embed_model_kwargs = {}
             if provider == "google":
-                embed_model, embed_dimensions = build_embed_model(
-                    settings, google_api_key=key_to_use
-                )
+                embed_model_kwargs["google_api_key"] = key_to_use
             elif provider == "openai":
-                embed_model, embed_dimensions = build_embed_model(
-                    settings, openai_api_key=key_to_use
-                )
+                embed_model_kwargs["openai_api_key"] = key_to_use
+            elif provider == "ollama":
+                embed_model_kwargs = {}
             else:
-                embed_model, embed_dimensions = build_embed_model(settings)
+                raise ValueError(f"Unsupported default embed provider: {provider}.")
+
+            embed_model, embed_dimensions = build_embed_model(
+                settings, **embed_model_kwargs
+            )
             logger.info(
                 f"Embedding model built successfully. Dimensions: {embed_dimensions}"
             )

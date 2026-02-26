@@ -1,10 +1,7 @@
 import os
 import sys
 from pathlib import Path
-
 import pytest
-
-from moonmind.config.settings import settings
 
 
 def _avoid_local_workflows_package_shadowing() -> None:
@@ -18,14 +15,17 @@ def _resolve_openai_api_key() -> str | None:
     return os.getenv("OPENAI_API_KEY")
 
 
+_avoid_local_workflows_package_shadowing()
+from llama_index.embeddings.openai import OpenAIEmbedding
+from moonmind.config.settings import settings
+from moonmind.factories.embed_model_factory import build_embed_model
+
+
 def test_openai_embeddings_generation(monkeypatch):
     """Verify OpenAI embedding instantiation and basic structure (integration)."""
     api_key = _resolve_openai_api_key()
     if not api_key:
         pytest.skip("OPENAI_API_KEY is not set.")
-
-    _avoid_local_workflows_package_shadowing()
-    from moonmind.factories.embed_model_factory import build_embed_model
 
     monkeypatch.setattr(settings, "default_embedding_provider", "openai", raising=False)
     monkeypatch.setattr(settings.openai, "openai_api_key", api_key, raising=False)
@@ -48,8 +48,6 @@ def test_openai_embeddings_generation(monkeypatch):
     assert configured_dimensions == 1536
 
     # Basic sanity check of the instance
-    from llama_index.embeddings.openai import OpenAIEmbedding
-
     assert isinstance(embed_model, OpenAIEmbedding)
     assert (
         getattr(embed_model, "model", None) == "text-embedding-3-small"
