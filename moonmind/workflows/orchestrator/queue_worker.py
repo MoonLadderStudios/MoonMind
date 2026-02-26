@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -84,7 +85,11 @@ def _skill_step_log_name(step: TaskRuntimeStep) -> str:
         char if char.isalnum() or char in {"-", "_", "."} else "-"
         for char in step.step_id
     ).strip("-")
-    return f"{safe_id or 'step'}-idx{step.step_index}-att{step.attempt}.log"
+    step_id_digest = hashlib.sha256(step.step_id.encode("utf-8")).hexdigest()[:10]
+    return (
+        f"{safe_id or 'step'}-idx{step.step_index}-att{step.attempt}-"
+        f"{step_id_digest}.log"
+    )
 
 
 @dataclass(frozen=True, slots=True)
