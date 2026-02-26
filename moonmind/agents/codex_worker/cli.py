@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from typing import Mapping, Sequence
 
@@ -35,6 +36,15 @@ from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
 
 logger = logging.getLogger(__name__)
+
+_MAX_ERROR_MESSAGE_CHARS = 1024
+_TOKEN_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"gh[pousr][-_][A-Za-z0-9_-]{8,}"),
+    re.compile(r"github_pat[_-][A-Za-z0-9_-]{8,}", re.IGNORECASE),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bATATT[0-9A-Za-z_-]+\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -157,7 +167,19 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
+    for pattern in _TOKEN_REDACTION_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
+
+
+def _truncate_error_message(
+    message: str, *, max_chars: int = _MAX_ERROR_MESSAGE_CHARS
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
 
 def _run_checked_command(
@@ -194,7 +216,6 @@ def _run_checked_command(
         message_prefix = f"command failed ({result.returncode}): {command_hint} | "
         redacted_tail = _redact_value(tail_line, redaction_values)
         message = f"{message_prefix}{redacted_tail}"
-
         if len(message) > 1024:
             # Preserve prefix and tail of the redacted line to capture failure context.
             prefix_len = len(message_prefix)
@@ -208,7 +229,10 @@ def _run_checked_command(
                 )
             else:
                 message = f"{message[:1021]}..."
-        raise RuntimeError(message)
+    else:
+        message = f"command failed ({result.returncode}): {command_hint}"
+        message = _redact_value(message, redaction_values)
+    raise RuntimeError(message)
 
     raise RuntimeError(
         _redact_value(
