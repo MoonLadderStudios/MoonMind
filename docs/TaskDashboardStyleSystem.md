@@ -465,13 +465,14 @@ Recommended interaction rules:
 
 ### 11.4 Buttons (Glow + Grow system)
 
-Buttons must follow one consistent interaction model across: Add Step, Apply, Create, Promote, Dismiss, Cancel, Back, and related actions.
+Buttons must follow one consistent interaction model across:
+Add Step, Apply, Create, Promote, Dismiss, Cancel, Back, etc.
 
 #### 11.4.1 Principles
 
 1. Hover gets lighter/brighter (never darker).
 2. All buttons are slightly translucent so underlying glass/gradients influence them.
-3. Glow is driven by the button's action color (purple for default, green for create/commit, red for danger).
+3. Glow is driven by the button's "action color" (purple for default, green for create/commit, red for danger).
 4. Motion is scale-based:
    - Hover: grow (for example, `scale(1.03)`).
    - Active/press: subtle press via scale (for example, `scale(0.99)`), still no translate.
@@ -479,27 +480,27 @@ Buttons must follow one consistent interaction model across: Add Step, Apply, Cr
 #### 11.4.2 Variants and when to use them
 
 - Default (brand action): purple (`--mm-accent`) for most actions.
-- Secondary: glass surface for safe/navigation actions (`Cancel`, `Back`, `View details`).
-- Commit/Create: green (`--mm-action-primary`) for "this will enqueue/apply a real action" flows (`Create`, `Promote-to-task`).
-- Danger: red (`--mm-danger`) for destructive actions (`Dismiss`, `Cancel job`).
+- Secondary: glass surface for safe/navigation actions (Cancel, Back, View Details).
+- Commit/Create: green (`--mm-action-primary`) for "this will enqueue/apply a real action" flows (Create, Promote-to-task).
+- Danger: red (`--mm-danger`) for destructive actions (Dismiss, Cancel job).
 
 Implementation note (current pattern):
 
 - Commit/danger actions use a shared action-button class that sets `--queue-action-color` and derives fill/glow from it.
 - `--queue-action-color` defaults to `--mm-action-primary`; danger overrides set it to `--mm-danger`.
 
-#### 11.4.3 Interaction state contract (must hold for all variants)
+#### 11.4.3 Interaction state contract (must be true for all variants)
 
 Base (idle):
 
-- Background uses alpha `< 1.0` (recommended `0.80-0.92`).
+- Background uses alpha < 1.0 (recommended `0.80-0.92`).
 - Thin outline present (1px) so the button edge stays readable on glass.
 
 Hover:
 
 - Increase brightness by increasing alpha and/or adding a subtle white highlight overlay.
 - Add a glow using the action color.
-- `transform: scale(...)` only (no `translateY`).
+- `transform: scale(...)` only (no translateY).
 
 Active (pressed):
 
@@ -508,7 +509,7 @@ Active (pressed):
 
 Focus-visible:
 
-- Keep a clear outline ring with high contrast in both themes.
+- Keep a clear outline ring (high contrast in both themes).
 
 Disabled:
 
@@ -516,15 +517,17 @@ Disabled:
 
 #### 11.4.4 Thin outline rationale
 
-A 1px outline + edge-light inset highlight keeps buttons legible on bright glass panels, dark-mode glass, and gradient backgrounds. Without the outline, buttons visually blend into the panel surface.
+A 1px outline plus edge-light inset highlight keeps buttons legible on:
 
-#### 11.4.5 Optional dynamic edge-light outline (Liquid Glass vibe)
+- bright glass panels,
+- dark mode glass,
+- gradient backgrounds.
 
-CSS cannot truly vary border width around a rectangle, but we can fake an uneven outline by varying border opacity using a gradient border overlay. This creates the impression that the outline is thinner in some corners and thicker in others.
+Without the outline, buttons visually blend into the panel surface.
 
-#### 11.4.6 CSS recipe (dashboard.tailwind.css guidance)
+#### 11.4.5 CSS recipe (dashboard.tailwind.css)
 
-Use the following selector pattern for an unambiguous "Glow + Grow (no rise)" implementation:
+Use this as the source-of-truth interaction recipe when editing `api_service/static/task_dashboard/dashboard.tailwind.css`:
 
 ```css
 /* Button interaction system: Glow + Grow (no translateY) */
@@ -537,7 +540,7 @@ Use the following selector pattern for an unambiguous "Glow + Grow (no rise)" im
   --mm-btn-scale-active: 0.99;
 }
 
-/* Use a single action-color concept for glow/focus.
+/* Use a single "action color" concept for glow/focus.
    queue-action already uses --queue-action-color; others fall back to --mm-accent. */
 button,
 .button {
@@ -545,6 +548,7 @@ button,
   background: rgb(var(--mm-btn-color) / var(--mm-btn-alpha));
   transform: scale(1);
   will-change: transform;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
 button:hover,
@@ -609,7 +613,9 @@ button.secondary:hover,
 }
 ```
 
-Liquid edge outline recipe:
+#### 11.4.6 Optional dynamic edge-light outline (Liquid Glass vibe)
+
+CSS cannot truly vary border width around a standard rectangle. Use gradient border opacity to create the perceived uneven edge thickness:
 
 ```css
 /* Optional: perceived uneven outline via gradient border overlay */
@@ -639,9 +645,7 @@ Liquid edge outline recipe:
 }
 
 @supports not ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
-  .mm-liquid-edge::before {
-    display: none;
-  }
+  .mm-liquid-edge::before { display: none; }
 }
 ```
 
@@ -740,7 +744,7 @@ Status: Planned
 
 - Expand `mm-glass` and `mm-glass-strong` usage.
 - Tune glow and elevation hierarchy.
-- Keep motion subtle (opacity/scale only). Avoid translateY "rising" on hover/click.
+- Keep motion subtle (opacity/scale only). Avoid translateY rising on hover/click.
 
 ## 14. Validation Checklist
 
