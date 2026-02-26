@@ -46,7 +46,9 @@ def upgrade() -> None:
         ),
         sa.Column("attempt", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("message", sa.Text(), nullable=True),
-        sa.Column("artifact_refs", _json_variant(), nullable=False, server_default="[]"),
+        sa.Column(
+            "artifact_refs", _json_variant(), nullable=False, server_default="[]"
+        ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(

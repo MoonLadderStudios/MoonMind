@@ -487,14 +487,22 @@ class OrchestratorQueueWorker:
                     job_id=job.id,
                     level="info",
                     message="Starting orchestrator step",
-                    payload={"runId": str(run_id), "taskId": str(run_id), "step": step.value},
+                    payload={
+                        "runId": str(run_id),
+                        "taskId": str(run_id),
+                        "step": step.value,
+                    },
                 )
                 await _execute_plan_step_async(run_id, step.value)
                 await self._append_event_best_effort(
                     job_id=job.id,
                     level="info",
                     message="Completed orchestrator step",
-                    payload={"runId": str(run_id), "taskId": str(run_id), "step": step.value},
+                    payload={
+                        "runId": str(run_id),
+                        "taskId": str(run_id),
+                        "step": step.value,
+                    },
                 )
         except Exception:
             if cancel_event.is_set():
@@ -556,7 +564,9 @@ class OrchestratorQueueWorker:
                 worker_id=self._config.worker_id,
                 error_message="invalid orchestrator payload",
             )
-            logger.exception("Invalid payload on orchestrator task queue job %s", job.id)
+            logger.exception(
+                "Invalid payload on orchestrator task queue job %s", job.id
+            )
             return
 
         await self._append_event_best_effort(
@@ -700,7 +710,9 @@ class OrchestratorQueueWorker:
         if stderr_text.strip():
             output_lines.append(stderr_text.rstrip())
         output_payload = "\n\n".join(output_lines) if output_lines else "(no output)"
-        artifact = storage.write_text(task_id, _skill_step_log_name(step), output_payload)
+        artifact = storage.write_text(
+            task_id, _skill_step_log_name(step), output_payload
+        )
         await state_sink.record_artifact(
             task_id=task_id,
             path=artifact.path,
@@ -832,9 +844,7 @@ class OrchestratorQueueWorker:
             if not isinstance(skill_args_raw, dict):
                 skill_args_raw = skill_node.get("args")
             skill_args = (
-                dict(skill_args_raw)
-                if isinstance(skill_args_raw, dict)
-                else {}
+                dict(skill_args_raw) if isinstance(skill_args_raw, dict) else {}
             )
             if not step_id:
                 step_id = f"step-{index + 1}"
