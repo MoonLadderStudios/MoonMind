@@ -41,18 +41,51 @@ if __name__ == "__main__":
         logger.info("Building embedding model...")
         try:
 
-            async def _get_google_key():
+            def _get_configured_api_key(provider: str) -> str | None:
+                if provider == "google":
+                    return settings.google.google_api_key
+                if provider == "openai":
+                    return settings.openai.openai_api_key
+                return None
+
+            async def _get_api_key(provider: str):
                 async with get_async_session_context() as db_session:
                     async with get_user_manager_context(db_session) as user_manager:
                         user = await get_or_create_default_user(
                             db_session=db_session, user_manager=user_manager
                         )
-                        return await get_user_api_key(user, "google", db_session)
+                        return await get_user_api_key(
+                            user, provider, db_session, prefer_system_key=True
+                        )
 
-            google_key = asyncio.run(_get_google_key())
+            provider = (
+                settings.default_embedding_provider.lower()
+                if settings.default_embedding_provider
+                else "google"
+            )
+            key_to_use = None
+            if provider in ["google", "openai"]:
+                key_to_use = _get_configured_api_key(provider)
+                if not key_to_use:
+                    try:
+                        key_to_use = asyncio.run(_get_api_key(provider))
+                    except Exception as exc:
+                        logger.warning(
+                            f"DB lookup for {provider} API key failed: {exc}"
+                        )
+
+            embed_model_kwargs = {}
+            if provider == "google":
+                embed_model_kwargs["google_api_key"] = key_to_use
+            elif provider == "openai":
+                embed_model_kwargs["openai_api_key"] = key_to_use
+            elif provider == "ollama":
+                embed_model_kwargs = {}
+            else:
+                raise ValueError(f"Unsupported default embed provider: {provider}.")
 
             embed_model, embed_dimensions = build_embed_model(
-                settings, google_api_key=google_key
+                settings, **embed_model_kwargs
             )
             logger.info(
                 f"Embedding model built successfully. Dimensions: {embed_dimensions}"
