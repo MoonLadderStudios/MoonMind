@@ -95,8 +95,8 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
     task_context.write_text(
         (
             "{"
-            "\"runtime\":\"codex\","
-            "\"runtimeConfig\":{\"mode\":\"gemini\",\"model\":\"gemini-2.5-pro\",\"effort\":\"medium\"}"
+            '"runtime":"codex",'
+            '"runtimeConfig":{"mode":"gemini","model":"gemini-2.5-pro","effort":"medium"}'
             "}"
         ),
         encoding="utf-8",
@@ -117,7 +117,7 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     task_context.write_text(
         (
             "{"
-            "\"runtimeConfig\":{\"mode\":\"claude\",\"model\":\"claude-3.7-sonnet\",\"effort\":\"low\"}"
+            '"runtimeConfig":{"mode":"claude","model":"claude-3.7-sonnet","effort":"low"}'
             "}"
         ),
         encoding="utf-8",
@@ -147,7 +147,7 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     task_context.write_text(
         (
             "{"
-            "\"runtimeConfig\":{\"mode\":\"codex\",\"model\":\"gpt-5-codex\",\"effort\":\"low\"}"
+            '"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low"}'
             "}"
         ),
         encoding="utf-8",

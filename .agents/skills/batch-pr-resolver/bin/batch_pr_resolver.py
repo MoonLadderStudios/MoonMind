@@ -226,9 +226,7 @@ def _load_parent_runtime_selection(
         if not mode:
             continue
 
-        model = _runtime_text(
-            runtime_config.get("model") or runtime_node.get("model")
-        )
+        model = _runtime_text(runtime_config.get("model") or runtime_node.get("model"))
         effort = _runtime_text(
             runtime_config.get("effort") or runtime_node.get("effort")
         )
