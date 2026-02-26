@@ -2732,7 +2732,10 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
         "Commit/push/merge directly when required by this skill. Publish stage is disabled for this task."
         in instruction
     )
-    assert "Do NOT commit or push. Publish is handled by MoonMind publish stage." not in instruction
+    assert (
+        "Do NOT commit or push. Publish is handled by MoonMind publish stage."
+        not in instruction
+    )
 
 
 async def test_run_once_task_steps_fail_fast_on_first_failed_step(
