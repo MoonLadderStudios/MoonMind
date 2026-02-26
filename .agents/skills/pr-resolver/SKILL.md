@@ -26,10 +26,26 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
      - `commentsSummary.hasActionableComments` is true.
      Proceed with comment fixes even if CI is still running.
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
+   - **Enable Auto-Merge While CI Runs:** If `ci.isRunning` is true, there are NO CI failures, mergeability is not conflicting, and `commentsSummary.hasActionableComments` is false, execute `gh pr merge --auto --<mergeMethod>`.
    - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `"CLEAN"`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
-   - **Blocked:** If CI is running and no failures while `mergeable` is clean (not in conflict), and `mergeStateStatus` is exactly `CLEAN`, exit and state the PR is blocked waiting for CI.
+   - **Blocked:** If CI is running but comments are still actionable or mergeability is conflicting, exit and state why it is blocked.
 4. After applying ANY fix (conflict, review comments, CI), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`.
 5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
+
+## Lightweight Finalize Pass
+
+When a prior `pr-resolver` run already fixed conflicts/comments/CI and is only waiting on CI, use:
+
+```bash
+python3 .agents/skills/pr-resolver/bin/pr_resolve_finalize.py --merge-method <merge|squash|rebase>
+```
+
+This performs only:
+- snapshot refresh
+- comment/mergeability/CI gate evaluation
+- either `gh pr merge --auto --<mergeMethod>`, direct merge, or blocked exit
+
+Use this command for check-back runs to avoid rerunning the full fix workflow.
 
 ## Constraints
 - Do NOT try to invent your own conflict resolution or CI fixing workflow. Always load and follow the specialized sub-skill instructions.
