@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import json
 import os
 import threading
@@ -38,6 +39,16 @@ class DummyProfileService:
 TEST_JOB_ID = "123e4567-e89b-12d3-a456-426614174000"
 
 
+@contextmanager
+def _playwright_page(playwright_obj):
+    browser = playwright_obj.chromium.launch()
+    page = browser.new_page()
+    try:
+        yield page
+    finally:
+        browser.close()
+
+
 @pytest.fixture(scope="module")
 def server():
     test_user = User(id=__import__("uuid").uuid4(), email="test@example.com")
@@ -63,13 +74,11 @@ def server():
 
 def test_submit_key(server):
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        page.goto("http://127.0.0.1:8001/settings")
-        page.fill("input[name='openai_api_key']", "browser-key")
-        page.click("button[type='submit']")
-        page.wait_for_load_state("networkidle")
-        browser.close()
+        with _playwright_page(p) as page:
+            page.goto("http://127.0.0.1:8001/settings")
+            page.fill("input[name='openai_api_key']", "browser-key")
+            page.click("button[type='submit']")
+            page.wait_for_load_state("networkidle")
 
     assert server.update_called_with is not None
 
@@ -119,9 +128,7 @@ def _mock_queue_create_job(page, job_id=None, should_fail=False):
 
 def test_submit_create_task_flow_successful_navigation(server):
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        try:
+        with _playwright_page(p) as page:
             _mock_queue_runtime_capabilities(page)
             _mock_queue_create_job(page, job_id=TEST_JOB_ID)
             page.goto("http://127.0.0.1:8001/tasks/create")
@@ -129,34 +136,32 @@ def test_submit_create_task_flow_successful_navigation(server):
             submit_button = _fill_queue_task_create_form(page)
             expect(submit_button).to_have_text("Create")
 
-            with page.expect_request("**/api/queue/jobs") as request_info:
+            with page.expect_response("**/api/queue/jobs") as response_info:
                 submit_button.click()
-            assert request_info.value.method == "POST"
+            response = response_info.value
+            assert response.request.method == "POST"
+            assert response.status == 200
             page.wait_for_url(f"**/tasks/queue/{TEST_JOB_ID}")
 
             assert page.url.endswith(f"/tasks/queue/{TEST_JOB_ID}")
-        finally:
-            browser.close()
 
 
 def test_submit_create_task_flow_error_restores_label(server):
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        try:
+        with _playwright_page(p) as page:
             _mock_queue_runtime_capabilities(page)
             _mock_queue_create_job(page, should_fail=True)
             page.goto("http://127.0.0.1:8001/tasks/create")
 
             submit_button = _fill_queue_task_create_form(page)
             original_label = submit_button.inner_text().strip()
-            with page.expect_request("**/api/queue/jobs") as request_info:
+            with page.expect_response("**/api/queue/jobs") as response_info:
                 submit_button.click()
-            assert request_info.value.method == "POST"
+            response = response_info.value
+            assert response.request.method == "POST"
+            assert response.status == 500
             expect(submit_button).to_have_text(original_label)
             expect(page.locator("#queue-submit-message")).to_contain_text(
                 "Failed to create queue task"
             )
             assert page.url.endswith("/tasks/create")
-        finally:
-            browser.close()
