@@ -21,7 +21,6 @@ from moonmind.schemas.task_proposal_models import (
     TaskProposalPriorityRequest,
     TaskProposalPromoteRequest,
     TaskProposalPromoteResponse,
-    TaskProposalSnoozeRequest,
     TaskProposalTaskPreview,
 )
 from moonmind.workflows import get_task_proposal_service
@@ -128,7 +127,6 @@ def _serialize_proposal(
         metadata=proposal.origin_metadata or {},
     )
     preview = _build_task_preview(proposal.task_create_request or {})
-    snooze_history = proposal.snooze_history or []
     data = {
         "id": proposal.id,
         "status": proposal.status,
@@ -153,10 +151,6 @@ def _serialize_proposal(
         "origin": origin,
         "taskCreateRequest": proposal.task_create_request or {},
         "taskPreview": preview,
-        "snoozedUntil": proposal.snoozed_until,
-        "snoozedByUserId": proposal.snoozed_by_user_id,
-        "snoozeNote": proposal.snooze_note,
-        "snoozeHistory": snooze_history,
         "similar": _serialize_similar(similar),
     }
     return TaskProposalModel.model_validate(data)
@@ -234,23 +228,17 @@ async def list_proposals(
     origin_id: Optional[UUID] = Query(None, alias="originId"),
     limit: int = Query(50, ge=1, le=200),
     cursor: Optional[str] = Query(None, alias="cursor"),
-    include_snoozed: bool = Query(False, alias="includeSnoozed"),
 ) -> TaskProposalListResponse:
     status_value = None
-    only_snoozed = False
     if status_filter:
         normalized_status = status_filter.lower()
-        if normalized_status == "snoozed":
-            only_snoozed = True
-            status_value = TaskProposalStatus.OPEN
-        else:
-            try:
-                status_value = TaskProposalStatus(normalized_status)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"code": "invalid_status", "message": str(exc)},
-                ) from exc
+        try:
+            status_value = TaskProposalStatus(normalized_status)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_status", "message": str(exc)},
+            ) from exc
     origin_value = None
     if origin_source:
         try:
@@ -269,8 +257,6 @@ async def list_proposals(
             origin_id=origin_id,
             cursor=cursor,
             limit=limit,
-            include_snoozed=include_snoozed,
-            only_snoozed=only_snoozed,
         )
     except TaskProposalValidationError as exc:
         raise HTTPException(
@@ -399,64 +385,6 @@ async def update_priority(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_request", "message": str(exc)},
-        ) from exc
-    except TaskProposalError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "proposal_not_found", "message": str(exc)},
-        ) from exc
-    return _serialize_proposal(proposal)
-
-
-@router.post("/{proposal_id}/snooze", response_model=TaskProposalModel)
-async def snooze_proposal(
-    *,
-    proposal_id: UUID,
-    payload: TaskProposalSnoozeRequest = Body(...),
-    service: TaskProposalService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
-) -> TaskProposalModel:
-    try:
-        proposal = await service.snooze_proposal(
-            proposal_id=proposal_id,
-            until=payload.until,
-            note=payload.note,
-            user_id=getattr(user, "id"),
-        )
-    except TaskProposalStatusError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "invalid_state", "message": str(exc)},
-        ) from exc
-    except TaskProposalValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "invalid_request", "message": str(exc)},
-        ) from exc
-    except TaskProposalError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "proposal_not_found", "message": str(exc)},
-        ) from exc
-    return _serialize_proposal(proposal)
-
-
-@router.post("/{proposal_id}/unsnooze", response_model=TaskProposalModel)
-async def unsnooze_proposal(
-    *,
-    proposal_id: UUID,
-    service: TaskProposalService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
-) -> TaskProposalModel:
-    try:
-        proposal = await service.unsnooze_proposal(
-            proposal_id=proposal_id,
-            user_id=getattr(user, "id"),
-        )
-    except TaskProposalStatusError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "invalid_state", "message": str(exc)},
         ) from exc
     except TaskProposalError as exc:
         raise HTTPException(

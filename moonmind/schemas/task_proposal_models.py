@@ -72,12 +72,6 @@ class TaskProposalModel(BaseModel):
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     task_preview: Optional[TaskProposalTaskPreview] = Field(None, alias="taskPreview")
-    snoozed_until: Optional[datetime] = Field(None, alias="snoozedUntil")
-    snoozed_by_user_id: Optional[UUID] = Field(None, alias="snoozedByUserId")
-    snooze_note: Optional[str] = Field(None, alias="snoozeNote")
-    snooze_history: list[dict[str, Any]] = Field(
-        default_factory=list, alias="snoozeHistory"
-    )
     similar: list["TaskProposalSimilarModel"] = Field(
         default_factory=list, alias="similar"
     )
@@ -154,12 +148,3 @@ class TaskProposalPriorityRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     priority: str = Field(..., alias="priority")
-
-
-class TaskProposalSnoozeRequest(BaseModel):
-    """Snooze payload."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    until: datetime = Field(..., alias="until")
-    note: Optional[str] = Field(None, alias="note")
