@@ -8,10 +8,10 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202602260001"
-down_revision: str | None = "202602240002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "202602260001"  # noqa: F841
+down_revision: str | None = "202602240002"  # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
+depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
 
 
 def upgrade() -> None:

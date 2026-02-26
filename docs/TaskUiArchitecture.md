@@ -88,7 +88,7 @@ Current dashboard routes rendered by `dashboard.js`:
 | `/tasks/manifests` | Manifest run list (queue jobs filtered by `type=manifest`) |
 | `/tasks/manifests/new` | Manifest submit flow (inline or registry-backed) |
 | `/tasks/proposals` | Proposal queue list and triage actions |
-| `/tasks/proposals/:proposalId` | Proposal detail, promote/dismiss/priority/snooze actions |
+| `/tasks/proposals/:proposalId` | Proposal detail, promote/dismiss/priority actions |
 
 Notes:
 
@@ -138,8 +138,6 @@ Queue detail operational controls:
 - `POST /api/proposals/{proposal_id}/promote`
 - `POST /api/proposals/{proposal_id}/dismiss`
 - `POST /api/proposals/{proposal_id}/priority`
-- `POST /api/proposals/{proposal_id}/snooze`
-- `POST /api/proposals/{proposal_id}/unsnooze`
 
 ### 4.4 Manifest endpoints
 
@@ -347,7 +345,6 @@ Behavior:
 List supports:
 
 - status, repository, category filters
-- include snoozed toggle
 - inline promote/dismiss actions
 
 Detail supports:
@@ -356,7 +353,6 @@ Detail supports:
 - edit + promote override flow
 - dismiss
 - priority update
-- snooze and unsnooze
 - similar proposal links
 
 ---

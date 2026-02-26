@@ -237,7 +237,10 @@ async def list_proposals(
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "invalid_status", "message": str(exc)},
+                detail={
+                    "code": "invalid_status",
+                    "message": "Invalid proposal status value.",
+                },
             ) from exc
     origin_value = None
     if origin_source:

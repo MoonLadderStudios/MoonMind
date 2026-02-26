@@ -1665,7 +1665,7 @@
             <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
             <td>${originLink}</td>
             <td>${escapeHtml(tags || "-")}</td>
-                <td><code>${escapeHtml(dedupShort)}</code></td>
+            <td><code>${escapeHtml(dedupShort)}</code></td>
             <td>
               <div class="stack compact">
                 <button
@@ -1689,7 +1689,7 @@
           </tr>
           ${
             instructions
-              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+              ? `<tr><td colspan="11"><span class="small">${escapeHtml(
                   instructions,
                 )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
                   dedupHash || "-",
