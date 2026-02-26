@@ -959,14 +959,12 @@ class CodexExecHandler:
 
                             text = text[len(remaining_snapshot) :]
                             replay_snapshot_match_offset[stream] = 0
+                            snapshot_match_offset = 0
                             if not text:
                                 return ""
-                            previous_snapshot = replay_snapshot_text.get(stream, "")
-                            replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
-                            snapshot_text_updated = True
                         else:
-                            snapshot_match_offset = 0
                             replay_snapshot_match_offset[stream] = 0
+                            snapshot_match_offset = 0
 
                 if previous_snapshot:
                     if text == previous_snapshot:
@@ -979,14 +977,16 @@ class CodexExecHandler:
                             return ""
                         replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
                         snapshot_text_updated = True
-                        previous_snapshot = replay_snapshot_text[stream]
 
                     elif previous_snapshot.startswith(text):
                         replay_snapshot_match_offset[stream] = len(text)
                         return ""
 
                 if not snapshot_text_updated:
-                    replay_snapshot_text[stream] = text
+                    if previous_snapshot:
+                        replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
+                    else:
+                        replay_snapshot_text[stream] = text
 
                 replay_snapshot_match_offset[stream] = 0
 
