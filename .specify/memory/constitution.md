@@ -49,9 +49,9 @@ Non-negotiable rules:
 - Configuration MUST have deterministic precedence (highest to lowest):
   1) command-line arguments (for CLI tools),
   2) explicit request payload / API parameter (when applicable),
-  2) environment variables,
-  3) config file,
-  4) defaults.
+  3) environment variables,
+  4) config file,
+  5) defaults.
 - Each config option MUST be:
   - documented (purpose + default + examples),
   - namespaced consistently (e.g., `MOONMIND_*`), and
