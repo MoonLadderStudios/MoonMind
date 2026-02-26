@@ -33,6 +33,7 @@ _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
+_SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver"})
 
 
 class TaskContractError(ValueError):
@@ -596,6 +597,23 @@ class TaskExecutionSpec(BaseModel):
         if self.container.enabled and self.steps:
             raise TaskContractError(
                 "task.steps is not supported when task.container.enabled=true"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_skill_publish_compatibility(self) -> "TaskExecutionSpec":
+        skill_ids: set[str] = {str(self.skill.id or "").strip().lower()}
+        for step in self.steps:
+            if step.skill is None:
+                continue
+            skill_ids.add(str(step.skill.id or "").strip().lower())
+
+        requires_self_managed_publish = bool(
+            skill_ids.intersection(_SELF_MANAGED_PUBLISH_SKILLS)
+        )
+        if requires_self_managed_publish and self.publish.mode != "none":
+            raise TaskContractError(
+                "task.publish.mode must be 'none' when using skill 'pr-resolver'"
             )
         return self
 

@@ -2689,6 +2689,52 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
     )
 
 
+async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_publish_none(
+    tmp_path: Path,
+) -> None:
+    """`pr-resolver` should be told to commit/push directly when publish is disabled."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Resolve PR #999",
+                "publish": {"mode": "none"},
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title=None,
+            instructions="Follow pr-resolver workflow",
+            effective_skill_id="pr-resolver",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    assert (
+        "Commit/push/merge directly when required by this skill. Publish stage is disabled for this task."
+        in instruction
+    )
+    assert "Do NOT commit or push. Publish is handled by MoonMind publish stage." not in instruction
+
+
 async def test_run_once_task_steps_fail_fast_on_first_failed_step(
     tmp_path: Path,
 ) -> None:

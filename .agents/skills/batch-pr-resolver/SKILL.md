@@ -69,7 +69,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.targetRuntime`: inherited/explicit runtime mode
      - `payload.task.runtime`: inherited/explicit `{mode, model?, effort?}`
      - `payload.task.git.startingBranch`: PR head branch
-     - `payload.task.publish.mode`: `branch`
+     - `payload.task.publish.mode`: `none` (the `pr-resolver` skill owns commit/push/merge actions directly)
      - `payload.task.skill.id`: `pr-resolver`
      - `payload.task.skill.args`: `{ repo, pr, branch, mergeMethod, maxIterations }`
    - Submit via internal queue service (`AgentQueueService`).

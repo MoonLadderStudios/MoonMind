@@ -295,7 +295,7 @@ def _build_queue_request(
                     "startingBranch": branch,
                     "newBranch": branch,
                 },
-                "publish": {"mode": "branch"},
+                "publish": {"mode": "none"},
             },
         },
     }

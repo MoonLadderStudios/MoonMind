@@ -57,6 +57,28 @@ def test_normalize_task_payload_defaults_publish_mode_to_pr() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
+def test_normalize_task_payload_rejects_pr_resolver_without_publish_none() -> None:
+    """`pr-resolver` tasks must disable worker publish stage explicitly."""
+
+    with pytest.raises(
+        TaskContractError,
+        match="task.publish.mode must be 'none' when using skill 'pr-resolver'",
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Resolve PR #123",
+                    "skill": {"id": "pr-resolver", "args": {"pr": "123"}},
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": "feature/example", "newBranch": None},
+                    "publish": {"mode": "branch"},
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_respects_default_publish_mode_override(
     monkeypatch,
 ) -> None:
