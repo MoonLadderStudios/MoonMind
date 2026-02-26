@@ -6,7 +6,10 @@ import asyncio
 from typing import Any
 from uuid import UUID, uuid4
 
-from moonmind.workflows.agent_queue.job_types import ORCHESTRATOR_RUN_JOB_TYPE
+from moonmind.workflows.agent_queue.job_types import (
+    ORCHESTRATOR_RUN_JOB_TYPE,
+    ORCHESTRATOR_TASK_JOB_TYPE,
+)
 from moonmind.workflows.orchestrator.queue_worker import (
     ClaimedJob,
     OrchestratorQueueWorker,
@@ -121,7 +124,7 @@ def _worker_config() -> QueueWorkerConfig:
         worker_token="worker-token",
         poll_interval_ms=1,
         lease_seconds=3,
-        allowed_types=(ORCHESTRATOR_RUN_JOB_TYPE,),
+        allowed_types=(ORCHESTRATOR_RUN_JOB_TYPE, ORCHESTRATOR_TASK_JOB_TYPE),
         worker_capabilities=("orchestrator",),
         queue_api_retry_attempts=3,
         queue_api_retry_delay_seconds=0.01,
@@ -253,4 +256,66 @@ def test_process_job_acks_cancellation_after_step_execution(monkeypatch) -> None
         (run_id, "orchestrator run cancelled"),
     ]
     assert queue.complete_calls == []
+    assert queue.fail_calls == []
+
+
+def test_process_task_job_completes_when_steps_succeed(monkeypatch) -> None:
+    """orchestrator_task jobs should complete when all task steps succeed."""
+
+    run_id = uuid4()
+    job = ClaimedJob(
+        id=uuid4(),
+        type=ORCHESTRATOR_TASK_JOB_TYPE,
+        payload={
+            "taskId": str(run_id),
+            "steps": [
+                {
+                    "stepId": "step-1",
+                    "title": "Step 1",
+                    "instructions": "Run update",
+                    "skillId": "update-moonmind",
+                    "skillArgs": {},
+                }
+            ],
+        },
+    )
+
+    class _FakeSink:
+        async def record_task_status(self, **_kwargs):
+            return None
+
+        async def record_step_status(self, **_kwargs):
+            return None
+
+        async def record_artifact(self, **_kwargs):
+            return None
+
+        async def flush(self):
+            return None
+
+    queue = _FakeQueueClient()
+    worker = OrchestratorQueueWorker(config=_worker_config(), queue_client=queue)
+    monkeypatch.setattr(
+        "moonmind.workflows.orchestrator.queue_worker._build_state_sink",
+        lambda: _FakeSink(),
+    )
+
+    async def _noop_step(*_args, **_kwargs):
+        return None
+
+    async def _noop_heartbeat(
+        _job_id: UUID,
+        stop_event: asyncio.Event,
+        _cancel_event: asyncio.Event,
+    ) -> None:
+        await stop_event.wait()
+
+    worker._execute_task_runtime_step = _noop_step  # type: ignore[method-assign]
+    worker._heartbeat_loop = _noop_heartbeat  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_job(job))
+
+    assert queue.complete_calls == [
+        (job.id, f"orchestrator task {run_id} completed"),
+    ]
     assert queue.fail_calls == []

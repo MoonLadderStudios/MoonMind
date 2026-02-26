@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -29,6 +30,21 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunListResponse,
 )
 from moonmind.workflows.speckit_celery import models as workflow_models
+
+
+def _override_current_user_dependencies() -> None:
+    mock_user = SimpleNamespace(id=uuid4(), email="orchestrator@example.com")
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dependency in dependant.dependencies:
+            call = dependency.call
+            if call is None:
+                continue
+            name = getattr(call, "__name__", "")
+            if name == "_current_user_fallback" or name.startswith("current_"):
+                app.dependency_overrides[call] = lambda mock_user=mock_user: mock_user
 
 
 @pytest.mark.asyncio
@@ -108,6 +124,7 @@ async def test_orchestrator_visibility_contract(tmp_path) -> None:
         artifact_id = artifact.id
 
     app.state.settings = settings
+    _override_current_user_dependencies()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -116,6 +133,15 @@ async def test_orchestrator_visibility_contract(tmp_path) -> None:
         collection = OrchestratorRunListResponse.model_validate(list_response.json())
         assert collection.runs
         assert collection.runs[0].run_id == run_id
+        assert collection.runs[0].task_id == run_id
+
+        task_list_response = await client.get("/orchestrator/tasks")
+        assert task_list_response.status_code == 200
+        task_collection = OrchestratorRunListResponse.model_validate(
+            task_list_response.json()
+        )
+        assert task_collection.tasks
+        assert task_collection.tasks[0].task_id == run_id
 
         filtered = await client.get(
             "/orchestrator/runs",
@@ -139,7 +165,15 @@ async def test_orchestrator_visibility_contract(tmp_path) -> None:
             detail_model.steps
             and detail_model.steps[0].name == OrchestratorPlanStep.VERIFY
         )
+        assert detail_model.task_id == run_id
         assert detail_model.metrics_snapshot is not None
+
+        task_detail_response = await client.get(f"/orchestrator/tasks/{run_id}")
+        assert task_detail_response.status_code == 200
+        task_detail_model = OrchestratorRunDetailModel.model_validate(
+            task_detail_response.json()
+        )
+        assert task_detail_model.task_id == run_id
 
         artifacts_response = await client.get(f"/orchestrator/runs/{run_id}/artifacts")
         assert artifacts_response.status_code == 200
@@ -148,3 +182,9 @@ async def test_orchestrator_visibility_contract(tmp_path) -> None:
         )
         assert artifacts_model.artifacts
         assert artifacts_model.artifacts[0].artifact_id == artifact_id
+
+        task_artifacts_response = await client.get(
+            f"/orchestrator/tasks/{run_id}/artifacts"
+        )
+        assert task_artifacts_response.status_code == 200
+    app.dependency_overrides.clear()

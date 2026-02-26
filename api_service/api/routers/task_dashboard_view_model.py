@@ -156,12 +156,12 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "taskStepTemplateFavorite": "/api/task-step-templates/{slug}:favorite",
             },
             "orchestrator": {
-                "list": "/orchestrator/runs",
-                "create": "/orchestrator/runs",
-                "detail": "/orchestrator/runs/{id}",
-                "artifacts": "/orchestrator/runs/{id}/artifacts",
-                "approve": "/orchestrator/runs/{id}/approvals",
-                "retry": "/orchestrator/runs/{id}/retry",
+                "list": "/orchestrator/tasks",
+                "create": "/orchestrator/tasks",
+                "detail": "/orchestrator/tasks/{id}",
+                "artifacts": "/orchestrator/tasks/{id}/artifacts",
+                "approve": "/orchestrator/tasks/{id}/approvals",
+                "retry": "/orchestrator/tasks/{id}/retry",
             },
             "proposals": {
                 "list": "/api/proposals",

@@ -6,7 +6,10 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from api_service.db import models as db_models
-from moonmind.workflows.agent_queue.job_types import ORCHESTRATOR_RUN_JOB_TYPE
+from moonmind.workflows.agent_queue.job_types import (
+    ORCHESTRATOR_RUN_JOB_TYPE,
+    ORCHESTRATOR_TASK_JOB_TYPE,
+)
 from moonmind.workflows.agent_queue.service import AgentQueueService
 
 
@@ -50,9 +53,30 @@ def build_orchestrator_queue_payload(
     )
     return {
         "runId": str(run_id),
+        "taskId": str(run_id),
         "steps": executable_steps,
         "includeRollback": run_rollback,
         # Required so only orchestrator-capable DB workers claim these jobs.
+        "requiredCapabilities": ["orchestrator"],
+    }
+
+
+def build_orchestrator_task_queue_payload(
+    *,
+    task_id: UUID,
+    steps: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    """Build queue payload for explicit orchestrator task runtime steps."""
+
+    normalized_steps: list[dict[str, object]] = []
+    for entry in steps:
+        normalized_steps.append(dict(entry))
+    if not normalized_steps:
+        raise ValueError("Orchestrator task payload must include at least one step")
+    return {
+        "taskId": str(task_id),
+        "runId": str(task_id),
+        "steps": normalized_steps,
         "requiredCapabilities": ["orchestrator"],
     }
 
@@ -81,7 +105,28 @@ async def enqueue_orchestrator_run_job(
     return job.id
 
 
+async def enqueue_orchestrator_task_job(
+    *,
+    queue_service: AgentQueueService,
+    task_id: UUID,
+    steps: Sequence[dict[str, object]],
+    priority: int = 0,
+) -> UUID:
+    """Create one orchestrator task queue job and return its queue id."""
+
+    payload = build_orchestrator_task_queue_payload(task_id=task_id, steps=steps)
+    job = await queue_service.create_job(
+        job_type=ORCHESTRATOR_TASK_JOB_TYPE,
+        payload=payload,
+        priority=priority,
+        max_attempts=1,
+    )
+    return job.id
+
+
 __all__ = [
     "build_orchestrator_queue_payload",
+    "build_orchestrator_task_queue_payload",
     "enqueue_orchestrator_run_job",
+    "enqueue_orchestrator_task_job",
 ]

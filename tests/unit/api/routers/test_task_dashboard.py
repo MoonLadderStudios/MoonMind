@@ -33,10 +33,12 @@ def client() -> Iterator[TestClient]:
 
 
 def test_allowed_path_helper_accepts_known_routes() -> None:
+    assert _is_allowed_path("list")
     assert _is_allowed_path("queue")
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
     assert _is_allowed_path("orchestrator/run-1")
+    assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("new")
     assert _is_allowed_path("manifests")
     assert _is_allowed_path("manifests/new")
@@ -68,6 +70,7 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
+        "/tasks/list",
         "/tasks/queue",
         "/tasks/new",
         "/tasks/queue/new",
@@ -87,6 +90,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
+        f"/tasks/{uuid4()}",
         f"/tasks/queue/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
         f"/tasks/manifests/{uuid4()}",
@@ -115,8 +119,9 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     detail = response.json()["detail"]
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
-        "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
-        "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
+        "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
+        "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
+        "/tasks/orchestrator, /tasks/orchestrator/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "/tasks/schedules, /tasks/schedules/new, "
         "or /tasks/settings."
@@ -130,13 +135,22 @@ def test_skills_api_returns_available_skill_ids(
         "api_service.api.routers.task_dashboard.list_available_skill_names",
         lambda: ("speckit", "speckit-orchestrate"),
     )
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.list_runnable_skill_names",
+        lambda: ("update-moonmind",),
+    )
 
     response = client.get("/api/tasks/skills")
 
     assert response.status_code == 200
     assert response.json() == {
-        "items": [
+        "items": {
+            "worker": ["speckit", "speckit-orchestrate"],
+            "orchestrator": ["update-moonmind"],
+        },
+        "legacyItems": [
             {"id": "speckit"},
             {"id": "speckit-orchestrate"},
-        ]
+            {"id": "update-moonmind"},
+        ],
     }

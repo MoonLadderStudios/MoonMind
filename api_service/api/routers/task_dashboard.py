@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
+from moonmind.workflows.orchestrator.skill_executor import list_runnable_skill_names
 from moonmind.workflows.skills.resolver import list_available_skill_names
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
@@ -22,11 +23,16 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_TASK_ID_SEGMENT = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 _STATIC_PATHS = {
+    "list",
     "queue",
     "queue/new",
     "new",
+    "create",
     "orchestrator",
     "orchestrator/new",
     "proposals",
@@ -52,7 +58,10 @@ class DashboardSkillOption(BaseModel):
 class DashboardSkillListResponse(BaseModel):
     """Dashboard response containing available skill options."""
 
-    items: list[DashboardSkillOption]
+    items: dict[str, list[str]]
+    legacy_items: list[DashboardSkillOption] = Field(
+        default_factory=list, alias="legacyItems"
+    )
 
 
 def _is_dynamic_detail(path: str, source: str) -> bool:
@@ -77,6 +86,8 @@ def _is_safe_detail_segment(segment: str) -> bool:
 def _is_allowed_path(path: str) -> bool:
     if not path:
         return False
+    if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
+        return True
     if path in _STATIC_PATHS:
         return True
     return any(
@@ -150,8 +161,9 @@ async def task_dashboard_route(
             detail={
                 "code": "dashboard_route_not_found",
                 "message": (
-                    "Dashboard route was not found. Use /tasks/queue, /tasks/queue/new, "
-                    "/tasks/create, /tasks/new, /tasks/orchestrator, /tasks/orchestrator/new, "
+                    "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
+                    "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
+                    "/tasks/orchestrator, /tasks/orchestrator/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
                     "/tasks/schedules, /tasks/schedules/new, "
                     "or /tasks/settings."
@@ -168,11 +180,18 @@ async def list_dashboard_skills(
 ) -> DashboardSkillListResponse:
     """List currently available skills for task dashboard submission forms."""
 
+    worker_skills = list(list_available_skill_names())
+    orchestrator_skills = list(list_runnable_skill_names())
+    legacy_sorted = sorted(
+        set(worker_skills).union(orchestrator_skills),
+        key=str,
+    )
     return DashboardSkillListResponse(
-        items=[
-            DashboardSkillOption(id=skill_id)
-            for skill_id in list_available_skill_names()
-        ]
+        items={
+            "worker": worker_skills,
+            "orchestrator": orchestrator_skills,
+        },
+        legacyItems=[DashboardSkillOption(id=skill_id) for skill_id in legacy_sorted],
     )
 
 

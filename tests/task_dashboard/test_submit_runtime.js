@@ -159,13 +159,13 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testDetermineSubmitDestinationRoutesPayloads() {
-  const endpoints = { queue: "/api/queue/jobs", orchestrator: "/orchestrator/runs" };
+  const endpoints = { queue: "/api/queue/jobs", orchestrator: "/orchestrator/tasks" };
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
   assert.strictEqual(workerTarget.mode, "worker");
   assert.strictEqual(workerTarget.endpoint, "/api/queue/jobs");
   const orchestratorTarget = helpers.determineSubmitDestination("orchestrator", endpoints);
   assert.strictEqual(orchestratorTarget.mode, "orchestrator");
-  assert.strictEqual(orchestratorTarget.endpoint, "/orchestrator/runs");
+  assert.strictEqual(orchestratorTarget.endpoint, "/orchestrator/tasks");
 })();
 
 (function testValidateOrchestratorSubmissionEnforcesFields() {
@@ -208,23 +208,23 @@ const helpers = loadSubmitRuntimeHelpers();
   const valid = helpers.resolvePromotedQueueRoute({
     job: { id: "123e4567-e89b-12d3-a456-426614174000" },
   });
-  assert.strictEqual(valid, "/tasks/queue/123e4567-e89b-12d3-a456-426614174000");
+  assert.strictEqual(valid, "/tasks/123e4567-e89b-12d3-a456-426614174000?source=queue");
 
   const fromJobIdAlias = helpers.resolvePromotedQueueRoute({
     job: { jobId: "ABCDEF01-2345-6789-ABCD-EF0123456789" },
   });
-  assert.strictEqual(fromJobIdAlias, "/tasks/queue/ABCDEF01-2345-6789-ABCD-EF0123456789");
+  assert.strictEqual(fromJobIdAlias, "/tasks/ABCDEF01-2345-6789-ABCD-EF0123456789?source=queue");
 
   const invalidEncoded = helpers.resolvePromotedQueueRoute({
     job: { id: "%2Ftmp%2Fqueue" },
   });
-  assert.strictEqual(invalidEncoded, "/tasks/queue");
+  assert.strictEqual(invalidEncoded, "/tasks/list?source=queue");
 
   const reservedCreateRoute = helpers.resolvePromotedQueueRoute({
     job: { id: "new" },
   });
-  assert.strictEqual(reservedCreateRoute, "/tasks/queue");
+  assert.strictEqual(reservedCreateRoute, "/tasks/list?source=queue");
 
   const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
-  assert.strictEqual(missing, "/tasks/queue");
+  assert.strictEqual(missing, "/tasks/list?source=queue");
 })();
