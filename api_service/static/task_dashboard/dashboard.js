@@ -1796,10 +1796,9 @@
     value.priority = ["normal", "high"].includes(normalizedPriority)
       ? normalizedPriority
       : "normal";
-    const skillId = rawSkillId;
     const skillArgsRaw = String(draft.skillArgs || "").trim();
-    if (skillId) {
-      value.skillId = skillId;
+    if (rawSkillId) {
+      value.skillId = rawSkillId;
     } else {
       delete value.skillId;
     }

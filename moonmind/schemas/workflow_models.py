@@ -405,9 +405,11 @@ class OrchestratorCreateRunRequest(BaseModel):
     def _require_instruction_when_skill_not_explicit(
         self,
     ) -> "OrchestratorCreateRunRequest":
+        normalized_instruction = None if self.instruction is None else str(self.instruction).strip()
+        self.instruction = normalized_instruction
         if self.skill_id and self.skill_id != "auto":
             return self
-        if self.instruction is None or not str(self.instruction).strip():
+        if not self.instruction:
             raise ValueError(
                 "instruction is required when skillId is not provided or is auto"
             )

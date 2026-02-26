@@ -120,7 +120,7 @@ async def create_orchestrator_run(
 
     try:
         requested_skill = payload.skill_id
-        instruction = "" if payload.instruction is None else str(payload.instruction)
+        instruction = payload.instruction or ""
         if requested_skill:
             if payload.target_service != "orchestrator":
                 raise ValueError(
