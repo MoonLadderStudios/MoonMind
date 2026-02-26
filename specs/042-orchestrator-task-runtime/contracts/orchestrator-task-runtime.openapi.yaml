@@ -1,0 +1,591 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Orchestrator Task Runtime Contract
+  version: 0.1.0
+  description: |
+    Transitional API contract for Orchestrator Task Runtime.
+    `/orchestrator/tasks*` is task-first naming; `/orchestrator/runs*` remains compatibility aliases.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /orchestrator/tasks:
+    post:
+      summary: Create orchestrator task.
+      operationId: createOrchestratorTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrchestratorCreateRequest'
+      responses:
+        '202':
+          description: Task accepted and queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskSummary'
+    get:
+      summary: List orchestrator tasks.
+      operationId: listOrchestratorTasks
+      parameters:
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/Service'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Task list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskListResponse'
+
+  /orchestrator/tasks/{taskId}:
+    get:
+      summary: Get orchestrator task detail.
+      operationId: getOrchestratorTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task detail response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskDetail'
+        '404':
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /orchestrator/tasks/{taskId}/artifacts:
+    get:
+      summary: List orchestrator task artifacts.
+      operationId: listOrchestratorTaskArtifacts
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Artifact list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorArtifactListResponse'
+
+  /orchestrator/tasks/{taskId}/approvals:
+    post:
+      summary: Provide approval token for a pending orchestrator task.
+      operationId: approveOrchestratorTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrchestratorApprovalRequest'
+      responses:
+        '200':
+          description: Approved task summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskSummary'
+
+  /orchestrator/tasks/{taskId}/retry:
+    post:
+      summary: Retry a failed orchestrator task.
+      operationId: retryOrchestratorTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrchestratorRetryRequest'
+      responses:
+        '202':
+          description: Retry accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskSummary'
+
+  /orchestrator/runs:
+    post:
+      summary: Legacy alias for create orchestrator task.
+      operationId: createOrchestratorRunAlias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrchestratorCreateRequest'
+      responses:
+        '202':
+          description: Alias response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskSummary'
+    get:
+      summary: Legacy alias for list orchestrator tasks.
+      operationId: listOrchestratorRunsAlias
+      parameters:
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/Service'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Alias list response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskListResponse'
+
+  /orchestrator/runs/{runId}:
+    get:
+      summary: Legacy alias for orchestrator task detail.
+      operationId: getOrchestratorRunAlias
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Alias detail response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorTaskDetail'
+
+  /api/tasks/skills:
+    get:
+      summary: List available skills grouped by runtime domain.
+      operationId: listDashboardSkills
+      responses:
+        '200':
+          description: Grouped dashboard skills.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSkillListResponse'
+
+components:
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Status:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [pending, running, awaiting_approval, succeeded, failed, rolled_back]
+    Service:
+      name: service
+      in: query
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: object
+
+    DashboardSkillListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: object
+          required: [worker, orchestrator]
+          properties:
+            worker:
+              type: array
+              items:
+                type: string
+            orchestrator:
+              type: array
+              items:
+                type: string
+        legacyItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/LegacySkillItem'
+
+    LegacySkillItem:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+
+    OrchestratorCreateRequest:
+      type: object
+      required: [instruction, targetService]
+      properties:
+        instruction:
+          type: string
+          minLength: 1
+        targetService:
+          type: string
+          minLength: 1
+        priority:
+          type: string
+          enum: [normal, high]
+          default: normal
+        approvalToken:
+          type: string
+          nullable: true
+        skillId:
+          type: string
+          nullable: true
+        skillArgs:
+          type: object
+          additionalProperties: true
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrchestratorTaskStepInput'
+
+    OrchestratorTaskStepInput:
+      type: object
+      required: [id, title, instructions, skill]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        instructions:
+          type: string
+          minLength: 1
+        skill:
+          $ref: '#/components/schemas/OrchestratorTaskStepSkill'
+
+    OrchestratorTaskStepSkill:
+      type: object
+      required: [id, args]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        args:
+          type: object
+          additionalProperties: true
+
+    OrchestratorTaskSummary:
+      type: object
+      required:
+        - taskId
+        - runId
+        - status
+        - priority
+        - targetService
+        - instruction
+        - approvalRequired
+        - approvalStatus
+      properties:
+        taskId:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+          description: Transitional alias of `taskId`.
+        status:
+          type: string
+          enum: [pending, running, awaiting_approval, succeeded, failed, rolled_back]
+        priority:
+          type: string
+          enum: [normal, high]
+        targetService:
+          type: string
+        instruction:
+          type: string
+        queuedAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        approvalRequired:
+          type: boolean
+        approvalStatus:
+          type: string
+          enum: [not_required, awaiting, granted, expired]
+
+    OrchestratorTaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/OrchestratorTaskSummary'
+        - type: object
+          properties:
+            actionPlan:
+              $ref: '#/components/schemas/OrchestratorActionPlan'
+              nullable: true
+            steps:
+              type: array
+              items:
+                $ref: '#/components/schemas/OrchestratorLegacyPlanStepState'
+            taskSteps:
+              type: array
+              items:
+                $ref: '#/components/schemas/OrchestratorTaskStepState'
+            artifacts:
+              type: array
+              items:
+                $ref: '#/components/schemas/OrchestratorArtifact'
+            metricsSnapshot:
+              type: object
+              nullable: true
+              additionalProperties: true
+
+    OrchestratorTaskListResponse:
+      type: object
+      required: [tasks, runs]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrchestratorTaskSummary'
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrchestratorTaskSummary'
+
+    OrchestratorActionPlan:
+      type: object
+      required: [planId, generatedBy, steps]
+      properties:
+        planId:
+          type: string
+          format: uuid
+        generatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        generatedBy:
+          type: string
+          enum: [operator, llm, system]
+        steps:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+              parameters:
+                type: object
+                nullable: true
+                additionalProperties: true
+
+    OrchestratorLegacyPlanStepState:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        celeryTaskId:
+          type: string
+          nullable: true
+        celeryState:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        artifactRefs:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    OrchestratorTaskStepState:
+      type: object
+      required: [id, stepId, index, title, instructions, skill, status, attempt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        stepId:
+          type: string
+        index:
+          type: integer
+          minimum: 0
+        title:
+          type: string
+        instructions:
+          type: string
+        skill:
+          $ref: '#/components/schemas/OrchestratorTaskStepSkill'
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, skipped]
+        attempt:
+          type: integer
+          minimum: 1
+        message:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrchestratorArtifact:
+      type: object
+      required: [artifactId, type, path]
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [patch_diff, build_log, verify_log, rollback_log, metrics, plan_snapshot]
+        path:
+          type: string
+        checksum:
+          type: string
+          nullable: true
+        sizeBytes:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrchestratorArtifactListResponse:
+      type: object
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrchestratorArtifact'
+
+    OrchestratorApprovalRequest:
+      type: object
+      required: [approver, token]
+      properties:
+        approver:
+          type: object
+          required: [id, role]
+          properties:
+            id:
+              type: string
+            role:
+              type: string
+        token:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrchestratorRetryRequest:
+      type: object
+      properties:
+        resumeFromStep:
+          type: string
+          enum: [patch, build, restart, verify, rollback]
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+
+    UnifiedTaskRow:
+      type: object
+      description: Client-side normalized row contract rendered by `/tasks/list`.
+      required: [id, source, status, rawStatus, title]
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+          enum: [queue, orchestrator]
+        runtime:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [queued, running, awaiting_action, succeeded, failed, cancelled]
+        rawStatus:
+          type: string
+        title:
+          type: string
+        skillId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true

@@ -404,7 +404,7 @@ def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
     """Tokenized output should be redacted before truncating diagnostic text."""
 
     token = "ghp-redact-boundary-token-012345"
-    detail = "x" * 900 + token + "x" * 80
+    detail = "x" * 900 + token + "tail"
 
     def fake_run(command, *args, **kwargs):
         return subprocess.CompletedProcess(

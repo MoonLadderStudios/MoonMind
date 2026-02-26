@@ -368,6 +368,7 @@ __all__ = [
     "OrchestratorActionPlan",
     "OrchestratorRun",
     "OrchestratorRunArtifact",
+    "OrchestratorTaskStep",
     "OrchestratorRunStatus",
     "OrchestratorRunPriority",
     "OrchestratorPlanStep",
@@ -376,6 +377,7 @@ __all__ = [
     "OrchestratorApprovalRequirement",
     "OrchestratorRunArtifactType",
     "OrchestratorTaskState",
+    "OrchestratorTaskStepStatus",
     "SpecWorkflowRun",
     "SpecWorkflowRunStatus",
     "SpecWorkflowRunPhase",
@@ -788,6 +790,16 @@ class OrchestratorTaskState(str, enum.Enum):
     FAILURE = "FAILURE"
 
 
+class OrchestratorTaskStepStatus(str, enum.Enum):
+    """Status values persisted for orchestrator task runtime steps."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 class ApprovalGate(Base):
     """Approval policies applied to orchestrator runs."""
 
@@ -998,6 +1010,12 @@ class OrchestratorRun(Base):
         cascade="all, delete-orphan",
         order_by="SpecWorkflowTaskState.created_at",
     )
+    task_steps: Mapped[list["OrchestratorTaskStep"]] = relationship(
+        "OrchestratorTaskStep",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="OrchestratorTaskStep.step_index",
+    )
 
 
 class OrchestratorRunArtifact(Base):
@@ -1040,6 +1058,70 @@ class OrchestratorRunArtifact(Base):
     run: Mapped[OrchestratorRun] = relationship(
         "OrchestratorRun",
         back_populates="artifacts",
+    )
+
+
+class OrchestratorTaskStep(Base):
+    """Arbitrary orchestrator task steps persisted outside the fixed enum flow."""
+
+    __tablename__ = "orchestrator_task_steps"
+    __table_args__ = (
+        UniqueConstraint("task_id", "step_id", name="uq_orchestrator_task_step_id"),
+        CheckConstraint("step_index >= 0", name="ck_orchestrator_task_step_index"),
+        CheckConstraint(
+            "attempt >= 1", name="ck_orchestrator_task_step_attempt_positive"
+        ),
+        Index("ix_orchestrator_task_steps_task_id", "task_id", "step_index"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    task_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    step_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    skill_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    skill_args: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    status: Mapped[OrchestratorTaskStepStatus] = mapped_column(
+        Enum(
+            OrchestratorTaskStepStatus,
+            name="orchestratortaskstepstatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=OrchestratorTaskStepStatus.QUEUED,
+        server_default=OrchestratorTaskStepStatus.QUEUED.value,
+    )
+    attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    artifact_refs: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), nullable=False, default=list
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    run: Mapped[OrchestratorRun] = relationship(
+        "OrchestratorRun",
+        back_populates="task_steps",
     )
 
 

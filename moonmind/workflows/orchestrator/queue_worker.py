@@ -4,24 +4,92 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import socket
+import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import httpx
 
 from api_service.db import models as db_models
-from moonmind.workflows.agent_queue.job_types import ORCHESTRATOR_RUN_JOB_TYPE
+from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.job_types import (
+    ORCHESTRATOR_RUN_JOB_TYPE,
+    ORCHESTRATOR_TASK_JOB_TYPE,
+)
+from moonmind.workflows.orchestrator.state_sink import (
+    ArtifactStateSink,
+    DbStateSink,
+    FallbackStateSink,
+)
+from moonmind.workflows.orchestrator.storage import (
+    ArtifactStorage,
+    ArtifactStorageError,
+    resolve_artifact_root,
+)
 from moonmind.workflows.orchestrator.tasks import _execute_plan_step_async
 
 logger = logging.getLogger(__name__)
 
 
+_TASK_STEP_EXECUTION_ENV = "MOONMIND_ORCHESTRATOR_TASK_STEP_EXECUTION"
+
+
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRuntimeStep:
+    """Parsed orchestrator task runtime step from queue payload."""
+
+    step_id: str
+    title: str
+    instructions: str
+    skill_id: str
+    skill_args: dict[str, Any]
+    step_index: int
+    attempt: int
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _artifact_root() -> Path:
+    default_root = Path(settings.spec_workflow.artifacts_root)
+    configured = os.getenv("ORCHESTRATOR_ARTIFACT_ROOT")
+    try:
+        return resolve_artifact_root(default_root, configured)
+    except ArtifactStorageError:
+        return resolve_artifact_root(default_root, None)
+
+
+def _build_state_sink() -> FallbackStateSink:
+    storage = ArtifactStorage(_artifact_root())
+    return FallbackStateSink(
+        db_sink=DbStateSink(),
+        artifact_sink=ArtifactStateSink(storage=storage),
+    )
+
+
+def _skill_step_log_name(step: TaskRuntimeStep) -> str:
+    safe_id = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "-"
+        for char in step.step_id
+    ).strip("-")
+    step_id_digest = hashlib.sha256(step.step_id.encode("utf-8")).hexdigest()[:10]
+    return (
+        f"{safe_id or 'step'}-idx{step.step_index}-att{step.attempt}-"
+        f"{step_id_digest}.log"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +139,7 @@ class QueueWorkerConfig:
 
         allowed_types_csv = (
             str(source.get("MOONMIND_WORKER_ALLOWED_TYPES", "")).strip()
-            or ORCHESTRATOR_RUN_JOB_TYPE
+            or f"{ORCHESTRATOR_RUN_JOB_TYPE},{ORCHESTRATOR_TASK_JOB_TYPE}"
         )
         allowed_types = tuple(
             dict.fromkeys(
@@ -80,6 +148,8 @@ class QueueWorkerConfig:
         )
         if ORCHESTRATOR_RUN_JOB_TYPE not in allowed_types:
             allowed_types = (*allowed_types, ORCHESTRATOR_RUN_JOB_TYPE)
+        if ORCHESTRATOR_TASK_JOB_TYPE not in allowed_types:
+            allowed_types = (*allowed_types, ORCHESTRATOR_TASK_JOB_TYPE)
 
         caps_csv = (
             str(source.get("MOONMIND_WORKER_CAPABILITIES", "")).strip()
@@ -376,16 +446,21 @@ class OrchestratorQueueWorker:
                     )
 
     async def _process_job(self, job: ClaimedJob) -> None:
-        if job.type != ORCHESTRATOR_RUN_JOB_TYPE:
-            await self._queue.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=f"unsupported job type: {job.type}",
-            )
+        if job.type == ORCHESTRATOR_RUN_JOB_TYPE:
+            await self._process_run_job(job)
             return
+        if job.type == ORCHESTRATOR_TASK_JOB_TYPE:
+            await self._process_task_job(job)
+            return
+        await self._queue.fail_job(
+            job_id=job.id,
+            worker_id=self._config.worker_id,
+            error_message=f"unsupported job type: {job.type}",
+        )
 
+    async def _process_run_job(self, job: ClaimedJob) -> None:
         try:
-            run_id, steps, include_rollback = self._parse_payload(job.payload)
+            run_id, steps, include_rollback = self._parse_run_payload(job.payload)
         except Exception:
             await self._queue.fail_job(
                 job_id=job.id,
@@ -401,6 +476,7 @@ class OrchestratorQueueWorker:
             message="Executing orchestrator run from DB queue",
             payload={
                 "runId": str(run_id),
+                "taskId": str(run_id),
                 "steps": [step.value for step in steps],
                 "includeRollback": include_rollback,
             },
@@ -421,14 +497,22 @@ class OrchestratorQueueWorker:
                     job_id=job.id,
                     level="info",
                     message="Starting orchestrator step",
-                    payload={"runId": str(run_id), "step": step.value},
+                    payload={
+                        "runId": str(run_id),
+                        "taskId": str(run_id),
+                        "step": step.value,
+                    },
                 )
                 await _execute_plan_step_async(run_id, step.value)
                 await self._append_event_best_effort(
                     job_id=job.id,
                     level="info",
                     message="Completed orchestrator step",
-                    payload={"runId": str(run_id), "step": step.value},
+                    payload={
+                        "runId": str(run_id),
+                        "taskId": str(run_id),
+                        "step": step.value,
+                    },
                 )
         except Exception:
             if cancel_event.is_set():
@@ -444,7 +528,7 @@ class OrchestratorQueueWorker:
                             job_id=job.id,
                             level="warn",
                             message="Attempting rollback after orchestrator step failure",
-                            payload={"runId": str(run_id)},
+                            payload={"runId": str(run_id), "taskId": str(run_id)},
                         )
                         await _execute_plan_step_async(
                             run_id, db_models.OrchestratorPlanStep.ROLLBACK.value
@@ -479,6 +563,207 @@ class OrchestratorQueueWorker:
             job_id=job.id,
             worker_id=self._config.worker_id,
             result_summary=f"orchestrator run {run_id} completed",
+        )
+
+    async def _process_task_job(self, job: ClaimedJob) -> None:
+        try:
+            task_id, steps = self._parse_task_payload(job.payload)
+        except Exception:
+            await self._queue.fail_job(
+                job_id=job.id,
+                worker_id=self._config.worker_id,
+                error_message="invalid orchestrator payload",
+            )
+            logger.exception(
+                "Invalid payload on orchestrator task queue job %s", job.id
+            )
+            return
+
+        await self._append_event_best_effort(
+            job_id=job.id,
+            level="info",
+            message="Executing orchestrator task from DB queue",
+            payload={
+                "taskId": str(task_id),
+                "steps": [step.step_id for step in steps],
+            },
+        )
+
+        state_sink = _build_state_sink()
+        started_at = _utcnow()
+        await state_sink.record_task_status(
+            task_id=task_id,
+            status=db_models.OrchestratorRunStatus.RUNNING.value,
+            started_at=started_at,
+        )
+
+        heartbeat_stop = asyncio.Event()
+        cancel_event = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(job.id, heartbeat_stop, cancel_event)
+        )
+        failure_message: str | None = None
+
+        try:
+            for step in steps:
+                if cancel_event.is_set():
+                    break
+                await self._append_event_best_effort(
+                    job_id=job.id,
+                    level="info",
+                    message="Starting orchestrator task step",
+                    payload={
+                        "taskId": str(task_id),
+                        "stepId": step.step_id,
+                        "skillId": step.skill_id,
+                    },
+                )
+                await self._execute_task_runtime_step(
+                    task_id=task_id,
+                    step=step,
+                    state_sink=state_sink,
+                )
+                await self._append_event_best_effort(
+                    job_id=job.id,
+                    level="info",
+                    message="Completed orchestrator task step",
+                    payload={"taskId": str(task_id), "stepId": step.step_id},
+                )
+        except Exception as exc:
+            logger.exception(
+                "Orchestrator task %s failed while processing queue job %s",
+                task_id,
+                job.id,
+            )
+            failure_message = self._INTERNAL_FAILURE_MESSAGE
+            await state_sink.record_task_status(
+                task_id=task_id,
+                status=db_models.OrchestratorRunStatus.FAILED.value,
+                finished_at=_utcnow(),
+                message=str(exc),
+            )
+        finally:
+            heartbeat_stop.set()
+            await heartbeat_task
+            await state_sink.flush()
+
+        if cancel_event.is_set():
+            await state_sink.record_task_status(
+                task_id=task_id,
+                status=db_models.OrchestratorRunStatus.FAILED.value,
+                finished_at=_utcnow(),
+                message=self._CANCELLATION_MESSAGE,
+            )
+            await self._queue.ack_cancel(
+                job_id=job.id,
+                worker_id=self._config.worker_id,
+                message=self._CANCELLATION_MESSAGE,
+            )
+            return
+
+        if failure_message is not None:
+            await self._queue.fail_job(
+                job_id=job.id,
+                worker_id=self._config.worker_id,
+                error_message=failure_message,
+            )
+            return
+
+        await state_sink.record_task_status(
+            task_id=task_id,
+            status=db_models.OrchestratorRunStatus.SUCCEEDED.value,
+            finished_at=_utcnow(),
+        )
+        await self._queue.complete_job(
+            job_id=job.id,
+            worker_id=self._config.worker_id,
+            result_summary=f"orchestrator task {task_id} completed",
+        )
+
+    async def _execute_task_runtime_step(
+        self,
+        *,
+        task_id: UUID,
+        step: TaskRuntimeStep,
+        state_sink: FallbackStateSink,
+    ) -> None:
+        started_at = _utcnow()
+        await state_sink.record_step_status(
+            task_id=task_id,
+            step_id=step.step_id,
+            status=db_models.OrchestratorTaskStepStatus.RUNNING.value,
+            started_at=started_at,
+        )
+
+        command = [
+            sys.executable,
+            "-m",
+            "moonmind.workflows.orchestrator.skill_executor",
+            "--skill-id",
+            step.skill_id,
+        ]
+        execution_env = os.environ.copy()
+        execution_env[_TASK_STEP_EXECUTION_ENV] = json.dumps(
+            {
+                "skillArgs": dict(step.skill_args),
+                "instructions": step.instructions,
+                "stepIndex": step.step_index,
+                "attempt": step.attempt,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=execution_env,
+        )
+        stdout_bytes, stderr_bytes = await process.communicate()
+        stdout_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
+        stderr_text = (stderr_bytes or b"").decode("utf-8", errors="replace")
+
+        storage = ArtifactStorage(_artifact_root())
+        output_lines = []
+        if stdout_text.strip():
+            output_lines.append(stdout_text.rstrip())
+        if stderr_text.strip():
+            output_lines.append(stderr_text.rstrip())
+        output_payload = "\n\n".join(output_lines) if output_lines else "(no output)"
+        artifact = storage.write_text(
+            task_id, _skill_step_log_name(step), output_payload
+        )
+        await state_sink.record_artifact(
+            task_id=task_id,
+            path=artifact.path,
+            artifact_type=db_models.OrchestratorRunArtifactType.BUILD_LOG.value,
+            checksum=artifact.checksum,
+            size_bytes=artifact.size_bytes,
+        )
+
+        finished_at = _utcnow()
+        if process.returncode != 0:
+            error_message = (
+                f"Skill '{step.skill_id}' failed for step '{step.step_id}' "
+                f"with exit code {process.returncode}."
+            )
+            await state_sink.record_step_status(
+                task_id=task_id,
+                step_id=step.step_id,
+                status=db_models.OrchestratorTaskStepStatus.FAILED.value,
+                finished_at=finished_at,
+                message=error_message,
+                artifact_refs=[artifact.path],
+            )
+            raise RuntimeError(error_message)
+
+        await state_sink.record_step_status(
+            task_id=task_id,
+            step_id=step.step_id,
+            status=db_models.OrchestratorTaskStepStatus.SUCCEEDED.value,
+            finished_at=finished_at,
+            message="Step completed successfully.",
+            artifact_refs=[artifact.path],
         )
 
     async def _heartbeat_loop(
@@ -528,7 +813,7 @@ class OrchestratorQueueWorker:
         return bool(str(cancel_requested_at).strip())
 
     @staticmethod
-    def _parse_payload(
+    def _parse_run_payload(
         payload: dict[str, Any],
     ) -> tuple[UUID, list[db_models.OrchestratorPlanStep], bool]:
         run_id_raw = payload.get("runId") or payload.get("run_id")
@@ -549,6 +834,88 @@ class OrchestratorQueueWorker:
 
         include_rollback = bool(payload.get("includeRollback"))
         return run_id, steps, include_rollback
+
+    @staticmethod
+    def _parse_task_payload(
+        payload: dict[str, Any],
+    ) -> tuple[UUID, list[TaskRuntimeStep]]:
+        task_id_raw = payload.get("taskId")
+        if not task_id_raw:
+            raise ValueError("taskId is required")
+        task_id = UUID(str(task_id_raw))
+
+        steps_raw = payload.get("steps")
+        if not isinstance(steps_raw, list) or not steps_raw:
+            raise ValueError("steps must be a non-empty list")
+
+        steps: list[TaskRuntimeStep] = []
+        for index, item in enumerate(steps_raw):
+            if not isinstance(item, dict):
+                raise ValueError("each step payload item must be an object")
+            skill_node = item.get("skill")
+            if not isinstance(skill_node, dict):
+                skill_node = {}
+            step_id = str(item.get("stepId") or "").strip()
+            title = str(item.get("title") or "").strip() or f"Step {index + 1}"
+            instructions = str(item.get("instructions") or "").strip()
+            skill_id = (
+                str(item.get("skillId") or "").strip()
+                or str(skill_node.get("id") or "").strip()
+            )
+            attempt_raw = item.get("attempt")
+            step_index_raw = item.get("stepIndex")
+            skill_args_raw = item.get("skillArgs")
+            if not isinstance(skill_args_raw, dict):
+                skill_args_raw = skill_node.get("args")
+            skill_args = (
+                dict(skill_args_raw) if isinstance(skill_args_raw, dict) else {}
+            )
+            if not step_id:
+                raise ValueError("stepId is required for task runtime steps")
+            try:
+                step_index = int(
+                    step_index_raw if step_index_raw is not None else index
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"step '{step_id}' stepIndex must be an integer"
+                ) from exc
+            if step_index < 0:
+                raise ValueError(
+                    f"step '{step_id}' stepIndex must be greater than or equal to 0"
+                )
+            if attempt_raw is None:
+                attempt = 1
+            else:
+                try:
+                    attempt = int(attempt_raw)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"step '{step_id}' attempt must be an integer"
+                    ) from exc
+                if attempt < 1:
+                    raise ValueError(
+                        f"step '{step_id}' attempt must be greater than or equal to 1"
+                    )
+            if not instructions:
+                raise ValueError(f"step '{step_id}' instructions are required")
+            if not skill_id:
+                raise ValueError(f"step '{step_id}' skillId is required")
+            steps.append(
+                TaskRuntimeStep(
+                    step_id=step_id,
+                    title=title,
+                    instructions=instructions,
+                    skill_id=skill_id,
+                    skill_args=skill_args,
+                    step_index=step_index,
+                    attempt=attempt,
+                )
+            )
+
+        if not steps:
+            raise ValueError("steps must contain at least one task runtime step")
+        return task_id, steps
 
 
 def _build_parser() -> argparse.ArgumentParser:

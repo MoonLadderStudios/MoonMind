@@ -862,6 +862,13 @@ class CodexExecHandler:
         replay_cursor: dict[str, int | None] = {"stdout": None, "stderr": None}
         replay_suppressed_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
+        replay_snapshot_text: dict[str, str] = {"stdout": "", "stderr": ""}
+        replay_snapshot_match_offset: dict[str, int] = {"stdout": 0, "stderr": 0}
+        is_polling_snapshot_command = bool(
+            len(command) >= 2
+            and os.path.basename(command[0]) == "codex"
+            and command[1] == "exec"
+        )
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -950,6 +957,61 @@ class CodexExecHandler:
                 return text
             if not text:
                 return ""
+
+            if is_polling_snapshot_command and len(text) >= min_replay_candidate_chars:
+                previous_snapshot = replay_snapshot_text.get(stream, "")
+                snapshot_match_offset = replay_snapshot_match_offset.get(stream, 0)
+                snapshot_text_updated = False
+
+                if previous_snapshot:
+                    if snapshot_match_offset >= len(previous_snapshot):
+                        replay_snapshot_match_offset[stream] = 0
+                        snapshot_match_offset = 0
+
+                    if snapshot_match_offset:
+                        remaining_snapshot = previous_snapshot[snapshot_match_offset:]
+                        if text.startswith(remaining_snapshot):
+                            if len(text) <= len(remaining_snapshot):
+                                replay_snapshot_match_offset[stream] = (
+                                    snapshot_match_offset + len(text)
+                                )
+                                return ""
+
+                            text = text[len(remaining_snapshot) :]
+                            replay_snapshot_match_offset[stream] = 0
+                            if not text:
+                                return ""
+                        elif remaining_snapshot.startswith(text):
+                            replay_snapshot_match_offset[stream] = (
+                                snapshot_match_offset + len(text)
+                            )
+                            return ""
+                        else:
+                            replay_snapshot_match_offset[stream] = 0
+
+                if previous_snapshot:
+                    if text == previous_snapshot:
+                        replay_snapshot_match_offset[stream] = len(previous_snapshot)
+                        return ""
+
+                    if text.startswith(previous_snapshot):
+                        text = text[len(previous_snapshot) :]
+                        if not text:
+                            return ""
+                        replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
+                        snapshot_text_updated = True
+
+                    elif previous_snapshot.startswith(text):
+                        replay_snapshot_match_offset[stream] = len(text)
+                        return ""
+
+                if not snapshot_text_updated:
+                    if previous_snapshot:
+                        replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
+                    else:
+                        replay_snapshot_text[stream] = text
+
+                replay_snapshot_match_offset[stream] = 0
 
             stream_history_index = history_index[stream]
             cursor = replay_cursor.get(stream)
@@ -1096,7 +1158,7 @@ class CodexExecHandler:
                 chunks: list[str],
             ) -> None:
                 while True:
-                    chunk = await reader.read(1024)
+                    chunk = await reader.read(64 * 1024)
                     if not chunk:
                         break
                     text = chunk.decode("utf-8", errors="replace")

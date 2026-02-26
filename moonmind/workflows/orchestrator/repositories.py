@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api_service.db import models as db_models
+from moonmind.schemas.workflow_models import OrchestratorTaskStepInputModel
 from moonmind.workflows.speckit_celery import models as workflow_models
+
+_TASK_STEP_FIELD_UNSET = object()
 
 
 def _to_enum(value: Any, enum_cls):
@@ -133,10 +136,97 @@ class OrchestratorRepository:
                 selectinload(db_models.OrchestratorRun.action_plan),
                 selectinload(db_models.OrchestratorRun.artifacts),
                 selectinload(db_models.OrchestratorRun.task_states),
+                selectinload(db_models.OrchestratorRun.task_steps),
                 selectinload(db_models.OrchestratorRun.approval_gate),
             )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def create_task_steps(
+        self,
+        *,
+        run_id: UUID,
+        steps: Sequence[OrchestratorTaskStepInputModel],
+    ) -> list[db_models.OrchestratorTaskStep]:
+        """Create persisted orchestrator task runtime steps for ``run_id``."""
+
+        created: list[db_models.OrchestratorTaskStep] = []
+        for index, step in enumerate(steps):
+            row = db_models.OrchestratorTaskStep(
+                id=uuid4(),
+                task_id=run_id,
+                step_id=step.id,
+                step_index=index,
+                title=step.title,
+                instructions=step.instructions,
+                skill_id=step.skill.id,
+                skill_args=dict(step.skill.args or {}),
+                status=db_models.OrchestratorTaskStepStatus.QUEUED,
+                attempt=1,
+                artifact_refs=[],
+            )
+            self._session.add(row)
+            created.append(row)
+        await self._session.flush()
+        return created
+
+    async def list_task_steps(
+        self,
+        *,
+        run_id: UUID,
+    ) -> list[db_models.OrchestratorTaskStep]:
+        """Return orchestrator task runtime steps ordered by index."""
+
+        stmt = (
+            select(db_models.OrchestratorTaskStep)
+            .where(db_models.OrchestratorTaskStep.task_id == run_id)
+            .order_by(db_models.OrchestratorTaskStep.step_index.asc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_task_step(
+        self,
+        *,
+        run_id: UUID,
+        step_id: str,
+    ) -> db_models.OrchestratorTaskStep | None:
+        """Fetch one orchestrator task runtime step by stable ``step_id``."""
+
+        stmt = select(db_models.OrchestratorTaskStep).where(
+            db_models.OrchestratorTaskStep.task_id == run_id,
+            db_models.OrchestratorTaskStep.step_id == step_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def update_task_step_state(
+        self,
+        step: db_models.OrchestratorTaskStep,
+        *,
+        status: db_models.OrchestratorTaskStepStatus | str | None = None,
+        message: str | None = None,
+        started_at: datetime | None | object = _TASK_STEP_FIELD_UNSET,
+        finished_at: datetime | None | object = _TASK_STEP_FIELD_UNSET,
+        attempt: int | None = None,
+        artifact_refs: Sequence[str] | None = None,
+    ) -> db_models.OrchestratorTaskStep:
+        """Apply task-step runtime status updates and flush."""
+
+        if status is not None:
+            step.status = _to_enum(status, db_models.OrchestratorTaskStepStatus)
+        if message is not None:
+            step.message = message
+        if started_at is not _TASK_STEP_FIELD_UNSET:
+            step.started_at = started_at
+        if finished_at is not _TASK_STEP_FIELD_UNSET:
+            step.finished_at = finished_at
+        if attempt is not None:
+            step.attempt = max(int(attempt), 1)
+        if artifact_refs is not None:
+            step.artifact_refs = [str(item) for item in artifact_refs]
+        await self._session.flush()
+        return step
 
     async def list_runs(
         self,

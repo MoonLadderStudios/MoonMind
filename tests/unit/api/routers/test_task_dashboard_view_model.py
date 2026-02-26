@@ -42,6 +42,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["queue"]["list"] == "/api/queue/jobs"
     assert config["sources"]["queue"]["cancel"] == "/api/queue/jobs/{id}/cancel"
+    assert config["sources"]["queue"]["update"] == "/api/queue/jobs/{id}"
     assert (
         config["sources"]["queue"]["eventsStream"]
         == "/api/queue/jobs/{id}/events/stream"
@@ -102,7 +103,9 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         == "/api/recurring-tasks/{id}/runs?limit=200"
     )
     assert "speckit" not in config["sources"]
-    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
+    assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
+    assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
+    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")

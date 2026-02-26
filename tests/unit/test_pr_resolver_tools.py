@@ -93,3 +93,59 @@ def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     assert infer_repo("") is None
     assert infer_repo("not a url") is None
     assert infer_repo("https://github.com/org") is None
+
+
+def test_review_bot_comments_are_not_actionable_by_default(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "review_comment",
+            "user": "qodo-free-for-open-source-projects[bot]",
+            "body": "Please update this logic.",
+        },
+        {
+            "type": "review_comment",
+            "user": "human-reviewer",
+            "body": "Please update this logic.",
+        },
+    ]
+
+    summary = summarize_comments(comments)
+    assert summary["actionableCommentCount"] == 1
+    assert summary["includeBotReviewComments"] is False
+
+
+def test_review_bot_comments_can_be_included_when_enabled(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "review_comment",
+            "user": "chatgpt-codex-connector[bot]",
+            "body": "This still needs to be addressed.",
+        }
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary["actionableCommentCount"] == 1
+    assert summary["includeBotReviewComments"] is True
+
+
+def test_resolved_review_threads_are_not_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    is_comment_actionable = pr_resolve_snapshot_module["_is_comment_actionable"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "human-reviewer",
+        "body": "Please update this logic.",
+        "thread_resolved": True,
+    }
+
+    assert is_comment_actionable(comment) is False
