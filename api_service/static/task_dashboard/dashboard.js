@@ -1614,6 +1614,253 @@
     });
   }
 
+  function filterProposalsByTag(rows, tag) {
+    const normalizedTag = String(tag || "").trim().toLowerCase();
+    const candidates = Array.isArray(rows) ? rows : [];
+    if (!normalizedTag) {
+      return candidates;
+    }
+    return candidates.filter((row) => {
+      const tagList = (pick(row, "tags") || []).map((candidateTag) =>
+        String(candidateTag || "").trim().toLowerCase(),
+      );
+      return tagList.includes(normalizedTag);
+    });
+  }
+
+  function renderProposalTable(rows) {
+    const candidates = (rows || []).filter(Boolean);
+    return candidates
+      .map((row) => {
+        const id = pick(row, "id");
+        const preview = pick(row, "taskPreview") || {};
+        const origin = pick(row, "origin") || {};
+        const originSource = pick(origin, "source") || "-";
+        const originLink =
+          originSource === "queue" && pick(origin, "id")
+            ? `<a href="/tasks/queue/${encodeURIComponent(
+                String(pick(origin, "id") || ""),
+              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            : escapeHtml(originSource);
+        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const instructions = pick(preview, "instructions") || "";
+        const tags = (pick(row, "tags") || []).join(", ");
+        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+        const overrideReason = pick(row, "priorityOverrideReason");
+        const priorityBadge = `<span class="badge priority-${escapeHtml(
+          priority.toLowerCase(),
+        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
+        const snoozedUntil = pick(row, "snoozedUntil");
+        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
+        const dedupHash = (pick(row, "dedupHash") || "").toString();
+        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+        return `
+          <tr data-proposal-id="${escapeHtml(String(id || ""))}">
+            <td><a href="/tasks/proposals/${encodeURIComponent(
+              String(id || ""),
+            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
+            <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
+            <td>${escapeHtml(repo)}</td>
+            <td>${escapeHtml(pick(row, "category") || "-")}</td>
+            <td>${priorityBadge}</td>
+            <td>${statusBadge("proposals", pick(row, "status"))}</td>
+            <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
+            <td>${originLink}</td>
+            <td>${escapeHtml(tags || "-")}</td>
+            <td>${escapeHtml(snoozedDisplay)}</td>
+            <td><code>${escapeHtml(dedupShort)}</code></td>
+            <td>
+              <div class="stack compact">
+                <button
+                  type="button"
+                  class="proposal-action queue-action"
+                  data-action="promote"
+                  data-proposal-action="promote"
+                  data-proposal-id="${escapeHtml(
+                  String(id || ""),
+                )}">Promote</button>
+                <button
+                  type="button"
+                  class="danger proposal-action queue-action queue-action-danger"
+                  data-action="dismiss"
+                  data-proposal-action="dismiss"
+                  data-proposal-id="${escapeHtml(
+                  String(id || ""),
+                )}">Dismiss</button>
+              </div>
+            </td>
+          </tr>
+          ${
+            instructions
+              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+                  instructions,
+                )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
+                  dedupHash || "-",
+                )}</code></span></td></tr>`
+              : ""
+          }
+        `;
+      })
+      .join("");
+  }
+
+  function renderProposalCards(rows) {
+    const candidates = (rows || []).filter(Boolean);
+    return candidates
+      .map((row) => {
+        const id = pick(row, "id");
+        const preview = pick(row, "taskPreview") || {};
+        const origin = pick(row, "origin") || {};
+        const originSource = pick(origin, "source") || "-";
+        const originLink =
+          originSource === "queue" && pick(origin, "id")
+            ? `<a href="/tasks/queue/${encodeURIComponent(
+                String(pick(origin, "id") || ""),
+              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            : escapeHtml(originSource);
+        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const instructions = pick(preview, "instructions") || "";
+        const instructionText = String(instructions || "").trim();
+        const instructionPreview = instructionText
+          ? `${escapeHtml(instructionText.slice(0, 140))}${
+              instructionText.length > 140 ? "..." : ""
+            }`
+          : "-";
+        const tags = (pick(row, "tags") || []).join(", ");
+        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
+        const overrideReason = pick(row, "priorityOverrideReason");
+        const priorityBadge = `<span class="badge priority-${escapeHtml(
+          priority.toLowerCase(),
+        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
+        const snoozedUntil = pick(row, "snoozedUntil");
+        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
+        const dedupHash = (pick(row, "dedupHash") || "").toString();
+        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
+        const rowId = String(id || "");
+        const title = pick(row, "title") || "(untitled)";
+        const titleWithId = rowId ? `${title} · ${rowId}` : title;
+        const encodedRowId = encodeURIComponent(String(id || ""));
+        return `
+          <li class="queue-card">
+            <div data-proposal-id="${escapeHtml(rowId)}"
+              data-proposal-title="${escapeHtml(title)}"
+              data-proposal-repo="${escapeHtml(repo)}"></div>
+            <div class="queue-card-header">
+              <div>
+                <a href="/tasks/proposals/${encodedRowId}" class="queue-card-title">${escapeHtml(
+                  titleWithId,
+                )}</a>
+                <p class="queue-card-meta">${escapeHtml(repo)}</p>
+              </div>
+              <div class="queue-card-status">
+                ${statusBadge("proposals", pick(row, "status"))}
+                <span class="queue-card-status-raw small">${escapeHtml(
+                  String(pick(row, "status") || "-").trim(),
+                )}</span>
+              </div>
+            </div>
+            <dl class="queue-card-fields">
+              <div data-field="id">
+                <dt>ID</dt>
+                <dd><code>${escapeHtml(rowId.slice(0, 8) || "-")}</code></dd>
+              </div>
+              <div data-field="category">
+                <dt>Category</dt>
+                <dd>${escapeHtml(pick(row, "category") || "-")}</dd>
+              </div>
+              <div data-field="priority">
+                <dt>Priority</dt>
+                <dd>${priorityBadge}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>${statusBadge("proposals", pick(row, "status"))}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</dd>
+              </div>
+              <div>
+                <dt>Origin</dt>
+                <dd>${originLink}</dd>
+              </div>
+              <div>
+                <dt>Tags</dt>
+                <dd>${escapeHtml(tags || "-")}</dd>
+              </div>
+              <div>
+                <dt>Snoozed Until</dt>
+                <dd>${escapeHtml(snoozedDisplay)}</dd>
+              </div>
+              <div>
+                <dt>Dedup</dt>
+                <dd><code>${escapeHtml(dedupShort)}</code></dd>
+              </div>
+              <div>
+                <dt>Instructions</dt>
+                <dd><span class="small">${instructionPreview}</span></dd>
+              </div>
+            </dl>
+            <div class="queue-card-actions">
+              <a href="/tasks/proposals/${encodedRowId}" class="button secondary" role="button">View details</a>
+              <button
+                type="button"
+                class="proposal-action queue-action"
+                data-action="promote"
+                data-proposal-action="promote"
+                data-proposal-id="${escapeHtml(String(id || ""))}">Promote</button>
+              <button
+                type="button"
+                class="danger proposal-action queue-action queue-action-danger"
+                data-action="dismiss"
+                data-proposal-action="dismiss"
+                data-proposal-id="${escapeHtml(String(id || ""))}">Dismiss</button>
+            </div>
+          </li>
+        `;
+      })
+      .join("");
+  }
+
+  function renderProposalLayouts(rows = [], tag = "") {
+    const normalizedRows = (rows || []).filter(Boolean);
+    if (!normalizedRows.length) {
+      return "<p class='small'>No proposals found for the current filters.</p>";
+    }
+    const filteredRows = filterProposalsByTag(normalizedRows, tag);
+    if (!filteredRows.length) {
+      return "<p class='small'>No proposals found for the current filters.</p>";
+    }
+    return `
+      <div class="queue-layouts">
+        <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Repository</th>
+                <th>Category</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Origin</th>
+                <th>Tags</th>
+                <th>Snoozed Until</th>
+                <th>Dedup</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>${renderProposalTable(filteredRows)}</tbody>
+          </table>
+        </div>
+        <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
+          filteredRows,
+        )}</ul>
+      </div>
+    `;
+  }
+
   // Queue metadata for table columns and card field rows is centralized here.
   // Card status remains a fixed leading row in renderQueueCards so mobile keeps
   // status first regardless of future queueFieldDefinitions ordering. When
@@ -1979,6 +2226,10 @@
       renderQueueLayouts,
       renderActivePageContent,
       renderRowsTable,
+      filterProposalsByTag,
+      renderProposalTable,
+      renderProposalCards,
+      renderProposalLayouts,
       toQueueRows,
     };
   }
@@ -6268,295 +6519,9 @@
       `;
     };
 
-    const renderProposalTable = (rows) => rows
-      .map((row) => {
-        const id = pick(row, "id");
-        const preview = pick(row, "taskPreview") || {};
-        const origin = pick(row, "origin") || {};
-        const originSource = pick(origin, "source") || "-";
-        const originLink =
-          originSource === "queue" && pick(origin, "id")
-            ? `<a href="/tasks/queue/${encodeURIComponent(
-                String(pick(origin, "id") || ""),
-              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
-            : escapeHtml(originSource);
-        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
-        const instructions = pick(preview, "instructions") || "";
-        const tags = (pick(row, "tags") || []).join(", ");
-        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
-        const overrideReason = pick(row, "priorityOverrideReason");
-        const priorityBadge = `<span class="badge priority-${escapeHtml(
-          priority.toLowerCase(),
-        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
-        const snoozedUntil = pick(row, "snoozedUntil");
-        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
-        const dedupHash = (pick(row, "dedupHash") || "").toString();
-        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
-        return `
-          <tr>
-            <td><a href="/tasks/proposals/${encodeURIComponent(
-              String(id || ""),
-            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
-            <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
-            <td>${escapeHtml(repo)}</td>
-            <td>${escapeHtml(pick(row, "category") || "-")}</td>
-            <td>${priorityBadge}</td>
-            <td>${statusBadge("proposals", pick(row, "status"))}</td>
-            <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
-            <td>${originLink}</td>
-            <td>${escapeHtml(tags || "-")}</td>
-            <td>${escapeHtml(snoozedDisplay)}</td>
-            <td><code>${escapeHtml(dedupShort)}</code></td>
-            <td>
-              <div class="stack compact">
-                <button
-                  type="button"
-                  class="proposal-action queue-action"
-                  data-action="promote"
-                  data-proposal-id="${escapeHtml(
-                  String(id || ""),
-                )}">Promote</button>
-                <button
-                  type="button"
-                  class="danger proposal-action queue-action queue-action-danger"
-                  data-action="dismiss"
-                  data-proposal-id="${escapeHtml(
-                  String(id || ""),
-                )}">Dismiss</button>
-              </div>
-            </td>
-          </tr>
-          ${
-            instructions
-              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
-                  instructions,
-                )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
-                  dedupHash || "-",
-                )}</code></span></td></tr>`
-              : ""
-          }
-        `;
-      })
-      .join("");
-
-    const renderProposalCards = (rows) => rows
-      .map((row) => {
-        const id = pick(row, "id");
-        const preview = pick(row, "taskPreview") || {};
-        const origin = pick(row, "origin") || {};
-        const originSource = pick(origin, "source") || "-";
-        const originLink =
-          originSource === "queue" && pick(origin, "id")
-            ? `<a href="/tasks/queue/${encodeURIComponent(
-                String(pick(origin, "id") || ""),
-              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
-            : escapeHtml(originSource);
-        const repo = pick(row, "repository") || pick(preview, "repository") || "-";
-        const instructions = pick(preview, "instructions") || "";
-        const instructionText = String(instructions || "").trim();
-        const instructionPreview = instructionText
-          ? `${escapeHtml(instructionText.slice(0, 140))}${
-              instructionText.length > 140 ? "..." : ""
-            }`
-          : "-";
-        const tags = (pick(row, "tags") || []).join(", ");
-        const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
-        const overrideReason = pick(row, "priorityOverrideReason");
-        const priorityBadge = `<span class="badge priority-${escapeHtml(
-          priority.toLowerCase(),
-        )}" ${overrideReason ? `title="Override: ${escapeHtml(String(overrideReason))}"` : ""}>${escapeHtml(priority)}</span>`;
-        const snoozedUntil = pick(row, "snoozedUntil");
-        const snoozedDisplay = snoozedUntil ? `${formatTimestamp(snoozedUntil)}` : "-";
-        const dedupHash = (pick(row, "dedupHash") || "").toString();
-        const dedupShort = dedupHash ? dedupHash.slice(0, 8) : "-";
-        const rowId = String(id || "");
-        const title = pick(row, "title") || "(untitled)";
-        const titleWithId = rowId ? `${title} · ${rowId}` : title;
-        const encodedRowId = encodeURIComponent(String(id || ""));
-        return `
-          <li class="queue-card">
-            <div class="queue-card-header">
-              <div>
-                <a href="/tasks/proposals/${encodedRowId}" class="queue-card-title">${escapeHtml(
-                  titleWithId,
-                )}</a>
-                <p class="queue-card-meta">${escapeHtml(repo)}</p>
-              </div>
-              <div class="queue-card-status">
-                ${statusBadge("proposals", pick(row, "status"))}
-                <span class="queue-card-status-raw small">${escapeHtml(
-                  String(pick(row, "status") || "-").trim(),
-                )}</span>
-              </div>
-            </div>
-            <dl class="queue-card-fields">
-              <div>
-                <dt>ID</dt>
-                <dd><code>${escapeHtml(rowId.slice(0, 8) || "-")}</code></dd>
-              </div>
-              <div>
-                <dt>Category</dt>
-                <dd>${escapeHtml(pick(row, "category") || "-")}</dd>
-              </div>
-              <div>
-                <dt>Priority</dt>
-                <dd>${priorityBadge}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>${statusBadge("proposals", pick(row, "status"))}</dd>
-              </div>
-              <div>
-                <dt>Created</dt>
-                <dd>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</dd>
-              </div>
-              <div>
-                <dt>Origin</dt>
-                <dd>${originLink}</dd>
-              </div>
-              <div>
-                <dt>Tags</dt>
-                <dd>${escapeHtml(tags || "-")}</dd>
-              </div>
-              <div>
-                <dt>Snoozed Until</dt>
-                <dd>${escapeHtml(snoozedDisplay)}</dd>
-              </div>
-              <div>
-                <dt>Dedup</dt>
-                <dd><code>${escapeHtml(dedupShort)}</code></dd>
-              </div>
-              <div>
-                <dt>Instructions</dt>
-                <dd><span class="small">${instructionPreview}</span></dd>
-              </div>
-            </dl>
-            <div class="queue-card-actions">
-              <a href="/tasks/proposals/${encodedRowId}" class="button secondary" role="button">View details</a>
-              <button
-                type="button"
-                class="proposal-action queue-action"
-                data-action="promote"
-                data-proposal-id="${escapeHtml(String(id || ""))}">Promote</button>
-              <button
-                type="button"
-                class="danger proposal-action queue-action queue-action-danger"
-                data-action="dismiss"
-                data-proposal-id="${escapeHtml(String(id || ""))}">Dismiss</button>
-            </div>
-          </li>
-        `;
-      })
-      .join("");
-
-    const filterProposalsByTag = (rows, tag) => {
-      const normalizedTag = String(tag || "").trim().toLowerCase();
-      if (!normalizedTag) {
-        return rows;
-      }
-      return rows.filter((row) => {
-        const tagList = (pick(row, "tags") || []).map((rowTag) =>
-          String(rowTag || "").trim().toLowerCase(),
-        );
-        return tagList.includes(normalizedTag);
-      });
-    };
-
-    const renderProposalLayouts = (rows = []) => {
-      const normalizedRows = (rows || []).filter(Boolean);
-      if (!normalizedRows.length) {
-        return "<p class='small'>No proposals found for the current filters.</p>";
-      }
-      if (!state.tag) {
-        return `
-          <div class="queue-layouts">
-            <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Title</th>
-                    <th>Repository</th>
-                    <th>Category</th>
-                    <th>Priority</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th>Origin</th>
-                    <th>Tags</th>
-                    <th>Snoozed Until</th>
-                    <th>Dedup</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>${renderProposalTable(normalizedRows)}</tbody>
-              </table>
-            </div>
-            <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
-              normalizedRows,
-            )}</ul>
-          </div>
-        `;
-      }
-      const filteredRows = filterProposalsByTag(normalizedRows, state.tag);
-      if (!filteredRows.length) {
-        return "<p class='small'>No proposals found for the current filters.</p>";
-      }
-      return `
-        <div class="queue-layouts">
-          <div class="queue-table-wrapper" data-layout="table" data-sticky-table="false">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Title</th>
-                  <th>Repository</th>
-                  <th>Category</th>
-                  <th>Priority</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                  <th>Origin</th>
-                  <th>Tags</th>
-                  <th>Snoozed Until</th>
-                  <th>Dedup</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>${renderProposalTable(filteredRows)}</tbody>
-            </table>
-          </div>
-          <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
-            filteredRows,
-          )}</ul>
-        </div>
-      `;
-    };
-
     const renderTable = () => {
-      if (!state.rows.length) {
-        return "<p class='small'>No proposals found for the current filters.</p>";
-      }
-      const filteredRows = state.rows.filter((row) => {
-        if (!state.tag) {
-          return true;
-        }
-        const tagNeedle = state.tag.toLowerCase();
-        const tagList = (pick(row, "tags") || []).map((tag) =>
-          String(tag || "").toLowerCase(),
-        );
-        return tagList.includes(tagNeedle);
-      });
-      if (!filteredRows.length) {
-        return "<p class='small'>No proposals found for the current filters.</p>";
-      }
-      return renderProposalLayouts(filteredRows);
+      return renderProposalLayouts(state.rows, state.tag);
     };
-
-    Object.assign(window.__queueLayoutTest, {
-      renderProposalTable,
-      renderProposalCards,
-      renderProposalLayouts,
-      filterProposalsByTag,
-    });
 
     const attachHandlers = () => {
       const filterForm = document.getElementById("proposals-filter-form");
