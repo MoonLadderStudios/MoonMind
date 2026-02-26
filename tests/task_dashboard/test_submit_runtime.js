@@ -275,3 +275,57 @@ const helpers = loadSubmitRuntimeHelpers();
   });
   assert.strictEqual(wrongStatus, false);
 })();
+
+(function testStringifySkillArgsPreservesFailureForUnserializableObjects() {
+  const circular = {};
+  circular.self = circular;
+  const rendered = helpers.stringifySkillArgs(circular);
+  assert.strictEqual(rendered, "[unserializable skill args]");
+})();
+
+(function testBuildQueueSubmissionDraftFromJobKeepsTemplateBoundFirstStep() {
+  const draft = helpers.buildQueueSubmissionDraftFromJob({
+    payload: {
+      repository: "Moon/Test",
+      task: {
+        instructions: "Build feature branch",
+        runtime: {
+          mode: "codex",
+        },
+        publish: {
+          mode: "pr",
+        },
+        steps: [
+          {
+            id: "step-1",
+            instructions: "Build feature branch",
+            skill: {
+              id: "",
+            },
+          },
+        ],
+        appliedStepTemplates: [
+          {
+            slug: "preset-template",
+            version: "1",
+            stepIds: ["step-1"],
+            appliedAt: "2026-02-26T00:00:00Z",
+          },
+        ],
+      },
+    },
+    priority: 2,
+    maxAttempts: 4,
+    createdByUserId: "00000000-0000-4000-8000-000000000001",
+    requestedByUserId: "00000000-0000-4000-8000-000000000001",
+    updatedAt: "2026-02-26T00:00:00Z",
+  });
+  assert.strictEqual(draft.steps.length, 1);
+  assert.strictEqual(draft.steps[0].id, "step-1");
+  assert.strictEqual(draft.steps[0].instructions, "Build feature branch");
+  assert.strictEqual(draft.appliedTemplateState.length, 1);
+  assert.deepStrictEqual(draft.appliedTemplateState[0].stepIds, ["step-1"]);
+  assert.strictEqual(draft.publishMode, "pr");
+  assert.strictEqual(draft.model, "");
+  assert.strictEqual(draft.effort, "");
+})();

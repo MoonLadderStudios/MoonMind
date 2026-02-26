@@ -603,8 +603,6 @@ class AgentQueueService:
     ) -> models.AgentJob:
         """Update one queued, never-started task job in place."""
 
-        if actor_user_id is None:
-            raise AgentQueueJobAuthorizationError("authenticated user id is required")
         candidate_type = str(job_type or "").strip()
         if not candidate_type:
             raise AgentQueueValidationError("type must be a non-empty string")
@@ -663,7 +661,9 @@ class AgentQueueService:
         job.max_attempts = max_attempts
         job.updated_at = now
         event_payload: dict[str, Any] = {
-            "actorUserId": str(actor_user_id),
+            "actorUserId": (
+                str(actor_user_id) if actor_user_id is not None else None
+            ),
             "changedFields": changed_fields,
         }
         if clean_note is not None:

@@ -49,7 +49,7 @@ async def queue_db(tmp_path: Path) -> AsyncIterator[sessionmaker[AsyncSession]]:
 async def _create_task_job(
     service: AgentQueueService,
     *,
-    owner_id: UUID,
+    owner_id: UUID | None = None,
 ) -> models.AgentJob:
     return await service.create_job(
         job_type="task",
@@ -114,6 +114,61 @@ async def test_update_queued_job_success_updates_and_appends_event(
     assert payload["actorUserId"] == str(owner_id)
     assert "payload" in payload["changedFields"]
     assert payload["note"] == "tuned objective"
+
+
+async def test_update_queued_job_allows_stub_actor_for_unowned_job(
+    tmp_path: Path,
+) -> None:
+    """Stub-context users should be able to edit unowned queued jobs."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await _create_task_job(service)
+            prior_updated_at = job.updated_at
+
+            updated = await service.update_queued_job(
+                job_id=job.id,
+                actor_user_id=None,
+                job_type="task",
+                payload={
+                    "repository": "Moon/Test",
+                    "task": {"instructions": "Edited objective"},
+                },
+                expected_updated_at=prior_updated_at,
+            )
+            events = await service.list_events(job_id=job.id, limit=50)
+
+    assert updated.payload["task"]["instructions"] == "Edited objective"
+    update_events = [event for event in events if event.message == "Job updated"]
+    assert update_events
+    payload = update_events[-1].payload or {}
+    assert payload["actorUserId"] is None
+
+
+async def test_update_queued_job_rejects_stub_actor_for_owned_job(
+    tmp_path: Path,
+) -> None:
+    """Stub-context actor IDs should remain unauthorized when ownership is set."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            owner_id = uuid4()
+            job = await _create_task_job(service, owner_id=owner_id)
+
+            with pytest.raises(AgentQueueJobAuthorizationError):
+                await service.update_queued_job(
+                    job_id=job.id,
+                    actor_user_id=None,
+                    job_type="task",
+                    payload={
+                        "repository": "Moon/Test",
+                        "task": {"instructions": "Updated objective"},
+                    },
+                )
 
 
 async def test_update_queued_job_rejects_non_queued_status(tmp_path: Path) -> None:

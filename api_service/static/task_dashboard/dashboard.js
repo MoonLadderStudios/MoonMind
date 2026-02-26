@@ -1176,8 +1176,9 @@
     }
     try {
       return JSON.stringify(args, null, 2);
-    } catch (_error) {
-      return "";
+    } catch (error) {
+      console.warn("Failed to format skill args for dashboard draft", error);
+      return "[unserializable skill args]";
     }
   }
 
@@ -1198,12 +1199,15 @@
       payload && typeof payload.task === "object" && !Array.isArray(payload.task)
         ? payload.task
         : {};
+    const publishNode =
+      task && typeof task.publish === "object" && !Array.isArray(task.publish)
+        ? task.publish
+        : {};
     const hasProposeTasks = Object.prototype.hasOwnProperty.call(
       task,
       "proposeTasks",
     );
-    const runtime =
-      normalizeTaskRuntimeInput(extractRuntimeFromPayload(payload)) || defaultTaskRuntime;
+    const runtime = extractRuntimeFromPayload(payload);
     const runtimeNode =
       task && typeof task.runtime === "object" && !Array.isArray(task.runtime)
         ? task.runtime
@@ -1220,6 +1224,32 @@
     if (!objectiveInstructions && taskSteps.length > 0) {
       objectiveInstructions = String(pick(taskSteps[0], "instructions") || "").trim();
     }
+    const firstStep = taskSteps[0] || null;
+    const firstStepInstructions =
+      firstStep && typeof firstStep === "object" && !Array.isArray(firstStep)
+        ? String(pick(firstStep, "instructions") || "").trim()
+        : "";
+    const firstStepSkillNode =
+      firstStep &&
+      typeof firstStep === "object" &&
+      !Array.isArray(firstStep) &&
+      firstStep.skill &&
+      typeof firstStep.skill === "object" &&
+      !Array.isArray(firstStep.skill)
+        ? firstStep.skill
+        : {};
+    const firstStepSkillId = String(firstStepSkillNode.id || "").trim();
+    const firstStepSkillArgs = stringifySkillArgs(firstStepSkillNode.args);
+    const firstStepSkillCaps = extractCapabilityCsv(
+      firstStepSkillNode.requiredCapabilities,
+    );
+    const firstStepHasTemplateBinding =
+      Boolean(firstStep) &&
+      String(pick(firstStep, "id") || "").trim() &&
+      firstStepInstructions === objectiveInstructions &&
+      !firstStepSkillId &&
+      !firstStepSkillArgs &&
+      !firstStepSkillCaps;
 
     const primaryStep = {
       id: "",
@@ -1230,7 +1260,7 @@
       templateStepId: "",
       templateInstructions: "",
     };
-    const steps = [primaryStep];
+    const steps = firstStepHasTemplateBinding ? [] : [primaryStep];
 
     taskSteps.forEach((rawStep, index) => {
       if (!rawStep || typeof rawStep !== "object" || Array.isArray(rawStep)) {
@@ -1251,7 +1281,9 @@
         !stepSkillArgs &&
         !stepSkillCaps;
       if (isPrimaryMirror) {
-        return;
+        if (!firstStepHasTemplateBinding) {
+          return;
+        }
       }
       steps.push({
         id: String(rawStep.id || "").trim(),
@@ -1288,13 +1320,29 @@
       : [];
 
     return {
-      runtime,
-      model: String(runtimeNode.model || "").trim(),
-      effort: String(runtimeNode.effort || "").trim(),
+      runtime: runtime ? String(runtime).trim() : defaultTaskRuntime,
+      model:
+        Object.prototype.hasOwnProperty.call(runtimeNode, "model")
+          ? String(runtimeNode.model || "")
+          : "",
+      effort:
+        Object.prototype.hasOwnProperty.call(runtimeNode, "effort")
+          ? String(runtimeNode.effort || "")
+          : "",
       repository: String(payload.repository || "").trim(),
       startingBranch: String(gitNode.startingBranch || "").trim(),
       newBranch: String(gitNode.newBranch || "").trim(),
-      publishMode: normalizePublishModeInput(extractPublishModeFromPayload(payload)) || "pr",
+      publishMode: (() => {
+        const draftMode = String(
+          Object.prototype.hasOwnProperty.call(publishNode, "mode")
+            ? publishNode.mode
+            : payload.publishMode || extractPublishModeFromPayload(payload),
+        ).trim();
+        if (draftMode) {
+          return draftMode;
+        }
+        return "";
+      })(),
       priority: Number(pick(job, "priority") || 0),
       maxAttempts: Number(pick(job, "maxAttempts") || 3),
       proposeTasks: hasProposeTasks
@@ -2380,6 +2428,8 @@
       isWorkerSubmitRuntime,
       parseEditJobSearchParam,
       isEditableQueuedTaskJob,
+      stringifySkillArgs,
+      buildQueueSubmissionDraftFromJob,
       normalizeOrchestratorPriority,
       persistSubmitDraftsToStorage,
       submitDraftController,
@@ -3658,10 +3708,14 @@
     );
     let activeWorkerRuntime = selectedWorkerRuntime;
     const queueDraftModel = String(
-      effectiveWorkerDraft.model || defaultTaskModel,
+      Object.prototype.hasOwnProperty.call(effectiveWorkerDraft, "model")
+        ? effectiveWorkerDraft.model || ""
+        : defaultTaskModel,
     ).trim();
     const queueDraftEffort = String(
-      effectiveWorkerDraft.effort || defaultTaskEffort,
+      Object.prototype.hasOwnProperty.call(effectiveWorkerDraft, "effort")
+        ? effectiveWorkerDraft.effort || ""
+        : defaultTaskEffort,
     ).trim();
     const queueDraftRepository = String(effectiveWorkerDraft.repository || "").trim();
     const queueDraftStartingBranch = String(
@@ -3669,7 +3723,9 @@
     ).trim();
     const queueDraftNewBranch = String(effectiveWorkerDraft.newBranch || "").trim();
     const queueDraftPublishMode = (() => {
-      const candidate = String(effectiveWorkerDraft.publishMode || "").trim().toLowerCase();
+      const candidate = Object.prototype.hasOwnProperty.call(effectiveWorkerDraft, "publishMode")
+        ? String(effectiveWorkerDraft.publishMode || "").trim().toLowerCase()
+        : "";
       return ["none", "branch", "pr"].includes(candidate)
         ? candidate
         : defaultPublishMode;
@@ -7670,13 +7726,14 @@
           },
         });
       } catch (error) {
+        console.error("Failed to load queued job for edit", error);
         const statusCode = Number(error?.status || 0);
         const detailMessage =
           statusCode === 404
             ? "The queued job was not found."
             : statusCode === 403
-              ? "You are not authorized to edit this queued job."
-              : `Failed to load queued job: ${String(error?.message || "request failed")}`;
+              ? "You are not authorized to edit this queued task."
+              : "Failed to load the queued task.";
         setView(
           "Edit queued task",
           `Job ${editParam.jobId}`,
