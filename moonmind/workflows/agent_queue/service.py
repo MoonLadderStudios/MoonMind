@@ -37,6 +37,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
     _normalize_publish_mode,
+    has_attachment_mutation_fields,
     normalize_queue_job_payload,
 )
 from moonmind.workflows.tasks import compile_task_payload_templates
@@ -586,6 +587,93 @@ class AgentQueueService:
         )
         await self._repository.commit()
         return job, stored
+
+    async def update_queued_job(
+        self,
+        *,
+        job_id: UUID,
+        actor_user_id: UUID | None,
+        job_type: str,
+        payload: dict[str, Any],
+        priority: int = 0,
+        affinity_key: str | None = None,
+        max_attempts: int = 3,
+        expected_updated_at: datetime | None = None,
+        note: str | None = None,
+    ) -> models.AgentJob:
+        """Update one queued, never-started task job in place."""
+
+        candidate_type = str(job_type or "").strip()
+        if not candidate_type:
+            raise AgentQueueValidationError("type must be a non-empty string")
+        if max_attempts < 1:
+            raise AgentQueueValidationError("maxAttempts must be >= 1")
+
+        job = await self._repository.require_job_for_update(job_id)
+        if actor_user_id not in {job.created_by_user_id, job.requested_by_user_id}:
+            raise AgentQueueJobAuthorizationError(
+                f"user '{actor_user_id}' is not authorized for task run {job_id}"
+            )
+        if job.status is not models.AgentJobStatus.QUEUED:
+            raise AgentJobStateError(
+                f"Job {job_id} is {job.status.value} and cannot be updated"
+            )
+        if job.started_at is not None:
+            raise AgentJobStateError(f"Job {job_id} has already started")
+        if candidate_type != job.type:
+            raise AgentJobStateError(
+                f"Job {job_id} type mismatch ({job.type} != {candidate_type})"
+            )
+        if candidate_type != CANONICAL_TASK_JOB_TYPE:
+            raise AgentJobStateError(
+                f"Job {job_id} type '{job.type}' does not support queued updates"
+            )
+        if expected_updated_at is not None:
+            if self._coerce_utc(expected_updated_at) != self._coerce_utc(
+                job.updated_at
+            ):
+                raise AgentJobStateError(
+                    f"Job {job_id} update conflict; refresh and retry"
+                )
+        if has_attachment_mutation_fields(payload):
+            raise AgentQueueValidationError(
+                "attachment edits are not supported for queued updates"
+            )
+
+        normalized_payload = self.normalize_task_job_payload(dict(payload or {}))
+        normalized_affinity = affinity_key.strip() if affinity_key else None
+        clean_note = self._clean_optional_str_max(note, max_length=256)
+
+        changed_fields: list[str] = []
+        if job.priority != priority:
+            changed_fields.append("priority")
+        if job.payload != normalized_payload:
+            changed_fields.append("payload")
+        if job.affinity_key != normalized_affinity:
+            changed_fields.append("affinityKey")
+        if job.max_attempts != max_attempts:
+            changed_fields.append("maxAttempts")
+
+        now = datetime.now(UTC)
+        job.priority = priority
+        job.payload = normalized_payload
+        job.affinity_key = normalized_affinity
+        job.max_attempts = max_attempts
+        job.updated_at = now
+        event_payload: dict[str, Any] = {
+            "actorUserId": (str(actor_user_id) if actor_user_id is not None else None),
+            "changedFields": changed_fields,
+        }
+        if clean_note is not None:
+            event_payload["note"] = clean_note
+        await self._repository.append_event(
+            job_id=job.id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Job updated",
+            payload=event_payload,
+        )
+        await self._repository.commit()
+        return job
 
     def _normalize_attachment_upload(
         self,

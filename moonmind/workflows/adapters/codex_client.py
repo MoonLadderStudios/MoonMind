@@ -27,6 +27,14 @@ class CodexDiffResult:
     has_changes: bool = True
 
 
+class CodexDiffNotReadyError(RuntimeError):
+    """Raised while a Codex diff is not yet available."""
+
+
+class CodexDiffRetrievalError(RuntimeError):
+    """Raised for non-transient Codex diff retrieval failures."""
+
+
 class CodexClient:
     """Lightweight adapter encapsulating Codex automation entrypoints."""
 
@@ -115,11 +123,17 @@ class CodexClient:
                 has_changes=True,
             )
 
-        raise RuntimeError(
+        raise CodexDiffRetrievalError(
             "Real Codex patch retrieval is not yet implemented. Enable test mode via "
             "WORKFLOW_TEST_MODE=1 (or SPEC_WORKFLOW_TEST_MODE=1 for legacy environments) "
             "for local development."
         )
 
 
-__all__ = ["CodexClient", "CodexSubmissionResult", "CodexDiffResult"]
+__all__ = [
+    "CodexClient",
+    "CodexDiffResult",
+    "CodexDiffNotReadyError",
+    "CodexDiffRetrievalError",
+    "CodexSubmissionResult",
+]

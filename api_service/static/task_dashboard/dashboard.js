@@ -2023,7 +2023,7 @@
     if (hasExplicitSkill && targetService !== "orchestrator") {
       return {
         ok: false,
-        error: "Explicit skill runs must targetService=orchestrator.",
+        error: "Target service must be orchestrator when Skill ID is set.",
       };
     }
     const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();

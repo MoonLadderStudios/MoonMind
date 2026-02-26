@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -25,6 +26,21 @@ from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
 from moonmind.workflows.orchestrator.service_profiles import ServiceProfile
 from moonmind.workflows.orchestrator.services import OrchestratorService
 from moonmind.workflows.orchestrator.storage import ArtifactStorage
+
+
+def _override_current_user_dependencies() -> None:
+    mock_user = SimpleNamespace(id=uuid4(), email="orchestrator@example.com")
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dependency in dependant.dependencies:
+            call = dependency.call
+            if call is None:
+                continue
+            name = getattr(call, "__name__", "")
+            if name == "_current_user_fallback" or name.startswith("current_"):
+                app.dependency_overrides[call] = lambda mock_user=mock_user: mock_user
 
 
 @pytest.mark.asyncio
@@ -55,10 +71,24 @@ async def test_protected_service_requires_approval(tmp_path: Path, monkeypatch) 
     artifact_override = f"test-artifacts/{uuid4()}"
     monkeypatch.setenv("ORCHESTRATOR_ARTIFACT_ROOT", artifact_override)
     app.state.settings = settings
-    enqueued: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    _override_current_user_dependencies()
+    enqueued: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def _enqueue_run(*args, **kwargs):
+        enqueued.append(("run", args, kwargs))
+        return uuid4()
+
+    async def _enqueue_task(*args, **kwargs):
+        enqueued.append(("task", args, kwargs))
+        return uuid4()
+
     monkeypatch.setattr(
-        "api_service.api.routers.orchestrator.enqueue_action_plan",
-        lambda *args, **kwargs: enqueued.append((args, kwargs)),
+        "api_service.api.routers.orchestrator.enqueue_orchestrator_run_job",
+        _enqueue_run,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.orchestrator.enqueue_orchestrator_task_job",
+        _enqueue_task,
     )
 
     transport = ASGITransport(app=app)
@@ -104,6 +134,7 @@ async def test_protected_service_requires_approval(tmp_path: Path, monkeypatch) 
         assert run.approval_token is not None
         assert run.approval_gate_id is not None
     assert enqueued
+    app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio

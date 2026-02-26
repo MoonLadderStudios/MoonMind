@@ -10,7 +10,7 @@
     },
     "merge_outcome": {
       "type": "string",
-      "enum": ["merged", "skipped", "blocked", "failed"]
+      "enum": ["merged", "auto_merge_enabled", "skipped", "blocked", "failed"]
     },
     "reason": {
       "type": "string",

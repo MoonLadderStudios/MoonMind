@@ -100,6 +100,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 )
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
+_PR_RESOLVER_SKILL_ID = "pr-resolver"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
@@ -2915,11 +2916,25 @@ class CodexWorker:
             workdir_mode = self._safe_workdir_mode(source_payload)
             task_node = canonical_payload.get("task")
             task = task_node if isinstance(task_node, Mapping) else {}
+            runtime_node = task.get("runtime")
+            runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
             git_node = task.get("git")
             git = git_node if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
             publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
+            runtime_mode = (
+                str(
+                    runtime.get("mode")
+                    or canonical_payload.get("targetRuntime")
+                    or "codex"
+                )
+                .strip()
+                .lower()
+                or "codex"
+            )
+            runtime_model = str(runtime.get("model") or "").strip() or None
+            runtime_effort = str(runtime.get("effort") or "").strip() or None
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -3015,6 +3030,11 @@ class CodexWorker:
             context_payload = {
                 "repository": repository,
                 "runtime": canonical_payload.get("targetRuntime"),
+                "runtimeConfig": {
+                    "mode": runtime_mode,
+                    "model": runtime_model,
+                    "effort": runtime_effort,
+                },
                 "skill": {
                     "id": (
                         deduped_selected_skills[0]
@@ -3390,9 +3410,7 @@ class CodexWorker:
                     encoding="utf-8", errors="replace"
                 ).splitlines()
             except OSError as exc:
-                error_message = (
-                    "could not read one or more verification logs; check worker logs for details"
-                )
+                error_message = "could not read one or more verification logs; check worker logs for details"
                 read_errors.append(error_message)
                 logger.warning(
                     "failed to collect verification evidence from stage log %s: %s",
@@ -6740,6 +6758,9 @@ class CodexWorker:
     ) -> str:
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = publish_node if isinstance(publish_node, Mapping) else {}
+        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
         objective = str(task.get("instructions") or "").strip()
         step_title = f" {step.title}" if step.title else ""
         normalized_objective = _normalize_instruction_text_for_comparison(objective)
@@ -6762,6 +6783,15 @@ class CodexWorker:
                 step_instruction_value
                 or "(no step-specific instructions; continue based on objective)"
             )
+        workspace_publish_line = (
+            "- Do NOT commit or push. Publish is handled by MoonMind publish stage."
+        )
+        if step.effective_skill_id == _PR_RESOLVER_SKILL_ID and publish_mode == "none":
+            workspace_publish_line = (
+                "- Commit/push/merge directly when required by this skill. "
+                "Publish stage is disabled for this task."
+            )
+
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"
             f"{objective}\n\n"
@@ -6771,7 +6801,7 @@ class CodexWorker:
             f"{step.effective_skill_id}\n\n"
             "WORKSPACE:\n"
             "- Repo is already checked out on the working branch.\n"
-            "- Do NOT commit or push. Publish is handled by MoonMind publish stage.\n"
+            f"{workspace_publish_line}\n"
             "- Skills are available via .agents/skills and .gemini/skills links.\n"
             "- Selected skills are always materialized under ../skills_active/<skill-id>/.\n"
             "- Write logs to stdout/stderr; MoonMind captures them.\n\n"

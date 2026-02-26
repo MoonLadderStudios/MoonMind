@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from api_service.db import models as db_models
+from moonmind.schemas.workflow_models import OrchestratorTaskStepInputModel
 
 from .action_plan import ActionPlan
 from .policies import (
@@ -32,6 +33,7 @@ class OrchestratorService:
         *,
         approval_token: Optional[str],
         priority: db_models.OrchestratorRunPriority | None,
+        task_steps: list[OrchestratorTaskStepInputModel] | None = None,
         policy: ApprovalPolicy | None = None,
     ) -> db_models.OrchestratorRun:
         policy = policy or await resolve_policy(
@@ -68,7 +70,10 @@ class OrchestratorService:
         )
         artifact_directory = self.artifact_storage.ensure_run_directory(run.id)
         run.artifact_root = str(artifact_directory)
-        await self.repository.initialize_plan_states(run, plan.steps_as_dict())
+        if task_steps:
+            await self.repository.create_task_steps(run_id=run.id, steps=task_steps)
+        else:
+            await self.repository.initialize_plan_states(run, plan.steps_as_dict())
         await self.repository.commit()
         return run
 

@@ -14,6 +14,9 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunDetailModel,
     OrchestratorRunListResponse,
     OrchestratorRunSummaryModel,
+    OrchestratorTaskStepModel,
+    OrchestratorTaskStepSkillModel,
+    OrchestratorTaskStepStatus,
 )
 from moonmind.workflows.speckit_celery import models as workflow_models
 
@@ -110,12 +113,41 @@ def _convert_task_states(
     return serialized
 
 
+def _convert_runtime_steps(
+    steps: Iterable[db_models.OrchestratorTaskStep],
+) -> list[OrchestratorTaskStepModel]:
+    serialized: list[OrchestratorTaskStepModel] = []
+    for step in steps:
+        serialized.append(
+            OrchestratorTaskStepModel(
+                id=step.id,
+                step_id=step.step_id,
+                index=step.step_index,
+                title=step.title,
+                instructions=step.instructions,
+                skill=OrchestratorTaskStepSkillModel(
+                    id=step.skill_id,
+                    args=step.skill_args or {},
+                ),
+                status=OrchestratorTaskStepStatus(
+                    step.status.value if hasattr(step.status, "value") else step.status
+                ),
+                attempt=step.attempt,
+                message=step.message,
+                started_at=step.started_at,
+                finished_at=step.finished_at,
+            )
+        )
+    return serialized
+
+
 def serialize_run_summary(
     run: db_models.OrchestratorRun,
 ) -> OrchestratorRunSummaryModel:
     approval_required, approval_status = _resolve_approval_state(run)
     return OrchestratorRunSummaryModel(
         run_id=run.id,
+        task_id=run.id,
         status=run.status,
         priority=run.priority,
         target_service=run.target_service,
@@ -135,6 +167,7 @@ def serialize_run_detail(run: db_models.OrchestratorRun) -> OrchestratorRunDetai
         action_plan=_convert_plan_definition(run.action_plan),
         steps=_convert_task_states(run.task_states or []),
         artifacts=_convert_artifacts(run.artifacts or []),
+        task_steps=_convert_runtime_steps(run.task_steps or []),
         metrics_snapshot=run.metrics_snapshot,
     )
 
@@ -143,7 +176,7 @@ def serialize_run_list(
     runs: Iterable[db_models.OrchestratorRun],
 ) -> OrchestratorRunListResponse:
     summaries = [serialize_run_summary(run) for run in runs]
-    return OrchestratorRunListResponse(runs=summaries)
+    return OrchestratorRunListResponse(runs=summaries, tasks=summaries)
 
 
 def serialize_artifacts(

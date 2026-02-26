@@ -335,12 +335,61 @@ class OrchestratorPlanStepStateModel(BaseModel):
     artifact_refs: list[UUID] = Field(default_factory=list, alias="artifactRefs")
 
 
+class OrchestratorTaskStepStatus(str, enum.Enum):
+    """Execution status for arbitrary orchestrator task steps."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class OrchestratorTaskStepSkillModel(BaseModel):
+    """Skill metadata associated with one orchestrator task step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(..., alias="id")
+    args: dict[str, Any] = Field(default_factory=dict, alias="args")
+
+
+class OrchestratorTaskStepInputModel(BaseModel):
+    """Step payload accepted by orchestrator task create requests."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(..., alias="id", min_length=1, max_length=128)
+    title: str = Field(..., alias="title", min_length=1, max_length=255)
+    instructions: str = Field(..., alias="instructions", min_length=1)
+    skill: OrchestratorTaskStepSkillModel = Field(..., alias="skill")
+
+
+class OrchestratorTaskStepModel(BaseModel):
+    """Persisted orchestrator task step state exposed to API clients."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID = Field(..., alias="id")
+    step_id: str = Field(..., alias="stepId")
+    index: int = Field(..., alias="index")
+    title: str = Field(..., alias="title")
+    instructions: str = Field(..., alias="instructions")
+    skill: OrchestratorTaskStepSkillModel = Field(..., alias="skill")
+    status: OrchestratorTaskStepStatus = Field(..., alias="status")
+    attempt: int = Field(..., alias="attempt")
+    message: str | None = Field(None, alias="message")
+    started_at: datetime | None = Field(None, alias="startedAt")
+    finished_at: datetime | None = Field(None, alias="finishedAt")
+
+
 class OrchestratorRunSummaryModel(BaseModel):
     """Compact representation of an orchestrator run."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     run_id: UUID = Field(..., alias="runId")
+    task_id: UUID = Field(..., alias="taskId")
     status: OrchestratorRunStatus = Field(..., alias="status")
     priority: OrchestratorRunPriority = Field(
         OrchestratorRunPriority.NORMAL, alias="priority"
@@ -366,6 +415,9 @@ class OrchestratorRunDetailModel(OrchestratorRunSummaryModel):
     artifacts: list[OrchestratorRunArtifactModel] = Field(
         default_factory=list, alias="artifacts"
     )
+    task_steps: list[OrchestratorTaskStepModel] = Field(
+        default_factory=list, alias="taskSteps"
+    )
     metrics_snapshot: dict[str, Any] | None = Field(None, alias="metricsSnapshot")
 
 
@@ -375,6 +427,9 @@ class OrchestratorRunListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     runs: list[OrchestratorRunSummaryModel] = Field(default_factory=list, alias="runs")
+    tasks: list[OrchestratorRunSummaryModel] = Field(
+        default_factory=list, alias="tasks"
+    )
 
 
 class OrchestratorArtifactListResponse(BaseModel):
@@ -399,6 +454,10 @@ class OrchestratorCreateRunRequest(BaseModel):
     approval_token: Optional[str] = Field(None, alias="approvalToken")
     priority: OrchestratorRunPriority = Field(
         OrchestratorRunPriority.NORMAL, alias="priority"
+    )
+    steps: list[OrchestratorTaskStepInputModel] = Field(
+        default_factory=list,
+        alias="steps",
     )
 
     @model_validator(mode="after")
@@ -544,6 +603,10 @@ __all__ = [
     "OrchestratorActionPlanModel",
     "OrchestratorRunArtifactModel",
     "OrchestratorPlanStepStateModel",
+    "OrchestratorTaskStepStatus",
+    "OrchestratorTaskStepSkillModel",
+    "OrchestratorTaskStepInputModel",
+    "OrchestratorTaskStepModel",
     "OrchestratorRunSummaryModel",
     "OrchestratorRunDetailModel",
     "OrchestratorRunListResponse",

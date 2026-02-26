@@ -25,6 +25,13 @@ class JobSubmission:
     branch: str
 
 
+@dataclass(frozen=True)
+class RuntimeSelection:
+    mode: str
+    model: str | None = None
+    effort: str | None = None
+
+
 def _run_command(cmd: list[str]) -> str:
     """Run a command and return trimmed stdout text."""
 
@@ -162,22 +169,114 @@ def _extract_branch(pr: dict[str, Any]) -> str:
     return branch
 
 
+def _normalize_runtime_mode(value: str | None) -> str | None:
+    candidate = str(value or "").strip().lower()
+    if candidate in {"codex", "gemini", "claude"}:
+        return candidate
+    return None
+
+
+def _runtime_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _load_parent_runtime_selection(
+    task_context_path: str | None = None,
+) -> RuntimeSelection | None:
+    candidates: list[Path] = []
+    if task_context_path:
+        candidates.append(Path(task_context_path))
+    for env_key in ("MOONMIND_TASK_CONTEXT_PATH", "TASK_CONTEXT_PATH"):
+        env_value = _runtime_text(os.getenv(env_key))
+        if env_value:
+            candidates.append(Path(env_value))
+    candidates.extend(
+        [Path("../artifacts/task_context.json"), Path("artifacts/task_context.json")]
+    )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        identity = str(candidate.expanduser())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        runtime_config = (
+            payload.get("runtimeConfig")
+            if isinstance(payload.get("runtimeConfig"), dict)
+            else {}
+        )
+        runtime_node = (
+            payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+        )
+        mode = _normalize_runtime_mode(
+            runtime_config.get("mode")
+            or runtime_node.get("mode")
+            or payload.get("runtime")
+        )
+        if not mode:
+            continue
+
+        model = _runtime_text(runtime_config.get("model") or runtime_node.get("model"))
+        effort = _runtime_text(
+            runtime_config.get("effort") or runtime_node.get("effort")
+        )
+        return RuntimeSelection(mode=mode, model=model, effort=effort)
+    return None
+
+
+def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
+    inherited = _load_parent_runtime_selection(args.task_context_path)
+    runtime_mode = _normalize_runtime_mode(args.runtime_mode) or (
+        inherited.mode if inherited else "codex"
+    )
+    runtime_model = _runtime_text(args.runtime_model)
+    runtime_effort = _runtime_text(args.runtime_effort)
+    if runtime_model is None and inherited is not None:
+        runtime_model = inherited.model
+    if runtime_effort is None and inherited is not None:
+        runtime_effort = inherited.effort
+
+    return RuntimeSelection(
+        mode=runtime_mode or "codex",
+        model=runtime_model,
+        effort=runtime_effort,
+    )
+
+
 def _build_queue_request(
     repo: str,
     pr_number: int | str,
     branch: str,
     *,
+    runtime: RuntimeSelection,
     merge_method: str,
     max_iterations: int,
     priority: int,
     max_attempts: int,
 ) -> dict[str, Any]:
+    runtime_payload: dict[str, Any] = {"mode": runtime.mode}
+    if runtime.model:
+        runtime_payload["model"] = runtime.model
+    if runtime.effort:
+        runtime_payload["effort"] = runtime.effort
+
     return {
         "type": "task",
         "priority": priority,
         "maxAttempts": max_attempts,
         "payload": {
             "repository": repo,
+            "targetRuntime": runtime.mode,
             "task": {
                 "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
                 "skill": {
@@ -191,7 +290,7 @@ def _build_queue_request(
                     },
                     "requiredCapabilities": ["gh"],
                 },
-                "runtime": {"mode": "codex"},
+                "runtime": runtime_payload,
                 "git": {
                     "startingBranch": branch,
                     "newBranch": branch,
@@ -230,6 +329,30 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--priority", type=int, default=0)
+    parser.add_argument(
+        "--task-context-path",
+        default=None,
+        help=(
+            "Optional path to parent task_context.json for runtime inheritance "
+            "(default: auto-detect ../artifacts/task_context.json)."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-mode",
+        choices=("codex", "gemini", "claude"),
+        default=None,
+        help="Explicit runtime mode for queued pr-resolver tasks.",
+    )
+    parser.add_argument(
+        "--runtime-model",
+        default=None,
+        help="Explicit runtime model for queued pr-resolver tasks.",
+    )
+    parser.add_argument(
+        "--runtime-effort",
+        default=None,
+        help="Explicit runtime effort for queued pr-resolver tasks.",
+    )
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument(
@@ -282,7 +405,8 @@ def _build_request_records(
     repo: str,
     open_prs: list[dict[str, Any]],
     args: argparse.Namespace,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    runtime: RuntimeSelection,
+) -> tuple[list[JobSubmission], list[dict[str, Any]]]:
     queue_requests: list[JobSubmission] = []
     skipped: list[dict[str, Any]] = []
 
@@ -307,6 +431,7 @@ def _build_request_records(
             repo,
             number,
             branch,
+            runtime=runtime,
             merge_method=args.merge_method,
             max_iterations=args.max_iterations,
             priority=args.priority,
@@ -331,9 +456,10 @@ async def main() -> int:
         raise RuntimeError("No repository provided and none could be inferred.")
     if args.state.strip() != "open":
         print(f"warning: non-open state requested: {args.state}")
+    runtime = _resolve_runtime_selection(args)
 
     open_prs = _run_pr_list(repo=repo, state=args.state)
-    queue_requests, skipped = _build_request_records(repo, open_prs, args)
+    queue_requests, skipped = _build_request_records(repo, open_prs, args, runtime)
     created, errors = await _submit_jobs(queue_requests)
 
     payload = {
@@ -341,6 +467,11 @@ async def main() -> int:
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "repository": repo,
         "state": args.state,
+        "runtime": {
+            "mode": runtime.mode,
+            "model": runtime.model,
+            "effort": runtime.effort,
+        },
         "requested": len(open_prs),
         "created": len(created),
         "queued": created,

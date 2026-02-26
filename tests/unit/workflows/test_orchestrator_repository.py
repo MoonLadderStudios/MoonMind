@@ -17,6 +17,8 @@ from api_service.db.models import (
     OrchestratorRunArtifactType,
     OrchestratorRunPriority,
     OrchestratorRunStatus,
+    OrchestratorTaskStep,
+    OrchestratorTaskStepStatus,
 )
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
 from moonmind.workflows.speckit_celery import models as workflow_models
@@ -165,3 +167,63 @@ async def test_list_artifacts_orders_by_created(tmp_path) -> None:
         repo = OrchestratorRepository(session)
         artifacts = await repo.list_artifacts(run.id)
         assert [artifact.path for artifact in artifacts] == ["patch.diff", "verify.log"]
+
+
+@pytest.mark.asyncio
+async def test_update_task_step_state_clears_timestamps(tmp_path) -> None:
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/task_step_timestamps.db", future=True
+    )
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with async_session() as session:
+        plan = OrchestratorActionPlan(
+            steps=[{"name": OrchestratorPlanStep.ANALYZE.value}],
+            service_context={"service": "api"},
+        )
+        session.add(plan)
+        await session.flush()
+        run = OrchestratorRun(
+            instruction="Timestamps test",
+            target_service="api",
+            priority=OrchestratorRunPriority.NORMAL,
+            queued_at=datetime.now(timezone.utc),
+        )
+        run.action_plan = plan
+        session.add(run)
+        await session.flush()
+
+        step = OrchestratorTaskStep(
+            task_id=run.id,
+            step_id="step-1",
+            step_index=0,
+            title="analyze",
+            instructions="Inspect",
+            skill_id="update-moonmind",
+            status=OrchestratorTaskStepStatus.QUEUED,
+            skill_args={},
+            started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            finished_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            attempt=3,
+            artifact_refs=[],
+        )
+        session.add(step)
+        await session.commit()
+
+        repo = OrchestratorRepository(session)
+        await repo.update_task_step_state(
+            step,
+            started_at=None,
+            finished_at=None,
+            status=OrchestratorTaskStepStatus.SUCCEEDED,
+        )
+        await repo.commit()
+
+        session.expunge_all()
+        refreshed = await session.get(OrchestratorTaskStep, step.id)
+        assert refreshed is not None
+        assert refreshed.started_at is None
+        assert refreshed.finished_at is None
