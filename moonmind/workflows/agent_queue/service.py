@@ -631,7 +631,9 @@ class AgentQueueService:
                 f"Job {job_id} type '{job.type}' does not support queued updates"
             )
         if expected_updated_at is not None:
-            if self._coerce_utc(expected_updated_at) != self._coerce_utc(job.updated_at):
+            if self._coerce_utc(expected_updated_at) != self._coerce_utc(
+                job.updated_at
+            ):
                 raise AgentJobStateError(
                     f"Job {job_id} update conflict; refresh and retry"
                 )

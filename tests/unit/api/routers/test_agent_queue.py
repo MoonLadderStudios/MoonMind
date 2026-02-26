@@ -349,9 +349,7 @@ def test_update_queued_job_authorization_error_maps_403(
     """Queued job update ownership errors should return HTTP 403."""
 
     test_client, service = client
-    service.update_queued_job.side_effect = AgentQueueJobAuthorizationError(
-        "not owner"
-    )
+    service.update_queued_job.side_effect = AgentQueueJobAuthorizationError("not owner")
 
     response = test_client.put(
         f"/api/queue/jobs/{uuid4()}",
