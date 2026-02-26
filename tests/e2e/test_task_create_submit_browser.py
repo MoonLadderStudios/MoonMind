@@ -44,7 +44,9 @@ def server():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     for dependency in _resolve_user_dependency_overrides():
-        main_app.dependency_overrides[dependency] = lambda test_user=test_user: test_user
+        main_app.dependency_overrides[dependency] = (
+            lambda test_user=test_user: test_user
+        )
 
     in_memory_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     in_memory_session_maker = async_sessionmaker(
@@ -54,9 +56,7 @@ def server():
     main_app.dependency_overrides[get_async_session] = lambda: in_memory_session_maker()
 
     port = _reserve_free_port()
-    config = uvicorn.Config(
-        main_app, host="127.0.0.1", port=port, log_level="warning"
-    )
+    config = uvicorn.Config(main_app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     try:
@@ -85,13 +85,15 @@ def _route_handlers(
         route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps({
-                "items": {
-                    "codex": {"models": ["gpt-5.3-codex"], "efforts": ["high"]},
-                    "gemini": {"models": [], "efforts": []},
-                    "claude": {"models": [], "efforts": []},
-                },
-            }),
+            body=json.dumps(
+                {
+                    "items": {
+                        "codex": {"models": ["gpt-5.3-codex"], "efforts": ["high"]},
+                        "gemini": {"models": [], "efforts": []},
+                        "claude": {"models": [], "efforts": []},
+                    },
+                }
+            ),
         )
 
     def _mock_skills(route):
@@ -105,10 +107,12 @@ def _route_handlers(
         route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps({
-                "system": {"workersPaused": False, "mode": "running"},
-                "metrics": {"isDrained": True},
-            }),
+            body=json.dumps(
+                {
+                    "system": {"workersPaused": False, "mode": "running"},
+                    "metrics": {"isDrained": True},
+                }
+            ),
         )
 
     def _mock_create(route):
@@ -137,7 +141,9 @@ def _route_handlers(
             body=json.dumps({"items": []}),
         )
 
-    page.route(f"{base_url}/api/queue/workers/runtime-capabilities", _mock_runtime_capabilities)
+    page.route(
+        f"{base_url}/api/queue/workers/runtime-capabilities", _mock_runtime_capabilities
+    )
     page.route(f"{base_url}/api/tasks/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)
     page.route(f"{base_url}/api/task-step-templates*", _mock_task_step_templates)
@@ -147,7 +153,9 @@ def _route_handlers(
 
 
 def _read_submit_label(page):
-    return (page.locator("#queue-submit-form button[type='submit']").text_content() or "").strip()
+    return (
+        page.locator("#queue-submit-form button[type='submit']").text_content() or ""
+    ).strip()
 
 
 def _assert_inflight_label(page, expected_label):
@@ -181,7 +189,10 @@ def test_submit_create_flows_to_task_detail(server):
 
         page.goto(f"{base_url}/tasks/create")
         page.wait_for_selector("#queue-submit-form")
-        page.fill('textarea[data-step-field="instructions"][data-step-index="0"]', "Run end-to-end regression flow.")
+        page.fill(
+            'textarea[data-step-field="instructions"][data-step-index="0"]',
+            "Run end-to-end regression flow.",
+        )
         page.fill('input[name="repository"]', "MoonLadderStudios/MoonMind")
 
         submit_button = page.locator("#queue-submit-form button[type='submit']")
@@ -213,7 +224,10 @@ def test_submit_error_restores_label(server):
 
         page.goto(f"{base_url}/tasks/create")
         page.wait_for_selector("#queue-submit-form")
-        page.fill('textarea[data-step-field="instructions"][data-step-index="0"]', "Run end-to-end regression flow.")
+        page.fill(
+            'textarea[data-step-field="instructions"][data-step-index="0"]',
+            "Run end-to-end regression flow.",
+        )
         page.fill('input[name="repository"]', "MoonLadderStudios/MoonMind")
 
         submit_button = page.locator("#queue-submit-form button[type='submit']")
