@@ -939,9 +939,10 @@ class CodexExecHandler:
             if not text:
                 return ""
 
-            if len(text) >= min_replay_candidate_chars and "\n" in text:
+            if len(text) >= min_replay_candidate_chars:
                 previous_snapshot = replay_snapshot_text.get(stream, "")
                 snapshot_match_offset = replay_snapshot_match_offset.get(stream, 0)
+                snapshot_text_updated = False
 
                 if previous_snapshot:
                     if snapshot_match_offset >= len(previous_snapshot):
@@ -961,6 +962,8 @@ class CodexExecHandler:
                             if not text:
                                 return ""
                             previous_snapshot = replay_snapshot_text.get(stream, "")
+                            replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
+                            snapshot_text_updated = True
                         else:
                             snapshot_match_offset = 0
                             replay_snapshot_match_offset[stream] = 0
@@ -974,12 +977,17 @@ class CodexExecHandler:
                         text = text[len(previous_snapshot) :]
                         if not text:
                             return ""
+                        replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
+                        snapshot_text_updated = True
+                        previous_snapshot = replay_snapshot_text[stream]
 
                     elif previous_snapshot.startswith(text):
                         replay_snapshot_match_offset[stream] = len(text)
                         return ""
 
-                replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
+                if not snapshot_text_updated:
+                    replay_snapshot_text[stream] = text
+
                 replay_snapshot_match_offset[stream] = 0
 
             stream_history_index = history_index[stream]
@@ -1127,7 +1135,7 @@ class CodexExecHandler:
                 chunks: list[str],
             ) -> None:
                 while True:
-                    chunk = await reader.read(1024)
+                    chunk = await reader.read(64 * 1024)
                     if not chunk:
                         break
                     text = chunk.decode("utf-8", errors="replace")
