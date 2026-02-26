@@ -196,6 +196,14 @@ const helpers = loadSubmitRuntimeHelpers();
   });
   assert.strictEqual(invalidSkillArgs.ok, false);
   assert.ok(/Skill Args/i.test(invalidSkillArgs.error));
+
+  const noInstructionWithSkill = helpers.validateOrchestratorSubmission({
+    targetService: "deploy",
+    skillId: "speckit-orchestrate",
+  });
+  assert.strictEqual(noInstructionWithSkill.ok, true);
+  assert.strictEqual(noInstructionWithSkill.value.skillId, "speckit-orchestrate");
+  assert.strictEqual(noInstructionWithSkill.value.instruction, "");
 })();
 
 (function testNormalizeOrchestratorPriority() {

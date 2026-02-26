@@ -1768,7 +1768,9 @@
       };
     }
     const instruction = String(draft.instruction || "").trim();
-    if (!instruction) {
+    const skillId = String(draft.skillId || "").trim().toLowerCase();
+    const hasExplicitSkill = Boolean(skillId) && skillId !== "auto";
+    if (!hasExplicitSkill && !instruction) {
       return {
         ok: false,
         error: "Instruction is required.",
@@ -4721,7 +4723,7 @@
           </select>
         </label>
         <label>Instruction
-          <textarea name="instruction" required placeholder="Describe what should be changed and verified.">${escapeHtml(
+          <textarea name="instruction" placeholder="Describe what should be changed and verified.">${escapeHtml(
             String(sanitizedOrchestratorDraft.instruction || "").trim(),
           )}</textarea>
         </label>

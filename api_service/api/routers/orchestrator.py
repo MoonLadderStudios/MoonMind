@@ -117,7 +117,8 @@ async def create_orchestrator_run(
         ) from exc
 
     try:
-        requested_skill = (payload.skill_id or "").strip()
+        requested_skill = str(payload.skill_id or "").strip().lower()
+        instruction = str(payload.instruction or "").strip()
         if requested_skill:
             if payload.target_service != "orchestrator":
                 raise ValueError(
@@ -136,14 +137,18 @@ async def create_orchestrator_run(
                 raise ValueError(
                     f"Selected skill '{requested_skill}' does not expose a runnable script."
                 )
+            if not instruction:
+                instruction = f"Execute orchestrator skill '{requested_skill}'."
             plan = generate_skill_action_plan(
-                payload.instruction,
+                instruction,
                 profile,
                 skill_id=requested_skill,
                 skill_args=payload.skill_args,
             )
         else:
-            plan = generate_action_plan(payload.instruction, profile)
+            if not instruction:
+                raise ValueError("Instruction must not be empty.")
+            plan = generate_action_plan(instruction, profile)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

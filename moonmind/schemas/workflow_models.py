@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api_service.db.models import (
     OrchestratorPlanOrigin,
@@ -392,7 +392,7 @@ class OrchestratorCreateRunRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    instruction: str = Field(..., alias="instruction")
+    instruction: str | None = Field(None, alias="instruction")
     target_service: str = Field(..., alias="targetService")
     skill_id: str | None = Field(None, alias="skillId")
     skill_args: dict[str, Any] = Field(default_factory=dict, alias="skillArgs")
@@ -400,6 +400,21 @@ class OrchestratorCreateRunRequest(BaseModel):
     priority: OrchestratorRunPriority = Field(
         OrchestratorRunPriority.NORMAL, alias="priority"
     )
+
+    @model_validator(mode="after")
+    def _require_objective_for_default_path(
+        self,
+    ) -> "OrchestratorCreateRunRequest":
+        normalized_skill = str(self.skill_id or "").strip().lower()
+        normalized_instruction = str(self.instruction or "").strip()
+        if normalized_skill and normalized_skill != "auto":
+            return self
+        if not normalized_instruction:
+            raise ValueError(
+                "instruction is required when skillId is not provided or is auto"
+            )
+        self.instruction = normalized_instruction
+        return self
 
 
 class OrchestratorApprovalActorModel(BaseModel):
