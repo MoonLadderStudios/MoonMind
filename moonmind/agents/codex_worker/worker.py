@@ -3390,9 +3390,7 @@ class CodexWorker:
                     encoding="utf-8", errors="replace"
                 ).splitlines()
             except OSError as exc:
-                error_message = (
-                    "could not read one or more verification logs; check worker logs for details"
-                )
+                error_message = "could not read one or more verification logs; check worker logs for details"
                 read_errors.append(error_message)
                 logger.warning(
                     "failed to collect verification evidence from stage log %s: %s",
@@ -3725,10 +3723,10 @@ class CodexWorker:
             verification_payload["skipReason"] = (
                 preflight_result.verification_skip_reason
             )
-                if preflight_result.verification_skip_reason is not None:
-                    verification_payload["status"] = "skipped"
-                elif preflight_result.source_code_paths:
-                    verification_payload["status"] = "passed"
+            if preflight_result.verification_skip_reason is not None:
+                verification_payload["status"] = "skipped"
+            elif preflight_result.source_code_paths:
+                verification_payload["status"] = "passed"
 
             if not preflight_result.passed:
                 verification_payload["status"] = "failed"
