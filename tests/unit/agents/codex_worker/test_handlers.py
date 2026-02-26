@@ -1405,7 +1405,7 @@ async def test_run_command_truncates_and_redacts_long_failure_messages(
 ) -> None:
     """Failure diagnostics should redact secrets before applying truncation."""
 
-    token = "ghp-handler-boundary-token-012345"
+    token = "fake-handler-boundary-token-012345"
     detail = "x" * 980 + token + "tail"
     handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
     log_path = tmp_path / "command-redaction.log"
