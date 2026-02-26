@@ -48,6 +48,7 @@ def build_embed_model(
             OpenAIEmbedding(
                 model=settings.openai.openai_embedding_model,
                 api_key=key_to_use,
+                dimensions=settings.openai.openai_embedding_dimensions,
             ),
             settings.openai.openai_embedding_dimensions,
         )

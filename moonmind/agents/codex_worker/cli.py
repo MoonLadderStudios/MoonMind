@@ -212,33 +212,14 @@ def _run_checked_command(
         " ".join(command[:2]) if len(command) > 1 else " ".join(command) or "<empty>"
     )
     if detail:
-        tail_line = detail.splitlines()[-1]
-        message_prefix = f"command failed ({result.returncode}): {command_hint} | "
-        redacted_tail = _redact_value(tail_line, redaction_values)
-        message = f"{message_prefix}{redacted_tail}"
-        if len(message) > 1024:
-            # Preserve prefix and tail of the redacted line to capture failure context.
-            prefix_len = len(message_prefix)
-            available = 1021 - prefix_len
-            if available > 100:
-                head_chunk = available // 4
-                tail_chunk = available - head_chunk
-                message = (
-                    f"{message_prefix}{redacted_tail[:head_chunk]}..."
-                    f"{redacted_tail[-tail_chunk:]}"
-                )
-            else:
-                message = f"{message[:1021]}..."
+        message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
+        message = _redact_value(message, redaction_values)
+        message = _truncate_error_message(message)
+        raise RuntimeError(message)
     else:
         message = f"command failed ({result.returncode}): {command_hint}"
         message = _redact_value(message, redaction_values)
-    raise RuntimeError(message)
-
-    raise RuntimeError(
-        _redact_value(
-            f"command failed ({result.returncode}): {command_hint}", redaction_values
-        )
-    )
+        raise RuntimeError(message)
 
 
 def _verify_speckit_cli(

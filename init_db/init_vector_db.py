@@ -41,6 +41,13 @@ if __name__ == "__main__":
         logger.info("Building embedding model...")
         try:
 
+            def _get_configured_api_key(provider: str) -> str | None:
+                if provider == "google":
+                    return settings.google.google_api_key
+                if provider == "openai":
+                    return settings.openai.openai_api_key
+                return None
+
             async def _get_api_key(provider: str):
                 async with get_async_session_context() as db_session:
                     async with get_user_manager_context(db_session) as user_manager:
@@ -56,7 +63,14 @@ if __name__ == "__main__":
             )
             key_to_use = None
             if provider in ["google", "openai"]:
-                key_to_use = asyncio.run(_get_api_key(provider))
+                key_to_use = _get_configured_api_key(provider)
+                if not key_to_use:
+                    try:
+                        key_to_use = asyncio.run(_get_api_key(provider))
+                    except Exception as exc:
+                        logger.warning(
+                            f"DB lookup for {provider} API key failed: {exc}"
+                        )
 
             if provider == "google":
                 embed_model, embed_dimensions = build_embed_model(

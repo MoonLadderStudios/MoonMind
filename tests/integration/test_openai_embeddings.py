@@ -1,8 +1,18 @@
+import sys
+from pathlib import Path
+
 import os
 
 import pytest
 
 from moonmind.config.settings import settings
+
+
+def _avoid_local_workflows_package_shadowing() -> None:
+    """Remove `<repo>/moonmind` from sys.path to avoid `workflows` shadowing."""
+    moonmind_src_path = str(Path(__file__).resolve().parents[2] / "moonmind")
+    while moonmind_src_path in sys.path:
+        sys.path.remove(moonmind_src_path)
 
 
 def _resolve_openai_api_key() -> str | None:
@@ -15,6 +25,7 @@ def test_openai_embeddings_generation(monkeypatch):
     if not api_key:
         pytest.skip("OPENAI_API_KEY is not set.")
 
+    _avoid_local_workflows_package_shadowing()
     from moonmind.factories.embed_model_factory import build_embed_model
 
     monkeypatch.setattr(settings, "default_embedding_provider", "openai", raising=False)
@@ -41,4 +52,7 @@ def test_openai_embeddings_generation(monkeypatch):
     from llama_index.embeddings.openai import OpenAIEmbedding
 
     assert isinstance(embed_model, OpenAIEmbedding)
-    assert embed_model.model_name == "text-embedding-3-small"
+    assert (
+        getattr(embed_model, "model", None) == "text-embedding-3-small"
+        or getattr(embed_model, "model_name", None) == "text-embedding-3-small"
+    )
