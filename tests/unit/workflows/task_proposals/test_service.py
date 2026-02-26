@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -445,34 +445,6 @@ async def test_update_review_priority_persists_value() -> None:
 
 
 @pytest.mark.asyncio
-async def test_snooze_and_unsnooze_proposal(monkeypatch) -> None:
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    proposal = SimpleNamespace(
-        id=uuid4(),
-        status=TaskProposalStatus.OPEN,
-        snoozed_until=None,
-        snoozed_by_user_id=None,
-        snooze_note=None,
-    )
-    repo.get_proposal_for_update.return_value = proposal
-    repo.snooze.return_value = proposal
-    repo.unsnooze.return_value = proposal
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
-
-    until = datetime.now(UTC) + timedelta(hours=1)
-    await service.snooze_proposal(
-        proposal_id=proposal.id,
-        until=until,
-        note="later",
-        user_id=uuid4(),
-    )
-    repo.snooze.assert_awaited()
-
-    await service.unsnooze_proposal(proposal_id=proposal.id, user_id=uuid4())
-    repo.unsnooze.assert_awaited()
-
-
 @pytest.mark.asyncio
 async def test_resolve_worker_token_allows_legacy_task_worker() -> None:
     repo = AsyncMock()

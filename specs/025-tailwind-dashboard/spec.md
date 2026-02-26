@@ -39,7 +39,7 @@ Front-end maintainers should be able to adjust brand colors, gradients, and stat
 
 ### User Story 3 - Build + docs alignment (Priority: P2)
 
-Engineering enablement teams need the implementation to match the guidance in `docs/TailwindStyleSystem.md`, including purple/cyan/pink gradients and status color mappings so later phases can build on a consistent baseline.
+Engineering enablement teams need the implementation to match the guidance in `docs/TaskDashboardStyleSystem.md`, including purple/cyan/pink gradients and status color mappings so later phases can build on a consistent baseline.
 
 **Why this priority**: Documentation loses credibility if the live dashboard diverges; keeping doc + assets in sync unblocks downstream Tailwind phases.
 

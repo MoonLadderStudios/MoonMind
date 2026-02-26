@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 from contextlib import suppress
@@ -15,6 +16,7 @@ import pytest
 
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
+    CodexExecHandler,
     CommandCancelledError,
     CommandResult,
     WorkerExecutionResult,
@@ -289,7 +291,7 @@ class FakeHandler:
         del cwd, check, env, redaction_values, cancel_event, output_chunk_callback
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"$ {' '.join(command)}\n")
+            handle.write(f"[command] $ {' '.join(command)}\n")
         return CommandResult(tuple(command), 0, "", "")
 
 
@@ -325,6 +327,130 @@ class CumulativeStepLogHandler(FakeHandler):
             error_message=None,
             artifacts=(ArtifactUpload(path=log_path, name="logs/codex_exec.log"),),
         )
+
+
+def _build_execute_stage_payloads() -> tuple[dict[str, object], dict[str, object]]:
+    """Return minimal payloads for direct execute-stage tests."""
+
+    canonical_payload: dict[str, object] = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex",
+        "task": {
+            "instructions": "run",
+            "skill": {"id": "auto", "args": {}},
+            "runtime": {"mode": "codex"},
+            "publish": {"mode": "none"},
+        },
+    }
+    source_payload: dict[str, object] = {"workdirMode": "reuse"}
+    return canonical_payload, source_payload
+
+
+def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWorkspace:
+    """Create a minimal prepared workspace for direct execute-stage invocation."""
+
+    job_root = tmp_path / str(job_id)
+    repo_dir = job_root / "repo"
+    artifacts_dir = job_root / "artifacts"
+    logs_dir = artifacts_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    return PreparedTaskWorkspace(
+        job_root=job_root,
+        repo_dir=repo_dir,
+        artifacts_dir=artifacts_dir,
+        prepare_log_path=logs_dir / "prepare.log",
+        execute_log_path=logs_dir / "execute.log",
+        publish_log_path=logs_dir / "publish.log",
+        task_context_path=artifacts_dir / "task_context.json",
+        publish_result_path=artifacts_dir / "publish_result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="main",
+        workdir_mode="reuse",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+
+def _build_resolved_step(
+    *, step_index: int, step_id: str, instructions: str
+) -> ResolvedTaskStep:
+    """Construct one execute-stage step definition."""
+
+    return ResolvedTaskStep(
+        step_index=step_index,
+        step_id=step_id,
+        title=None,
+        instructions=instructions,
+        effective_skill_id="auto",
+        effective_skill_args={},
+        has_step_instructions=True,
+    )
+
+
+class StreamingReplayStepHandler(FakeHandler):
+    """Handler stub that streams Codex-like replay chunks through real dedupe logic."""
+
+    def __init__(self, *, workdir_root: Path) -> None:
+        super().__init__(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        )
+        self._workdir_root = workdir_root
+        self._streaming_handler = CodexExecHandler(workdir_root=workdir_root)
+
+    async def handle(
+        self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
+    ):
+        del cancel_event
+        self.calls.append("codex_exec")
+        self.exec_payloads.append(dict(payload))
+        log_path = self._workdir_root / str(job_id) / "artifacts" / "codex_exec.log"
+        await self._streaming_handler._run_command(
+            ["codex", "exec", "simulate"],
+            cwd=self._workdir_root,
+            log_path=log_path,
+            check=True,
+            output_chunk_callback=output_chunk_callback,
+            enable_replay_dedupe=True,
+        )
+        return WorkerExecutionResult(
+            succeeded=True,
+            summary="streamed step",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=log_path, name="logs/codex_exec.log"),),
+        )
+
+
+class _FakeStreamingReader:
+    def __init__(self, chunks: Sequence[str]) -> None:
+        self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+    async def read(self, _size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+class _FakeStreamingProcess:
+    def __init__(self, chunks: Sequence[str]) -> None:
+        self.returncode = 0
+        self.stdout = _FakeStreamingReader(chunks)
+        self.stderr = _FakeStreamingReader(())
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+        del input
+        return (b"", b"")
 
 
 async def test_run_once_returns_false_when_no_job() -> None:
@@ -1194,6 +1320,176 @@ async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
     assert "SESSION HEADER step-2" in step_two_text
 
 
+async def test_run_once_task_step_log_without_truncation_skips_companion_artifact(
+    tmp_path: Path,
+) -> None:
+    """Untruncated per-step log snapshots should not emit companion artifacts."""
+
+    step_log = tmp_path / "small-step.log"
+    step_log.write_text("step output\nall good\n", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=4096,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    full_step_log_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.gz"
+    )
+    linkage_metadata_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.metadata.json"
+    )
+
+    assert step_log_path.read_text(encoding="utf-8") == "step output\nall good\n"
+    assert not full_step_log_path.exists()
+    assert not linkage_metadata_path.exists()
+    assert "logs/steps/step-0000.full.log.gz" not in queue.uploaded
+    assert "logs/steps/step-0000.full.log.metadata.json" not in queue.uploaded
+
+
+async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
+    tmp_path: Path,
+) -> None:
+    """Truncated previews should emit a gzip full-fidelity companion and linkage."""
+
+    source_content = (
+        "prefix-line\n" * 200
+    ) + "ERROR: critical failure context that must be preserved\n"
+    source_step_log = tmp_path / "truncated-step.log"
+    source_step_log.write_text(source_content, encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(
+                ArtifactUpload(path=source_step_log, name="logs/codex_exec.log"),
+            ),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=320,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    full_step_log_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.gz"
+    )
+    linkage_metadata_path = (
+        tmp_path
+        / str(job.id)
+        / "artifacts"
+        / "logs"
+        / "steps"
+        / "step-0000.full.log.metadata.json"
+    )
+
+    preview = step_log_path.read_text(encoding="utf-8")
+    assert step_log_path.stat().st_size <= 320
+    assert "[moonmind] step log truncated" in preview
+    assert "[moonmind] step log linkage:" in preview
+    assert "logs/steps/step-0000.full.log.metadata.json" in preview
+
+    with gzip.open(full_step_log_path, "rb") as handle:
+        companion_content = handle.read().decode("utf-8")
+    assert companion_content == source_content
+
+    metadata = json.loads(linkage_metadata_path.read_text(encoding="utf-8"))
+    assert metadata["kind"] == "moonmind.stepLogLinkage"
+    assert metadata["truncated"] is True
+    assert metadata["previewArtifact"] == "logs/steps/step-0000.log"
+    assert metadata["fullArtifact"] == "logs/steps/step-0000.full.log.gz"
+    assert metadata["metadataArtifact"] == "logs/steps/step-0000.full.log.metadata.json"
+    assert metadata["sourceDeltaBytes"] == len(source_content.encode("utf-8"))
+    assert metadata["omittedBytes"] > 0
+
+    assert "logs/steps/step-0000.log" in queue.uploaded
+    assert "logs/steps/step-0000.full.log.gz" in queue.uploaded
+    assert "logs/steps/step-0000.full.log.metadata.json" in queue.uploaded
+
+
 async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
     tmp_path: Path,
 ) -> None:
@@ -1490,6 +1786,376 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     step2_text = step2_log_path.read_text(encoding="utf-8")
     assert step2_text == "step-2 output\n"
     assert "step-1 output" not in step2_text
+
+
+async def test_run_execute_stage_step_log_deltas_survive_worker_restart(
+    tmp_path: Path,
+) -> None:
+    """Restarted workers should keep per-step log boundaries from persisted offsets."""
+
+    job_id = uuid4()
+    step_one_segment = "== SESSION HEADER step-1 ==\nstep-one output\n"
+    step_two_segment = "== SESSION HEADER step-2 ==\nstep-two output\n"
+    queue = FakeQueueClient()
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    canonical_payload, source_payload = _build_execute_stage_payloads()
+
+    first_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_one_segment],
+        ),
+    )
+    first_result = await first_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=0,
+                step_id="step-1",
+                instructions="First",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert first_result.succeeded is True
+
+    second_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_two_segment],
+        ),
+    )
+    second_result = await second_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=1,
+                step_id="step-2",
+                instructions="Second",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert second_result.succeeded is True
+
+    step_one_log = (
+        tmp_path / str(job_id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step_two_log = (
+        tmp_path / str(job_id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    checkpoint_path = (
+        tmp_path / str(job_id) / "artifacts" / "state" / "step_log_offsets.json"
+    )
+    assert step_one_log.read_text(encoding="utf-8") == step_one_segment
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert step_two_text == step_two_segment
+    assert "SESSION HEADER step-1" not in step_two_text
+    assert checkpoint_path.exists()
+
+
+async def test_run_execute_stage_step_log_deltas_handle_source_truncation_on_resume(
+    tmp_path: Path,
+) -> None:
+    """Truncation before the next step should not duplicate prior step bytes."""
+
+    job_id = uuid4()
+    step_one_segment = "== SESSION HEADER step-1 ==\nalpha\n"
+    step_two_segment = "== SESSION HEADER step-2 ==\nbeta\n"
+    queue = FakeQueueClient()
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    canonical_payload, source_payload = _build_execute_stage_payloads()
+
+    first_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_one_segment],
+        ),
+    )
+    first_result = await first_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=0,
+                step_id="step-1",
+                instructions="First",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert first_result.succeeded is True
+
+    source_log = tmp_path / str(job_id) / "artifacts" / "codex_exec.log"
+    source_log.write_text("", encoding="utf-8")
+
+    second_worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=CumulativeStepLogHandler(
+            workdir_root=tmp_path,
+            segments=[step_two_segment],
+        ),
+    )
+    second_result = await second_worker._run_execute_stage(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        source_payload=source_payload,
+        runtime_mode="codex",
+        resolved_steps=(
+            _build_resolved_step(
+                step_index=1,
+                step_id="step-2",
+                instructions="Second",
+            ),
+        ),
+        prepared=prepared,
+    )
+    assert second_result.succeeded is True
+
+    step_two_log = (
+        tmp_path / str(job_id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert step_two_text == step_two_segment
+    assert "SESSION HEADER step-1" not in step_two_text
+    assert source_log.read_text(encoding="utf-8") == step_two_segment
+
+
+async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_turn_repeats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Execute-stage artifacts should dedupe replay chunks without collapsing distinct turns."""
+
+    completion_block = (
+        "Implemented execute-stage duplicate-output regression coverage.\n"
+        "**Completion Summary**\n"
+        "- Added worker-level replay regression assertions.\n"
+    )
+    test_summary_block = (
+        "**Test Summary**\n"
+        "- Ran required unit test script: `./tools/test_unit.sh`\n"
+        "- Result: `802 passed, 8 subtests passed`.\n"
+    )
+    repeated_turn_line = "- Final answer status: tests already green.\n"
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeStreamingProcess(
+            (
+                "thinking\n",
+                completion_block,
+                test_summary_block,
+                completion_block,
+                test_summary_block,
+                "assistant\n",
+                repeated_turn_line,
+                "user\nPlease repeat the same status line exactly.\n",
+                repeated_turn_line,
+                "done\n",
+            )
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = StreamingReplayStepHandler(workdir_root=tmp_path)
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    codex_text = codex_log_path.read_text(encoding="utf-8")
+    step_text = step_log_path.read_text(encoding="utf-8")
+    for text in (codex_text, step_text):
+        assert (
+            text.count(
+                "Implemented execute-stage duplicate-output regression coverage."
+            )
+            == 1
+        )
+        assert text.count("Result: `802 passed, 8 subtests passed`.") == 1
+        assert text.count("Final answer status: tests already green.") == 2
+
+    stdout_event_text = "".join(
+        str(event["message"])
+        for event in queue.events
+        if event["payload"].get("kind") == "log"
+        and event["payload"].get("stream") == "stdout"
+    )
+    assert (
+        stdout_event_text.count(
+            "Implemented execute-stage duplicate-output regression coverage."
+        )
+        == 1
+    )
+    assert stdout_event_text.count("Result: `802 passed, 8 subtests passed`.") == 1
+    assert stdout_event_text.count("Final answer status: tests already green.") == 2
+
+
+def test_load_step_log_offsets_checkpoint_ignores_large_payload(
+    tmp_path: Path,
+) -> None:
+    """Oversized checkpoint payloads should be ignored instead of loaded into memory."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),  # type: ignore[arg-type]
+    )
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = worker._step_log_offsets_checkpoint_path(
+        artifacts_dir=artifacts_dir
+    )
+    checkpoint_path.write_text("x" * (70_000), encoding="utf-8")
+
+    assert worker._load_step_log_offsets_checkpoint(artifacts_dir=artifacts_dir) == {}
+
+
+def test_persist_step_log_offsets_checkpoint_safely_skips_symlinked_parent(
+    tmp_path: Path,
+) -> None:
+    """Checkpoint writes must avoid symlinked checkpoint state directories."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),  # type: ignore[arg-type]
+    )
+    artifacts_dir = tmp_path / "job" / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    state_target = tmp_path / "state-target"
+    state_target.mkdir(parents=True, exist_ok=True)
+    state_link = artifacts_dir / "state"
+    state_link.symlink_to(state_target)
+
+    worker._persist_step_log_offsets_checkpoint(
+        artifacts_dir=artifacts_dir,
+        step_log_offsets={"artifacts/source.log": {"offset": 1}},
+    )
+
+    assert not (state_target / "step_log_offsets.json").exists()
+
+
+def test_persist_step_log_offsets_checkpoint_handles_temp_path_directory(
+    tmp_path: Path,
+) -> None:
+    """Cleanup handling should tolerate a pre-existing temporary path directory."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),  # type: ignore[arg-type]
+    )
+
+    artifacts_dir = tmp_path / "job-2" / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = worker._step_log_offsets_checkpoint_path(
+        artifacts_dir=artifacts_dir
+    )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
+    temp_path.mkdir()
+    try:
+        worker._persist_step_log_offsets_checkpoint(
+            artifacts_dir=artifacts_dir,
+            step_log_offsets={"artifacts/source.log": {"offset": 1}},
+        )
+    finally:
+        assert temp_path.is_dir()
 
 
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
@@ -3633,6 +4299,170 @@ async def test_resolve_publish_text_override_preserves_non_empty_verbatim() -> N
     assert CodexWorker._resolve_publish_text_override(None) is None
 
 
+def test_parse_git_status_paths_collects_renamed_source_paths() -> None:
+    """Git status parser should include both sides of a rename or copy for safety."""
+
+    status_output = """
+R  moonmind/agents/codex_worker/worker.py -> docs/README.md
+R  \"src/legacy path.py\" -> \"legacy/src/archived.py\"
+ M \"docs -> handbook.md\"\n"""
+    paths = CodexWorker._parse_git_status_paths(status_output)
+    assert paths == (
+        "moonmind/agents/codex_worker/worker.py",
+        "docs/README.md",
+        "src/legacy path.py",
+        "legacy/src/archived.py",
+        "docs -> handbook.md",
+    )
+
+
+def test_is_source_code_change_path_preserves_dotfile_classes() -> None:
+    """Source-path classifier should keep dot-prefixed allowlist entries working."""
+
+    assert (
+        CodexWorker._is_source_code_change_path(".github/workflows/test.yml") is False
+    )
+    assert (
+        CodexWorker._is_source_code_change_path("./.github/workflows/test.yml") is False
+    )
+    assert (
+        CodexWorker._is_source_code_change_path(".specify/specs/overview.md") is False
+    )
+    assert CodexWorker._is_source_code_change_path(".gitignore") is False
+    assert (
+        CodexWorker._is_source_code_change_path(
+            "moonmind/agents/codex_worker/worker.py"
+        )
+        is True
+    )
+
+
+def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> None:
+    """Only `verificationSkipReason.category`/`reason` should be accepted."""
+
+    assert CodexWorker._resolve_publish_verification_skip_reason(
+        {
+            "verificationSkipReason": {
+                "category": "ops",
+                "reason": "scheduled maintenance",
+            }
+        }
+    ) == {"category": "ops", "reason": "scheduled maintenance"}
+
+    with pytest.raises(ValueError, match="task.publish.verificationSkipReason.reason"):
+        CodexWorker._resolve_publish_verification_skip_reason(
+            {
+                "verificationSkipReason": {
+                    "category": "ops",
+                    "detail": "temporary issue",
+                }
+            }
+        )
+
+    with pytest.raises(
+        ValueError, match="task.publish.verificationSkipReason.category"
+    ):
+        CodexWorker._resolve_publish_verification_skip_reason(
+            {
+                "verificationSkipReason": {
+                    "type": "ops",
+                    "details": "temporary issue",
+                }
+            }
+        )
+
+    with pytest.raises(ValueError, match="task.publish.verification.skipReason"):
+        CodexWorker._resolve_publish_verification_skip_reason(
+            {"verification": {"skipReason": {"category": "ops", "reason": "legacy"}}}
+        )
+
+
+def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
+    tmp_path: Path,
+) -> None:
+    """Evidence collection should ignore plain `$`-prefixed output text."""
+
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path,
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.execute_log_path.write_text(
+        "$ pytest\n" "[command] $ ./tools/test_unit.sh\n" "[command] $ npm run build\n",
+        encoding="utf-8",
+    )
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
+    assert len(evidence) == 2
+    assert len(read_errors) == 0
+    assert evidence[0]["command"] == "./tools/test_unit.sh"
+    assert evidence[1]["command"] == "npm run build"
+
+
+def test_collect_verification_evidence_records_log_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unreadable verification logs should surface errors while preserving other evidence."""
+
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path,
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    (prepared.artifacts_dir / "logs").mkdir(exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\n", encoding="utf-8"
+    )
+    readable_log_path = prepared.artifacts_dir / "logs" / "codex_exec.log"
+    readable_log_path.write_text("[command] $ npm run build\n", encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def _raise_read_text(self, encoding=None, errors=None):
+        if self == prepared.execute_log_path:
+            raise OSError("permission denied")
+        return original_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", _raise_read_text)
+
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
+    assert len(evidence) == 1
+    assert evidence[0]["command"] == "npm run build"
+    assert len(read_errors) == 1
+    assert (
+        read_errors[0]
+        == "could not read one or more verification logs; check worker logs for details"
+    )
+
+
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3708,6 +4538,10 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     )
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
 
     commit_override = "  commit title with preserved spaces  "
     pr_title_override = "  PR title with preserved spaces  "
@@ -3749,6 +4583,389 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     assert pr_command[pr_command.index("--title") + 1] == pr_title_override
     assert pr_command[pr_command.index("--body") + 1] == pr_body_override
     assert pr_call["redaction_values"] == (pr_title_override, pr_body_override)
+    assert any(
+        artifact.name == "reports/publish_preflight.json"
+        for artifact in staged_artifacts
+    )
+
+
+async def test_run_publish_stage_fails_without_verification_evidence_for_source_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Source-code changes should block publish without verification evidence/skip reason."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(
+                tuple(command),
+                0,
+                " M moonmind/agents/codex_worker/worker.py\n",
+                "",
+            )
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    with pytest.raises(RuntimeError, match="publish preflight failed"):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={"task": {"publish": {"mode": "branch"}}},
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=staged_artifacts,
+        )
+
+    preflight_path = prepared.artifacts_dir / "reports" / "publish_preflight.json"
+    assert preflight_path.exists()
+    preflight_payload = json.loads(preflight_path.read_text(encoding="utf-8"))
+    assert preflight_payload["status"] == "FAIL"
+    assert preflight_payload["verification"]["required"] is True
+    assert preflight_payload["verification"]["evidenceCount"] == 0
+    assert preflight_payload["verification"]["skipReason"] is None
+    assert any(
+        artifact.name == "reports/publish_preflight.json"
+        for artifact in staged_artifacts
+    )
+    assert any(artifact.name == "logs/publish.log" for artifact in staged_artifacts)
+    assert any(artifact.name == "publish_result.json" for artifact in staged_artifacts)
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["verification"]["status"] == "failed"
+    assert (
+        "publish preflight failed: source-code changes detected"
+        in publish_payload["reason"]
+    )
+
+
+async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No-change publish path should report verification as not run without a preflight artifact."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(tuple(command), 0, "", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={"task": {"publish": {"mode": "branch"}}},
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert publish_note == "publish skipped: no local changes"
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["verification"]["status"] == "not_required"
+    assert "evidenceArtifact" not in publish_payload["verification"]
+    assert any(artifact.name == "logs/publish.log" for artifact in staged_artifacts)
+
+
+async def test_run_publish_stage_fails_for_renamed_source_change_without_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Renamed source paths should still be checked for verification evidence."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(
+                tuple(command),
+                0,
+                "R  moonmind/agents/codex_worker/worker.py -> docs/README.md\n",
+                "",
+            )
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    with pytest.raises(RuntimeError, match="publish preflight failed"):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={"task": {"publish": {"mode": "branch"}}},
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=staged_artifacts,
+        )
+
+
+async def test_run_publish_stage_allows_structured_verification_skip_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured skip reason should allow publish and propagate into PR body/artifacts."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(
+                command_tuple,
+                0,
+                " M moonmind/agents/codex_worker/worker.py\n",
+                "",
+            )
+        if command_tuple[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                command_tuple,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/777\n",
+                "",
+            )
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={
+            "task": {
+                "runtime": {"mode": "codex"},
+                "publish": {
+                    "mode": "pr",
+                    "verificationSkipReason": {
+                        "category": "infra_unavailable",
+                        "reason": "CI runner was unavailable during this queue window.",
+                        "ticket": "OPS-1234",
+                    },
+                },
+            }
+        },
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert publish_note is not None
+    assert "verification skipped (infra_unavailable)" in publish_note
+    pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
+    pr_body = pr_call[pr_call.index("--body") + 1]
+    assert "## Verification" in pr_body
+    assert "Category: infra_unavailable" in pr_body
+    assert "Reason: CI runner was unavailable during this queue window." in pr_body
+    assert "Ticket: OPS-1234" in pr_body
+
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["verification"]["status"] == "skipped"
+    assert (
+        publish_payload["verification"]["skipReason"]["category"] == "infra_unavailable"
+    )
+    assert any(
+        artifact.name == "reports/publish_preflight.json"
+        for artifact in staged_artifacts
+    )
 
 
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(

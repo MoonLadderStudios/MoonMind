@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
+from api_service.db.models import Base, User
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import (
     AgentJobOwnershipError,
@@ -113,6 +113,44 @@ async def test_claim_prioritizes_highest_priority_then_oldest(tmp_path):
     assert first.status is models.AgentJobStatus.RUNNING
     assert first.claimed_by == "worker-1"
     assert first.lease_expires_at is not None
+
+
+async def test_claim_blocks_second_running_job_for_same_worker_id(tmp_path):
+    """One worker id should not hold multiple concurrent running claims."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            first_job = await _create_job(repo, priority=10)
+            second_job = await _create_job(repo, priority=5)
+            await repo.commit()
+
+            first_claim = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=45,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+            blocked_claim = await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=45,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+            other_worker_claim = await repo.claim_job(
+                worker_id="worker-2",
+                lease_seconds=45,
+                worker_capabilities=["codex", "git"],
+            )
+            await repo.commit()
+
+    assert first_claim is not None
+    assert first_claim.id == first_job.id
+    assert blocked_claim is None
+    assert other_worker_claim is not None
+    assert other_worker_claim.id == second_job.id
 
 
 async def test_heartbeat_requires_owner_and_running_state(tmp_path):
@@ -223,6 +261,29 @@ async def test_pause_state_seed_and_update(tmp_path):
     assert updated.paused is True
     assert updated.mode is models.WorkerPauseMode.DRAIN
     assert updated.version == initial_version + 1
+
+
+async def test_user_exists_checks_user_table(tmp_path):
+    """Actor existence helper should match actual user rows."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            existing_user_id = uuid4()
+            session.add(
+                User(
+                    id=existing_user_id,
+                    email="operator@example.com",
+                    hashed_password=None,
+                    is_active=True,
+                    is_superuser=True,
+                    is_verified=True,
+                )
+            )
+            await repo.commit()
+
+            assert await repo.user_exists(existing_user_id) is True
+            assert await repo.user_exists(uuid4()) is False
 
 
 async def test_append_system_control_event_and_list(tmp_path):

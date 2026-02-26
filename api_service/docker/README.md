@@ -16,6 +16,8 @@ During the build the stage:
 
 The final runtime image copies only the produced binaries, supporting node modules, and licenses from the builder. Python remains the only runtime dependency while both CLIs are available on the default `PATH` for Celery workers and FastAPI.
 
+The runtime stage also includes additional shell tooling required by bootstrap and diagnostics workflows, including `rg` (`ripgrep`) so Codex preflight and maintenance shells can perform reliable search checks without ad-hoc runtime installs.
+
 ### Updating Versions
 
 Override the defaults when building an image:

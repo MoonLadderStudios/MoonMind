@@ -34,9 +34,9 @@
 ### Implementation for User Story 1
 
 - [X] T009 [US1] Replace the `:root` section in `dashboard.tailwind.css` with the documented `--mm-*` RGB tokens (bg, panel, ink, muted, border, accent family, status, shadow).
-- [X] T010 [US1] Update `body` background gradients in `dashboard.tailwind.css` to the purple/cyan/pink radial stack described in `docs/TailwindStyleSystem.md`.
+- [X] T010 [US1] Update `body` background gradients in `dashboard.tailwind.css` to the purple/cyan/pink radial stack described in `docs/TaskDashboardStyleSystem.md`.
 - [X] T011 [US1] Regenerate `api_service/static/task_dashboard/dashboard.css` via `npm run dashboard:css:min` and verify diffs only reflect token + gradient changes.
-- [ ] T012 [US1] Store before/after screenshots under `docs/assets/task_dashboard/phase2/` and link them from `docs/TailwindStyleSystem.md` to prove readability post-migration.
+- [ ] T012 [US1] Store before/after screenshots under `docs/assets/task_dashboard/phase2/` and link them from `docs/TaskDashboardStyleSystem.md` to prove readability post-migration.
 
 ---
 
@@ -59,11 +59,11 @@
 
 **Goal**: Keep the canonical documentation and validation steps in sync with the implemented palette to support future Tailwind phases.
 
-**Independent Test**: Comparing `docs/TailwindStyleSystem.md` values with the final CSS tokens shows exact matches; quickstart instructions describe the actual commands used.
+**Independent Test**: Comparing `docs/TaskDashboardStyleSystem.md` values with the final CSS tokens shows exact matches; quickstart instructions describe the actual commands used.
 
 ### Implementation for User Story 3
 
-- [X] T017 [US3] Update `docs/TailwindStyleSystem.md` with the final token table, gradient settings, and links to the new screenshot assets.
+- [X] T017 [US3] Update `docs/TaskDashboardStyleSystem.md` with the final token table, gradient settings, and links to the new screenshot assets.
 - [X] T018 [US3] Refresh `quickstart.md` within the spec folder to include the precise build/test steps executed after tokenization (done in Phase 1/2, verify nothing drifted).
 - [X] T019 [US3] Add a Phase 2 release note section to `docs/TaskUiArchitecture.md` (or the repo changelog) summarizing the purple rebrand for stakeholders.
 
@@ -75,8 +75,8 @@
 
 - [X] T020 Run `npm run dashboard:css:min` followed by `git diff --stat api_service/static/task_dashboard/dashboard.css` to ensure deterministic output.
 - [X] T021 Execute `./tools/test_unit.sh` to protect FastAPI router/template integrations.
-- [X] T022 [P] Perform manual visual QA across Chromium + Firefox and append contrast notes to `docs/TailwindStyleSystem.md#Validation Checklist`.
-- [X] T023 Add Phase 2 troubleshooting insights to `docs/TailwindStyleSystem.md#15` based on any issues hit during implementation.
+- [X] T022 [P] Perform manual visual QA across Chromium + Firefox and append contrast notes to `docs/TaskDashboardStyleSystem.md#Validation Checklist`.
+- [X] T023 Add Phase 2 troubleshooting insights to `docs/TaskDashboardStyleSystem.md#15` based on any issues hit during implementation.
 - [X] T024 Draft the final PR summary + checklist in `specs/025-tailwind-dashboard/pr-summary.md`, referencing screenshots, tests, and doc alignment.
 
 ---

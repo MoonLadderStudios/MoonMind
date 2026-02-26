@@ -24,13 +24,38 @@ def test_run_preflight_missing_codex_raises(monkeypatch) -> None:
         cli.run_preflight()
 
 
+def test_run_preflight_missing_rg_raises_clear_diagnostic(monkeypatch) -> None:
+    """Codex-capable startup should fail fast with one rg diagnostic."""
+
+    calls: list[list[str]] = []
+
+    def fake_verify(name: str) -> str:
+        if name == "rg":
+            raise CliVerificationError("The 'rg' CLI is not available on PATH.")
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="Codex runtime requires ripgrep"):
+        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+
+    assert calls == []
+
+
 def test_run_preflight_login_failure_raises(monkeypatch) -> None:
     """Preflight should fail when `codex login status` exits non-zero."""
 
     monkeypatch.setattr(
         cli,
         "verify_cli_is_executable",
-        lambda _name: "/usr/bin/codex",
+        lambda name: f"/usr/bin/{name}",
     )
 
     def fake_run(command, *args, **kwargs):
@@ -39,6 +64,13 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
                 args=command,
                 returncode=0,
                 stdout="speckit 0.4.0",
+                stderr="",
+            )
+        if command == ["/usr/bin/rg", "--version"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="ripgrep 14.0.0",
                 stderr="",
             )
         return subprocess.CompletedProcess(
@@ -80,8 +112,9 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     )
 
     assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
-    assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
-    assert calls[2][0] == [
+    assert calls[1] == (["/usr/bin/rg", "--version"], None, None)
+    assert calls[2] == (["/usr/bin/codex", "login", "status"], None, None)
+    assert calls[3][0] == [
         "/usr/bin/gh",
         "auth",
         "login",
@@ -89,25 +122,25 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         "github.com",
         "--with-token",
     ]
-    assert calls[2][1] == "ghp-test-token"
-    assert calls[2][2] is not None
-    assert calls[2][2].get("MOONMIND_TEST_ENV") == "preserved"
-    assert "GITHUB_TOKEN" not in calls[2][2]
-    assert "GH_TOKEN" not in calls[2][2]
-    assert calls[3][0] == ["/usr/bin/gh", "auth", "setup-git"]
-    assert calls[3][1] is None
+    assert calls[3][1] == "ghp-test-token"
     assert calls[3][2] is not None
     assert calls[3][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[3][2]
     assert "GH_TOKEN" not in calls[3][2]
-    assert calls[4][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
+    assert calls[4][0] == ["/usr/bin/gh", "auth", "setup-git"]
     assert calls[4][1] is None
     assert calls[4][2] is not None
     assert calls[4][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[4][2]
     assert "GH_TOKEN" not in calls[4][2]
+    assert calls[5][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
+    assert calls[5][1] is None
+    assert calls[5][2] is not None
+    assert calls[5][2].get("MOONMIND_TEST_ENV") == "preserved"
+    assert "GITHUB_TOKEN" not in calls[5][2]
+    assert "GH_TOKEN" not in calls[5][2]
 
-    for idx in (2, 3, 4):
+    for idx in (3, 4, 5):
         env = calls[idx][2]
         assert env is not None
         assert "PATH" in env
@@ -136,9 +169,10 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
 
     cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
-    assert verifications == ["codex", "speckit"]
+    assert verifications == ["codex", "rg", "speckit"]
     assert calls == [
         ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
     ]
 
@@ -172,8 +206,11 @@ def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -
         }
     )
 
-    assert verifications == ["codex"]
-    assert calls == [["/usr/bin/codex", "login", "status"]]
+    assert verifications == ["codex", "rg"]
+    assert calls == [
+        ["/usr/bin/rg", "--version"],
+        ["/usr/bin/codex", "login", "status"],
+    ]
 
 
 def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
@@ -205,8 +242,11 @@ def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
         }
     )
 
-    assert verifications == ["codex"]
-    assert calls == [["/usr/bin/codex", "login", "status"]]
+    assert verifications == ["codex", "rg"]
+    assert calls == [
+        ["/usr/bin/rg", "--version"],
+        ["/usr/bin/codex", "login", "status"],
+    ]
 
 
 def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
@@ -236,8 +276,11 @@ def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
         }
     )
 
-    assert verifications == ["codex"]
-    assert calls == [["/usr/bin/codex", "login", "status"]]
+    assert verifications == ["codex", "rg"]
+    assert calls == [
+        ["/usr/bin/rg", "--version"],
+        ["/usr/bin/codex", "login", "status"],
+    ]
 
 
 def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None:
@@ -332,6 +375,81 @@ def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
     assert observed_env["MM_NEW_VAR"] == "new"
 
 
+def test_run_checked_command_error_message_includes_return_code_and_tail(
+    monkeypatch,
+) -> None:
+    """Failed command diagnostics should expose return code and last stderr line."""
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=2,
+            stdout="ignored stdout\n",
+            stderr="warn: step 1\nfatal: bad request\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(
+        RuntimeError, match=r"command failed \(2\): /usr/bin/codex login"
+    ) as exc_info:
+        cli._run_checked_command(["/usr/bin/codex", "login", "status"])
+
+    message = str(exc_info.value)
+    assert "warn: step 1" not in message
+    assert "fatal: bad request" in message
+
+
+def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
+    """Tokenized output should be redacted before truncating diagnostic text."""
+
+    token = "ghp-redact-boundary-token-012345"
+    detail = "x" * 900 + token + "tail"
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=99,
+            stdout="",
+            stderr=detail,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._run_checked_command(["codex", "login"], redaction_values=(token,))
+
+    message = str(exc_info.value)
+    assert token[:16] not in message
+    assert "[REDACTED]" in message
+    assert len(message) <= 1024
+
+
+def test_run_checked_command_error_message_without_detail_uses_compact_hint(
+    monkeypatch,
+) -> None:
+    """Failure without command output should still include compact command hint."""
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=7,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"command failed \(7\): codex exec",
+    ) as exc_info:
+        cli._run_checked_command(["codex", "exec", "run now"])
+
+    message = str(exc_info.value)
+    assert "run now" not in message
+
+
 def test_run_preflight_missing_speckit_raises(monkeypatch) -> None:
     """Preflight should fail when speckit binary is unavailable."""
 
@@ -377,9 +495,10 @@ def test_run_preflight_speckit_version_fallback_to_help(monkeypatch) -> None:
 
     cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
-    assert calls[:3] == [
+    assert calls[:4] == [
         ["/usr/bin/speckit", "--version"],
         ["/usr/bin/speckit", "--help"],
+        ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
     ]
 
@@ -540,9 +659,10 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
         }
     )
 
-    assert verifications == ["codex", "gemini", "speckit"]
+    assert verifications == ["codex", "gemini", "rg", "speckit"]
     assert calls == [
         ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
         ["/usr/bin/gemini", "--version"],
     ]
@@ -615,9 +735,10 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
         }
     )
 
-    assert verifications == ["codex", "gemini", "claude", "speckit"]
+    assert verifications == ["codex", "gemini", "claude", "rg", "speckit"]
     assert calls == [
         ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
         ["/usr/bin/gemini", "--version"],
         ["/usr/bin/claude", "--version"],

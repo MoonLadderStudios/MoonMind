@@ -25,8 +25,7 @@ Run Workflow with umbrella-015 aligned defaults:
 ## 1) One-time Codex auth for worker volume
 
 ```bash
-docker compose run --rm celery_codex_worker \
-  bash -lc 'codex login --device-auth && codex login status'
+./tools/auth-codex-volume.sh
 ```
 
 ## 2) Start runtime services
