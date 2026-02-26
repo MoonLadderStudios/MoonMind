@@ -12,7 +12,7 @@ const baseQueueRow = Object.freeze({
   createdAt: "2026-02-23T12:00:00Z",
   startedAt: "2026-02-23T12:05:00Z",
   finishedAt: null,
-  link: "/tasks/queue/job-123",
+  link: "/tasks/job-123?source=queue",
 });
 
 const baseOrchestratorRow = Object.freeze({
@@ -27,7 +27,7 @@ const baseOrchestratorRow = Object.freeze({
   createdAt: "2026-02-23T12:00:00Z",
   startedAt: null,
   finishedAt: null,
-  link: "/tasks/orchestrator/run-789",
+  link: "/tasks/run-789?source=orchestrator",
 });
 
 function createQueueRow(overrides = {}) {

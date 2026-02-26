@@ -103,7 +103,9 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         == "/api/recurring-tasks/{id}/runs?limit=200"
     )
     assert "speckit" not in config["sources"]
-    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/runs/{id}"
+    assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
+    assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
+    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")
