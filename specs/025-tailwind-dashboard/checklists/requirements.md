@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Specification references `docs/TailwindStyleSystem.md` for palette authority and assumes Phase 1 build tooling already exists per doc.
+- Specification references `docs/TaskDashboardStyleSystem.md` for palette authority and assumes Phase 1 build tooling already exists per doc.

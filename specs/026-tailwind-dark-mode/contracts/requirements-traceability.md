@@ -13,7 +13,7 @@
 | `DOC-REQ-007` dark readability for table/form/live output | `FR-007`, `FR-011` | `T020` | `T023`, `T024`, `T026` | `api_service/static/task_dashboard/dashboard.tailwind.css`, `tests/task_dashboard/test_theme_runtime.js` |
 | `DOC-REQ-008` accent hierarchy (purple-primary, restrained warm highlights) | `FR-008`, `FR-011` | `T021` | `T024`, `T026` | `api_service/static/task_dashboard/dashboard.tailwind.css`, `tests/task_dashboard/test_theme_runtime.js` |
 | `DOC-REQ-009` token-driven semantic adaptation | `FR-001`, `FR-009` | `T006`, `T020`, `T021` | `T023`, `T026` | `api_service/static/task_dashboard/dashboard.tailwind.css`, `api_service/static/task_dashboard/dashboard.js` |
-| `DOC-REQ-010` Phase 3 deliverable completeness | `FR-003`, `FR-005`, `FR-010`, `FR-011` | `T004`, `T005`, `T006`, `T010`, `T011`, `T015`, `T020`, `T021`, `T022` | `T009`, `T014`, `T018`, `T019`, `T024`, `T026`, `T027` | `specs/026-tailwind-dark-mode/quickstart.md`, `docs/TailwindStyleSystem.md` |
+| `DOC-REQ-010` Phase 3 deliverable completeness | `FR-003`, `FR-005`, `FR-010`, `FR-011` | `T004`, `T005`, `T006`, `T010`, `T011`, `T015`, `T020`, `T021`, `T022` | `T009`, `T014`, `T018`, `T019`, `T024`, `T026`, `T027` | `specs/026-tailwind-dark-mode/quickstart.md`, `docs/TaskDashboardStyleSystem.md` |
 
 ## Validation Evidence (2026-02-19)
 
