@@ -121,7 +121,8 @@ A separate runbook will capture the exact commands; conceptually:
 
 1. **Create the volume** (e.g., `codex_auth_worker1`) and attach it to a temporary shell container using the same image as the Codex worker.
 2. **Run the Codex CLI login flow** inside that container so OAuth artifacts and `.codex/config.toml` are written into the volume.:contentReference[oaicite:30]{index=30}
-3. **Verify login** via the pre-flight check (Codex CLI status or the worker’s own health probe) before enabling the worker to accept jobs.:contentReference[oaicite:31]{index=31}
+3. **Verify login** via the pre-flight shell command `bash -lc 'codex login status'` so the container path and volume mapping are validated before enabling the worker to accept jobs.:contentReference[oaicite:31]{index=31}
+4. Ensure optional shell search tooling is present (`rg`) before maintenance commands that rely on it, so bootstrap routines fail with a clear pre-flight signal instead of noisy fallback behavior.
 
 Once the volume is authenticated, all future Codex runs executed by that worker group should complete without interactive re-authentication.:contentReference[oaicite:32]{index=32}
 
