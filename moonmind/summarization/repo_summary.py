@@ -9,6 +9,19 @@ import toml  # For pyproject.toml or other toml files
 
 logger = logging.getLogger(__name__)
 
+IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    ".vscode",
+    ".idea",
+}
+
 
 def summarize_repo_for_readme(
     repo_path: str,
@@ -105,18 +118,7 @@ def summarize_repo_for_readme(
                     tech_stack.append("JavaScript/TypeScript")
 
             elif os.path.isdir(item_path):
-                if item not in [
-                    ".git",
-                    ".hg",
-                    ".svn",
-                    "__pycache__",
-                    "node_modules",
-                    "target",
-                    "build",
-                    "dist",
-                    ".vscode",
-                    ".idea",
-                ]:  # common ignores
+                if item not in IGNORED_DIRS:
                     top_level_dirs.append(item)
 
         # Simple language detection if not provided
@@ -131,13 +133,15 @@ def summarize_repo_for_readme(
                 detected_language = max(lang_counts, key=lang_counts.get)
         logger.info(f"Detected main language: {detected_language}")
 
-        # TODO: Deeper scan for all_files_detail if necessary for more advanced analysis
-        # for root, dirs, files in os.walk(repo_path):
-        #     # Add filtering for common ignore patterns here too
-        #     dirs[:] = [d for d in dirs if d not in ['.git', '.hg', '.svn', '__pycache__', 'node_modules', 'target', 'build', 'dist', '.vscode', '.idea']]
-        #     for file in files:
-        #         # Add filtering for file extensions if needed
-        #         all_files_detail.append(os.path.join(root, file))
+        # Deeper scan for all_files_detail for more advanced analysis
+        for root, dirs, files in os.walk(repo_path):
+            # Filter directories in-place to prevent walking into ignored ones
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+
+            for file in files:
+                # Store relative paths for cleaner analysis and reporting
+                rel_path = os.path.relpath(os.path.join(root, file), repo_path)
+                all_files_detail.append(rel_path)
 
     except Exception as e:
         logger.exception(f"Error during repository analysis: {e}")
