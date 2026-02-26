@@ -5023,8 +5023,7 @@
           console.error("orchestrator submit failed", error);
           message.className = "notice error queue-submit-message";
           message.textContent =
-            "Failed to create orchestrator task: " +
-            String(error?.message || "request failed");
+            "Unable to create orchestrator task. Please try again or contact an administrator.";
           return;
         }
       }

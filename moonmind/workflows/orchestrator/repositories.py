@@ -16,6 +16,8 @@ from api_service.db import models as db_models
 from moonmind.schemas.workflow_models import OrchestratorTaskStepInputModel
 from moonmind.workflows.speckit_celery import models as workflow_models
 
+_TASK_STEP_FIELD_UNSET = object()
+
 
 def _to_enum(value: Any, enum_cls):
     """Coerce ``value`` into ``enum_cls`` preserving ``None``."""
@@ -204,8 +206,8 @@ class OrchestratorRepository:
         *,
         status: db_models.OrchestratorTaskStepStatus | str | None = None,
         message: str | None = None,
-        started_at: datetime | None = None,
-        finished_at: datetime | None = None,
+        started_at: datetime | None | object = _TASK_STEP_FIELD_UNSET,
+        finished_at: datetime | None | object = _TASK_STEP_FIELD_UNSET,
         attempt: int | None = None,
         artifact_refs: Sequence[str] | None = None,
     ) -> db_models.OrchestratorTaskStep:
@@ -215,9 +217,9 @@ class OrchestratorRepository:
             step.status = _to_enum(status, db_models.OrchestratorTaskStepStatus)
         if message is not None:
             step.message = message
-        if started_at is not None:
+        if started_at is not _TASK_STEP_FIELD_UNSET:
             step.started_at = started_at
-        if finished_at is not None:
+        if finished_at is not _TASK_STEP_FIELD_UNSET:
             step.finished_at = finished_at
         if attempt is not None:
             step.attempt = max(int(attempt), 1)

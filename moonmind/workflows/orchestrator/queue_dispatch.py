@@ -75,7 +75,6 @@ def build_orchestrator_task_queue_payload(
         raise ValueError("Orchestrator task payload must include at least one step")
     return {
         "taskId": str(task_id),
-        "runId": str(task_id),
         "steps": normalized_steps,
         "requiredCapabilities": ["orchestrator"],
     }

@@ -104,7 +104,7 @@ def _normalize_task_step_queue_payload(
     steps: Sequence[OrchestratorTaskStepInputModel],
 ) -> list[dict[str, object]]:
     payload_steps: list[dict[str, object]] = []
-    for step in steps:
+    for index, step in enumerate(steps):
         payload_steps.append(
             {
                 "stepId": step.id,
@@ -112,6 +112,8 @@ def _normalize_task_step_queue_payload(
                 "instructions": step.instructions,
                 "skillId": step.skill.id,
                 "skillArgs": dict(step.skill.args or {}),
+                "stepIndex": index,
+                "attempt": 1,
             }
         )
     return payload_steps
@@ -133,6 +135,8 @@ def _serialize_persisted_task_steps_for_queue(
                 "instructions": step.instructions,
                 "skillId": step.skill_id,
                 "skillArgs": dict(step.skill_args or {}),
+                "stepIndex": int(step.step_index),
+                "attempt": int(step.attempt or 1),
             }
         )
     return payload_steps

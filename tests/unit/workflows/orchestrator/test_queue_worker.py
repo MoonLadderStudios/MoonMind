@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
+
+import pytest
 
 from moonmind.workflows.agent_queue.job_types import (
     ORCHESTRATOR_RUN_JOB_TYPE,
@@ -14,7 +18,9 @@ from moonmind.workflows.orchestrator.queue_worker import (
     ClaimedJob,
     OrchestratorQueueWorker,
     QueueWorkerConfig,
+    TaskRuntimeStep,
 )
+from moonmind.workflows.orchestrator import queue_worker
 
 
 class _FakeQueueClient:
@@ -319,3 +325,157 @@ def test_process_task_job_completes_when_steps_succeed(monkeypatch) -> None:
         (job.id, f"orchestrator task {run_id} completed"),
     ]
     assert queue.fail_calls == []
+
+
+def test_parse_task_payload_requires_task_id() -> None:
+    payload = {
+        "steps": [
+            {
+                "stepId": "step-1",
+                "title": "Only step",
+                "instructions": "Run",
+                "skillId": "update-moonmind",
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="taskId is required"):
+        OrchestratorQueueWorker._parse_task_payload(payload)
+
+
+def test_parse_task_payload_rejects_runid_and_stepid_fallbacks() -> None:
+    run_id = str(uuid4())
+    with pytest.raises(ValueError, match="taskId is required"):
+        OrchestratorQueueWorker._parse_task_payload(
+            {
+                "runId": run_id,
+                "steps": [
+                    {
+                        "id": "legacy-step",
+                        "title": "legacy",
+                        "instructions": "Run",
+                        "skillId": "update-moonmind",
+                    }
+                ],
+            }
+        )
+
+    with pytest.raises(ValueError, match="stepId is required"):
+        OrchestratorQueueWorker._parse_task_payload(
+            {
+                "taskId": run_id,
+                "steps": [
+                    {
+                        "id": "legacy-step",
+                        "title": "legacy",
+                        "instructions": "Run",
+                        "skillId": "update-moonmind",
+                    }
+                ],
+            }
+        )
+
+
+def test_parse_task_payload_reads_attempt_and_step_index() -> None:
+    run_id = str(uuid4())
+    payload_task_id, steps = OrchestratorQueueWorker._parse_task_payload(
+        {
+            "taskId": run_id,
+            "steps": [
+                {
+                    "stepId": "step-1",
+                    "title": "Index check",
+                    "instructions": "Run",
+                    "skillId": "update-moonmind",
+                    "stepIndex": 4,
+                    "attempt": 3,
+                }
+            ],
+        }
+    )
+
+    assert str(payload_task_id) == run_id
+    assert len(steps) == 1
+    assert steps[0].step_index == 4
+    assert steps[0].attempt == 3
+
+
+def test_execute_task_runtime_step_uses_env_for_step_payload(monkeypatch) -> None:
+    task_id = uuid4()
+    step = TaskRuntimeStep(
+        step_id="step-1",
+        title="Step 1",
+        instructions="Use safe command",
+        skill_id="update-moonmind",
+        skill_args={"repo": "."},
+        step_index=2,
+        attempt=4,
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*command: object, **kwargs: object):
+        captured["command"] = list(command)
+        captured["env"] = dict(kwargs.get("env") or {})
+        del command
+
+        class FakeProcess:
+            returncode = 0
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return (b"task complete", b"")
+
+        return FakeProcess()
+
+    def fake_write_text(self, _run_id: UUID, path: str, text: str, **_kwargs: object):
+        captured["artifact_path"] = path
+        captured["artifact_text"] = text
+        return SimpleNamespace(path=path, size_bytes=len(text), checksum="checksum")
+
+    async def _noop_heartbeat(
+        _job_id: UUID,
+        stop_event: asyncio.Event,
+        _cancel_event: asyncio.Event,
+    ) -> None:
+        await stop_event.wait()
+
+    class _FakeSink:
+        async def record_task_status(self, **_kwargs) -> None:
+            return None
+
+        async def record_step_status(self, **_kwargs) -> None:
+            return None
+
+        async def record_artifact(self, **_kwargs) -> None:
+            return None
+
+        async def flush(self) -> None:
+            return None
+
+    queue = _FakeQueueClient()
+    worker = OrchestratorQueueWorker(config=_worker_config(), queue_client=queue)
+    worker._heartbeat_loop = _noop_heartbeat  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        queue_worker.asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    monkeypatch.setattr(queue_worker.ArtifactStorage, "write_text", fake_write_text)
+
+    asyncio.run(
+        worker._execute_task_runtime_step(
+            task_id=task_id,
+            step=step,
+            state_sink=_FakeSink(),
+        )
+    )
+
+    command = captured["command"]
+    assert command is not None
+    assert "--skill-args-json" not in command
+    context = json.loads(
+        str(captured["env"][queue_worker._TASK_STEP_EXECUTION_ENV])
+    )
+    assert context["skillArgs"] == {"repo": "."}
+    assert context["instructions"] == "Use safe command"
+    assert context["stepIndex"] == 2
+    assert context["attempt"] == 4
+    assert "idx2" in str(captured["artifact_path"])
+    assert "att4" in str(captured["artifact_path"])

@@ -266,6 +266,12 @@ class FallbackStateSink(OrchestratorStateSink):
                 return
             except Exception:
                 self._db_available = False
+        try:
+            await db_call()
+            self._db_available = True
+            return
+        except Exception:
+            self._db_available = False
         await fallback_call()
 
     async def record_task_status(

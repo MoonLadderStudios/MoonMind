@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 _SKILL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_TASK_EXECUTION_CONTEXT_ENV = "MOONMIND_ORCHESTRATOR_TASK_STEP_EXECUTION"
+_TASK_INSTRUCTIONS_ENV = "MOONMIND_ORCHESTRATOR_TASK_STEP_INSTRUCTIONS"
 
 
 def _resolve_workspace_root() -> Path:
@@ -205,16 +207,30 @@ def _resolve_skill_command(
     return (command, repo_path)
 
 
-def _parse_skill_args(raw: str) -> dict[str, Any]:
+def _parse_json_object(raw: str, *, source: str) -> dict[str, Any]:
     if not raw.strip():
         return {}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid --skill-args-json payload: {exc}") from exc
+        raise RuntimeError(f"Invalid {source} payload: {exc}") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("--skill-args-json must decode to a JSON object.")
+        raise RuntimeError(f"{source} must decode to a JSON object.")
     return parsed
+
+
+def _parse_skill_args(raw: str | None) -> dict[str, Any]:
+    return _parse_json_object(raw or "", source="--skill-args-json")
+
+
+def _resolve_step_execution_context() -> tuple[dict[str, Any], str]:
+    raw = os.getenv(_TASK_EXECUTION_CONTEXT_ENV) or ""
+    payload = _parse_json_object(raw, source="task-step execution context")
+    instructions_raw = payload.get("instructions")
+    instructions = (
+        str(instructions_raw) if isinstance(instructions_raw, str) else ""
+    ).strip()
+    return payload, instructions
 
 
 def _validate_skill_id(skill_id: str) -> str:
@@ -265,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skill-id", required=True, help="Skill identifier")
     parser.add_argument(
         "--skill-args-json",
-        default="{}",
+        default=None,
         help="Optional JSON object of skill arguments",
     )
     args = parser.parse_args(argv)
@@ -273,7 +289,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         normalized_skill_id = _validate_skill_id(args.skill_id)
         workspace_root = _resolve_workspace_root()
-        skill_args = _parse_skill_args(args.skill_args_json)
+        step_payload, step_instructions = _resolve_step_execution_context()
+        if args.skill_args_json is not None:
+            skill_args = _parse_skill_args(args.skill_args_json)
+        else:
+            skill_args_raw = step_payload.get("skillArgs")
+            skill_args = (
+                dict(skill_args_raw)
+                if isinstance(skill_args_raw, dict)
+                else {}
+            )
         skill_path = _resolve_skill_path(normalized_skill_id, workspace_root)
         repo_path = _resolve_repo_path(workspace_root, skill_args)
         script_path = _detect_script(skill_path, normalized_skill_id)
@@ -287,9 +312,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"skill-executor error: {exc}", file=sys.stderr)
         return 2
 
+    process_env = os.environ.copy()
+    if step_instructions:
+        process_env[_TASK_INSTRUCTIONS_ENV] = step_instructions
+
     process = subprocess.run(
         command,
         cwd=str(cwd),
+        env=process_env,
         text=True,
         capture_output=True,
         check=False,

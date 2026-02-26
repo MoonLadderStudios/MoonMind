@@ -38,6 +38,9 @@ from moonmind.workflows.orchestrator.tasks import _execute_plan_step_async
 logger = logging.getLogger(__name__)
 
 
+_TASK_STEP_EXECUTION_ENV = "MOONMIND_ORCHESTRATOR_TASK_STEP_EXECUTION"
+
+
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
 
@@ -51,6 +54,8 @@ class TaskRuntimeStep:
     instructions: str
     skill_id: str
     skill_args: dict[str, Any]
+    step_index: int
+    attempt: int
 
 
 def _utcnow() -> datetime:
@@ -79,7 +84,7 @@ def _skill_step_log_name(step: TaskRuntimeStep) -> str:
         char if char.isalnum() or char in {"-", "_", "."} else "-"
         for char in step.step_id
     ).strip("-")
-    return f"{safe_id or 'step'}.log"
+    return f"{safe_id or 'step'}-idx{step.step_index}-att{step.attempt}.log"
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,13 +696,23 @@ class OrchestratorQueueWorker:
             "moonmind.workflows.orchestrator.skill_executor",
             "--skill-id",
             step.skill_id,
-            "--skill-args-json",
-            json.dumps(step.skill_args or {}, sort_keys=True, separators=(",", ":")),
         ]
+        execution_env = os.environ.copy()
+        execution_env[_TASK_STEP_EXECUTION_ENV] = json.dumps(
+            {
+                "skillArgs": dict(step.skill_args),
+                "instructions": step.instructions,
+                "stepIndex": step.step_index,
+                "attempt": step.attempt,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=execution_env,
         )
         stdout_bytes, stderr_bytes = await process.communicate()
         stdout_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
@@ -819,7 +834,9 @@ class OrchestratorQueueWorker:
     def _parse_task_payload(
         payload: dict[str, Any],
     ) -> tuple[UUID, list[TaskRuntimeStep]]:
-        task_id_raw = payload.get("taskId") or payload.get("runId")
+        task_id_raw = payload.get("taskId")
+        if not task_id_raw:
+            raise ValueError("taskId is required")
         task_id = UUID(str(task_id_raw))
 
         steps_raw = payload.get("steps")
@@ -833,13 +850,15 @@ class OrchestratorQueueWorker:
             skill_node = item.get("skill")
             if not isinstance(skill_node, dict):
                 skill_node = {}
-            step_id = str(item.get("stepId") or item.get("id") or "").strip()
+            step_id = str(item.get("stepId") or "").strip()
             title = str(item.get("title") or "").strip() or f"Step {index + 1}"
             instructions = str(item.get("instructions") or "").strip()
             skill_id = (
                 str(item.get("skillId") or "").strip()
                 or str(skill_node.get("id") or "").strip()
             )
+            attempt_raw = item.get("attempt")
+            step_index_raw = item.get("stepIndex")
             skill_args_raw = item.get("skillArgs")
             if not isinstance(skill_args_raw, dict):
                 skill_args_raw = skill_node.get("args")
@@ -847,7 +866,30 @@ class OrchestratorQueueWorker:
                 dict(skill_args_raw) if isinstance(skill_args_raw, dict) else {}
             )
             if not step_id:
-                step_id = f"step-{index + 1}"
+                raise ValueError("stepId is required for task runtime steps")
+            try:
+                step_index = int(step_index_raw if step_index_raw is not None else index)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"step '{step_id}' stepIndex must be an integer"
+                ) from exc
+            if step_index < 0:
+                raise ValueError(
+                    f"step '{step_id}' stepIndex must be greater than or equal to 0"
+                )
+            if attempt_raw is None:
+                attempt = 1
+            else:
+                try:
+                    attempt = int(attempt_raw)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"step '{step_id}' attempt must be an integer"
+                    ) from exc
+                if attempt < 1:
+                    raise ValueError(
+                        f"step '{step_id}' attempt must be greater than or equal to 1"
+                    )
             if not instructions:
                 raise ValueError(f"step '{step_id}' instructions are required")
             if not skill_id:
@@ -859,6 +901,8 @@ class OrchestratorQueueWorker:
                     instructions=instructions,
                     skill_id=skill_id,
                     skill_args=skill_args,
+                    step_index=step_index,
+                    attempt=attempt,
                 )
             )
 
