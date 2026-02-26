@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-19
+Last Updated: 2026-02-26
 
 ## 1. Purpose
 
@@ -48,6 +48,7 @@ Queue status model:
 - `POST /api/queue/jobs`
 - `GET /api/queue/jobs`
 - `GET /api/queue/jobs/{jobId}`
+- `PUT /api/queue/jobs/{jobId}`
 - `POST /api/queue/jobs/claim`
 - `POST /api/queue/jobs/{jobId}/heartbeat`
 - `POST /api/queue/jobs/{jobId}/complete`
@@ -63,6 +64,13 @@ Queue status model:
 - `GET /api/queue/jobs/{jobId}/attachments/{attachmentId}/download`
 - `GET /api/queue/jobs/{jobId}/attachments/worker`
 - `GET /api/queue/jobs/{jobId}/attachments/{attachmentId}/download/worker`
+
+Queued task update endpoint notes:
+
+- `PUT /api/queue/jobs/{jobId}` updates eligible `type="task"` jobs in place.
+- Eligibility is restricted to queued jobs that have not started.
+- The update request mirrors create fields and may include `expectedUpdatedAt` for optimistic concurrency.
+- Successful updates append a `Job updated` queue event.
 
 ### 3.2 Task Preset Catalog REST
 

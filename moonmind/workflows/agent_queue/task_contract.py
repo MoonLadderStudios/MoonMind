@@ -1107,6 +1107,22 @@ def normalize_queue_job_payload(
     return source
 
 
+def has_attachment_mutation_fields(payload: Mapping[str, Any] | None) -> bool:
+    """Return ``True`` when payload includes unsupported attachment edit fields."""
+
+    source = payload if isinstance(payload, Mapping) else {}
+    forbidden = {"attachments", "attachmentIds", "attachment_ids"}
+    for key in forbidden:
+        if key in source:
+            return True
+    task_node = source.get("task")
+    if isinstance(task_node, Mapping):
+        for key in forbidden:
+            if key in task_node:
+                return True
+    return False
+
+
 def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     """Return ordered stage identifiers for canonical task execution."""
 
@@ -1131,5 +1147,6 @@ __all__ = [
     "TaskContractError",
     "build_task_stage_plan",
     "build_canonical_task_view",
+    "has_attachment_mutation_fields",
     "normalize_queue_job_payload",
 ]
