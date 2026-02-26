@@ -3390,9 +3390,7 @@ class CodexWorker:
                     encoding="utf-8", errors="replace"
                 ).splitlines()
             except OSError as exc:
-                error_message = (
-                    "could not read one or more verification logs; check worker logs for details"
-                )
+                error_message = "could not read one or more verification logs; check worker logs for details"
                 read_errors.append(error_message)
                 logger.warning(
                     "failed to collect verification evidence from stage log %s: %s",
