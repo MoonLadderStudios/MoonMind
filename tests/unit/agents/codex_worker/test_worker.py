@@ -687,6 +687,50 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     assert "ragCommand" not in rag_payload
 
 
+async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) -> None:
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "runtime": {
+                    "mode": "codex",
+                    "model": "gpt-5-codex",
+                    "effort": "high",
+                },
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    task_context = json.loads(task_context_path.read_text(encoding="utf-8"))
+    runtime_config = task_context["runtimeConfig"]
+    assert runtime_config["mode"] == "codex"
+    assert runtime_config["model"] == "gpt-5-codex"
+    assert runtime_config["effort"] == "high"
+
+
 async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     """Zero-byte artifacts should be skipped to avoid upload validation failures."""
 

@@ -2915,11 +2915,25 @@ class CodexWorker:
             workdir_mode = self._safe_workdir_mode(source_payload)
             task_node = canonical_payload.get("task")
             task = task_node if isinstance(task_node, Mapping) else {}
+            runtime_node = task.get("runtime")
+            runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
             git_node = task.get("git")
             git = git_node if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = publish_node if isinstance(publish_node, Mapping) else {}
             publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
+            runtime_mode = (
+                str(
+                    runtime.get("mode")
+                    or canonical_payload.get("targetRuntime")
+                    or "codex"
+                )
+                .strip()
+                .lower()
+                or "codex"
+            )
+            runtime_model = str(runtime.get("model") or "").strip() or None
+            runtime_effort = str(runtime.get("effort") or "").strip() or None
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -3015,6 +3029,11 @@ class CodexWorker:
             context_payload = {
                 "repository": repository,
                 "runtime": canonical_payload.get("targetRuntime"),
+                "runtimeConfig": {
+                    "mode": runtime_mode,
+                    "model": runtime_model,
+                    "effort": runtime_effort,
+                },
                 "skill": {
                     "id": (
                         deduped_selected_skills[0]
