@@ -27,6 +27,8 @@ from moonmind.config.settings import settings
 from moonmind.workflows.adapters import (
     CodexClient,
     CodexDiffResult,
+    CodexDiffNotReadyError,
+    CodexDiffRetrievalError,
     CodexSubmissionResult,
     GitHubClient,
     GitHubPublishResult,
@@ -965,13 +967,15 @@ async def _poll_for_codex_diff(
                 task_identifier=task_identifier,
                 task_summary=task_summary,
             )
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except CodexDiffNotReadyError as exc:
             last_error = exc
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     "Timed out while polling Codex for diff availability"
                 ) from exc
             await asyncio.sleep(poll_interval)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            raise CodexDiffRetrievalError(f"failed to poll for Codex diff: {exc}") from exc
 
     raise RuntimeError("Unexpected Codex polling exit") from last_error
 
