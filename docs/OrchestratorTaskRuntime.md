@@ -73,7 +73,7 @@ The orchestrator plan-step enum is fixed (`analyze/patch/build/restart/verify/ro
 * Response payloads:
 
   * For a transition period, return both `taskId` and `runId` fields (same UUID) in summaries/details.
-  * Internally the DB model/table may remain `orchestrator_runs` initially; this is a compatibility layer.
+  * Internally the DB tables will be aggressively migrated from `orchestrator_runs` to `orchestrator_tasks` to ensure terminology alignment across the stack.
 
 ### 5.2 Unified Dashboard UX (Remove Orchestrator Pages)
 
@@ -85,15 +85,17 @@ Current dashboard routes include `/tasks/orchestrator` and `/tasks/orchestrator/
 
 * Remove `/tasks/orchestrator` list route.
 * Remove `/tasks/orchestrator/:runId` detail route.
+* Remove `/tasks/queue` list route.
 * Replace with:
 
-  * `/tasks` = unified list (all tasks, not only “active”)
+  * `/tasks/list` = unified list (all tasks, not only “active” or queue-specific)
   * `/tasks/:taskId` = unified detail
 
 **Compatibility redirects**:
 
-* `/tasks/orchestrator` → `/tasks?filterRuntime=orchestrator` (client-side redirect)
+* `/tasks/orchestrator` → `/tasks/list?filterRuntime=orchestrator` (client-side redirect)
 * `/tasks/orchestrator/:runId` → `/tasks/:runId?source=orchestrator` (client-side redirect)
+* `/tasks/queue` → `/tasks/list?source=queue` (client-side redirect)
 * `/tasks/queue/:jobId` → `/tasks/:jobId?source=queue` (optional; can keep existing for a while)
 
 #### 5.2.2 Unified list data model (client-side first)
@@ -170,10 +172,10 @@ Instead of hiding the step editor when runtime is `orchestrator` (as the current
   * `priority` (normal/high)
   * `approvalToken` (optional)
 
-We *hide* queue-only fields that don’t apply to orchestrator:
+We **do not hide** queue-specific fields. Orchestrator tasks should be able to do anything normal worker tasks can do if desired:
 
-* publish mode, PR fields, max attempts (orchestrator tasks are maxAttempts=1 today via dispatch L75-L81)
-* repo/new branch fields (unless explicitly supported later)
+* publish mode, PR fields, max attempts (though orchestrator tasks are maxAttempts=1 today via dispatch L75-L81, they will be expanded)
+* repo/new branch fields
 
 #### 5.3.2 Orchestrator skill catalog surfaced to the dashboard
 
@@ -260,11 +262,11 @@ Add new persistence specifically for orchestrator task steps:
 
 This mirrors the “steps list” mental model the user wants, without fighting the legacy orchestrator enum constraints.
 
-#### 5.4.2 Legacy compatibility
+#### 5.4.2 Legacy compatibility and Migration
 
-* Existing `orchestrator_runs` remain readable (legacy tasks).
-* New orchestrator tasks use the new tables.
-* The unified dashboard treats both as `runtime=orchestrator` tasks; detail page chooses a renderer based on which model exists.
+* Given the decision to migrate aggressively, existing `orchestrator_runs` will be migrated directly into `orchestrator_tasks` via database migration scripts.
+* `orchestrator_runs` tables will be dropped rather than kept around indefinitely.
+* The unified dashboard reads exclusively from the new models.
 
 ### 5.5 Execution Model
 
@@ -337,10 +339,10 @@ Mitigation options:
 1. Update dashboard:
 
    * Remove `/tasks/orchestrator` and `/tasks/orchestrator/:runId` from the client route map.
-   * Add unified `/tasks` list (all tasks) + `/tasks/:id` detail.
+   * Add unified `/tasks/list` list (all tasks) + `/tasks/:id` detail.
 2. Update server allowlist:
 
-   * Remove `orchestrator` paths from `api_service/api/routers/task_dashboard.py` allowlist L26-L35 and only allow unified routes.
+   * Remove `orchestrator` paths from `api_service/api/routers/task_dashboard.py` allowlist L26-L35 and only allow unified routes (`/tasks/list`, etc).
 3. Rename UI labels:
 
    * Replace “Orchestrator Runs” with “Orchestrator Tasks”
@@ -356,11 +358,12 @@ Mitigation options:
    * step editor + per-step skill selection
    * targetService/priority/approvalToken fields
 
-### Phase 3 — Step-state tracking v2 (higher churn, unlocks “true step list”)
+### Phase 3 — Step-state tracking v2 & Aggressive DB Migration (higher churn, unlocks “true step list”)
 
-1. Add new orchestrator task + step tables.
-2. Implement new orchestrator executor that runs `orchestrator_task_steps` and records step state.
-3. Update orchestrator queue worker to process `orchestrator_task` job type in addition to `orchestrator_run`.
+1. Add new orchestrator task + step tables (`orchestrator_tasks`, `orchestrator_task_steps`).
+2. Migrate existing data from `orchestrator_runs` to `orchestrator_tasks` and drop the old `orchestrator_runs` tables.
+3. Implement new orchestrator executor that runs `orchestrator_task_steps` and records step state.
+4. Update orchestrator queue worker to process the `orchestrator_task` job type.
 
 ### Phase 4 — Degraded mode + reconciliation (resilience)
 
@@ -388,8 +391,11 @@ Mitigation options:
 
   * Accepts both `orchestrator_run` and `orchestrator_task` job types.
 
-## 8. Open Questions / Follow-ups
+## 8. Resolved Questions
 
-1. Do we want orchestrator tasks to ever support “publish PR” semantics like worker tasks? (likely no; keep out of scope).
-2. Should orchestrator tasks appear interleaved with queue tasks on `/tasks/queue`, or do we redefine `/tasks` as the canonical “All Tasks” list and deprecate `/tasks/queue` entirely?
-3. How aggressively do we want to migrate DB naming (`orchestrator_runs` → `orchestrator_tasks`), vs keeping DB names stable and only changing external contracts?
+1. **Do we want orchestrator tasks to ever support “publish PR” semantics like worker tasks?**
+   * **Decision:** Yes. Orchestrator tasks should be able to do anything normal worker tasks can do if desired. The UI and backend will not artificially hide queue-only fields for orchestrator tasks.
+2. **Should orchestrator tasks appear interleaved with queue tasks on `/tasks/queue`, or do we redefine `/tasks` as the canonical “All Tasks” list and deprecate `/tasks/queue` entirely?**
+   * **Decision:** We will use `/tasks/list` as the canonical idiomatic route for the unified list, since we are using a database and it is not a strict queue structure. `/tasks/queue` will be deprecated and redirect to `/tasks/list`.
+3. **How aggressively do we want to migrate DB naming (`orchestrator_runs` → `orchestrator_tasks`), vs keeping DB names stable and only changing external contracts?**
+   * **Decision:** Aggressively. We will run database migrations to move data from `orchestrator_runs` to `orchestrator_tasks` and drop the legacy tables, rather than maintaining dual models.
