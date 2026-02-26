@@ -850,6 +850,11 @@ class CodexExecHandler:
         replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
         replay_snapshot_text: dict[str, str] = {"stdout": "", "stderr": ""}
         replay_snapshot_match_offset: dict[str, int] = {"stdout": 0, "stderr": 0}
+        is_polling_snapshot_command = bool(
+            len(command) >= 2
+            and os.path.basename(command[0]) == "codex"
+            and command[1] == "exec"
+        )
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -939,32 +944,32 @@ class CodexExecHandler:
             if not text:
                 return ""
 
-            if len(text) >= min_replay_candidate_chars:
+            if is_polling_snapshot_command and len(text) >= min_replay_candidate_chars:
                 previous_snapshot = replay_snapshot_text.get(stream, "")
                 snapshot_match_offset = replay_snapshot_match_offset.get(stream, 0)
                 snapshot_text_updated = False
 
                 if previous_snapshot:
                     if snapshot_match_offset >= len(previous_snapshot):
-                        snapshot_match_offset = 0
+                        replay_snapshot_match_offset[stream] = 0
 
                     if snapshot_match_offset:
                         remaining_snapshot = previous_snapshot[snapshot_match_offset:]
                         if text.startswith(remaining_snapshot):
                             if len(text) <= len(remaining_snapshot):
                                 replay_snapshot_match_offset[stream] = (
-                                    snapshot_match_offset + len(text)
+                                    snapshot_match_offset
+                                    if len(text) == len(remaining_snapshot)
+                                    else snapshot_match_offset + len(text)
                                 )
                                 return ""
 
                             text = text[len(remaining_snapshot) :]
                             replay_snapshot_match_offset[stream] = 0
-                            snapshot_match_offset = 0
                             if not text:
                                 return ""
                         else:
                             replay_snapshot_match_offset[stream] = 0
-                            snapshot_match_offset = 0
 
                 if previous_snapshot:
                     if text == previous_snapshot:
