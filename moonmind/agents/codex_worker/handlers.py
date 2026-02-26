@@ -20,6 +20,7 @@ from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
+from moonmind.utils.logging import scrub_github_tokens
 
 _MAX_ERROR_MESSAGE_CHARS = 1024
 
@@ -1323,6 +1324,7 @@ class CodexExecHandler:
         )
         for value in values:
             redacted = redacted.replace(value, "[REDACTED]")
+        redacted = scrub_github_tokens(redacted)
         return redacted
 
     @staticmethod

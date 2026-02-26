@@ -11,6 +11,10 @@ from urllib.parse import quote_plus
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth)(?:$|[^a-z0-9])"
 )
+_GITHUB_TOKEN_PATTERN = re.compile(
+    r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
+    re.IGNORECASE,
+)
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -28,6 +32,14 @@ def _secret_variants(secret: str) -> set[str]:
     except Exception:  # pragma: no cover - defensive
         pass
     return variants
+
+
+def scrub_github_tokens(text: str) -> str:
+    """Scrub common GitHub token-like values from diagnostic text."""
+
+    if not text:
+        return ""
+    return _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
 
 
 class SecretRedactor:
@@ -77,4 +89,4 @@ class SecretRedactor:
         return [self.scrub(value) for value in values]
 
 
-__all__ = ["SecretRedactor"]
+__all__ = ["SecretRedactor", "scrub_github_tokens"]
