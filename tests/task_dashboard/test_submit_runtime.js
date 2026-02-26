@@ -243,3 +243,126 @@ const helpers = loadSubmitRuntimeHelpers();
   const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
   assert.strictEqual(missing, "/tasks/list?source=queue");
 })();
+
+(function testParseEditJobSearchParam() {
+  const params = new URLSearchParams("editJobId=123e4567-e89b-12d3-a456-426614174000");
+  const parsed = helpers.parseEditJobSearchParam(params);
+  assert.strictEqual(parsed.provided, true);
+  assert.strictEqual(parsed.jobId, "123e4567-e89b-12d3-a456-426614174000");
+
+  const missing = helpers.parseEditJobSearchParam(new URLSearchParams(""));
+  assert.strictEqual(missing.provided, false);
+  assert.strictEqual(missing.jobId, "");
+
+  const invalid = helpers.parseEditJobSearchParam(
+    new URLSearchParams("editJobId=../../etc/passwd"),
+  );
+  assert.strictEqual(invalid.provided, true);
+  assert.strictEqual(invalid.jobId, "");
+})();
+
+(function testIsEditableQueuedTaskJob() {
+  const editable = helpers.isEditableQueuedTaskJob({
+    type: "task",
+    status: "queued",
+    startedAt: null,
+  });
+  assert.strictEqual(editable, true);
+
+  const started = helpers.isEditableQueuedTaskJob({
+    type: "task",
+    status: "queued",
+    startedAt: "2026-02-25T01:23:45.678Z",
+  });
+  assert.strictEqual(started, false);
+
+  const wrongType = helpers.isEditableQueuedTaskJob({
+    type: "manifest",
+    status: "queued",
+    startedAt: null,
+  });
+  assert.strictEqual(wrongType, false);
+
+  const wrongStatus = helpers.isEditableQueuedTaskJob({
+    type: "task",
+    status: "running",
+    startedAt: null,
+  });
+  assert.strictEqual(wrongStatus, false);
+})();
+
+(function testStringifySkillArgsPreservesFailureForUnserializableObjects() {
+  const circular = {};
+  circular.self = circular;
+  const rendered = helpers.stringifySkillArgs(circular);
+  assert.strictEqual(rendered, "[unserializable skill args]");
+})();
+
+(function testBuildQueueSubmissionDraftFromJobKeepsTemplateBoundFirstStep() {
+  const draft = helpers.buildQueueSubmissionDraftFromJob({
+    payload: {
+      repository: "Moon/Test",
+      task: {
+        instructions: "Build feature branch",
+        runtime: {
+          mode: "codex",
+        },
+        publish: {
+          mode: "pr",
+        },
+        steps: [
+          {
+            id: "step-1",
+            instructions: "Build feature branch",
+            skill: {
+              id: "",
+            },
+          },
+        ],
+        appliedStepTemplates: [
+          {
+            slug: "preset-template",
+            version: "1",
+            stepIds: ["step-1"],
+            appliedAt: "2026-02-26T00:00:00Z",
+          },
+        ],
+      },
+    },
+    priority: 2,
+    maxAttempts: 4,
+    createdByUserId: "00000000-0000-4000-8000-000000000001",
+    requestedByUserId: "00000000-0000-4000-8000-000000000001",
+    updatedAt: "2026-02-26T00:00:00Z",
+  });
+  assert.strictEqual(draft.steps.length, 1);
+  assert.strictEqual(draft.steps[0].id, "step-1");
+  assert.strictEqual(draft.steps[0].instructions, "Build feature branch");
+  assert.strictEqual(draft.appliedTemplateState.length, 1);
+  assert.deepStrictEqual(draft.appliedTemplateState[0].stepIds, ["step-1"]);
+  assert.strictEqual(draft.publishMode, "pr");
+  assert.strictEqual(draft.model, "");
+  assert.strictEqual(draft.effort, "");
+})();
+
+(function testBuildQueueSubmissionDraftFromJobPreservesRawEditFields() {
+  const draft = helpers.buildQueueSubmissionDraftFromJob({
+    payload: {
+      repository: "Moon/Test",
+      task: {
+        runtime: {
+          mode: "CustomRuntime",
+          model: " model-with-space ",
+          effort: " fast ",
+        },
+        publish: {
+          mode: " PR ",
+        },
+      },
+    },
+  });
+  assert.strictEqual(draft.runtime, "CustomRuntime");
+  assert.strictEqual(draft.model, " model-with-space ");
+  assert.strictEqual(draft.effort, " fast ");
+  assert.strictEqual(draft.publishMode, " PR ");
+})();

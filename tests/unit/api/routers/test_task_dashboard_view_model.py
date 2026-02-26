@@ -42,6 +42,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["queue"]["list"] == "/api/queue/jobs"
     assert config["sources"]["queue"]["cancel"] == "/api/queue/jobs/{id}/cancel"
+    assert config["sources"]["queue"]["update"] == "/api/queue/jobs/{id}"
     assert (
         config["sources"]["queue"]["eventsStream"]
         == "/api/queue/jobs/{id}/events/stream"
