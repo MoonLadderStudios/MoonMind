@@ -464,6 +464,13 @@ There is no generalized exponential backoff layer in current dashboard polling.
 - Active page focuses on queue + orchestrator fan-out; proposals and manifests remain dedicated pages.
 - Proposal edit/promote and template save paths currently use prompt-driven UX; they are functional but not yet fully structured form experiences.
 
+### 12.1 Action button styling contract
+
+- Create/Promote/Dismiss flows use action-button classes (`.queue-action`, `.queue-submit-primary`) and derive color via `--queue-action-color`.
+- Create/commit actions default `--queue-action-color` to `--mm-action-primary`; danger actions override to `--mm-danger`.
+- Secondary actions (`Cancel`, `Back`, `View details`) use `.button.secondary` and retain neutral glass-surface styling.
+- Full interaction and visual rules live in `docs/TaskDashboardStyleSystem.md`.
+
 ---
 
 ## 13. Related Documents
@@ -472,4 +479,4 @@ There is no generalized exponential backoff layer in current dashboard polling.
 - `docs/TaskQueueSystem.md`
 - `docs/TaskProposalQueue`
 - `docs/ManifestTaskSystem.md`
-- `docs/TailwindStyleSystem.md`
+- `docs/TaskDashboardStyleSystem.md`

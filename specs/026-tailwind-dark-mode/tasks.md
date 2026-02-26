@@ -109,7 +109,7 @@
 
 - [X] T025 [P] Reconcile final `DOC-REQ-*` to task/evidence links in `specs/026-tailwind-dark-mode/contracts/requirements-traceability.md` (`DOC-REQ-001`, `DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`, `DOC-REQ-008`, `DOC-REQ-009`, `DOC-REQ-010`).
 - [X] T026 Run `npm run dashboard:css:min`, `./tools/test_unit.sh`, and `node tests/task_dashboard/test_theme_runtime.js`; confirm outputs referenced in `api_service/static/task_dashboard/dashboard.css` and `specs/026-tailwind-dark-mode/quickstart.md` (`DOC-REQ-010`).
-- [X] T027 Update Phase 3 completion notes and validation checklist state in `docs/TailwindStyleSystem.md` to reflect shipped runtime behavior and remaining future phases (`DOC-REQ-010`).
+- [X] T027 Update Phase 3 completion notes and validation checklist state in `docs/TaskDashboardStyleSystem.md` to reflect shipped runtime behavior and remaining future phases (`DOC-REQ-010`).
 
 ---
 

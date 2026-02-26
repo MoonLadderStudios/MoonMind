@@ -2,7 +2,7 @@
 
 ## Decision 1: Token format (RGB triplets via CSS variables)
 - **Decision**: Represent all MoonMind palette tokens as space-separated RGB triplets (e.g., `--mm-accent: 139 92 246`) to support Tailwind opacity helpers and calc-based fallbacks.
-- **Rationale**: Matches the guidance in `docs/TailwindStyleSystem.md`, keeps Tailwind-compatible while also supporting vanilla CSS `rgb(var(--mm-accent) / <alpha>)` syntax.
+- **Rationale**: Matches the guidance in `docs/TaskDashboardStyleSystem.md`, keeps Tailwind-compatible while also supporting vanilla CSS `rgb(var(--mm-accent) / <alpha>)` syntax.
 - **Alternatives Considered**:
   - Hex codes per token: easier to read but breaks Tailwind opacity shorthands.
   - HSL tokens: smoother gradient tweaking but adds conversion overhead in current CSS.

@@ -194,8 +194,9 @@ def _build_queue_request(
                 "runtime": {"mode": "codex"},
                 "git": {
                     "startingBranch": branch,
+                    "newBranch": branch,
                 },
-                "publish": {"mode": "none"},
+                "publish": {"mode": "branch"},
             },
         },
     }
