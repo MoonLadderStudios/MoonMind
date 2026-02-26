@@ -404,7 +404,7 @@ def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
     """Tokenized output should be redacted before truncating diagnostic text."""
 
     token = "ghp-redact-boundary-token-012345"
-    detail = "x" * 980 + token + "tail"
+    detail = "x" * 900 + token + "x" * 80
 
     def fake_run(command, *args, **kwargs):
         return subprocess.CompletedProcess(
@@ -417,7 +417,7 @@ def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError) as exc_info:
-        cli._run_checked_command(["codex", "login"])
+        cli._run_checked_command(["codex", "login"], redaction_values=(token,))
 
     message = str(exc_info.value)
     assert token[:16] not in message
