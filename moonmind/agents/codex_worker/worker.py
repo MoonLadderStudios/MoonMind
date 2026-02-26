@@ -3388,12 +3388,8 @@ class CodexWorker:
                     encoding="utf-8", errors="replace"
                 ).splitlines()
             except OSError as exc:
-                artifact_name = cls._artifact_name_for_path(
-                    path=log_path, prepared=prepared
-                )
                 error_message = (
-                    "could not read verification log "
-                    f"'{artifact_name}'; check worker logs for details"
+                    "could not read one or more verification logs; check worker logs for details"
                 )
                 read_errors.append(error_message)
                 logger.warning(

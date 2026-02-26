@@ -4116,7 +4116,10 @@ def test_collect_verification_evidence_records_log_read_errors(
     assert len(evidence) == 1
     assert evidence[0]["command"] == "npm run build"
     assert len(read_errors) == 1
-    assert read_errors[0] == "could not read verification log 'execute.log'; check worker logs for details"
+    assert (
+        read_errors[0]
+        == "could not read one or more verification logs; check worker logs for details"
+    )
 
 
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(
