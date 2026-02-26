@@ -39,6 +39,5 @@ def test_openai_embeddings_generation(monkeypatch):
 
     # Basic sanity check of the instance
     from llama_index.embeddings.openai import OpenAIEmbedding
-
     assert isinstance(embed_model, OpenAIEmbedding)
     assert embed_model.model_name == "text-embedding-3-small"
