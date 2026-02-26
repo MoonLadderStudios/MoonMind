@@ -1012,7 +1012,7 @@ def _write_run_summary(artifacts_dir: Path, context: Mapping[str, Any]) -> Path:
 def _run_codex_preflight_check(
     *, timeout: int = 60, volume_name: str | None = None
 ) -> CodexPreflightResult:
-    """Execute ``codex login status`` using the configured auth volume."""
+    """Execute ``command -v rg && codex login status`` using the configured auth volume."""
 
     volume = volume_name or settings.spec_workflow.codex_volume_name
     if not volume:
@@ -1037,7 +1037,7 @@ def _run_codex_preflight_check(
         client = docker.from_env()
         container = client.containers.run(
             image,
-            command=["bash", "-lc", "codex login status"],
+            command=["bash", "-lc", "command -v rg && codex login status"],
             environment={"HOME": "/home/app"},
             volumes={volume: {"bind": "/home/app/.codex", "mode": "ro"}},
             detach=True,

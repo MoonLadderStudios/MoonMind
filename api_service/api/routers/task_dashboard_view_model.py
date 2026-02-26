@@ -169,8 +169,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "promote": "/api/proposals/{id}/promote",
                 "dismiss": "/api/proposals/{id}/dismiss",
                 "priority": "/api/proposals/{id}/priority",
-                "snooze": "/api/proposals/{id}/snooze",
-                "unsnooze": "/api/proposals/{id}/unsnooze",
             },
             "manifests": {
                 "list": "/api/queue/jobs?type=manifest&limit=200",
