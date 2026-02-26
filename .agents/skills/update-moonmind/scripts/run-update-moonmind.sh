@@ -205,14 +205,20 @@ mark_not_running_services_for_restart() {
       continue
     fi
 
-    case "$service" in
+      case "$service" in
       docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db)
         continue
         ;;
     esac
 
-    mapfile -t container_ids < <("${COMPOSE_CMD[@]}" ps -q "$service" 2>/dev/null || true)
+    mapfile -t container_ids < <("${COMPOSE_CMD[@]}" ps -a -q "$service" 2>/dev/null || true)
     if [[ ${#container_ids[@]} -eq 0 ]]; then
+      case "$service" in
+        api | api-db | codex-worker | docker-proxy | qdrant | scheduler)
+          say "Marking service '$service' for restart: no container found for baseline service."
+          add_target "$service"
+          ;;
+      esac
       continue
     fi
 
@@ -567,7 +573,7 @@ done
 readarray -t SERVICES_TO_RESTART < <(
   for target in "${!target_services[@]}"; do
     [[ -n "${target//[[:space:]]/}" ]] || continue
-    case "$target" in
+      case "$target" in
       docker-proxy | agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
         continue
         ;;
