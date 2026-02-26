@@ -21,7 +21,7 @@ _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 class DatabaseSettings(BaseSettings):
     """Database settings"""
 
-    POSTGRES_HOST: str = Field("api-db", env="POSTGRES_HOST")
+    POSTGRES_HOST: str = Field("moonmind-api-db", env="POSTGRES_HOST")
     POSTGRES_USER: str = Field("postgres", env="POSTGRES_USER")
     POSTGRES_PASSWORD: str = Field("password", env="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field("moonmind", env="POSTGRES_DB")

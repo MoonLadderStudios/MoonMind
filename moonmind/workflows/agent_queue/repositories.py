@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.db.models import User
 from moonmind.workflows.agent_queue import models
 
 
@@ -73,6 +74,13 @@ class AgentQueueRepository:
         """Persist transaction changes."""
 
         await self._session.commit()
+
+    async def user_exists(self, user_id: UUID) -> bool:
+        """Return ``True`` when the user row exists."""
+
+        stmt = select(User.id).where(User.id == user_id).limit(1)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
 
     async def create_job(
         self,
