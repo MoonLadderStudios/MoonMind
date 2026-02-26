@@ -386,7 +386,7 @@ class _FakeStreamingProcess:
     def kill(self) -> None:
         return None
 
-    async def communicate(self, input: object | None = None) -> tuple[bytes, bytes]:
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
         del input
         return (b"", b"")
 
