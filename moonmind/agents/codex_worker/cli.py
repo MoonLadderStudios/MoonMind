@@ -36,33 +36,6 @@ from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
 
 logger = logging.getLogger(__name__)
-MAX_COMMAND_ERROR_MESSAGE_LENGTH = 1024
-_TRUNCATION_SUFFIX = "..."
-
-
-def _truncate_error_message(
-    message: str, max_length: int = MAX_COMMAND_ERROR_MESSAGE_LENGTH
-) -> str:
-    if len(message) <= max_length:
-        return message
-
-    if max_length <= len(_TRUNCATION_SUFFIX):
-        return message[:max_length]
-
-    available = max_length - len(_TRUNCATION_SUFFIX)
-    truncated = message[:available]
-    marker = "[REDACTED]"
-    marker_prefix = "[RED"
-    marker_start = truncated.rfind("[")
-    if (
-        marker_start != -1
-        and truncated[marker_start:].startswith(marker_prefix)
-        and marker.startswith(truncated[marker_start:])
-        and truncated[marker_start:] != marker
-    ):
-        keep_prefix = max(0, available - len(marker))
-        truncated = f"{truncated[:keep_prefix]}{marker}"
-    return f"{truncated}{_TRUNCATION_SUFFIX}"
 
 _MAX_ERROR_MESSAGE_CHARS = 1024
 _TOKEN_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -239,10 +212,7 @@ def _run_checked_command(
         " ".join(command[:2]) if len(command) > 1 else " ".join(command) or "<empty>"
     )
     if detail:
-        message = (
-            f"command failed ({result.returncode}): "
-            f"{command_hint} | {detail.splitlines()[-1]}"
-        )
+        message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
         message = _redact_value(message, redaction_values)
         message = _truncate_error_message(message)
         raise RuntimeError(message)

@@ -24,18 +24,6 @@ from moonmind.utils.env_bool import env_to_bool
 _MAX_ERROR_MESSAGE_CHARS = 1024
 
 
-def _truncate_error_message(
-    message: str,
-    *,
-    max_chars: int = _MAX_ERROR_MESSAGE_CHARS,
-) -> str:
-    if len(message) <= max_chars:
-        return message
-    head_chars = min(768, max_chars - 4)
-    tail_chars = max_chars - head_chars - 3
-    return f"{message[:head_chars]}...{message[-tail_chars:]}"
-
-
 class CodexWorkerHandlerError(RuntimeError):
     """Raised when handler payloads or command execution are invalid."""
 
@@ -576,7 +564,6 @@ class CodexExecHandler:
             log_path,
             f"[rag] retrieval completed via {pack.transport}; items={items_count}",
         )
-
         if items_count < 1:
             return PromptContextResolution(
                 instruction=payload.instruction,
