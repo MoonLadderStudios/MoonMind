@@ -1,8 +1,8 @@
-from contextlib import contextmanager
 import json
 import os
 import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 import uvicorn
