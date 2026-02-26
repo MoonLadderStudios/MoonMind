@@ -4076,7 +4076,7 @@ def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
 def test_collect_verification_evidence_records_log_read_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unreadable log files should be surfaced as read errors without dropping evidence."""
+    """Unreadable verification logs should surface errors while preserving other evidence."""
 
     prepared = PreparedTaskWorkspace(
         job_root=tmp_path,
@@ -4096,9 +4096,12 @@ def test_collect_verification_evidence_records_log_read_errors(
         publish_command_env=None,
     )
     prepared.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    (prepared.artifacts_dir / "logs").mkdir(exist_ok=True)
     prepared.execute_log_path.write_text(
         "[command] $ ./tools/test_unit.sh\n", encoding="utf-8"
     )
+    readable_log_path = prepared.artifacts_dir / "logs" / "codex_exec.log"
+    readable_log_path.write_text("[command] $ npm run build\n", encoding="utf-8")
 
     original_read_text = Path.read_text
 
@@ -4110,10 +4113,10 @@ def test_collect_verification_evidence_records_log_read_errors(
     monkeypatch.setattr(Path, "read_text", _raise_read_text)
 
     evidence, read_errors = CodexWorker._collect_verification_evidence(prepared=prepared)
-    assert evidence == ()
+    assert len(evidence) == 1
+    assert evidence[0]["command"] == "npm run build"
     assert len(read_errors) == 1
-    assert "permission denied" in read_errors[0]
-    assert "stage log" in read_errors[0]
+    assert read_errors[0] == "could not read verification log 'execute.log'; check worker logs for details"
 
 
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(

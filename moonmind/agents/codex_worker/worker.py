@@ -3388,9 +3388,12 @@ class CodexWorker:
                     encoding="utf-8", errors="replace"
                 ).splitlines()
             except OSError as exc:
+                artifact_name = cls._artifact_name_for_path(
+                    path=log_path, prepared=prepared
+                )
                 error_message = (
-                    f"failed to read stage log {log_path}: "
-                    f"{exc.__class__.__name__}: {exc}"
+                    "could not read verification log "
+                    f"'{artifact_name}'; check worker logs for details"
                 )
                 read_errors.append(error_message)
                 logger.warning(
@@ -3724,10 +3727,10 @@ class CodexWorker:
             verification_payload["skipReason"] = (
                 preflight_result.verification_skip_reason
             )
-            if preflight_result.verification_skip_reason is not None:
-                verification_payload["status"] = "skipped"
-            elif preflight_result.source_code_paths:
-                verification_payload["status"] = "passed"
+                if preflight_result.verification_skip_reason is not None:
+                    verification_payload["status"] = "skipped"
+                elif preflight_result.source_code_paths:
+                    verification_payload["status"] = "passed"
 
             if not preflight_result.passed:
                 verification_payload["status"] = "failed"
