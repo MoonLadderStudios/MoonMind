@@ -152,21 +152,26 @@ async def get_user_api_key(
 ) -> Optional[str]:
     """Return the API key for ``provider`` using the AuthProviderManager."""
 
-    manager = await get_auth_manager(db_session)
-    key_name = f"{provider.upper()}_API_KEY"
-    user_obj = user if getattr(user, "id", None) else None
-    secret = await manager.get_secret("profile", key=key_name, user=user_obj)
-    if secret:
-        return secret
-
     provider_lower = provider.lower()
+    env_api_key: str | None = None
     if provider_lower == "google":
-        return settings.google.google_api_key
-    if provider_lower == "openai":
-        return settings.openai.openai_api_key
-    if provider_lower == "anthropic":
-        return settings.anthropic.anthropic_api_key
-    return None
+        env_api_key = settings.google.google_api_key
+    elif provider_lower == "openai":
+        env_api_key = settings.openai.openai_api_key
+    elif provider_lower == "anthropic":
+        env_api_key = settings.anthropic.anthropic_api_key
+
+    try:
+        manager = await get_auth_manager(db_session)
+        key_name = f"{provider.upper()}_API_KEY"
+        user_obj = user if getattr(user, "id", None) else None
+        secret = await manager.get_secret("profile", key=key_name, user=user_obj)
+        if secret:
+            return secret
+    except Exception as exc:
+        logger.warning("Unable to load user API key from DB: %s", exc)
+
+    return env_api_key
 
 
 @router.post("/completions", response_model=ChatCompletionResponse)

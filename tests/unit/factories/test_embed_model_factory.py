@@ -8,10 +8,12 @@ from moonmind.factories.embed_model_factory import build_embed_model
 
 @pytest.fixture
 def mock_settings():
+    placeholder_api_key = "unit-test-openai-api-key"
+
     settings = MagicMock(spec=AppSettings)
     settings.default_embedding_provider = "openai"
     settings.openai = MagicMock()
-    settings.openai.openai_api_key = "placeholder-openai-key"
+    settings.openai.openai_api_key = placeholder_api_key
     settings.openai.openai_embedding_model = "text-embedding-3-small"
     settings.openai.openai_embedding_dimensions = 1536
     return settings
@@ -30,7 +32,7 @@ def test_build_embed_model_openai(mock_settings):
         # Verify OpenAIEmbedding was called with correct parameters
         MockOpenAIEmbedding.assert_called_once_with(
             model="text-embedding-3-small",
-            api_key="placeholder-openai-key",
+            api_key=mock_settings.openai.openai_api_key,
             dimensions=1536,
         )
 
@@ -43,7 +45,7 @@ def test_build_embed_model_openai_with_explicit_key(mock_settings):
     with patch(
         "moonmind.factories.embed_model_factory.OpenAIEmbedding"
     ) as MockOpenAIEmbedding:
-        explicit_key = "override-openai-key"
+        explicit_key = "unit-test-openai-api-key-override"
 
         build_embed_model(mock_settings, openai_api_key=explicit_key)
 
