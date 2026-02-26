@@ -228,3 +228,50 @@ const helpers = loadSubmitRuntimeHelpers();
   const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
   assert.strictEqual(missing, "/tasks/queue");
 })();
+
+(function testParseEditJobSearchParam() {
+  const params = new URLSearchParams("editJobId=123e4567-e89b-12d3-a456-426614174000");
+  const parsed = helpers.parseEditJobSearchParam(params);
+  assert.strictEqual(parsed.provided, true);
+  assert.strictEqual(parsed.jobId, "123e4567-e89b-12d3-a456-426614174000");
+
+  const missing = helpers.parseEditJobSearchParam(new URLSearchParams(""));
+  assert.strictEqual(missing.provided, false);
+  assert.strictEqual(missing.jobId, "");
+
+  const invalid = helpers.parseEditJobSearchParam(
+    new URLSearchParams("editJobId=../../etc/passwd"),
+  );
+  assert.strictEqual(invalid.provided, true);
+  assert.strictEqual(invalid.jobId, "");
+})();
+
+(function testIsEditableQueuedTaskJob() {
+  const editable = helpers.isEditableQueuedTaskJob({
+    type: "task",
+    status: "queued",
+    startedAt: null,
+  });
+  assert.strictEqual(editable, true);
+
+  const started = helpers.isEditableQueuedTaskJob({
+    type: "task",
+    status: "queued",
+    startedAt: "2026-02-25T01:23:45.678Z",
+  });
+  assert.strictEqual(started, false);
+
+  const wrongType = helpers.isEditableQueuedTaskJob({
+    type: "manifest",
+    status: "queued",
+    startedAt: null,
+  });
+  assert.strictEqual(wrongType, false);
+
+  const wrongStatus = helpers.isEditableQueuedTaskJob({
+    type: "task",
+    status: "running",
+    startedAt: null,
+  });
+  assert.strictEqual(wrongStatus, false);
+})();

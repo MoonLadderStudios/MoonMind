@@ -1166,6 +1166,147 @@
     return Array.from(new Set(parts));
   }
 
+  function stringifySkillArgs(args) {
+    if (!args || typeof args !== "object" || Array.isArray(args)) {
+      return "";
+    }
+    const keys = Object.keys(args);
+    if (keys.length === 0) {
+      return "";
+    }
+    try {
+      return JSON.stringify(args, null, 2);
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function extractCapabilityCsv(value) {
+    if (!Array.isArray(value)) {
+      return "";
+    }
+    return normalizeRuntimeOptions(value).join(", ");
+  }
+
+  function buildQueueSubmissionDraftFromJob(job) {
+    const jobPayload = pick(job, "payload");
+    const payload =
+      jobPayload && typeof jobPayload === "object" && !Array.isArray(jobPayload)
+        ? jobPayload
+        : {};
+    const task =
+      payload && typeof payload.task === "object" && !Array.isArray(payload.task)
+        ? payload.task
+        : {};
+    const hasProposeTasks = Object.prototype.hasOwnProperty.call(
+      task,
+      "proposeTasks",
+    );
+    const runtime =
+      normalizeTaskRuntimeInput(extractRuntimeFromPayload(payload)) || defaultTaskRuntime;
+    const runtimeNode =
+      task && typeof task.runtime === "object" && !Array.isArray(task.runtime)
+        ? task.runtime
+        : {};
+    const gitNode =
+      task && typeof task.git === "object" && !Array.isArray(task.git) ? task.git : {};
+    const skillNode =
+      task && typeof task.skill === "object" && !Array.isArray(task.skill)
+        ? task.skill
+        : {};
+
+    const taskSteps = Array.isArray(task.steps) ? task.steps : [];
+    let objectiveInstructions = String(task.instructions || "").trim();
+    if (!objectiveInstructions && taskSteps.length > 0) {
+      objectiveInstructions = String(pick(taskSteps[0], "instructions") || "").trim();
+    }
+
+    const primaryStep = {
+      id: "",
+      instructions: objectiveInstructions,
+      skillId: String(skillNode.id || "auto").trim() || "auto",
+      skillArgs: stringifySkillArgs(skillNode.args),
+      skillRequiredCapabilities: extractCapabilityCsv(skillNode.requiredCapabilities),
+      templateStepId: "",
+      templateInstructions: "",
+    };
+    const steps = [primaryStep];
+
+    taskSteps.forEach((rawStep, index) => {
+      if (!rawStep || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+        return;
+      }
+      const stepInstructions = String(rawStep.instructions || "").trim();
+      const stepSkillNode =
+        rawStep.skill && typeof rawStep.skill === "object" && !Array.isArray(rawStep.skill)
+          ? rawStep.skill
+          : {};
+      const stepSkillId = String(stepSkillNode.id || "").trim();
+      const stepSkillArgs = stringifySkillArgs(stepSkillNode.args);
+      const stepSkillCaps = extractCapabilityCsv(stepSkillNode.requiredCapabilities);
+      const isPrimaryMirror =
+        index === 0 &&
+        stepInstructions === objectiveInstructions &&
+        !stepSkillId &&
+        !stepSkillArgs &&
+        !stepSkillCaps;
+      if (isPrimaryMirror) {
+        return;
+      }
+      steps.push({
+        id: String(rawStep.id || "").trim(),
+        instructions: stepInstructions,
+        skillId: stepSkillId,
+        skillArgs: stepSkillArgs,
+        skillRequiredCapabilities: stepSkillCaps,
+        templateStepId: "",
+        templateInstructions: "",
+      });
+    });
+
+    const appliedTemplateState = Array.isArray(task.appliedStepTemplates)
+      ? task.appliedStepTemplates
+          .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+          .map((entry) => ({
+            slug: String(entry.slug || "").trim(),
+            version: String(entry.version || "").trim(),
+            inputs:
+              entry.inputs && typeof entry.inputs === "object" && !Array.isArray(entry.inputs)
+                ? entry.inputs
+                : {},
+            stepIds: Array.isArray(entry.stepIds)
+              ? entry.stepIds
+                  .map((stepId) => String(stepId || "").trim())
+                  .filter(Boolean)
+              : [],
+            appliedAt: String(entry.appliedAt || "").trim() || new Date().toISOString(),
+            capabilities: Array.isArray(entry.capabilities)
+              ? normalizeRuntimeOptions(entry.capabilities)
+              : [],
+          }))
+          .filter((entry) => entry.slug && entry.version)
+      : [];
+
+    return {
+      runtime,
+      model: String(runtimeNode.model || "").trim(),
+      effort: String(runtimeNode.effort || "").trim(),
+      repository: String(payload.repository || "").trim(),
+      startingBranch: String(gitNode.startingBranch || "").trim(),
+      newBranch: String(gitNode.newBranch || "").trim(),
+      publishMode: normalizePublishModeInput(extractPublishModeFromPayload(payload)) || "pr",
+      priority: Number(pick(job, "priority") || 0),
+      maxAttempts: Number(pick(job, "maxAttempts") || 3),
+      proposeTasks: hasProposeTasks
+        ? Boolean(task.proposeTasks)
+        : defaultProposeTasks,
+      instruction: objectiveInstructions,
+      steps,
+      appliedTemplateState,
+      templateFeatureRequest: "",
+    };
+  }
+
   async function loadAvailableSkillIds() {
     if (cachedAvailableSkillIds) {
       return cachedAvailableSkillIds;
@@ -2166,6 +2307,31 @@
     return { provided: true, runtime, rawValue: runtimeValue };
   };
 
+  const parseEditJobSearchParam = (searchParams) => {
+    const editJobId = searchParams?.get("editJobId");
+    if (editJobId === null) {
+      return { provided: false, jobId: "", rawValue: "" };
+    }
+    return {
+      provided: true,
+      jobId: normalizeDashboardDetailSegment(editJobId),
+      rawValue: editJobId,
+    };
+  };
+
+  const isEditableQueuedTaskJob = (job) => {
+    if (!job || typeof job !== "object" || Array.isArray(job)) {
+      return false;
+    }
+    const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
+    const jobType = String(pick(job, "type") || "").trim().toLowerCase();
+    return (
+      jobType === "task" &&
+      normalizedStatus === "queued" &&
+      !pick(job, "startedAt")
+    );
+  };
+
   const isWorkerSubmitRuntime = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
     return normalized !== ORCHESTRATOR_RUNTIME && supportedTaskRuntimes.includes(normalized);
@@ -2212,6 +2378,8 @@
       readSubmitDraftStorage,
       resolveSubmitRuntime,
       isWorkerSubmitRuntime,
+      parseEditJobSearchParam,
+      isEditableQueuedTaskJob,
       normalizeOrchestratorPriority,
       persistSubmitDraftsToStorage,
       submitDraftController,
@@ -3470,51 +3638,68 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage(presetRuntime) {
+  function renderQueueSubmitPage(presetRuntime, options = {}) {
+    const editContext =
+      options &&
+      typeof options === "object" &&
+      !Array.isArray(options) &&
+      options.editContext &&
+      typeof options.editContext === "object"
+        ? options.editContext
+        : null;
+    const isEditMode = Boolean(editContext && editContext.jobId);
     const sanitizedWorkerDraft = submitDraftController.loadWorker();
+    const effectiveWorkerDraft = isEditMode
+      ? editContext.draft || {}
+      : sanitizedWorkerDraft;
     const selectedWorkerRuntime = resolveSubmitRuntime(
-      presetRuntime ?? sanitizedWorkerDraft.runtime,
+      presetRuntime ?? effectiveWorkerDraft.runtime,
       defaultTaskRuntime,
     );
     let activeWorkerRuntime = selectedWorkerRuntime;
     const queueDraftModel = String(
-      sanitizedWorkerDraft.model || defaultTaskModel,
+      effectiveWorkerDraft.model || defaultTaskModel,
     ).trim();
     const queueDraftEffort = String(
-      sanitizedWorkerDraft.effort || defaultTaskEffort,
+      effectiveWorkerDraft.effort || defaultTaskEffort,
     ).trim();
-    const queueDraftRepository = String(sanitizedWorkerDraft.repository || "").trim();
+    const queueDraftRepository = String(effectiveWorkerDraft.repository || "").trim();
     const queueDraftStartingBranch = String(
-      sanitizedWorkerDraft.startingBranch || "",
+      effectiveWorkerDraft.startingBranch || "",
     ).trim();
-    const queueDraftNewBranch = String(sanitizedWorkerDraft.newBranch || "").trim();
+    const queueDraftNewBranch = String(effectiveWorkerDraft.newBranch || "").trim();
     const queueDraftPublishMode = (() => {
-      const candidate = String(sanitizedWorkerDraft.publishMode || "").trim().toLowerCase();
+      const candidate = String(effectiveWorkerDraft.publishMode || "").trim().toLowerCase();
       return ["none", "branch", "pr"].includes(candidate)
         ? candidate
         : defaultPublishMode;
     })();
     const queueDraftPriority = Number.isInteger(
-      Number(sanitizedWorkerDraft.priority),
+      Number(effectiveWorkerDraft.priority),
     )
-      ? Number(sanitizedWorkerDraft.priority)
+      ? Number(effectiveWorkerDraft.priority)
       : 0;
     const queueDraftMaxAttempts = Number.isInteger(
-      Number(sanitizedWorkerDraft.maxAttempts),
+      Number(effectiveWorkerDraft.maxAttempts),
     )
-      ? Math.max(1, Number(sanitizedWorkerDraft.maxAttempts))
+      ? Math.max(1, Number(effectiveWorkerDraft.maxAttempts))
       : 3;
     const queueDraftProposeTasks = Object.prototype.hasOwnProperty.call(
-      sanitizedWorkerDraft,
+      effectiveWorkerDraft,
       "proposeTasks",
     )
-      ? Boolean(sanitizedWorkerDraft.proposeTasks)
+      ? Boolean(effectiveWorkerDraft.proposeTasks)
       : defaultProposeTasks;
     const queueDraftTemplateFeatureRequest = String(
-      sanitizedWorkerDraft.templateFeatureRequest || "",
+      effectiveWorkerDraft.templateFeatureRequest || "",
     ).trim();
-    const queueDraftSteps = Array.isArray(sanitizedWorkerDraft.steps)
-      ? sanitizedWorkerDraft.steps
+    const queueDraftSteps = Array.isArray(effectiveWorkerDraft.steps)
+      ? effectiveWorkerDraft.steps
+      : [];
+    const queueDraftAppliedTemplateState = Array.isArray(
+      effectiveWorkerDraft.appliedTemplateState,
+    )
+      ? effectiveWorkerDraft.appliedTemplateState
       : [];
 
     const runtimeOptions = renderRuntimeOptions(
@@ -3555,8 +3740,8 @@
       : "";
 
     setView(
-      "Submit Queue Task",
-      "",
+      isEditMode ? "Edit queued task" : "Submit Queue Task",
+      isEditMode ? `Job ${editContext.jobId}` : "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
@@ -3632,8 +3817,15 @@
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
+          ${
+            isEditMode
+              ? `<a href="/tasks/queue/${encodeURIComponent(
+                  editContext.jobId,
+                )}"><button type="button" class="secondary">Cancel</button></a>`
+              : ""
+          }
           <button type="submit" class="queue-submit-primary">
-            Create
+            ${isEditMode ? "Update" : "Create"}
           </button>
         </div>
       </form>
@@ -3865,7 +4057,9 @@
         wrapper.classList.add("hidden");
       }
     };
-    let appliedTemplateState = [];
+    let appliedTemplateState = queueDraftAppliedTemplateState.map((entry) =>
+      normalizeSubmissionDraftForTest(entry),
+    );
     const renderStepEditor = () => {
       if (!stepsList) {
         console.error("[dashboard] #queue-steps-list not found; step editor unavailable");
@@ -4888,6 +5082,12 @@
         priority,
         maxAttempts,
       };
+      if (isEditMode) {
+        requestBody.affinityKey = editContext.affinityKey;
+        if (String(editContext.expectedUpdatedAt || "").trim()) {
+          requestBody.expectedUpdatedAt = editContext.expectedUpdatedAt;
+        }
+      }
 
       const submitButton = form.querySelector('button[type="submit"]');
       if (submitButton instanceof HTMLButtonElement) {
@@ -4895,35 +5095,67 @@
       }
 
       try {
-        const created = await fetchJson("/api/queue/jobs", {
-          method: "POST",
+        const submissionEndpoint = isEditMode
+          ? endpoint(
+              queueSourceConfig.update || "/api/queue/jobs/{id}",
+              { id: editContext.jobId },
+            )
+          : "/api/queue/jobs";
+        const updatedOrCreated = await fetchJson(submissionEndpoint, {
+          method: isEditMode ? "PUT" : "POST",
           body: JSON.stringify(requestBody),
         });
-        if (!created || typeof created.id !== "string" || !created.id.trim()) {
-          throw new Error("queue creation response missing job id");
+        if (
+          !updatedOrCreated ||
+          typeof updatedOrCreated.id !== "string" ||
+          !updatedOrCreated.id.trim()
+        ) {
+          throw new Error("queue mutation response missing job id");
         }
-        try {
-          clearWorkerSubmissionDraftAfterCreate();
-        } catch (cleanupError) {
-          console.warn("worker draft cleanup failed after queue creation", cleanupError);
+        if (!isEditMode) {
+          try {
+            clearWorkerSubmissionDraftAfterCreate();
+          } catch (cleanupError) {
+            console.warn("worker draft cleanup failed after queue creation", cleanupError);
+          }
         }
-        window.location.href = `/tasks/queue/${encodeURIComponent(created.id)}`;
+        window.location.href = `/tasks/queue/${encodeURIComponent(
+          updatedOrCreated.id,
+        )}`;
       } catch (error) {
         if (submitButton instanceof HTMLButtonElement) {
           submitButton.disabled = false;
         }
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
+        if (isEditMode && Number(error?.status || 0) === 409) {
+          message.textContent =
+            "This task already started or changed. Refresh the detail page and try again.";
+          return;
+        }
+        if (isEditMode && Number(error?.status || 0) === 403) {
+          message.textContent = "You are not authorized to edit this queued task.";
+          return;
+        }
+        const verb = isEditMode ? "update" : "create";
         message.textContent =
-          "Failed to create queue task: " +
+          `Failed to ${verb} queue task: ` +
           String(error?.message || "request failed");
       }
     });
   }
 
-  function renderSubmitWorkPage(presetRuntime) {
+  function renderSubmitWorkPage(presetRuntime, options = {}) {
+    const editContext =
+      options &&
+      typeof options === "object" &&
+      !Array.isArray(options) &&
+      options.editContext &&
+      typeof options.editContext === "object"
+        ? options.editContext
+        : null;
     if (presetRuntime == null) {
-      renderQueueSubmitPage();
+      renderQueueSubmitPage(undefined, { editContext });
       return;
     }
     const normalizedRuntime = validateSubmitRuntime(presetRuntime);
@@ -4940,7 +5172,7 @@
       return;
     }
     if (isWorkerSubmitRuntime(normalizedRuntime)) {
-      renderQueueSubmitPage(normalizedRuntime);
+      renderQueueSubmitPage(normalizedRuntime, { editContext });
       return;
     }
     renderOrchestratorSubmitPage();
@@ -5395,11 +5627,18 @@
       const cancelRequestedAt = pick(job, "cancelRequestedAt");
       const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
       const canCancel = normalizedStatus === "queued" || normalizedStatus === "running";
+      const canEdit = isEditableQueuedTaskJob(job);
       const cancelButtonDisabled = !canCancel || cancelPending;
       const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
       cancelActionsNode.innerHTML = `<div class="actions"><button type="button" id="queue-cancel-button" ${
         cancelButtonDisabled ? "disabled" : ""
-      }>${escapeHtml(cancelButtonLabel)}</button></div>`;
+      }>${escapeHtml(cancelButtonLabel)}</button>${
+        canEdit
+          ? `<a href="/tasks/queue/new?editJobId=${encodeURIComponent(
+              String(pick(job, "id") || ""),
+            )}"><button type="button" class="secondary">Edit</button></a>`
+          : ""
+      }</div>`;
 
       const payload = pick(job, "payload") || {};
       const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
@@ -7376,7 +7615,76 @@
         renderSubmitWorkPage(runtimeParam.rawValue);
         return;
       }
-      renderSubmitWorkPage(runtimeParam.runtime);
+      const editParam = parseEditJobSearchParam(searchParams);
+      if (!editParam.provided) {
+        renderSubmitWorkPage(runtimeParam.runtime);
+        return;
+      }
+      if (!editParam.jobId) {
+        setView(
+          "Edit queued task",
+          "Invalid edit target.",
+          `<div class="notice error">The editJobId query value is invalid.</div><div class="actions"><a href="/tasks/queue"><button type="button" class="secondary">Back to queue</button></a></div>`,
+        );
+        return;
+      }
+      if (runtimeParam.runtime === ORCHESTRATOR_RUNTIME) {
+        setView(
+          "Edit queued task",
+          `Job ${editParam.jobId}`,
+          `<div class="notice error">Queued task editing only supports worker runtimes.</div><div class="actions"><a href="/tasks/queue/${encodeURIComponent(
+            editParam.jobId,
+          )}"><button type="button" class="secondary">Back to detail</button></a></div>`,
+        );
+        return;
+      }
+
+      setView(
+        "Edit queued task",
+        `Job ${editParam.jobId}`,
+        "<p class='loading'>Loading queued task...</p>",
+      );
+      try {
+        const detailEndpoint = endpoint(
+          queueSourceConfig.detail || "/api/queue/jobs/{id}",
+          { id: editParam.jobId },
+        );
+        const job = await fetchJson(detailEndpoint);
+        if (!isEditableQueuedTaskJob(job)) {
+          setView(
+            "Edit queued task",
+            `Job ${editParam.jobId}`,
+            `<div class="notice error">This task can no longer be edited. It may have started or changed state.</div><div class="actions"><a href="/tasks/queue/${encodeURIComponent(
+              editParam.jobId,
+            )}"><button type="button" class="secondary">Back to detail</button></a></div>`,
+          );
+          return;
+        }
+        const draft = buildQueueSubmissionDraftFromJob(job);
+        renderSubmitWorkPage(runtimeParam.runtime || draft.runtime, {
+          editContext: {
+            jobId: editParam.jobId,
+            expectedUpdatedAt: String(pick(job, "updatedAt") || ""),
+            affinityKey: pick(job, "affinityKey") || null,
+            draft,
+          },
+        });
+      } catch (error) {
+        const statusCode = Number(error?.status || 0);
+        const detailMessage =
+          statusCode === 404
+            ? "The queued job was not found."
+            : statusCode === 403
+              ? "You are not authorized to edit this queued job."
+              : `Failed to load queued job: ${String(error?.message || "request failed")}`;
+        setView(
+          "Edit queued task",
+          `Job ${editParam.jobId}`,
+          `<div class="notice error">${escapeHtml(
+            detailMessage,
+          )}</div><div class="actions"><a href="/tasks/queue"><button type="button" class="secondary">Back to queue</button></a></div>`,
+        );
+      }
       return;
     }
     if (normalizedRoute === "/tasks/orchestrator/new") {

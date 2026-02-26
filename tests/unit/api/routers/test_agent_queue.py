@@ -25,6 +25,7 @@ from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import (
+    AgentJobNotFoundError,
     AgentJobOwnershipError,
     AgentJobStateError,
 )
@@ -272,6 +273,143 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert body["status"] == models.AgentJobStatus.QUEUED.value
     assert body["type"] == "codex_exec"
     service.create_job.assert_awaited_once()
+
+
+def test_update_queued_job_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """PUT /jobs/{id} should return updated job payload."""
+
+    test_client, service = client
+    job = _build_job()
+    job.type = "task"
+    service.update_queued_job.return_value = job
+
+    response = test_client.put(
+        f"/api/queue/jobs/{job.id}",
+        json={
+            "type": "task",
+            "priority": 3,
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Update"}},
+            "maxAttempts": 4,
+            "expectedUpdatedAt": "2026-02-25T01:23:45.678Z",
+            "note": "tighten instructions",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(job.id)
+    assert body["status"] == models.AgentJobStatus.QUEUED.value
+    assert body["type"] == "task"
+    service.update_queued_job.assert_awaited_once()
+
+
+def test_update_queued_job_state_conflict_maps_409(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Queued job update state conflicts should return HTTP 409."""
+
+    test_client, service = client
+    service.update_queued_job.side_effect = AgentJobStateError("already running")
+
+    response = test_client.put(
+        f"/api/queue/jobs/{uuid4()}",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Update"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "job_state_conflict"
+
+
+def test_update_queued_job_validation_error_maps_422(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Queued job update payload validation errors should return HTTP 422."""
+
+    test_client, service = client
+    service.update_queued_job.side_effect = AgentQueueValidationError("invalid payload")
+
+    response = test_client.put(
+        f"/api/queue/jobs/{uuid4()}",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test"},
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+
+
+def test_update_queued_job_authorization_error_maps_403(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Queued job update ownership errors should return HTTP 403."""
+
+    test_client, service = client
+    service.update_queued_job.side_effect = AgentQueueJobAuthorizationError(
+        "not owner"
+    )
+
+    response = test_client.put(
+        f"/api/queue/jobs/{uuid4()}",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Update"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "job_not_authorized"
+
+
+def test_update_queued_job_not_found_maps_404(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Queued job update missing target should return HTTP 404."""
+
+    test_client, service = client
+    missing_id = uuid4()
+    service.update_queued_job.side_effect = AgentJobNotFoundError(missing_id)
+
+    response = test_client.put(
+        f"/api/queue/jobs/{missing_id}",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Update"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"]["code"] == "job_not_found"
+
+
+def test_update_queued_job_claude_runtime_gate_maps_400(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Queued job update runtime gate errors should map to HTTP 400."""
+
+    test_client, service = client
+    service.update_queued_job.side_effect = AgentQueueValidationError(
+        "targetRuntime=claude requires ANTHROPIC_API_KEY"
+    )
+
+    response = test_client.put(
+        f"/api/queue/jobs/{uuid4()}",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Test",
+                "targetRuntime": "claude",
+                "task": {"instructions": "Update"},
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "claude_runtime_disabled"
 
 
 def test_create_job_rejects_claude_runtime_without_api_key(
