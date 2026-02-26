@@ -129,7 +129,7 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
             await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
 
             first = await service.fail_job(
@@ -148,7 +148,7 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
             await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
             second = await service.fail_job(
                 job_id=job.id,
@@ -179,7 +179,7 @@ async def test_heartbeat_triggers_runtime_timeout(tmp_path: Path) -> None:
             claim = await service.claim_job(
                 worker_id="executor-01",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
             claimed = claim.job
             assert claimed is not None
@@ -220,11 +220,11 @@ async def test_get_queue_safeguard_snapshot_classifies_jobs(tmp_path: Path) -> N
                 payload={"repository": "Moon/Mind", "instruction": "run"},
             )
             await repo.commit()
-            for _ in (fresh, timed_out, stale):
+            for index, _ in enumerate((fresh, timed_out, stale), start=1):
                 await service.claim_job(
-                    worker_id="executor",
+                    worker_id=f"executor-{index}",
                     lease_seconds=30,
-                    worker_capabilities=["codex", "git"],
+                    worker_capabilities=["codex", "git", "gh"],
                 )
             fresh.started_at = datetime.now(UTC)
             timed_out.started_at = datetime.now(UTC) - timedelta(seconds=10)
@@ -255,7 +255,7 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
             claim = await service.claim_job(
                 worker_id="executor",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
             claimed = claim.job
             assert claimed is not None
@@ -292,7 +292,7 @@ async def test_recover_job_requires_owner_or_operator(tmp_path: Path) -> None:
             await service.claim_job(
                 worker_id="executor",
                 lease_seconds=30,
-                worker_capabilities=["codex", "git"],
+                worker_capabilities=["codex", "git", "gh"],
             )
 
             with pytest.raises(AgentQueueJobAuthorizationError):
@@ -873,10 +873,10 @@ async def test_migration_telemetry_reports_volume_by_type(
     assert "publishedRate" in telemetry.publish_outcomes
 
 
-async def test_extract_publish_mode_defaults_to_none_when_absent() -> None:
-    """Telemetry parser should not count missing publish metadata as requested."""
+async def test_extract_publish_mode_defaults_to_pr_when_absent() -> None:
+    """Telemetry parser should use the publish default when metadata is missing."""
 
-    assert AgentQueueService._extract_publish_mode({}) == "none"
+    assert AgentQueueService._extract_publish_mode({}) == "pr"
     assert (
         AgentQueueService._extract_publish_mode(
             {"task": {"publish": {"mode": "branch"}}}

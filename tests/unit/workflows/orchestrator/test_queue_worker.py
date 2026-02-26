@@ -123,6 +123,8 @@ def _worker_config() -> QueueWorkerConfig:
         lease_seconds=3,
         allowed_types=(ORCHESTRATOR_RUN_JOB_TYPE,),
         worker_capabilities=("orchestrator",),
+        queue_api_retry_attempts=3,
+        queue_api_retry_delay_seconds=0.01,
     )
 
 

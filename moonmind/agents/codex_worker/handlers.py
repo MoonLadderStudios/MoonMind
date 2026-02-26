@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections import defaultdict, deque
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,8 @@ from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
+
+_MAX_ERROR_MESSAGE_CHARS = 1024
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -219,6 +222,18 @@ class CodexSkillPayload:
         )
 
 
+def _truncate_error_message(
+    message: str,
+    *,
+    max_chars: int = _MAX_ERROR_MESSAGE_CHARS,
+) -> str:
+    if len(message) <= max_chars:
+        return message
+    head_chars = min(768, max_chars - 4)
+    tail_chars = max_chars - head_chars - 3
+    return f"{message[:head_chars]}...{message[-tail_chars:]}"
+
+
 class CodexExecHandler:
     """Executes `codex_exec` jobs and produces uploadable artifacts."""
 
@@ -304,6 +319,7 @@ class CodexExecHandler:
                 log_path=log_path,
                 cancel_event=cancel_event,
                 output_chunk_callback=output_chunk_callback,
+                enable_replay_dedupe=True,
             )
 
             diff_result = await self._run_command(
@@ -510,12 +526,18 @@ class CodexExecHandler:
         if not query:
             return PromptContextResolution(instruction=payload.instruction)
 
+        retrieval_skip_reason: str | None = None
         try:
-            pack = await asyncio.to_thread(
+            retrieval_result = await asyncio.to_thread(
                 self._retrieve_context_pack,
                 job_id=job_id,
                 payload=payload,
             )
+            if isinstance(retrieval_result, tuple) and len(retrieval_result) == 2:
+                pack, retrieval_skip_reason = retrieval_result
+            else:
+                pack = retrieval_result
+                retrieval_skip_reason = None
         except Exception as exc:
             self._append_log(
                 log_path,
@@ -524,6 +546,11 @@ class CodexExecHandler:
             return PromptContextResolution(instruction=payload.instruction)
 
         if pack is None:
+            if retrieval_skip_reason:
+                self._append_log(
+                    log_path,
+                    f"[rag] retrieval skipped: {retrieval_skip_reason}",
+                )
             return PromptContextResolution(instruction=payload.instruction)
 
         artifact = self._persist_context_pack(
@@ -556,18 +583,17 @@ class CodexExecHandler:
         *,
         job_id: UUID,
         payload: CodexExecPayload,
-    ) -> ContextPack | None:
+    ) -> tuple[ContextPack | None, str | None]:
         settings = RagRuntimeSettings.from_env(os.environ)
-        if not settings.rag_enabled:
-            return None
+        executable, reason = settings.retrieval_execution_reason(os.environ)
+        if not executable:
+            return None, reason
         if not settings.job_id:
             settings.job_id = str(job_id)
         if not settings.run_id:
             settings.run_id = str(job_id)
 
         transport = settings.resolved_transport(None)
-        if transport == "direct" and not settings.qdrant_enabled:
-            return None
 
         filters = settings.as_filter_metadata()
         repo_filter = self._repository_filter_value(payload.repository)
@@ -576,13 +602,16 @@ class CodexExecHandler:
             filters.setdefault("repository", repo_filter)
 
         service = ContextRetrievalService(settings=settings, env=os.environ)
-        return service.retrieve(
-            query=payload.instruction,
-            filters=filters,
-            top_k=settings.similarity_top_k,
-            overlay_policy=self._resolve_rag_overlay_policy(),
-            budgets=self._resolve_rag_budgets(),
-            transport=transport,
+        return (
+            service.retrieve(
+                query=payload.instruction,
+                filters=filters,
+                top_k=settings.similarity_top_k,
+                overlay_policy=self._resolve_rag_overlay_policy(),
+                budgets=self._resolve_rag_budgets(),
+                transport=transport,
+            ),
+            None,
         )
 
     def _persist_context_pack(
@@ -778,11 +807,12 @@ class CodexExecHandler:
         redaction_values: tuple[str, ...] = (),
         cancel_event: asyncio.Event | None = None,
         output_chunk_callback: OutputChunkCallback | None = None,
+        enable_replay_dedupe: bool = True,
     ) -> CommandResult:
         self._append_log(
             log_path,
             self._redact_text(
-                f"$ {' '.join(command)}",
+                f"[command] $ {' '.join(command)}",
                 extra_redaction_values=redaction_values,
             ),
         )
@@ -811,6 +841,27 @@ class CodexExecHandler:
                     await process.wait()
 
         stream_log_buffers: dict[str, str] = {"stdout": "", "stderr": ""}
+        max_stream_log_buffer_chars = 8192
+        max_replay_history_chunks = 512
+        min_replay_candidate_chars = 32
+
+        stream_chunk_history: dict[str, deque[tuple[int, str]]] = {
+            "stdout": deque(maxlen=max_replay_history_chunks),
+            "stderr": deque(maxlen=max_replay_history_chunks),
+        }
+        history_index: dict[str, dict[int, str]] = {"stdout": {}, "stderr": {}}
+        history_seq: dict[str, int] = {"stdout": 0, "stderr": 0}
+        chunk_seq_index: dict[str, dict[str, deque[int]]] = {
+            "stdout": defaultdict(deque),
+            "stderr": defaultdict(deque),
+        }
+        replay_candidate: dict[str, tuple[int, str] | None] = {
+            "stdout": None,
+            "stderr": None,
+        }
+        replay_cursor: dict[str, int | None] = {"stdout": None, "stderr": None}
+        replay_suppressed_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -837,18 +888,158 @@ class CodexExecHandler:
             if flush_text:
                 _write_redacted_log_block(flush_text)
 
+        async def _invoke_output_callback(
+            stream: str,
+            text: str | None,
+            *,
+            context: str,
+        ) -> None:
+            if output_chunk_callback is None:
+                return
+            try:
+                await output_chunk_callback(stream, text)
+            except Exception as exc:
+                self._append_log(
+                    log_path,
+                    self._redact_text(
+                        (
+                            "[warn] output chunk callback failed "
+                            f"during {context} ({stream}): {exc}"
+                        ),
+                        extra_redaction_values=redaction_values,
+                    ),
+                )
+
+        def _append_chunk_history(stream: str, text: str) -> None:
+            if not text:
+                return
+            history = stream_chunk_history[stream]
+            stream_history_index = history_index[stream]
+            stream_chunk_index = chunk_seq_index[stream]
+            if len(history) == max_replay_history_chunks and history:
+                evicted_seq, evicted_text = history[0]
+                history.popleft()
+                stream_history_index.pop(evicted_seq, None)
+                tracked_seqs = stream_chunk_index.get(evicted_text)
+                if tracked_seqs:
+                    if tracked_seqs and tracked_seqs[0] == evicted_seq:
+                        tracked_seqs.popleft()
+                    else:
+                        with suppress(ValueError):
+                            tracked_seqs.remove(evicted_seq)
+                    if not tracked_seqs:
+                        stream_chunk_index.pop(evicted_text, None)
+
+            seq = history_seq[stream]
+            history_seq[stream] = seq + 1
+            history.append((seq, text))
+            stream_history_index[seq] = text
+            stream_chunk_index[text].append(seq)
+
+            cursor = replay_cursor.get(stream)
+            if cursor is not None and cursor not in stream_history_index:
+                replay_cursor[stream] = None
+                replay_suppressed_chunks[stream] = []
+
+            candidate = replay_candidate.get(stream)
+            if candidate is not None and candidate[0] not in stream_history_index:
+                replay_candidate[stream] = None
+
+        def _dedupe_replayed_stream_chunk(stream: str, text: str) -> str:
+            if not enable_replay_dedupe:
+                return text
+            if not text:
+                return ""
+
+            stream_history_index = history_index[stream]
+            cursor = replay_cursor.get(stream)
+            if cursor is not None:
+                expected = stream_history_index.get(cursor)
+                if expected is not None and text == expected:
+                    replay_cursor[stream] = cursor + 1
+                    replay_suppressed_chunks[stream].append(text)
+                    return ""
+
+                replay_cursor[stream] = None
+                replay_pending_candidate_text[stream] = ""
+                emitted_replay_prefix = ""
+                if expected is not None:
+                    emitted_replay_prefix = "".join(replay_suppressed_chunks[stream])
+                replay_suppressed_chunks[stream] = []
+                _append_chunk_history(stream, text)
+                return f"{emitted_replay_prefix}{text}"
+
+            emitted_prefix = ""
+            candidate = replay_candidate.get(stream)
+            if candidate is not None:
+                replay_candidate[stream] = None
+                start_seq, pending_text = candidate
+                expected_seq = start_seq + 1
+                expected = stream_history_index.get(expected_seq)
+                if expected is not None and text == expected:
+                    replay_cursor[stream] = expected_seq + 1
+                    replay_pending_candidate_text[stream] = ""
+                    replay_suppressed_chunks[stream] = [pending_text, text]
+                    return ""
+                emitted_prefix = replay_pending_candidate_text[stream]
+                if not emitted_prefix:
+                    emitted_prefix = pending_text
+                replay_pending_candidate_text[stream] = text
+                _append_chunk_history(stream, pending_text)
+                replay_candidate[stream] = (start_seq, text)
+                _append_chunk_history(stream, text)
+                return emitted_prefix
+
+            if (
+                len(text) >= min_replay_candidate_chars
+                and "\n" in text
+                # Need at least one trailing chunk in history to validate replay.
+                and len(stream_chunk_history[stream]) >= 2
+            ):
+                seen_seqs = chunk_seq_index[stream].get(text)
+                if seen_seqs:
+                    candidate_seq = seen_seqs[-1]
+                    if candidate_seq + 1 in stream_history_index:
+                        replay_candidate[stream] = (candidate_seq, text)
+                        return emitted_prefix
+
+            _append_chunk_history(stream, text)
+            return f"{emitted_prefix}{text}"
+
+        async def _flush_pending_replay_candidate(stream: str) -> None:
+            candidate = replay_candidate.get(stream)
+            if candidate is None:
+                return
+            replay_candidate[stream] = None
+            replay_pending_candidate_text[stream] = ""
+            _index, pending_text = candidate
+            _append_chunk_history(stream, pending_text)
+            stream_log_buffers[stream] = (
+                stream_log_buffers.get(stream, "") + pending_text
+            )
+            await _invoke_output_callback(
+                stream,
+                pending_text,
+                context="replay-candidate flush",
+            )
+
         async def _emit_output(stream: str, text: str) -> None:
-            stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + text
-            _flush_stream_log_buffer(stream, force=False)
-            if output_chunk_callback is not None:
-                with suppress(Exception):
-                    await output_chunk_callback(stream, text)
+            deduped_text = _dedupe_replayed_stream_chunk(stream, text)
+            if not deduped_text:
+                return
+            stream_log_buffers[stream] = (
+                stream_log_buffers.get(stream, "") + deduped_text
+            )
+            _flush_stream_log_buffer(
+                stream,
+                force=len(stream_log_buffers[stream]) >= max_stream_log_buffer_chars,
+            )
+            await _invoke_output_callback(stream, deduped_text, context="chunk emit")
 
         async def _emit_stream_closed(stream: str) -> None:
+            await _flush_pending_replay_candidate(stream)
             _flush_stream_log_buffer(stream, force=True)
-            if output_chunk_callback is not None:
-                with suppress(Exception):
-                    await output_chunk_callback(stream, None)
+            await _invoke_output_callback(stream, None, context="stream close")
 
         stdout_reader = getattr(process, "stdout", None)
         stderr_reader = getattr(process, "stderr", None)
@@ -947,6 +1138,10 @@ class CodexExecHandler:
                         stderr_task.cancel()
                         with suppress(asyncio.CancelledError, Exception):
                             await asyncio.gather(stdout_task, stderr_task)
+                        await _flush_pending_replay_candidate("stdout")
+                        await _flush_pending_replay_candidate("stderr")
+                        _flush_stream_log_buffer("stdout", force=True)
+                        _flush_stream_log_buffer("stderr", force=True)
                         with suppress(asyncio.CancelledError, Exception):
                             await wait_task
                         raise CommandCancelledError(
@@ -978,17 +1173,22 @@ class CodexExecHandler:
         )
         if check and result.returncode != 0:
             detail = (stderr or stdout).strip()
+            command_hint = (
+                " ".join(command[:2]) if len(command) > 1 else " ".join(command)
+            ) or "<empty>"
             if detail:
                 tail_line = detail.splitlines()[-1]
                 redacted_tail = self._redact_text(
                     tail_line, extra_redaction_values=redaction_values
                 )
-                raise CodexWorkerHandlerError(
-                    f"command failed ({result.returncode}): {' '.join(command)} | {redacted_tail}"
+                message = (
+                    f"command failed ({result.returncode}): "
+                    f"{command_hint} | {redacted_tail}"
                 )
-            raise CodexWorkerHandlerError(
-                f"command failed ({result.returncode}): {' '.join(command)}"
-            )
+            else:
+                message = f"command failed ({result.returncode}): {command_hint}"
+            message = _truncate_error_message(message)
+            raise CodexWorkerHandlerError(message)
         return result
 
     def _build_codex_exec_command(

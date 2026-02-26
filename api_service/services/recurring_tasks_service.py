@@ -601,7 +601,7 @@ class RecurringTasksService:
         cursor = _coerce_utc(definition.next_run_at)
         safety_limit = max(500, policy.max_backfill * 20)
 
-        while cursor <= now and len(due_candidates) < safety_limit:
+        while cursor < now and len(due_candidates) < safety_limit:
             due_candidates.append(cursor)
             cursor = compute_next_occurrence(
                 cron=definition.cron,

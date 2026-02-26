@@ -158,7 +158,8 @@ async def test_scheduler_tick_creates_and_dispatches_runs(tmp_path: Path) -> Non
                 policy={},
             )
 
-            now = datetime.now(UTC).replace(microsecond=0)
+            # Avoid minute-boundary flakes where catchup=last can select scheduled_for==now.
+            now = datetime.now(UTC).replace(second=30, microsecond=0)
             task_definition.next_run_at = now - timedelta(minutes=1)
             manifest_definition.next_run_at = now - timedelta(minutes=1)
             await session.commit()

@@ -473,6 +473,375 @@ async def test_run_command_streaming_forwards_output_chunks(
     assert ("stderr", None) in callback_events
 
 
+async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Replay chunks from the same stream should only persist once in logs."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-dedupe.log"
+    replay_a = (
+        "Implemented the runtime capability fix and regression coverage.\n"
+        "**What changed**\n"
+        "- Added regression tests.\n"
+    )
+    replay_b = (
+        "**Validation**\n"
+        "- Ran required unit test script: `./tools/test_unit.sh`\n"
+        "- Result: `802 passed, 8 subtests passed`.\n"
+    )
+    callback_events: list[tuple[str, str | None]] = []
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(
+                ["thinking\n", replay_a, replay_b, replay_a, replay_b, "file update:\n"]
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert (
+        text.count("Implemented the runtime capability fix and regression coverage.")
+        == 1
+    )
+    assert text.count("Ran required unit test script: `./tools/test_unit.sh`") == 1
+    assert text.count("Result: `802 passed, 8 subtests passed`.") == 1
+    assert "file update:" in text
+    callback_text = "".join(
+        chunk for stream, chunk in callback_events if stream == "stdout" and chunk
+    )
+    assert (
+        callback_text.count(
+            "Implemented the runtime capability fix and regression coverage."
+        )
+        == 1
+    )
+
+
+async def test_run_command_streaming_keeps_repeated_output_across_turn_boundaries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Intentionally repeated lines across separate turns should be preserved."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-repeat.log"
+    repeated_line = "- Ran required unit test script: `./tools/test_unit.sh`\n"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(
+                [
+                    "assistant\n",
+                    repeated_line,
+                    "user\nPlease repeat the same test line exactly.\n",
+                    repeated_line,
+                    "done\n",
+                ]
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("Ran required unit test script: `./tools/test_unit.sh`") == 2
+
+
+async def test_run_command_streaming_keeps_prefix_if_replay_diverges(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Diverging replay sequences must re-emit the suppressed prefix chunks."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-diverge.log"
+
+    replay_a = "section A\nline 1\n"
+    replay_b = "section B\nline 2\n"
+    diverging_c = "section C\nline 3\n"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(
+                [replay_a, replay_b, "tail\n", replay_a, replay_b, diverging_c]
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["codex", "exec", "test"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        enable_replay_dedupe=True,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("section A") == 2
+    assert text.count("section B") == 2
+    assert text.count("section C") == 1
+
+
+async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Non-codex commands should preserve repeated chunks exactly."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-no-dedupe.log"
+    repeated = "duplicate block\n"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader([repeated, repeated])
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["git", "status"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("duplicate block") == 2
+
+
+async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Cancellation should flush pending replay candidates before returning."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-cancel.log"
+    cancel_event = asyncio.Event()
+    callback_events: list[tuple[str, str | None]] = []
+
+    replay_a = "candidate heading\nmore\n"
+    replay_b = "matched follow-up\n"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str], *, trigger_cancel: bool = False) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+            self._trigger_cancel = trigger_cancel
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                await asyncio.sleep(0.01)
+                return b""
+            value = self._chunks.pop(0)
+            if self._trigger_cancel and not self._chunks:
+                cancel_event.set()
+                await asyncio.sleep(0.02)
+            return value
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 1
+            self.stdout = FakeReader(
+                [replay_a, replay_b, replay_a], trigger_cancel=True
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            await asyncio.sleep(0.2)
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(CommandCancelledError):
+        await handler._run_command(
+            ["codex", "exec", "cancel"],
+            cwd=tmp_path,
+            log_path=log_path,
+            check=False,
+            cancel_event=cancel_event,
+            output_chunk_callback=output_callback,
+            enable_replay_dedupe=True,
+        )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("candidate heading") == 2
+    callback_text = "".join(
+        chunk for stream, chunk in callback_events if stream == "stdout" and chunk
+    )
+    assert callback_text.count("candidate heading") == 2
+
+
+async def test_run_command_logs_callback_failures_with_context(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Callback exceptions should be logged instead of silently swallowed."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-callback-warning.log"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader(["hello\n"])
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(_stream: str, _text: str | None) -> None:
+        raise RuntimeError("callback exploded")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["echo", "stream"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert "output chunk callback failed during chunk emit" in text
+    assert "callback exploded" in text
+
+
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     """Handler should run core codex_exec command sequence."""
 
@@ -489,6 +858,7 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -541,6 +911,7 @@ async def test_handler_injects_retrieved_context_when_available(
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -587,6 +958,51 @@ async def test_handler_injects_retrieved_context_when_available(
     assert "rag_context_items=1" in (result.summary or "")
 
 
+@pytest.mark.parametrize(
+    "provider",
+    ("[REDACTED]", "unsupported-provider", "google"),
+)
+async def test_retrieve_context_pack_skips_when_embedding_provider_unexecutable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    """Unsupported or unconfigured providers should skip retrieval cleanly."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    payload = CodexExecPayload.from_payload(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "publish": {"mode": "none"},
+        }
+    )
+
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("QDRANT_ENABLED", "1")
+    monkeypatch.setenv("DEFAULT_EMBEDDING_PROVIDER", provider)
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    class _UnexpectedRetrievalService:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("retrieval service should not initialize")
+
+    monkeypatch.setattr(
+        handlers, "ContextRetrievalService", _UnexpectedRetrievalService
+    )
+
+    pack, reason = handler._retrieve_context_pack(job_id=uuid4(), payload=payload)
+
+    assert pack is None
+    assert reason in {
+        "embedding_provider_unsupported",
+        "embedding_provider_not_configured",
+    }
+
+
 async def test_handler_falls_back_when_retrieval_raises(
     tmp_path: Path,
     monkeypatch,
@@ -606,6 +1022,7 @@ async def test_handler_falls_back_when_retrieval_raises(
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -651,6 +1068,7 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -695,6 +1113,7 @@ async def test_handler_preserves_codex_model_and_effort(
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -745,6 +1164,7 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -788,6 +1208,7 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -827,6 +1248,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         calls.append(list(command))
         if command[:3] == ["git", "status", "--porcelain"]:
@@ -925,6 +1347,7 @@ async def test_handler_publish_commit_failure_returns_failed_result(
         redaction_values=(),
         cancel_event=None,
         output_chunk_callback=None,
+        enable_replay_dedupe=False,
     ):
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")
@@ -975,6 +1398,114 @@ async def test_run_command_error_includes_stderr_tail(
             cwd=tmp_path,
             log_path=log_path,
         )
+
+
+async def test_run_command_truncates_and_redacts_long_failure_messages(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Failure diagnostics should redact secrets before applying truncation."""
+
+    token = "ghp-handler-boundary-token-012345"
+    detail = "x" * 980 + token + "tail"
+    handler = CodexExecHandler(workdir_root=tmp_path, redaction_values=(token,))
+    log_path = tmp_path / "command-redaction.log"
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (b"", detail.encode("utf-8"))
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(CodexWorkerHandlerError) as exc_info:
+        await handler._run_command(
+            ["codex", "login"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert token[:16] not in message
+    assert "[REDACTED]" in message
+    assert len(message) <= 1024
+
+
+async def test_run_command_error_message_uses_compact_command_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Failed command diagnostics should avoid dumping long command payloads."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "command-noise.log"
+    long_instruction = (
+        "Perform an extremely long codex instruction payload that should not appear"
+        " in failure diagnostics."
+    )
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (
+                b"",
+                b"fatal: invalid model requested while running command\n",
+            )
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(
+        CodexWorkerHandlerError,
+        match=r"command failed \(1\): codex exec .*",
+    ) as exc_info:
+        await handler._run_command(
+            ["codex", "exec", "--model", "gpt-5.3-codex-spark", long_instruction],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert "Perform an extremely long codex instruction payload" not in message
+    assert "gpt-5.3-codex-spark" not in message
+    assert "fatal: invalid model requested while running command" in message
+
+
+async def test_run_command_error_message_without_output_uses_compact_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No-output failures should still include concise command prefix."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "command-no-detail.log"
+
+    class FakeProcess:
+        returncode = 2
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(
+        CodexWorkerHandlerError, match=r"command failed \(2\): git diff"
+    ) as exc_info:
+        await handler._run_command(
+            ["git", "diff", "--check", "README.md"],
+            cwd=tmp_path,
+            log_path=log_path,
+        )
+
+    message = str(exc_info.value)
+    assert "README.md" not in message
 
 
 async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> None:

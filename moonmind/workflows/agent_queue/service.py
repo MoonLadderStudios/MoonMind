@@ -36,6 +36,7 @@ from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
+    _normalize_publish_mode,
     normalize_queue_job_payload,
 )
 from moonmind.workflows.tasks import compile_task_payload_templates
@@ -724,17 +725,21 @@ class AgentQueueService:
         status: Optional[models.AgentJobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[models.AgentJob]:
         """List queue jobs with optional filters."""
 
-        if limit < 1 or limit > 200:
-            raise AgentQueueValidationError("limit must be between 1 and 200")
+        if limit < 1 or limit > 201:
+            raise AgentQueueValidationError("limit must be between 1 and 201")
+        if offset < 0:
+            raise AgentQueueValidationError("offset must be >= 0")
 
         normalized_type = job_type.strip() if job_type else None
         return await self._repository.list_jobs(
             status=status,
             job_type=normalized_type if normalized_type else None,
             limit=limit,
+            offset=offset,
         )
 
     async def claim_job(
@@ -2406,14 +2411,15 @@ class AgentQueueService:
         publish_node = source.get("publish")
         publish = publish_node if isinstance(publish_node, dict) else {}
         publish = (
-            task_publish.get("mode")
-            or publish.get("mode")
-            or source.get("publishMode")
-            or "none"
+            task_publish.get("mode") or publish.get("mode") or source.get("publishMode")
         )
-        mode = str(publish).strip().lower()
-        if mode in {"none", "branch", "pr"}:
-            return mode
+        try:
+            return _normalize_publish_mode(publish)
+        except TaskContractError:
+            logger.debug(
+                "Invalid publish mode %r found in payload for telemetry; defaulting to none",
+                publish,
+            )
         return "none"
 
     @staticmethod

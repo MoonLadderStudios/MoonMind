@@ -169,11 +169,14 @@ class AgentQueueRepository:
         status: Optional[models.AgentJobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[models.AgentJob]:
         """Return jobs filtered by optional status and type."""
 
         if limit < 1:
             raise ValueError("limit must be at least 1")
+        if offset < 0:
+            raise ValueError("offset must be at least 0")
 
         stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob)
         if status is not None:
@@ -181,10 +184,14 @@ class AgentQueueRepository:
         if job_type is not None:
             stmt = stmt.where(models.AgentJob.type == job_type)
 
-        stmt = stmt.order_by(
-            models.AgentJob.created_at.desc(),
-            models.AgentJob.id.desc(),
-        ).limit(limit)
+        stmt = (
+            stmt.order_by(
+                models.AgentJob.created_at.desc(),
+                models.AgentJob.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -223,6 +230,25 @@ class AgentQueueRepository:
 
         now = datetime.now(UTC)
         await self._requeue_expired_jobs(now=now)
+        # Harden single-worker execution: do not allow one logical worker id to
+        # hold multiple concurrent running claims. This prevents a second claim
+        # when a prior terminal transition (complete/fail/cancel ack) has not
+        # been durably persisted yet.
+        active_claim_stmt: Select[tuple[UUID]] = (
+            select(models.AgentJob.id)
+            .where(
+                models.AgentJob.status == models.AgentJobStatus.RUNNING,
+                models.AgentJob.claimed_by == worker_id,
+                or_(
+                    models.AgentJob.lease_expires_at.is_(None),
+                    models.AgentJob.lease_expires_at >= now,
+                ),
+            )
+            .limit(1)
+        )
+        active_claim_result = await self._session.execute(active_claim_stmt)
+        if active_claim_result.scalar_one_or_none() is not None:
+            return None
 
         base_stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob).where(
             models.AgentJob.status == models.AgentJobStatus.QUEUED,

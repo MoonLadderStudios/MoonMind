@@ -45,15 +45,7 @@ class ContextRetrievalService:
         self._telemetry = VectorTelemetry(
             run_id=settings.run_id, job_id=settings.job_id
         )
-        self._embedding = embedding_client or EmbeddingClient(
-            EmbeddingConfig(
-                provider=settings.embedding_provider,
-                model=settings.embedding_model,
-                google_api_key=self._env.get("GOOGLE_API_KEY"),
-                openai_api_key=self._env.get("OPENAI_API_KEY"),
-                ollama_model=self._env.get("OLLAMA_EMBEDDING_MODEL"),
-            )
-        )
+        self._embedding = embedding_client
         self._qdrant = qdrant_client or RagQdrantClient(
             host=settings.qdrant_host,
             port=settings.qdrant_port,
@@ -69,6 +61,16 @@ class ContextRetrievalService:
 
     @property
     def embedding_client(self) -> EmbeddingClient:
+        if self._embedding is None:
+            self._embedding = EmbeddingClient(
+                EmbeddingConfig(
+                    provider=self._settings.embedding_provider,
+                    model=self._settings.embedding_model,
+                    google_api_key=self._env.get("GOOGLE_API_KEY"),
+                    openai_api_key=self._env.get("OPENAI_API_KEY"),
+                    ollama_model=self._env.get("OLLAMA_EMBEDDING_MODEL"),
+                )
+            )
         return self._embedding
 
     @property
@@ -102,7 +104,7 @@ class ContextRetrievalService:
             )
         self._qdrant.ensure_collection_ready()
         with self._telemetry.timer("embedding"):
-            vector = self._embedding.embed(query)
+            vector = self.embedding_client.embed(query)
         overlay_collection = None
         if (
             overlay_policy == "include"
