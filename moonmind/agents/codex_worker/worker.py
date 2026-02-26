@@ -3709,9 +3709,7 @@ class CodexWorker:
             )
             bounded_result = StepLogReadResult(
                 content=bounded_content,
-                source_delta_bytes=max(
-                    0, source_size - dedupe_start_offset
-                ),
+                source_delta_bytes=max(0, source_size - dedupe_start_offset),
                 truncated=bounded_result.truncated,
                 omitted_bytes=bounded_result.omitted_bytes,
             )

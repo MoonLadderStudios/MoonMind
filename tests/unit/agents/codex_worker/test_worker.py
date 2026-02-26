@@ -1615,20 +1615,10 @@ async def test_run_once_task_steps_self_referential_log_growth_tracks_unique_out
 
     assert processed is True
     step2_log_path = (
-        artifact_scope
-        / str(job.id)
-        / "artifacts"
-        / "logs"
-        / "steps"
-        / "step-0001.log"
+        artifact_scope / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
     )
     step3_log_path = (
-        artifact_scope
-        / str(job.id)
-        / "artifacts"
-        / "logs"
-        / "steps"
-        / "step-0002.log"
+        artifact_scope / str(job.id) / "artifacts" / "logs" / "steps" / "step-0002.log"
     )
     step2_text = step2_log_path.read_text(encoding="utf-8")
     step3_text = step3_log_path.read_text(encoding="utf-8")
@@ -1749,12 +1739,7 @@ async def test_run_once_task_steps_preserves_identical_steps(
 
     assert processed is True
     step2_log_path = (
-        artifact_scope
-        / str(job.id)
-        / "artifacts"
-        / "logs"
-        / "steps"
-        / "step-0001.log"
+        artifact_scope / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
     )
     step2_text = step2_log_path.read_text(encoding="utf-8")
     assert step2_text == duplicated_block
