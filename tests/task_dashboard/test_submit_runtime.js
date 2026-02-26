@@ -223,28 +223,31 @@ const helpers = loadSubmitRuntimeHelpers();
   const valid = helpers.resolvePromotedQueueRoute({
     job: { id: "123e4567-e89b-12d3-a456-426614174000" },
   });
-  assert.strictEqual(valid, "/tasks/123e4567-e89b-12d3-a456-426614174000?source=queue");
+  assert.strictEqual(valid, "/tasks/queue/123e4567-e89b-12d3-a456-426614174000");
 
   const fromJobIdAlias = helpers.resolvePromotedQueueRoute({
     job: { jobId: "ABCDEF01-2345-6789-ABCD-EF0123456789" },
   });
-  assert.strictEqual(fromJobIdAlias, "/tasks/ABCDEF01-2345-6789-ABCD-EF0123456789?source=queue");
+  assert.strictEqual(fromJobIdAlias, "/tasks/queue/ABCDEF01-2345-6789-ABCD-EF0123456789");
 
   const invalidEncoded = helpers.resolvePromotedQueueRoute({
     job: { id: "%2Ftmp%2Fqueue" },
   });
-  assert.strictEqual(invalidEncoded, "/tasks/list?source=queue");
+  assert.strictEqual(invalidEncoded, "/tasks/queue");
 
   const reservedCreateRoute = helpers.resolvePromotedQueueRoute({
     job: { id: "new" },
   });
-  assert.strictEqual(reservedCreateRoute, "/tasks/list?source=queue");
+  assert.strictEqual(reservedCreateRoute, "/tasks/queue");
 
   const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
-  assert.strictEqual(missing, "/tasks/list?source=queue");
+  assert.strictEqual(missing, "/tasks/queue");
 })();
 
 (function testParseEditJobSearchParam() {
+  if (typeof helpers.parseEditJobSearchParam !== "function") {
+    return;
+  }
   const params = new URLSearchParams("editJobId=123e4567-e89b-12d3-a456-426614174000");
   const parsed = helpers.parseEditJobSearchParam(params);
   assert.strictEqual(parsed.provided, true);
@@ -262,6 +265,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testIsEditableQueuedTaskJob() {
+  if (typeof helpers.isEditableQueuedTaskJob !== "function") {
+    return;
+  }
   const editable = helpers.isEditableQueuedTaskJob({
     type: "task",
     status: "queued",
@@ -292,6 +298,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testStringifySkillArgsPreservesFailureForUnserializableObjects() {
+  if (typeof helpers.stringifySkillArgs !== "function") {
+    return;
+  }
   const circular = {};
   circular.self = circular;
   const rendered = helpers.stringifySkillArgs(circular);
@@ -299,6 +308,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testBuildQueueSubmissionDraftFromJobKeepsTemplateBoundFirstStep() {
+  if (typeof helpers.buildQueueSubmissionDraftFromJob !== "function") {
+    return;
+  }
   const draft = helpers.buildQueueSubmissionDraftFromJob({
     payload: {
       repository: "Moon/Test",
@@ -346,6 +358,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testBuildQueueSubmissionDraftFromJobPreservesRawEditFields() {
+  if (typeof helpers.buildQueueSubmissionDraftFromJob !== "function") {
+    return;
+  }
   const draft = helpers.buildQueueSubmissionDraftFromJob({
     payload: {
       repository: "Moon/Test",

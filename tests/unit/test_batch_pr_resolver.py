@@ -58,7 +58,7 @@ def test_is_local_head_rejects_fork_owner_mismatch():
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is False
 
 
-def test_build_queue_request_sets_none_publish_with_matching_branches():
+def test_build_queue_request_sets_branch_publish_with_matching_branches():
     module = _load_module()
     build_queue_request = module["_build_queue_request"]
     runtime_selection = module["RuntimeSelection"]
@@ -82,7 +82,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["mode"] == "codex"
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
-    assert task["publish"]["mode"] == "none"
+    assert task["publish"]["mode"] == "branch"
     assert git["startingBranch"] == "feature/example"
     assert git["newBranch"] == "feature/example"
 

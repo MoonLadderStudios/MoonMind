@@ -4,14 +4,31 @@ set -euo pipefail
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 AUTH_SERVICE="${CODEX_AUTH_SERVICE:-codex-worker}"
 AUTH_COMMAND="${CODEX_AUTH_COMMAND:-codex login --device-auth && codex login status}"
-AUTH_COMMAND_TOKEN_RE='^[A-Za-z0-9._/:=-]+$'
+AUTH_COMMAND_TOKEN_RE='^[A-Za-z0-9._/:=?&%+#@!,-]+$'
 CODEX_TERM="${TERM:-xterm-256color}"
 
 run_auth_command() {
   local raw_command="$1"
   local -a command_parts=()
+  local -a forbidden_patterns=(
+    '$'
+    '`'
+  )
 
-  read -r -a command_parts <<< "$raw_command"
+  for pattern in "${forbidden_patterns[@]}"; do
+  if [[ "$raw_command" == *"$pattern"* ]]; then
+    echo "Error: CODEX_AUTH_COMMAND contains unsupported characters." >&2
+    return 1
+  fi
+  done
+
+  set -f
+  if ! eval "command_parts=( $raw_command )"; then
+    set +f
+    echo "Error: CODEX_AUTH_COMMAND could not be parsed as shell arguments." >&2
+    return 1
+  fi
+  set +f
   if [[ "${#command_parts[@]}" -eq 0 ]]; then
     echo "Error: CODEX_AUTH_COMMAND contains an empty command." >&2
     return 1
@@ -24,7 +41,7 @@ run_auth_command() {
 
   for token in "${command_parts[@]}"; do
     if [[ ! "$token" =~ $AUTH_COMMAND_TOKEN_RE ]]; then
-      echo "Error: Invalid token in CODEX_AUTH_COMMAND: ${token}" >&2
+      echo "Error: CODEX_AUTH_COMMAND contains invalid argument values." >&2
       return 1
     fi
   done
@@ -37,6 +54,22 @@ run_auth_command() {
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker CLI is not available." >&2
+  exit 127
+fi
+
+if ! command -v sed >/dev/null 2>&1; then
+  echo "Error: sed is not available." >&2
+  exit 127
+fi
+
+if ! command -v grep >/dev/null 2>&1; then
+  echo "Error: grep is not available." >&2
+  exit 127
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+  echo "Error: docker compose is not available." >&2
+  echo "Install Docker Compose v2 and retry." >&2
   exit 127
 fi
 
