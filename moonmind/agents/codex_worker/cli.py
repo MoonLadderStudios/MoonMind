@@ -6,8 +6,8 @@ import argparse
 import asyncio
 import logging
 import os
-import subprocess
 import re
+import subprocess
 from typing import Mapping, Sequence
 
 _MAX_COMMAND_ERROR_MESSAGE_BYTES = 1024

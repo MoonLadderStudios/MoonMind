@@ -3640,9 +3640,7 @@ class CodexWorker:
         linkage_marker = None
         if metadata_artifact_name:
             linkage_marker = f"metadata={metadata_artifact_name}"
-        max_bytes = (
-            self._config.step_log_max_bytes if allow_truncation else source_size
-        )
+        max_bytes = self._config.step_log_max_bytes if allow_truncation else source_size
         bounded_result = self._read_bounded_step_log_bytes(
             source_path=source_path,
             start_offset=dedupe_start_offset,
