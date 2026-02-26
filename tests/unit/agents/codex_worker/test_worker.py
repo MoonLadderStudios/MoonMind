@@ -361,6 +361,36 @@ class StreamingReplayStepHandler(FakeHandler):
         )
 
 
+class _FakeStreamingReader:
+    def __init__(self, chunks: Sequence[str]) -> None:
+        self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+    async def read(self, _size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+class _FakeStreamingProcess:
+    def __init__(self, chunks: Sequence[str]) -> None:
+        self.returncode = 0
+        self.stdout = _FakeStreamingReader(chunks)
+        self.stderr = _FakeStreamingReader(())
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+    async def communicate(self, input: object | None = None) -> tuple[bytes, bytes]:
+        del input
+        return (b"", b"")
+
+
 async def test_run_once_returns_false_when_no_job() -> None:
     """No claim should produce a no-work cycle."""
 
@@ -1544,36 +1574,9 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     )
     repeated_turn_line = "- Final answer status: tests already green.\n"
 
-    class FakeReader:
-        def __init__(self, chunks: Sequence[str]) -> None:
-            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
-
-        async def read(self, _size: int) -> bytes:
-            if not self._chunks:
-                return b""
-            return self._chunks.pop(0)
-
-    class FakeProcess:
-        def __init__(self, chunks: Sequence[str]) -> None:
-            self.returncode = 0
-            self.stdout = FakeReader(chunks)
-            self.stderr = FakeReader(())
-
-        async def wait(self) -> int:
-            return self.returncode
-
-        def terminate(self) -> None:
-            return None
-
-        def kill(self) -> None:
-            return None
-
-        async def communicate(self, input: object | None = None) -> tuple[bytes, bytes]:
-            return (b"", b"")
-
     async def fake_exec(*args, **kwargs):
         del args, kwargs
-        return FakeProcess(
+        return _FakeStreamingProcess(
             (
                 "thinking\n",
                 completion_block,
