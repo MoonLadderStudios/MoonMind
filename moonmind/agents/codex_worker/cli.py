@@ -6,8 +6,11 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from typing import Mapping, Sequence
+
+_MAX_COMMAND_ERROR_MESSAGE_BYTES = 1024
 
 from celery_worker.runtime_mode import (
     format_invalid_gemini_cli_auth_mode_error,
@@ -157,7 +160,20 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
+    # Include heuristic redaction for common secret-like tokens that may not yet be
+    # supplied in ``secrets`` but should still be suppressed in diagnostics.
+    redacted = re.sub(
+        r"(?:ghp|gho|ghu|ghs|ghr)[-_][A-Za-z0-9._-]{20,}",
+        "[REDACTED]",
+        redacted,
+    )
     return redacted
+
+
+def _compact_command_hint(command: Sequence[str]) -> str:
+    parts = [str(part).strip() for part in command]
+    compact_parts = [part for part in parts if part]
+    return " ".join(compact_parts[:2] or compact_parts)
 
 
 def _run_checked_command(
@@ -185,12 +201,28 @@ def _run_checked_command(
     if result.returncode == 0:
         return
 
-    message = (
-        result.stderr.strip()
-        or result.stdout.strip()
-        or f"command failed: {' '.join(command)}"
-    )
-    raise RuntimeError(_redact_value(message, redaction_values))
+    command_hint = _compact_command_hint(command)
+    failure_output = result.stderr.strip() or result.stdout.strip()
+    failure_output = _redact_value(failure_output, redaction_values)
+    failure_tail = ""
+    if failure_output:
+        lines = [line for line in failure_output.splitlines() if line.strip()]
+        if lines:
+            failure_tail = lines[-1].strip()
+
+    message = f"command failed ({result.returncode}): {command_hint}"
+    if failure_tail:
+        message = f"{message}\n{failure_tail}"
+
+    if failure_tail and len(message) > _MAX_COMMAND_ERROR_MESSAGE_BYTES:
+        prefix = f"command failed ({result.returncode}): {command_hint}\n"
+        tail_limit = max(0, _MAX_COMMAND_ERROR_MESSAGE_BYTES - len(prefix))
+        if tail_limit == 0:
+            message = prefix.rstrip("\n")
+        else:
+            message = prefix + failure_tail[-tail_limit:]
+
+    raise RuntimeError(message)
 
 
 def _verify_speckit_cli(

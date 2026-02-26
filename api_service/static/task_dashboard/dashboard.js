@@ -4376,7 +4376,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       message.className = "small queue-submit-message";
-      message.textContent = "";
+      message.textContent = "Submitting...";
       persistWorkerDraft();
 
       const formData = new FormData(form);
@@ -4643,8 +4643,14 @@
       };
 
       const submitButton = form.querySelector('button[type="submit"]');
+      const originalSubmitLabel =
+        submitButton instanceof HTMLButtonElement
+          ? (submitButton.textContent || "Create").trim() || "Create"
+          : "Create";
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
+        submitButton.textContent = "Submitting...";
+        submitButton.setAttribute("aria-busy", "true");
       }
 
       try {
@@ -4664,6 +4670,8 @@
       } catch (error) {
         if (submitButton instanceof HTMLButtonElement) {
           submitButton.disabled = false;
+          submitButton.textContent = originalSubmitLabel;
+          submitButton.removeAttribute("aria-busy");
         }
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
