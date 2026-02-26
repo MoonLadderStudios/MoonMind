@@ -54,7 +54,9 @@ if __name__ == "__main__":
                         user = await get_or_create_default_user(
                             db_session=db_session, user_manager=user_manager
                         )
-                        return await get_user_api_key(user, provider, db_session)
+                        return await get_user_api_key(
+                            user, provider, db_session, prefer_system_key=True
+                        )
 
             provider = (
                 settings.default_embedding_provider.lower()

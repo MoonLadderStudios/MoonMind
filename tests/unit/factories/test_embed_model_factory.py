@@ -8,7 +8,7 @@ from moonmind.factories.embed_model_factory import build_embed_model
 
 @pytest.fixture
 def mock_settings():
-    placeholder_api_key = "unit-test-openai-api-key"
+    placeholder_api_key = "placeholder-openai-token"
 
     settings = MagicMock(spec=AppSettings)
     settings.default_embedding_provider = "openai"
@@ -45,7 +45,7 @@ def test_build_embed_model_openai_with_explicit_key(mock_settings):
     with patch(
         "moonmind.factories.embed_model_factory.OpenAIEmbedding"
     ) as MockOpenAIEmbedding:
-        explicit_key = "unit-test-openai-api-key-override"
+        explicit_key = "openai-token-override"
 
         build_embed_model(mock_settings, openai_api_key=explicit_key)
 

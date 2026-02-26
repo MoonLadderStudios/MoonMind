@@ -148,9 +148,16 @@ async def get_rag_context(
 
 
 async def get_user_api_key(
-    user: User, provider: str, db_session: AsyncSession
+    user: User,
+    provider: str,
+    db_session: AsyncSession,
+    prefer_system_key: bool = False,
 ) -> Optional[str]:
-    """Return the API key for ``provider`` using the AuthProviderManager."""
+    """Return the API key for ``provider`` using the AuthProviderManager.
+
+    Pass ``prefer_system_key=True`` to return configured system key first and only
+    hit the auth provider for a user override when needed.
+    """
 
     provider_lower = provider.lower()
     env_api_key: str | None = None
@@ -160,6 +167,9 @@ async def get_user_api_key(
         env_api_key = settings.openai.openai_api_key
     elif provider_lower == "anthropic":
         env_api_key = settings.anthropic.anthropic_api_key
+
+    if prefer_system_key and env_api_key:
+        return env_api_key
 
     try:
         manager = await get_auth_manager(db_session)
