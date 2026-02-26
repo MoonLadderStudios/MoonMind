@@ -3495,6 +3495,7 @@ class CodexWorker:
         step_patch_path: Path,
         step_log_offsets: MutableMapping[str, int] | None = None,
         step_log_checkpoints: MutableMapping[str, tuple[bytes, int]] | None = None,
+        truncate_step_log: bool = True,
     ) -> list[ArtifactUpload]:
         """Map runtime artifacts to deterministic per-step artifact paths."""
 
@@ -3519,6 +3520,7 @@ class CodexWorker:
                         preview_artifact_name=step_log_name,
                         full_artifact_name=step_log_full_name,
                         metadata_artifact_name=step_log_metadata_name,
+                        allow_truncation=truncate_step_log,
                     )
                     normalized.append(
                         ArtifactUpload(
@@ -3610,6 +3612,7 @@ class CodexWorker:
         full_artifact_name: str | None = None,
         metadata_artifact_name: str | None = None,
         step_log_checkpoints: MutableMapping[str, tuple[bytes, int]] | None = None,
+        allow_truncation: bool = True,
     ) -> StepLogCopyResult:
         """Persist only the unread log delta for a step with a bounded snapshot size."""
 
@@ -3637,11 +3640,14 @@ class CodexWorker:
         linkage_marker = None
         if metadata_artifact_name:
             linkage_marker = f"metadata={metadata_artifact_name}"
+        max_bytes = (
+            self._config.step_log_max_bytes if allow_truncation else source_size
+        )
         bounded_result = self._read_bounded_step_log_bytes(
             source_path=source_path,
             start_offset=dedupe_start_offset,
             source_size=source_size,
-            max_bytes=self._config.step_log_max_bytes,
+            max_bytes=max_bytes,
             linkage_marker=linkage_marker,
         )
         bounded_content = bounded_result.content
@@ -3651,6 +3657,7 @@ class CodexWorker:
             previous_checkpoint: tuple[bytes, int] | None = step_log_checkpoints.get(
                 offset_key
             )
+            replay_source_prefix: bytes | None = None
             if dedupe_start_offset > 0 and previous_checkpoint is not None:
                 replay_checkpoint, replay_source_size = previous_checkpoint
                 if (
@@ -3681,11 +3688,12 @@ class CodexWorker:
                         dedupe_start_offset += replay_source_size
 
                     if dedupe_start_offset != original_start_offset:
+                        replay_source_prefix = replay_checkpoint
                         bounded_content = self._read_bounded_step_log_bytes(
                             source_path=source_path,
                             start_offset=dedupe_start_offset,
                             source_size=source_size,
-                            max_bytes=self._config.step_log_max_bytes,
+                            max_bytes=max_bytes,
                             linkage_marker=linkage_marker,
                         )
                         bounded_content = bounded_content.content
@@ -3703,10 +3711,11 @@ class CodexWorker:
                     source_delta_bytes,
                 )
 
-            bounded_content = self._dedupe_replayed_step_log_bytes(
-                content=bounded_content,
-                replay_checkpoint=current_checkpoint,
-            )
+            if replay_source_prefix is not None:
+                bounded_content = self._dedupe_replayed_step_log_bytes(
+                    content=bounded_content,
+                    replay_checkpoint=replay_source_prefix,
+                )
             bounded_result = StepLogReadResult(
                 content=bounded_content,
                 source_delta_bytes=max(0, source_size - dedupe_start_offset),
@@ -5650,6 +5659,9 @@ class CodexWorker:
                 step_patch_path=step_patch_path,
                 step_log_offsets=step_log_offsets,
                 step_log_checkpoints=step_log_checkpoints,
+                truncate_step_log=not (
+                    len(resolved_steps) > 1 and step.step_index == 0
+                ),
             )
             step_artifacts.extend(normalized_step_artifacts)
             if artifact_callback is not None and normalized_step_artifacts:
