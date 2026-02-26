@@ -3926,10 +3926,12 @@
         templateFeatureRequest: readQueueTemplateFeatureRequest(),
       };
     };
-    const persistWorkerDraft = () => {
-      submitDraftController.saveWorker(collectWorkerDraftFromForm());
-      persistSubmitDraftsToStorage();
-    };
+    const persistWorkerDraft = isEditMode
+      ? () => {}
+      : () => {
+          submitDraftController.saveWorker(collectWorkerDraftFromForm());
+          persistSubmitDraftsToStorage();
+        };
     const scheduleWorkerDraftPersist = createDraftPersistenceScheduler(
       persistWorkerDraft,
     );
