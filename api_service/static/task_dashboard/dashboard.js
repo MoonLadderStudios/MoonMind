@@ -2005,7 +2005,9 @@
       };
     }
     const instruction = String(draft.instruction || "").trim();
-    if (!instruction) {
+    const rawSkillId = String(draft.skillId || "").trim();
+    const hasExplicitSkill = Boolean(rawSkillId) && rawSkillId !== "auto";
+    if (!hasExplicitSkill && !instruction) {
       return {
         ok: false,
         error: "Instruction is required.",
@@ -2018,6 +2020,12 @@
         error: "Target service is required.",
       };
     }
+    if (hasExplicitSkill && targetService !== "orchestrator") {
+      return {
+        ok: false,
+        error: "Explicit skill runs must targetService=orchestrator.",
+      };
+    }
     const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
     const value = normalizeSubmissionDraftForTest(draft);
     value.instruction = instruction;
@@ -2025,10 +2033,9 @@
     value.priority = ["normal", "high"].includes(normalizedPriority)
       ? normalizedPriority
       : "normal";
-    const skillId = String(draft.skillId || "").trim();
     const skillArgsRaw = String(draft.skillArgs || "").trim();
-    if (skillId) {
-      value.skillId = skillId;
+    if (rawSkillId) {
+      value.skillId = rawSkillId;
     } else {
       delete value.skillId;
     }
@@ -4936,7 +4943,7 @@
           </select>
         </label>
         <label>Instruction
-          <textarea name="instruction" required placeholder="Describe what should be changed and verified.">${escapeHtml(
+          <textarea name="instruction" placeholder="Describe what should be changed and verified.">${escapeHtml(
             String(sanitizedOrchestratorDraft.instruction || "").trim(),
           )}</textarea>
         </label>

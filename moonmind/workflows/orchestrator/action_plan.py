@@ -232,18 +232,19 @@ def generate_skill_action_plan(
 ) -> ActionPlan:
     """Expand ``instruction`` into a skill-execution action plan."""
 
-    normalized = instruction.strip()
+    normalized = str(instruction or "")
     normalized_skill_id = skill_id.strip()
-    if not normalized:
-        raise ValueError("Instruction must not be empty")
     if not normalized_skill_id:
         raise ValueError("Skill id must not be empty")
 
+    analyze_instruction = (
+        f"{normalized}\nRequested orchestrator skill: {normalized_skill_id}"
+        if normalized.strip()
+        else f"Requested orchestrator skill: {normalized_skill_id}"
+    )
+
     steps: list[PlanStep] = [
-        _build_analyze_step(
-            f"{normalized}\nRequested orchestrator skill: {normalized_skill_id}",
-            profile,
-        ),
+        _build_analyze_step(analyze_instruction, profile),
         _build_skill_build_step(
             profile,
             skill_id=normalized_skill_id,
