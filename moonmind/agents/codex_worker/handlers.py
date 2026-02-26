@@ -812,7 +812,7 @@ class CodexExecHandler:
         self._append_log(
             log_path,
             self._redact_text(
-                f"$ {' '.join(command)}",
+                f"[command] $ {' '.join(command)}",
                 extra_redaction_values=redaction_values,
             ),
         )
