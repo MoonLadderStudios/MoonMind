@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+
 import pytest
 
 
@@ -17,6 +18,7 @@ def _resolve_openai_api_key() -> str | None:
 
 _avoid_local_workflows_package_shadowing()
 from llama_index.embeddings.openai import OpenAIEmbedding
+
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
 
