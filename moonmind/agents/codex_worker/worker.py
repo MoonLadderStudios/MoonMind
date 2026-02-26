@@ -1024,6 +1024,7 @@ class PublishPreflightResult:
     changed_paths: tuple[str, ...]
     source_code_paths: tuple[str, ...]
     verification_evidence: tuple[dict[str, Any], ...]
+    verification_log_read_errors: tuple[str, ...]
     verification_skip_reason: dict[str, str] | None
     report_path: Path
 
@@ -3356,7 +3357,7 @@ class CodexWorker:
     @classmethod
     def _collect_verification_evidence(
         cls, *, prepared: PreparedTaskWorkspace
-    ) -> tuple[dict[str, Any], ...]:
+    ) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
         """Collect verification-command evidence from stage log artifacts."""
 
         candidate_paths: list[Path] = [
@@ -3370,6 +3371,7 @@ class CodexWorker:
 
         unique_paths: list[Path] = []
         seen_paths: set[str] = set()
+        read_errors: list[str] = []
         for path in candidate_paths:
             key = path.resolve(strict=False).as_posix()
             if key in seen_paths:
@@ -3386,6 +3388,11 @@ class CodexWorker:
                     encoding="utf-8", errors="replace"
                 ).splitlines()
             except OSError as exc:
+                error_message = (
+                    f"failed to read stage log {log_path}: "
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+                read_errors.append(error_message)
                 logger.warning(
                     "failed to collect verification evidence from stage log %s: %s",
                     log_path,
@@ -3408,7 +3415,7 @@ class CodexWorker:
                         "line": line_number,
                     }
                 )
-        return tuple(evidence)
+        return tuple(evidence), tuple(read_errors)
 
     @staticmethod
     def _resolve_publish_verification_skip_reason(
@@ -3501,7 +3508,9 @@ class CodexWorker:
         source_code_paths = tuple(
             path for path in changed_paths if self._is_source_code_change_path(path)
         )
-        verification_evidence = self._collect_verification_evidence(prepared=prepared)
+        verification_evidence, verification_log_read_errors = (
+            self._collect_verification_evidence(prepared=prepared)
+        )
 
         skip_reason: dict[str, str] | None = None
         skip_reason_error: str | None = None
@@ -3552,6 +3561,7 @@ class CodexWorker:
                 "required": verification_required,
                 "evidenceCount": len(verification_evidence),
                 "evidence": list(verification_evidence),
+                "logReadErrors": list(verification_log_read_errors),
                 "skipped": effective_skip_reason is not None,
                 "skipReason": effective_skip_reason,
                 "skipReasonError": skip_reason_error if skip_used else None,
@@ -3574,6 +3584,7 @@ class CodexWorker:
             source_code_paths=tuple(source_code_paths),
             verification_evidence=tuple(verification_evidence),
             verification_skip_reason=effective_skip_reason,
+            verification_log_read_errors=tuple(verification_log_read_errors),
             report_path=report_path,
         )
 
@@ -3706,6 +3717,9 @@ class CodexWorker:
             )
             verification_payload["evidence"] = list(
                 preflight_result.verification_evidence
+            )
+            verification_payload["logReadErrors"] = list(
+                preflight_result.verification_log_read_errors
             )
             verification_payload["skipReason"] = (
                 preflight_result.verification_skip_reason
