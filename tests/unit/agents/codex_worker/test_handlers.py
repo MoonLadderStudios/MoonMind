@@ -568,20 +568,40 @@ async def test_run_command_streaming_polling_snapshots_append_only_new_deltas(
     final_summary = (
         "final summary:\n" "Added long-running polling regression coverage.\n"
     )
+    long_lines = (
+        "This is a long output line used to force stream chunking.\n" * 40
+    )
     snapshots: list[str] = []
     cumulative = ""
     for update in (file_update, assistant_summary, final_summary):
-        cumulative = f"{cumulative}{update}"
+        cumulative = f"{cumulative}{update}{long_lines}"
         snapshots.extend([cumulative, cumulative])
 
     class FakeReader:
         def __init__(self, chunks: list[str]) -> None:
             self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+            self._chunk_index = 0
+            self._chunk_offset = 0
 
-        async def read(self, _size: int) -> bytes:
-            if not self._chunks:
+        async def read(self, size: int) -> bytes:
+            if self._chunk_index >= len(self._chunks):
                 return b""
-            return self._chunks.pop(0)
+
+            size = max(1, int(size))
+            current_chunk = self._chunks[self._chunk_index]
+            remaining = current_chunk[self._chunk_offset :]
+            if not remaining:
+                self._chunk_index += 1
+                self._chunk_offset = 0
+                return await self.read(size)
+
+            payload = remaining[:size]
+            if len(remaining) <= size:
+                self._chunk_index += 1
+                self._chunk_offset = 0
+            else:
+                self._chunk_offset += size
+            return payload
 
     class FakeProcess:
         def __init__(self) -> None:
