@@ -48,10 +48,10 @@ Non-negotiable rules:
 - Operator-facing behavior MUST be controlled by configuration (env/config) rather than hardcoded constants.
 - Configuration MUST have deterministic precedence (highest to lowest):
   1) command-line arguments (for CLI tools),
-  2) explicit request payload / API parameter (when applicable),
-  3) environment variables,
-  4) config file,
-  5) defaults.
+  1) explicit request payload / API parameter (when applicable),
+  1) environment variables,
+  1) config file,
+  1) defaults.
 - Each config option MUST be:
   - documented (purpose + default + examples),
   - namespaced consistently (e.g., `MOONMIND_*`), and
