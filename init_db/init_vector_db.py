@@ -41,19 +41,33 @@ if __name__ == "__main__":
         logger.info("Building embedding model...")
         try:
 
-            async def _get_google_key():
+            async def _get_api_key(provider: str):
                 async with get_async_session_context() as db_session:
                     async with get_user_manager_context(db_session) as user_manager:
                         user = await get_or_create_default_user(
                             db_session=db_session, user_manager=user_manager
                         )
-                        return await get_user_api_key(user, "google", db_session)
+                        return await get_user_api_key(user, provider, db_session)
 
-            google_key = asyncio.run(_get_google_key())
-
-            embed_model, embed_dimensions = build_embed_model(
-                settings, google_api_key=google_key
+            provider = (
+                settings.default_embedding_provider.lower()
+                if settings.default_embedding_provider
+                else "google"
             )
+            key_to_use = None
+            if provider in ["google", "openai"]:
+                key_to_use = asyncio.run(_get_api_key(provider))
+
+            if provider == "google":
+                embed_model, embed_dimensions = build_embed_model(
+                    settings, google_api_key=key_to_use
+                )
+            elif provider == "openai":
+                embed_model, embed_dimensions = build_embed_model(
+                    settings, openai_api_key=key_to_use
+                )
+            else:
+                embed_model, embed_dimensions = build_embed_model(settings)
             logger.info(
                 f"Embedding model built successfully. Dimensions: {embed_dimensions}"
             )

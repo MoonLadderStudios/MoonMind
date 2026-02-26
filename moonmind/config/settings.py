@@ -1181,6 +1181,10 @@ class OpenAISettings(BaseSettings):
 
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
     openai_chat_model: str = Field("gpt-3.5-turbo", env="OPENAI_CHAT_MODEL")
+    openai_embedding_model: str = Field(
+        "text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL"
+    )
+    openai_embedding_dimensions: int = Field(1536, env="OPENAI_EMBEDDING_DIMENSIONS")
     openai_enabled: bool = Field(True, env="OPENAI_ENABLED")
 
     model_config = SettingsConfigDict(env_prefix="")

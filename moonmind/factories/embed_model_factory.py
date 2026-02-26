@@ -1,10 +1,15 @@
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
 
 from ..config.settings import AppSettings
 
 
-def build_embed_model(settings: AppSettings, google_api_key: str | None = None):
+def build_embed_model(
+    settings: AppSettings,
+    google_api_key: str | None = None,
+    openai_api_key: str | None = None,
+):
     provider = (
         settings.default_embedding_provider.lower()
         if settings.default_embedding_provider
@@ -33,8 +38,19 @@ def build_embed_model(settings: AppSettings, google_api_key: str | None = None):
             ),
             settings.google.google_embedding_dimensions,
         )
-    # Add other providers here if they become default options
-    # TODO: OpenAI
+    elif provider == "openai":
+        key_to_use = (
+            openai_api_key if openai_api_key else settings.openai.openai_api_key
+        )
+        if not key_to_use:
+            raise ValueError("OpenAI API key is not configured for OpenAI embeddings.")
+        return (
+            OpenAIEmbedding(
+                model=settings.openai.openai_embedding_model,
+                api_key=key_to_use,
+            ),
+            settings.openai.openai_embedding_dimensions,
+        )
     else:
         # Fallback or error if provider is not supported for embeddings
         raise ValueError(f"Unsupported default embed provider: {provider}.")
