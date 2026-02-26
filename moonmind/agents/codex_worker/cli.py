@@ -9,6 +9,7 @@ import os
 import subprocess
 from typing import Mapping, Sequence
 
+from moonmind.utils.logging import scrub_github_tokens
 from celery_worker.runtime_mode import (
     format_invalid_gemini_cli_auth_mode_error,
     inspect_gemini_home_for_auth_mode,
@@ -35,6 +36,7 @@ from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
 
 logger = logging.getLogger(__name__)
+_MAX_COMMAND_ERROR_MESSAGE_LENGTH = 1024
 
 
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
@@ -157,6 +159,7 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
+    redacted = scrub_github_tokens(redacted)
     return redacted
 
 
@@ -192,8 +195,8 @@ def _run_checked_command(
     if detail:
         message = f"command failed ({result.returncode}): {command_hint} | {detail.splitlines()[-1]}"
         message = _redact_value(message, redaction_values)
-        if len(message) > 4096:
-            message = f"{message[:4093]}..."
+        if len(message) > _MAX_COMMAND_ERROR_MESSAGE_LENGTH:
+            message = f"{message[:_MAX_COMMAND_ERROR_MESSAGE_LENGTH - 3]}..."
         raise RuntimeError(message)
 
     raise RuntimeError(

@@ -974,6 +974,8 @@ async def _poll_for_codex_diff(
                     "Timed out while polling Codex for diff availability"
                 ) from exc
             await asyncio.sleep(poll_interval)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive logging
             raise CodexDiffRetrievalError(f"failed to poll for Codex diff: {exc}") from exc
 

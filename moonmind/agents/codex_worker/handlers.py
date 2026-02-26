@@ -20,6 +20,9 @@ from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
+from moonmind.utils.logging import scrub_github_tokens
+
+_MAX_COMMAND_ERROR_MESSAGE_LENGTH = 1024
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -1173,8 +1176,8 @@ class CodexExecHandler:
                 )
             else:
                 message = f"command failed ({result.returncode}): {command_hint}"
-            if len(message) > 4096:
-                message = f"{message[:4093]}..."
+            if len(message) > _MAX_COMMAND_ERROR_MESSAGE_LENGTH:
+                message = f"{message[:_MAX_COMMAND_ERROR_MESSAGE_LENGTH - 3]}..."
             raise CodexWorkerHandlerError(message)
         return result
 
@@ -1248,6 +1251,7 @@ class CodexExecHandler:
         )
         for value in values:
             redacted = redacted.replace(value, "[REDACTED]")
+        redacted = scrub_github_tokens(redacted)
         return redacted
 
     @staticmethod
