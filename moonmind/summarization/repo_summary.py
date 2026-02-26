@@ -160,9 +160,7 @@ def summarize_repo_for_readme(
             for root, dirs, files in os.walk(repo_path):
                 # Filter directories in-place to prevent walking into ignored ones
                 dirs[:] = [
-                    d
-                    for d in dirs
-                    if _normalize_dir_path(d) not in IGNORED_DIRS
+                    d for d in dirs if _normalize_dir_path(d) not in IGNORED_DIRS
                 ]
                 for file in files:
                     if len(all_files_detail) >= MAX_FILES_IN_REPO_INFO:
