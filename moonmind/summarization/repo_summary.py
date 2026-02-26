@@ -9,18 +9,39 @@ import toml  # For pyproject.toml or other toml files
 
 logger = logging.getLogger(__name__)
 
-IGNORED_DIRS = {
-    ".git",
-    ".hg",
-    ".svn",
-    "__pycache__",
-    "node_modules",
-    "target",
-    "build",
-    "dist",
-    ".vscode",
-    ".idea",
-}
+IGNORED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".vscode",
+        ".idea",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "build",
+        "dist",
+        "node_modules",
+        "target",
+        ".gradle",
+        "__pycache__",
+        "venv",
+    }
+)
+
+MAX_FILES_IN_REPO_INFO = 200
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize path separators for portable path representation."""
+    return path.replace(os.path.sep, "/")
+
+
+def _normalize_dir_path(directory: str) -> str:
+    """Normalize a directory name for consistency in ignore checks."""
+    return directory.rstrip("/").rstrip("\\")
 
 
 def summarize_repo_for_readme(
@@ -29,12 +50,13 @@ def summarize_repo_for_readme(
     text_summarizer: callable,
     project_name_arg: str = None,
     main_language_arg: str = None,
+    include_all_files_detail: bool = False,
 ) -> str:
     """
     Generates a README content string for a given code repository.
     Aims to provide context for coding agents and follows modern summarization strategies.
     """
-    logger.info(f"Starting README generation for repository at: {repo_path}")
+    logger.info("Starting README generation for repository at: %s", repo_path)
 
     project_name = project_name_arg if project_name_arg else os.path.basename(repo_path)
     detected_language = main_language_arg  # Prioritize argument
@@ -118,7 +140,7 @@ def summarize_repo_for_readme(
                     tech_stack.append("JavaScript/TypeScript")
 
             elif os.path.isdir(item_path):
-                if item not in IGNORED_DIRS:
+                if _normalize_dir_path(item) not in IGNORED_DIRS:
                     top_level_dirs.append(item)
 
         # Simple language detection if not provided
@@ -133,15 +155,22 @@ def summarize_repo_for_readme(
                 detected_language = max(lang_counts, key=lang_counts.get)
         logger.info(f"Detected main language: {detected_language}")
 
-        # Deeper scan for all_files_detail for more advanced analysis
-        for root, dirs, files in os.walk(repo_path):
-            # Filter directories in-place to prevent walking into ignored ones
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
-
-            for file in files:
-                # Store relative paths for cleaner analysis and reporting
-                rel_path = os.path.relpath(os.path.join(root, file), repo_path)
-                all_files_detail.append(rel_path)
+        if include_all_files_detail:
+            # Deeper scan for all_files_detail for optional advanced analysis
+            for root, dirs, files in os.walk(repo_path):
+                # Filter directories in-place to prevent walking into ignored ones
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if _normalize_dir_path(d) not in IGNORED_DIRS
+                ]
+                for file in files:
+                    if len(all_files_detail) >= MAX_FILES_IN_REPO_INFO:
+                        break
+                    rel_path = os.path.relpath(os.path.join(root, file), repo_path)
+                    all_files_detail.append(_normalize_path(rel_path))
+                if len(all_files_detail) >= MAX_FILES_IN_REPO_INFO:
+                    break
 
     except Exception as e:
         logger.exception(f"Error during repository analysis: {e}")
@@ -157,8 +186,16 @@ def summarize_repo_for_readme(
     }
 
     logger.info(
-        f"Repo info gathered: {json.dumps(repo_info, indent=2, ensure_ascii=False)}"
-    )  # ensure_ascii for broader char support in logs
+        "Repo info gathered for %s: top_level_dirs=%d, top_level_files=%d",
+        repo_info["project_name"],
+        len(repo_info["top_level_dirs"]),
+        len(repo_info["top_level_files"]),
+    )
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Repo info details: %s",
+            json.dumps(repo_info, indent=2, ensure_ascii=False),
+        )  # ensure_ascii for broader char support in logs
 
     readme_sections = []
     model = None
