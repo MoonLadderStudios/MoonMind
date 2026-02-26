@@ -174,11 +174,12 @@ entries include a `message` that should match the Celery exception output.
    - On a machine with a browser:
 
 ```bash
-docker run --rm -it \
-  -v codex_auth_0:/home/app/.codex \
-  --entrypoint bash \
-  ${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest} -lc 'codex login --device-auth && codex login status'
-# Repeat for codex_auth_1 and codex_auth_2
+./tools/auth-codex-volume.sh
+# or target a specific bootstrap container:
+CODEX_AUTH_SERVICE=codex-worker \
+  CODEX_AUTH_COMMAND='codex login --device-auth && codex login status' \
+  ./tools/auth-codex-volume.sh
+# Repeat as needed for additional environments/volumes.
 ```
 
    If you must authenticate elsewhere, copy your local ~/.codex into each volume with care (avoid duplicating to many places).

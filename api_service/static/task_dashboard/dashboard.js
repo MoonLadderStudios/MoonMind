@@ -425,6 +425,10 @@
   const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
   const TASK_LIST_TITLE_MAX_CHARS = 400;
+  const ACTIVE_QUEUE_FETCH_LIMIT = 50;
+  const ACTIVE_ORCHESTRATOR_FETCH_LIMIT = 50;
+  const QUEUE_PAGE_SIZE_OPTIONS = [20, 50];
+  const DEFAULT_QUEUE_PAGE_SIZE = 50;
   const pollers = [];
   const disposers = [];
   const persistentPollers = [];
@@ -601,7 +605,19 @@
     const runImmediately = options.runImmediately !== false;
     const skipAutoRefresh = options.skipAutoRefresh === true;
     const persistent = options.persistent === true;
+    let inFlight = null;
+    let rerunRequested = false;
+    let disposed = false;
+
+    registerDisposer(() => {
+      disposed = true;
+      rerunRequested = false;
+    }, { persistent });
+
     const run = (forced = false) => {
+      if (disposed) {
+        return;
+      }
       if (!forced) {
         if (!skipAutoRefresh && !isAutoRefreshActive()) {
           return;
@@ -610,9 +626,24 @@
           return;
         }
       }
-      task().catch((error) => {
-        console.error("polling task failed", error);
-      });
+      if (inFlight) {
+        rerunRequested = true;
+        return;
+      }
+      inFlight = Promise.resolve()
+        .then(() => task())
+        .catch((error) => {
+          console.error("polling task failed", error);
+        })
+        .finally(() => {
+          inFlight = null;
+          if (!rerunRequested || disposed) {
+            rerunRequested = false;
+            return;
+          }
+          rerunRequested = false;
+          run(false);
+        });
     };
 
     if (runImmediately) {
@@ -2127,6 +2158,11 @@
       { showAutoRefreshControls: true },
     );
 
+    let pageActive = true;
+    registerDisposer(() => {
+      pageActive = false;
+    });
+
     const loader = async () => {
       const errors = [];
       const rows = [];
@@ -2135,29 +2171,45 @@
         {
           source: "queue-running",
           call: () =>
-            fetchJson(withQueueSummaryFlag("/api/queue/jobs?status=running&limit=200")),
+            fetchJson(
+              withQueueSummaryFlag(
+                `/api/queue/jobs?status=running&limit=${ACTIVE_QUEUE_FETCH_LIMIT}`,
+              ),
+            ),
           transform: (payload) => toQueueRows(payload?.items || []),
         },
         {
           source: "queue-queued",
           call: () =>
-            fetchJson(withQueueSummaryFlag("/api/queue/jobs?status=queued&limit=200")),
+            fetchJson(
+              withQueueSummaryFlag(
+                `/api/queue/jobs?status=queued&limit=${ACTIVE_QUEUE_FETCH_LIMIT}`,
+              ),
+            ),
           transform: (payload) => toQueueRows(payload?.items || []),
         },
         {
           source: "orchestrator-running",
-          call: () => fetchJson("/orchestrator/runs?status=running&limit=100"),
+          call: () =>
+            fetchJson(
+              `/orchestrator/runs?status=running&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
         {
           source: "orchestrator-pending",
-          call: () => fetchJson("/orchestrator/runs?status=pending&limit=100"),
+          call: () =>
+            fetchJson(
+              `/orchestrator/runs?status=pending&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
         {
           source: "orchestrator-awaiting",
           call: () =>
-            fetchJson("/orchestrator/runs?status=awaiting_approval&limit=100"),
+            fetchJson(
+              `/orchestrator/runs?status=awaiting_approval&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
       ];
@@ -2173,7 +2225,9 @@
         }
       });
 
-      root.querySelector(".panel")?.remove();
+      if (!pageActive) {
+        return;
+      }
       setView(
         "Active Tasks",
         `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
@@ -2210,6 +2264,11 @@
     let telemetryInFlight = null;
     let telemetryLastRequestedAt = 0;
     let currentRows = [];
+    const paginationState = {
+      limit: DEFAULT_QUEUE_PAGE_SIZE,
+      offset: 0,
+      hasMore: false,
+    };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -2255,6 +2314,12 @@
         supportedTaskRuntimes,
         filterState.runtime,
       );
+      const pageSizeOptions = QUEUE_PAGE_SIZE_OPTIONS.map(
+        (value) =>
+          `<option value="${escapeHtml(value)}" ${
+            paginationState.limit === value ? "selected" : ""
+          }>${escapeHtml(value)}</option>`,
+      ).join("");
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -2300,6 +2365,11 @@
                 ${stageStatusOptions}
               </select>
             </label>
+            <label>Page Size
+              <select name="pageSize">
+                ${pageSizeOptions}
+              </select>
+            </label>
           </div>
           <label>Publish Mode
             <select name="publishMode">
@@ -2308,6 +2378,28 @@
             </select>
           </label>
         </form>
+      `;
+    }
+
+    function renderQueuePaginationSummary(rows, filteredRows) {
+      const page = Math.floor(paginationState.offset / paginationState.limit) + 1;
+      const hasRows = rows.length > 0;
+      return `
+        <div class="actions">
+          <div class="small">
+            Page ${escapeHtml(page)} · showing ${escapeHtml(filteredRows.length)} of ${escapeHtml(
+              rows.length,
+            )} jobs in this page.
+          </div>
+          <div>
+            <button type="button" class="secondary" data-queue-page-prev ${
+              paginationState.offset <= 0 || !hasRows ? "disabled" : ""
+            }>Previous</button>
+            <button type="button" class="secondary" data-queue-page-next ${
+              paginationState.hasMore ? "" : "disabled"
+            }>Next</button>
+          </div>
+        </div>
       `;
     }
 
@@ -2340,10 +2432,13 @@
       }
       const filteredRows = applyQueueFilters(rows);
       const telemetryHtml = renderTelemetrySummary(telemetryPayload);
+      const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
       setView(
         "Queue Jobs",
         `All queue jobs ordered by creation time. Unified queue: ${defaultQueueName}.`,
-        `${telemetryHtml}${renderQueueFilters()}${renderQueueLayouts(filteredRows)}`,
+        `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
+          filteredRows,
+        )}`,
         { showAutoRefreshControls: true },
       );
       attachFilterHandlers(rows);
@@ -2358,6 +2453,9 @@
       const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
+      const pageSizeField = filterForm.elements.namedItem("pageSize");
+      const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
+      const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
       const rerender = () => {
         renderQueueList(rows);
@@ -2387,6 +2485,43 @@
           rerender();
         });
       }
+      if (pageSizeField) {
+        pageSizeField.addEventListener("change", () => {
+          const parsed = Number(pageSizeField.value || DEFAULT_QUEUE_PAGE_SIZE);
+          if (!QUEUE_PAGE_SIZE_OPTIONS.includes(parsed)) {
+            return;
+          }
+          paginationState.limit = parsed;
+          paginationState.offset = 0;
+          load().catch((error) => {
+            console.error("queue page size update failed", error);
+          });
+        });
+      }
+
+      prevButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (paginationState.offset <= 0) {
+            return;
+          }
+          paginationState.offset = Math.max(0, paginationState.offset - paginationState.limit);
+          load().catch((error) => {
+            console.error("queue previous page load failed", error);
+          });
+        });
+      });
+
+      nextButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (!paginationState.hasMore) {
+            return;
+          }
+          paginationState.offset += paginationState.limit;
+          load().catch((error) => {
+            console.error("queue next page load failed", error);
+          });
+        });
+      });
     }
 
     async function refreshTelemetryIfStale() {
@@ -2420,11 +2555,27 @@
     }
 
     const load = async () => {
-      const payload = await fetchJson(withQueueSummaryFlag("/api/queue/jobs?limit=200"));
+      const params = new URLSearchParams();
+      params.set("limit", String(paginationState.limit));
+      params.set("offset", String(paginationState.offset));
+      const payload = await fetchJson(
+        withQueueSummaryFlag(`/api/queue/jobs?${params.toString()}`),
+      );
       if (!pageActive) {
         return;
       }
-      currentRows = sortRows(toQueueRows(payload?.items || []));
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const payloadHasMore = payload && typeof payload === "object"
+        && Object.prototype.hasOwnProperty.call(payload, "hasMore")
+          ? Boolean(payload.hasMore)
+          : items.length >= paginationState.limit;
+      paginationState.hasMore = payloadHasMore;
+      if (paginationState.offset > 0 && items.length === 0) {
+        paginationState.offset = Math.max(0, paginationState.offset - paginationState.limit);
+        await load();
+        return;
+      }
+      currentRows = sortRows(toQueueRows(items));
       renderQueueList(currentRows);
       refreshTelemetryIfStale().catch(() => {
         console.warn("queue telemetry refresh failed");
@@ -4488,13 +4639,8 @@
       };
 
       const submitButton = form.querySelector('button[type="submit"]');
-      const originalSubmitLabel =
-        submitButton instanceof HTMLButtonElement
-          ? submitButton.textContent || "Create"
-          : "Create";
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
-        submitButton.textContent = "Submitting...";
       }
 
       try {
@@ -4514,7 +4660,6 @@
       } catch (error) {
         if (submitButton instanceof HTMLButtonElement) {
           submitButton.disabled = false;
-          submitButton.textContent = originalSubmitLabel;
         }
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";

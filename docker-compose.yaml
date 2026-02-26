@@ -71,6 +71,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
+      - POSTGRES_HOST=${POSTGRES_HOST:-moonmind-api-db}
       - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -117,7 +118,10 @@ services:
     expose:
       - "5432"
     networks:
-      - local-network
+      local-network:
+        aliases:
+          # local-network is external/shared; use a unique DB hostname to avoid cross-stack DNS collisions.
+          - moonmind-api-db
     restart: unless-stopped
 
   qdrant:
@@ -136,7 +140,7 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@api-db:5432/${POSTGRES_DB:-moonmind}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@${POSTGRES_HOST:-moonmind-api-db}:5432/${POSTGRES_DB:-moonmind}
       - PYTHONPATH=/app
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
@@ -485,6 +489,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
+      - POSTGRES_HOST=${POSTGRES_HOST:-moonmind-api-db}
       - MOONMIND_SCHEDULER_POLL_INTERVAL_MS=${MOONMIND_SCHEDULER_POLL_INTERVAL_MS:-2000}
       - MOONMIND_SCHEDULER_BATCH_SIZE=${MOONMIND_SCHEDULER_BATCH_SIZE:-50}
       - MOONMIND_SCHEDULER_MAX_BACKFILL=${MOONMIND_SCHEDULER_MAX_BACKFILL:-3}

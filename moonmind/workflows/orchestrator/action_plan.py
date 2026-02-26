@@ -92,8 +92,14 @@ def _build_skill_build_step(
 ) -> PlanStep:
     normalized_args: dict[str, Any] = dict(skill_args or {})
     if skill_id == "update-moonmind":
-        normalized_args.setdefault("composeProject", profile.compose_project)
-    serialized_args = json.dumps(normalized_args, sort_keys=True)
+        # Always pin update-moonmind runs to the managed compose project to
+        # avoid accidentally creating a second stack from a different cwd.
+        normalized_args["composeProject"] = profile.compose_project
+    serialized_args = json.dumps(
+        normalized_args,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     parameters = {
         "service": profile.compose_service,
         "workspace": str(profile.workspace_path),

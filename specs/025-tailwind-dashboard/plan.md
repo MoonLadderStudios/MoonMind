@@ -7,7 +7,7 @@
 
 ## Summary
 
-Phase 2 modernizes the tasks dashboard stylesheet by replacing the legacy `--bg`/`--accent` tokens with the documented `--mm-*` palette, shifting the entire UI toward MoonMind’s purple/cyan brand direction, and ensuring gradients + status chips align with `docs/TailwindStyleSystem.md`. Implementation keeps the FastAPI + vanilla JS architecture intact; all work occurs inside `dashboard.tailwind.css`/`dashboard.css` plus the style doc. Deliverables include palette tokenization, updated gradients, validation guidance, and regression-safe build/test steps so later Tailwind phases (dark mode, responsive polish) can reuse the same tokens.
+Phase 2 modernizes the tasks dashboard stylesheet by replacing the legacy `--bg`/`--accent` tokens with the documented `--mm-*` palette, shifting the entire UI toward MoonMind’s purple/cyan brand direction, and ensuring gradients + status chips align with `docs/TaskDashboardStyleSystem.md`. Implementation keeps the FastAPI + vanilla JS architecture intact; all work occurs inside `dashboard.tailwind.css`/`dashboard.css` plus the style doc. Deliverables include palette tokenization, updated gradients, validation guidance, and regression-safe build/test steps so later Tailwind phases (dark mode, responsive polish) can reuse the same tokens.
 
 ## Technical Context
 
@@ -64,7 +64,7 @@ api_service/
 │   ├── dashboard.css              # Generated output shipped to browsers
 │   └── dashboard.js               # Vanilla JS renderer consuming semantic classes
 docs/
-└── TailwindStyleSystem.md         # Design + migration guide
+└── TaskDashboardStyleSystem.md         # Design + migration guide
 
 package.json                       # Tailwind/PostCSS devDependencies + scripts
 tools/

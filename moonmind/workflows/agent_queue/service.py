@@ -725,17 +725,21 @@ class AgentQueueService:
         status: Optional[models.AgentJobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[models.AgentJob]:
         """List queue jobs with optional filters."""
 
-        if limit < 1 or limit > 200:
-            raise AgentQueueValidationError("limit must be between 1 and 200")
+        if limit < 1 or limit > 201:
+            raise AgentQueueValidationError("limit must be between 1 and 201")
+        if offset < 0:
+            raise AgentQueueValidationError("offset must be >= 0")
 
         normalized_type = job_type.strip() if job_type else None
         return await self._repository.list_jobs(
             status=status,
             job_type=normalized_type if normalized_type else None,
             limit=limit,
+            offset=offset,
         )
 
     async def claim_job(
@@ -832,7 +836,7 @@ class AgentQueueService:
         action: Literal["pause", "resume"],
         mode: Optional[str],
         reason: str,
-        actor_user_id: UUID,
+        actor_user_id: UUID | None,
         force_resume: bool = False,
         audit_limit: int = 5,
     ) -> WorkerPauseSnapshot:
@@ -845,8 +849,7 @@ class AgentQueueService:
         normalized_reason = self._clean_optional_str(reason)
         if not normalized_reason:
             raise AgentQueueValidationError("reason must be a non-empty string")
-        if actor_user_id is None:
-            raise AgentQueueValidationError("actor_user_id is required")
+        actor = await self._resolve_existing_actor_user_id(actor_user_id)
 
         state = await self._repository.get_pause_state()
         now = datetime.now(UTC)
@@ -876,20 +879,20 @@ class AgentQueueService:
                 paused=True,
                 mode=pause_mode,
                 reason=normalized_reason,
-                requested_by_user_id=actor_user_id,
+                requested_by_user_id=actor,
                 requested_at=requested_at,
             )
             await self._repository.append_system_control_event(
                 action="pause",
                 mode=pause_mode,
                 reason=normalized_reason,
-                actor_user_id=actor_user_id,
+                actor_user_id=actor,
             )
             logger.info(
                 "worker pause enabled",
                 extra={
                     "mode": pause_mode.value,
-                    "operator": str(actor_user_id),
+                    "operator": str(actor) if actor is not None else None,
                 },
             )
         else:
@@ -905,20 +908,20 @@ class AgentQueueService:
                 paused=False,
                 mode=None,
                 reason=normalized_reason,
-                requested_by_user_id=actor_user_id,
+                requested_by_user_id=actor,
                 requested_at=None,
             )
             await self._repository.append_system_control_event(
                 action="resume",
                 mode=None,
                 reason=normalized_reason,
-                actor_user_id=actor_user_id,
+                actor_user_id=actor,
             )
             logger.info(
                 "worker pause disabled",
                 extra={
                     "forceResume": force_resume,
-                    "operator": str(actor_user_id),
+                    "operator": str(actor) if actor is not None else None,
                     "runningBeforeResume": metrics.running,
                     "staleRunningBeforeResume": metrics.stale_running,
                 },
@@ -2217,6 +2220,22 @@ class AgentQueueService:
 
         state = await self._repository.get_pause_state()
         return self._to_queue_system_metadata(state)
+
+    async def _resolve_existing_actor_user_id(
+        self,
+        actor_user_id: UUID | None,
+    ) -> UUID | None:
+        """Return actor id only when it still exists in persistence."""
+
+        if actor_user_id is None:
+            return None
+        if await self._repository.user_exists(actor_user_id):
+            return actor_user_id
+        logger.warning(
+            "worker pause actor missing in user table; recording null actor metadata",
+            extra={"actorUserId": str(actor_user_id)},
+        )
+        return None
 
     async def _build_worker_pause_metrics(self) -> WorkerPauseMetrics:
         """Compute queued/running/stale counters for worker pause UX."""

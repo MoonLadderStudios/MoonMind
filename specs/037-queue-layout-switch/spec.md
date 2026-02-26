@@ -31,7 +31,7 @@ Non-goals:
 | DOC-REQ-005 | §4.4 Table Composition | Rename the existing queue table helper to `renderQueueTable(rows)`, wrap it with `.queue-table-wrapper`, and derive `<th>/<td>` cells from `queueFieldDefinitions` to keep column parity. |
 | DOC-REQ-006 | §4.5 CSS / Tailwind Rules | Add `.queue-layouts`, `.queue-table-wrapper`, `.queue-card-*` classes with breakpoint rules so Tailwind builds show cards on mobile and tables on md+, using MoonMind tokenized colors. |
 | DOC-REQ-007 | §4.6 Accessibility & Performance | Keep cards semantic (`<ul role="list">`, `<li>`, `<dl>`), ensure `View details` buttons use accessible roles, and limit DOM growth to <2× rows with no new network calls. |
-| DOC-REQ-008 | §5-6 Implementation & Rollout | Deliver the JS + CSS refactor without template changes, validate via responsive manual testing plus `./tools/test_unit.sh`, ship without feature flags, update `docs/TailwindStyleSystem.md`, and monitor bundle growth (<3 KB gzip). |
+| DOC-REQ-008 | §5-6 Implementation & Rollout | Deliver the JS + CSS refactor without template changes, validate via responsive manual testing plus `./tools/test_unit.sh`, ship without feature flags, update `docs/TaskDashboardStyleSystem.md`, and monitor bundle growth (<3 KB gzip). |
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -91,7 +91,7 @@ A product engineer needs to add a new metadata field (for example, publish mode)
 - **FR-007**: Extend `dashboard.tailwind.css` with `.queue-layouts`, `.queue-card-*`, `.queue-table-wrapper`, and breakpoint rules that hide cards on `min-width:768px` and hide tables on smaller widths, using MoonMind color tokens and Tailwind utilities to keep bundle growth under 3 KB gzip. *(Maps: DOC-REQ-006)*
 - **FR-008**: Ensure card markup follows accessibility guidelines—semantic list/definition tags, `role="list"` on the `<ul>`, focusable `View details` buttons using `<a>` with button classes, and status badges using existing `status-*` tokens—to satisfy screen reader and keyboard navigation requirements. *(Maps: DOC-REQ-007)*
 - **FR-009**: Add unit tests (or extend existing dashboard tests) that render the new helpers, prove `queueFieldDefinitions` drives both layouts, and run them via `./tools/test_unit.sh`; include responsive manual QA notes (320 px, 768 px, 1024 px) before handing off. *(Maps: DOC-REQ-008)*
-- **FR-010**: Document the shipped layout in `docs/TailwindStyleSystem.md`, confirm no feature flag is needed, and capture the observed dashboard bundle delta (expected <3 KB gzip) as part of release notes. *(Maps: DOC-REQ-008)*
+- **FR-010**: Document the shipped layout in `docs/TaskDashboardStyleSystem.md`, confirm no feature flag is needed, and capture the observed dashboard bundle delta (expected <3 KB gzip) as part of release notes. *(Maps: DOC-REQ-008)*
 
 ### Key Entities *(include if feature involves data)*
 - **QueueRow**: Existing normalized representation returned by `toQueueRows(items)`, supplying source, id, queueName, runtimeMode, skillId, timestamps, and action links for each queue job.
@@ -99,7 +99,7 @@ A product engineer needs to add a new metadata field (for example, publish mode)
 - **QueueLayoutsViewModel**: Helper return value that combines `tableHtml`, `cardsHtml`, and empty-state text so calling pages can inject one HTML blob regardless of viewport.
 
 ### Assumptions & Dependencies
-- Tailwind build tooling (documented in `docs/TailwindStyleSystem.md`) remains available so `dashboard.tailwind.css` changes can be compiled into `dashboard.css`.
+- Tailwind build tooling (documented in `docs/TaskDashboardStyleSystem.md`) remains available so `dashboard.tailwind.css` changes can be compiled into `dashboard.css`.
 - `dashboard.js` continues to use vanilla JS templating; no bundler changes are required for injecting the new helpers.
 - Queue endpoints already provide all fields referenced by `queueFieldDefinitions`; no API payload changes are necessary.
 - Auto-refresh and filtering logic already re-render via string templates; wiring `renderQueueLayouts` into those pathways is sufficient to update both layouts simultaneously.

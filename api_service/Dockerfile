@@ -258,6 +258,7 @@ RUN apt-get update && \
         pkg-config \
         libcairo2-dev \
         libffi-dev \
+        ripgrep \
         tesseract-ocr \
         tesseract-ocr-eng \
         git \
