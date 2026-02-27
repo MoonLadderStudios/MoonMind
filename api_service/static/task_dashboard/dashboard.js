@@ -7219,13 +7219,7 @@
   async function renderForPath(pathname, searchParams) {
     const normalizedRoute = normalizeDashboardRoutePath(pathname);
     stopPolling();
-    const navRoute =
-      normalizedRoute === "/tasks/queue/new"
-        ? "/tasks/create"
-        : normalizedRoute === "/tasks/queue"
-          ? "/tasks/list"
-          : normalizedRoute;
-    activateNav(navRoute);
+    activateNav(normalizedRoute);
 
     const queueDetailMatch = normalizedRoute.match(/^\/tasks\/queue\/([^/]+)$/);
     const orchestratorDetailMatch = normalizedRoute.match(
