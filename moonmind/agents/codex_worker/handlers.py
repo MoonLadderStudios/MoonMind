@@ -25,6 +25,7 @@ from moonmind.utils.logging import scrub_github_tokens
 _MAX_ERROR_MESSAGE_CHARS = 1024
 _COMMAND_START_PREFIX = "[command] $ "
 _COMMAND_COMPLETE_PREFIX = "[command] complete:"
+_COMMAND_CONTROL_TAG = "control=worker"
 _GIT_DIFF_LOG_CAPTURE_MAX_CHARS = 64 * 1024
 
 
@@ -315,6 +316,29 @@ def _summarize_oversized_command_output(
         stream=stream,
         text=deduped,
         max_chars=max_chars,
+    )
+
+
+def _summarize_sensitive_command_output(
+    *,
+    stream: str,
+    text: str,
+    max_chars: int,
+) -> str:
+    """Return structured diagnostics without logging sensitive command content."""
+
+    normalized = text.replace("\r", "")
+    _deduped, omitted_lines = _dedupe_adjacent_output_lines(normalized)
+    line_count = normalized.count("\n")
+    if normalized and not normalized.endswith("\n"):
+        line_count += 1
+    return (
+        f"[moonmind] {stream} output captured for sensitive command: "
+        f"chars={len(normalized)}; "
+        f"lines={line_count}; "
+        f"adjacentDuplicateLines={omitted_lines}; "
+        f"truncated={str(len(normalized) > max_chars).lower()}; "
+        "contentLogged=false"
     )
 
 
@@ -897,7 +921,7 @@ class CodexExecHandler:
         self._append_log(
             log_path,
             self._redact_text(
-                f"{_COMMAND_START_PREFIX}{' '.join(command)}",
+                f"{_COMMAND_START_PREFIX}{' '.join(command)}; {_COMMAND_CONTROL_TAG}",
                 extra_redaction_values=redaction_values,
             ),
         )
@@ -1325,6 +1349,28 @@ class CodexExecHandler:
                         await _flush_pending_replay_candidate("stderr")
                         _flush_stream_log_buffer("stdout", force=True)
                         _flush_stream_log_buffer("stderr", force=True)
+                        if defer_stream_output_logging:
+                            for stream_name, chunks in (
+                                ("stdout", stdout_chunks),
+                                ("stderr", stderr_chunks),
+                            ):
+                                summary = _summarize_sensitive_command_output(
+                                    stream=stream_name,
+                                    text="".join(chunks),
+                                    max_chars=_GIT_DIFF_LOG_CAPTURE_MAX_CHARS,
+                                )
+                                if summary:
+                                    _write_redacted_log_block(summary)
+                            self._append_log(
+                                log_path,
+                                self._redact_text(
+                                    (
+                                        "[moonmind] command cancelled before completion; "
+                                        "sensitive command output omitted from logs"
+                                    ),
+                                    extra_redaction_values=redaction_values,
+                                ),
+                            )
                         with suppress(asyncio.CancelledError, Exception):
                             await wait_task
                         raise CommandCancelledError(
@@ -1359,7 +1405,7 @@ class CodexExecHandler:
                 ("stdout", result.stdout),
                 ("stderr", result.stderr),
             ):
-                summarized = _summarize_oversized_command_output(
+                summarized = _summarize_sensitive_command_output(
                     stream=stream,
                     text=output,
                     max_chars=_GIT_DIFF_LOG_CAPTURE_MAX_CHARS,
@@ -1375,7 +1421,7 @@ class CodexExecHandler:
                 (
                     f"{_COMMAND_COMPLETE_PREFIX} rc={result.returncode}; "
                     f"cmd={command_hint}; stdoutChars={len(result.stdout)}; "
-                    f"stderrChars={len(result.stderr)}"
+                    f"stderrChars={len(result.stderr)}; {_COMMAND_CONTROL_TAG}"
                 ),
                 extra_redaction_values=redaction_values,
             ),

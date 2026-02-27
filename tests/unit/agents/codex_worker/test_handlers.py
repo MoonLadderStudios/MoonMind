@@ -788,7 +788,7 @@ async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
 async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Oversized git diff capture should dedupe and cap logs while keeping tail context."""
+    """Sensitive git diff output should emit structured diagnostics only."""
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "git-diff-capped.log"
@@ -818,10 +818,10 @@ async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
 
     assert result.stdout == large_diff
     text = log_path.read_text(encoding="utf-8")
-    assert "[moonmind] stdout output deduped:" in text
-    assert "[moonmind] stdout output truncated:" in text
-    assert "TAIL_CONTEXT=git-diff-ending" in text
-    assert len(text) < len(large_diff)
+    assert "[moonmind] stdout output captured for sensitive command:" in text
+    assert "adjacentDuplicateLines=" in text
+    assert "contentLogged=false" in text
+    assert "TAIL_CONTEXT=git-diff-ending" not in text
 
 
 async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
@@ -895,6 +895,70 @@ async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
         chunk for stream, chunk in callback_events if stream == "stdout" and chunk
     )
     assert callback_text.count("candidate heading") == 2
+
+
+async def test_run_command_git_diff_logs_sensitive_summary_on_cancellation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Cancelled git diff commands should retain structured stream diagnostics."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "git-diff-cancel.log"
+    cancel_event = asyncio.Event()
+
+    class FakeReader:
+        def __init__(self, chunks: list[str], *, trigger_cancel: bool = False) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+            self._trigger_cancel = trigger_cancel
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                await asyncio.sleep(0.01)
+                return b""
+            value = self._chunks.pop(0)
+            if self._trigger_cancel and not self._chunks:
+                cancel_event.set()
+                await asyncio.sleep(0.02)
+            return value
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 1
+            self.stdout = FakeReader(
+                ["diff --git a/x b/x\n", "SECRET_PAYLOAD=should_not_log\n"],
+                trigger_cancel=True,
+            )
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            await asyncio.sleep(0.2)
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(CommandCancelledError):
+        await handler._run_command(
+            ["git", "diff"],
+            cwd=tmp_path,
+            log_path=log_path,
+            check=False,
+            cancel_event=cancel_event,
+        )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert "[moonmind] stdout output captured for sensitive command:" in text
+    assert "contentLogged=false" in text
+    assert "sensitive command output omitted from logs" in text
+    assert "SECRET_PAYLOAD=should_not_log" not in text
 
 
 async def test_run_command_logs_callback_failures_with_context(

@@ -109,10 +109,23 @@ _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES = 64 * 1024
 _STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
 _COMMAND_START_PREFIX = "[command] $ "
 _COMMAND_COMPLETE_PREFIX = "[command] complete:"
+_COMMAND_CONTROL_TAG = "control=worker"
+_CONTROLLED_COMMAND_START_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_START_PREFIX)}.+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
+_CONTROLLED_COMMAND_COMPLETE_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
+    rf"stdoutChars=\d+;\s+stderrChars=\d+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
+_LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
+    r"stdoutChars=\d+;\s+stderrChars=\d+$"
+)
 _STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
     {
         "step_transcript_truncated_mid_command",
         "step_transcript_missing_terminal_marker",
+        "step_transcript_invalid_marker_balance",
     }
 )
 _NON_SOURCE_CHANGE_PREFIXES = (
@@ -1120,20 +1133,22 @@ class QueueApiClient:
         job_data = data.get("job")
         job = None
         if job_data:
-            try:
-                attempt = int(job_data.get("attempt") or 1)
-            except (TypeError, ValueError):
-                attempt = 1
-            try:
-                max_attempts = int(job_data.get("maxAttempts") or 3)
-            except (TypeError, ValueError):
-                max_attempts = 3
+            attempt = self._parse_positive_int_field(
+                node=job_data,
+                field_name="attempt",
+                default=1,
+            )
+            max_attempts = self._parse_positive_int_field(
+                node=job_data,
+                field_name="maxAttempts",
+                default=3,
+            )
             job = ClaimedJob(
                 id=UUID(str(job_data["id"])),
                 type=str(job_data["type"]),
                 payload=dict(job_data.get("payload") or {}),
-                attempt=max(1, attempt),
-                max_attempts=max(1, max_attempts),
+                attempt=attempt,
+                max_attempts=max_attempts,
             )
         system = self._parse_system_metadata(data.get("system"))
         return QueueClaimResult(job=job, system=system)
@@ -1342,6 +1357,28 @@ class QueueApiClient:
             return datetime.fromisoformat(normalized)
         except ValueError:
             return None
+
+    @staticmethod
+    def _parse_positive_int_field(
+        *,
+        node: Mapping[str, Any],
+        field_name: str,
+        default: int,
+    ) -> int:
+        raw_value = node.get(field_name)
+        if raw_value is None:
+            return default
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise QueueClientError(
+                f"invalid queue field '{field_name}': expected positive int, got {raw_value!r}"
+            ) from exc
+        if parsed < 1:
+            raise QueueClientError(
+                f"invalid queue field '{field_name}': expected positive int, got {raw_value!r}"
+            )
+        return parsed
 
     async def get_live_session(self, *, job_id: UUID) -> dict[str, Any] | None:
         """Fetch current live-session payload; return ``None`` when no session exists."""
@@ -4689,24 +4726,79 @@ class CodexWorker:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _load_step_transcript_for_integrity(*, source_path: Path) -> str:
+        if source_path.suffix == ".gz":
+            with gzip.open(source_path, "rt", encoding="utf-8", errors="replace") as handle:
+                return handle.read()
+        return source_path.read_text(encoding="utf-8", errors="replace")
+
+    @staticmethod
+    def _resolve_step_transcript_integrity_source(*, step_log_path: Path) -> Path:
+        metadata_path = CodexWorker._step_log_companion_metadata_path(step_log_path)
+        full_log_path = CodexWorker._step_log_companion_path(step_log_path)
+        if not (metadata_path.exists() and full_log_path.exists()):
+            return step_log_path
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (
+            OSError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+            UnicodeDecodeError,
+        ):
+            logger.warning(
+                "Ignoring invalid step transcript linkage metadata at %s",
+                metadata_path,
+                exc_info=True,
+            )
+            return step_log_path
+        if isinstance(payload, Mapping) and bool(payload.get("truncated")):
+            return full_log_path
+        return step_log_path
+
+    @staticmethod
+    def _classify_step_transcript_control_lines(
+        lines: Sequence[str],
+    ) -> tuple[Sequence[str], Sequence[str]]:
+        controlled_start = [
+            line for line in lines if _CONTROLLED_COMMAND_START_PATTERN.match(line)
+        ]
+        controlled_complete = [
+            line for line in lines if _CONTROLLED_COMMAND_COMPLETE_PATTERN.match(line)
+        ]
+        if controlled_start or controlled_complete:
+            return controlled_start, controlled_complete
+        legacy_start = [
+            line for line in lines if line.startswith(_COMMAND_START_PREFIX)
+        ]
+        legacy_complete = [
+            line for line in lines if _LEGACY_COMMAND_COMPLETE_PATTERN.match(line)
+        ]
+        return legacy_start, legacy_complete
+
     def _evaluate_step_transcript_integrity(
         self,
         *,
         step: ResolvedTaskStep,
         step_log_path: Path,
     ) -> StepTranscriptIntegrityResult:
-        """Validate command-start/complete markers in a step transcript preview."""
+        """Validate command-start/complete markers in a step transcript."""
 
         if not step_log_path.exists():
             return StepTranscriptIntegrityResult(passed=True)
+        transcript_source = self._resolve_step_transcript_integrity_source(
+            step_log_path=step_log_path
+        )
         try:
-            transcript_text = step_log_path.read_text(
-                encoding="utf-8", errors="replace"
+            transcript_text = self._load_step_transcript_for_integrity(
+                source_path=transcript_source
             )
         except OSError:
             logger.warning(
                 "Failed reading step transcript for integrity check at %s",
-                step_log_path,
+                transcript_source,
                 exc_info=True,
             )
             return StepTranscriptIntegrityResult(passed=True)
@@ -4714,16 +4806,36 @@ class CodexWorker:
         non_empty_lines = [
             line.strip() for line in transcript_text.splitlines() if line.strip()
         ]
-        start_count = sum(
-            1 for line in non_empty_lines if line.startswith(_COMMAND_START_PREFIX)
+        start_markers, complete_markers = self._classify_step_transcript_control_lines(
+            non_empty_lines
         )
-        complete_count = sum(
-            1 for line in non_empty_lines if line.startswith(_COMMAND_COMPLETE_PREFIX)
-        )
+        start_count = len(start_markers)
+        complete_count = len(complete_markers)
         if start_count == 0 and complete_count == 0:
             return StepTranscriptIntegrityResult(passed=True)
 
-        terminal_line = non_empty_lines[-1] if non_empty_lines else ""
+        terminal_line = (
+            complete_markers[-1]
+            if complete_markers
+            else (non_empty_lines[-1] if non_empty_lines else "")
+        )
+        if complete_count > start_count:
+            detail = (
+                "step transcript marker counts are invalid "
+                f"(startMarkers={start_count}, completeMarkers={complete_count})"
+            )
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_invalid_marker_balance",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
         if complete_count < start_count:
             detail = (
                 "step transcript ended mid-command "

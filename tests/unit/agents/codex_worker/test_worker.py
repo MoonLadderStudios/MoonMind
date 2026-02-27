@@ -26,6 +26,8 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     PreparedTaskWorkspace,
+    QueueApiClient,
+    QueueClientError,
     QueueClaimResult,
     QueueHeartbeatResult,
     QueueSystemStatus,
@@ -201,6 +203,23 @@ class FakeQueueClient:
     async def create_task_proposal(self, *, proposal):
         self.submitted_proposals.append(dict(proposal))
         return {"id": str(uuid4())}
+
+
+async def test_parse_positive_int_field_rejects_invalid_values() -> None:
+    """Queue payload integer parsing should fail fast on invalid values."""
+
+    with pytest.raises(QueueClientError):
+        QueueApiClient._parse_positive_int_field(
+            node={"attempt": "nope"},
+            field_name="attempt",
+            default=1,
+        )
+    with pytest.raises(QueueClientError):
+        QueueApiClient._parse_positive_int_field(
+            node={"maxAttempts": 0},
+            field_name="maxAttempts",
+            default=3,
+        )
 
 
 class FailingUploadQueueClient(FakeQueueClient):
@@ -1515,9 +1534,9 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
 
     step_log = tmp_path / "complete-step.log"
     step_log.write_text(
-        "[command] $ codex exec run integrity check\n"
+        "[command] $ codex exec run integrity check; control=worker\n"
         "done\n"
-        "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0\n",
+        "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n",
         encoding="utf-8",
     )
 
@@ -1563,6 +1582,125 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     assert queue.failed == []
     assert queue.failed_retryable == []
     assert any(event["message"] == "task.step.finished" for event in queue.events)
+
+
+async def test_run_once_task_step_transcript_uses_full_companion_when_preview_truncated(
+    tmp_path: Path,
+) -> None:
+    """Integrity checks should prefer full companion logs when preview is truncated."""
+
+    step_log = tmp_path / "companion-step.log"
+    step_log.write_text(
+        (
+            ("prefix-no-markers\n" * 30000)
+            + "[command] $ codex exec run integrity check; control=worker\n"
+            + ("middle-content\n" * 30000)
+            + "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; "
+            "stderrChars=0; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=4096,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+
+
+async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output(
+    tmp_path: Path,
+) -> None:
+    """Integrity checks should ignore marker-like text not emitted as worker controls."""
+
+    step_log = tmp_path / "quoted-marker-step.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check; control=worker\n"
+            "model output: [command] $ not a worker control marker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
     assert not any(event["message"] == "task.step.failed" for event in queue.events)
 
 
