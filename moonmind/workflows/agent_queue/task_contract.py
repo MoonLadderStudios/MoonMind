@@ -658,18 +658,14 @@ class TaskExecutionSpec(BaseModel):
             if step.instructions:
                 instruction_chunks.append(step.instructions)
 
-        if (
-            self.publish.mode == "none"
-            and "pr-resolver" not in skill_ids
-        ):
+        if self.publish.mode == "none" and "pr-resolver" not in skill_ids:
             raise TaskContractError(
                 "resolve-PR objectives with task.publish.mode='none' require "
                 "skill 'pr-resolver' so commit/push/merge can be handled directly"
             )
 
         if any(
-            _contains_no_commit_push_constraint(chunk)
-            for chunk in instruction_chunks
+            _contains_no_commit_push_constraint(chunk) for chunk in instruction_chunks
         ):
             raise TaskContractError(
                 "resolve-PR objectives cannot include 'Do NOT commit or push' constraints"

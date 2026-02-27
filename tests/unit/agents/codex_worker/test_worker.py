@@ -3047,7 +3047,10 @@ async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
     assert processed is True
     assert queue.completed == []
     assert len(queue.failed) == 1
-    assert "resolve-PR objectives with task.publish.mode='none' require skill 'pr-resolver'" in queue.failed[0]
+    assert (
+        "resolve-PR objectives with task.publish.mode='none' require skill 'pr-resolver'"
+        in queue.failed[0]
+    )
     assert handler.calls == []
 
 
@@ -3095,7 +3098,11 @@ async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
             output_chunk_callback=None,
         ):
             snapshot_path = (
-                tmp_path / str(job_id) / "repo" / "artifacts" / "pr_resolver_snapshot.json"
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(
@@ -3200,7 +3207,11 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
             output_chunk_callback=None,
         ):
             snapshot_path = (
-                tmp_path / str(job_id) / "repo" / "artifacts" / "pr_resolver_snapshot.json"
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(

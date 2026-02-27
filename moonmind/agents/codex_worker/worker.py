@@ -4678,7 +4678,9 @@ class CodexWorker:
 
         snapshot_path = prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json"
         result_path = prepared.repo_dir / "artifacts" / "pr_resolver_result.json"
-        report_path = prepared.artifacts_dir / "reports" / "pr_resolution_validation.json"
+        report_path = (
+            prepared.artifacts_dir / "reports" / "pr_resolution_validation.json"
+        )
         report_path.parent.mkdir(parents=True, exist_ok=True)
 
         failure_reason: str | None = None
@@ -4701,12 +4703,16 @@ class CodexWorker:
                     snapshot_payload = dict(parsed_snapshot)
 
         if snapshot_error is not None:
-            failure_reason = f"pr-resolution final state validation failed: {snapshot_error}"
+            failure_reason = (
+                f"pr-resolution final state validation failed: {snapshot_error}"
+            )
         else:
             pr_node = snapshot_payload.get("pr")
             pr = pr_node if isinstance(pr_node, Mapping) else {}
             comments_node = snapshot_payload.get("commentsSummary")
-            comments_summary = comments_node if isinstance(comments_node, Mapping) else {}
+            comments_summary = (
+                comments_node if isinstance(comments_node, Mapping) else {}
+            )
 
             merge_state = str(pr.get("mergeStateStatus") or "").strip().upper()
             mergeable_raw = pr.get("mergeable")
@@ -4727,7 +4733,9 @@ class CodexWorker:
             actionable_count = self._coerce_non_negative_int(
                 comments_summary.get("actionableCommentCount")
             )
-            has_actionable_comments = bool(comments_summary.get("hasActionableComments"))
+            has_actionable_comments = bool(
+                comments_summary.get("hasActionableComments")
+            )
             if actionable_count is None:
                 actionable_count = 1 if has_actionable_comments else 0
             elif actionable_count == 0 and has_actionable_comments:
