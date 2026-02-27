@@ -99,10 +99,7 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
-        if (
-            not include_bot_review_comments
-            and is_bot_user(comment.get("user") or "")
-        ):
+        if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
 
