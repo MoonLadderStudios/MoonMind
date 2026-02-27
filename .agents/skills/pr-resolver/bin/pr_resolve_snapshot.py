@@ -232,9 +232,11 @@ def _check_state(check: dict) -> str:
 
 def _is_security_check(check: dict) -> bool:
     name = _check_name(check).upper()
-    workflow = str(
-        check.get("workflowName") or check.get("workflow_name") or ""
-    ).strip().upper()
+    workflow = (
+        str(check.get("workflowName") or check.get("workflow_name") or "")
+        .strip()
+        .upper()
+    )
     app_node = check.get("app")
     app_slug = ""
     if isinstance(app_node, dict):
@@ -369,12 +371,16 @@ def _fetch_previous_commit_sha(
     return shas[-2]
 
 
-def _fetch_commit_check_runs(*, pr_repo: str | None, commit_sha: str | None) -> list[dict]:
+def _fetch_commit_check_runs(
+    *, pr_repo: str | None, commit_sha: str | None
+) -> list[dict]:
     repo = str(pr_repo or "").strip()
     sha = str(commit_sha or "").strip()
     if not repo or not sha:
         return []
-    payload = run_command_optional(["gh", "api", f"repos/{repo}/commits/{sha}/check-runs"])
+    payload = run_command_optional(
+        ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs"]
+    )
     if not isinstance(payload, dict):
         return []
     check_runs = payload.get("check_runs")
@@ -476,7 +482,9 @@ def main():
                 ci_summary["hasFailures"] = True
                 ci_summary["signalQuality"] = "degraded"
                 degraded = list(ci_summary.get("degradedReasons") or [])
-                degraded.append("head_missing_non_security_checks_seen_on_previous_commit")
+                degraded.append(
+                    "head_missing_non_security_checks_seen_on_previous_commit"
+                )
                 ci_summary["degradedReasons"] = sorted(dict.fromkeys(degraded))
                 ci_summary["failedChecks"].append(
                     {
