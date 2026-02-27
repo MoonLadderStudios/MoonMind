@@ -6812,7 +6812,14 @@
           fetchJson(endpoint(artifactsEndpoint, { id: runId })),
         ]);
 
-        const steps = pick(run, "taskSteps") || pick(run, "steps") || [];
+        const taskSteps = pick(run, "taskSteps");
+        const legacySteps = pick(run, "steps");
+        const steps =
+          Array.isArray(taskSteps) && taskSteps.length > 0
+            ? taskSteps
+            : Array.isArray(legacySteps)
+              ? legacySteps
+              : [];
         const stepRows = steps
           .map(
             (step) => `
