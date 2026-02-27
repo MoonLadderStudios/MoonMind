@@ -190,12 +190,27 @@ _VERIFICATION_COMMAND_PATTERNS = (
     ),
 )
 _VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
+_RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
+    r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
+    re.IGNORECASE,
+)
+_CONFLICTING_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
+_CONFLICTING_MERGEABLE_VALUES = frozenset({"CONFLICTING", "DIRTY", "FALSE"})
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
     """Normalize instruction text for objective/step deduplication checks."""
 
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _is_resolve_pr_objective_text(value: str | None) -> bool:
+    """Return True when instructions target pull-request resolution."""
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return _RESOLVE_PR_OBJECTIVE_PATTERN.search(text) is not None
 
 
 def _normalize_proposal_tags(values: object) -> list[str]:
@@ -4920,6 +4935,175 @@ class CodexWorker:
             return False
         return job.attempt == 1
 
+    @staticmethod
+    def _coerce_non_negative_int(value: object) -> int | None:
+        """Best-effort conversion for non-negative integer fields."""
+
+        try:
+            converted = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return converted if converted >= 0 else None
+
+    def _validate_pr_resolution_final_state(
+        self,
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+        prepared: PreparedTaskWorkspace,
+    ) -> StepGateResult:
+        """Fail resolve-PR runs when final PR state remains unresolved."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        objective = str(task.get("instructions") or "").strip()
+        is_pr_resolution_task = _is_resolve_pr_objective_text(objective) or any(
+            step.effective_skill_id == _PR_RESOLVER_SKILL_ID for step in resolved_steps
+        )
+        if not is_pr_resolution_task:
+            return StepGateResult(passed=True)
+
+        snapshot_path = prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json"
+        result_path = prepared.repo_dir / "artifacts" / "pr_resolver_result.json"
+        report_path = (
+            prepared.artifacts_dir / "reports" / "pr_resolution_validation.json"
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+
+        failure_reason: str | None = None
+        unresolved_signals: list[str] = []
+        snapshot_payload: dict[str, Any] = {}
+        snapshot_error: str | None = None
+        if not snapshot_path.exists():
+            snapshot_error = "missing artifacts/pr_resolver_snapshot.json"
+        else:
+            try:
+                parsed_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                snapshot_error = "artifacts/pr_resolver_snapshot.json is not valid JSON"
+            else:
+                if not isinstance(parsed_snapshot, Mapping):
+                    snapshot_error = (
+                        "artifacts/pr_resolver_snapshot.json must be a JSON object"
+                    )
+                else:
+                    snapshot_payload = dict(parsed_snapshot)
+
+        if snapshot_error is not None:
+            failure_reason = (
+                f"pr-resolution final state validation failed: {snapshot_error}"
+            )
+        else:
+            pr_node = snapshot_payload.get("pr")
+            pr = pr_node if isinstance(pr_node, Mapping) else {}
+            comments_node = snapshot_payload.get("commentsSummary")
+            comments_summary = (
+                comments_node if isinstance(comments_node, Mapping) else {}
+            )
+
+            merge_state = str(pr.get("mergeStateStatus") or "").strip().upper()
+            mergeable_raw = pr.get("mergeable")
+            if merge_state in _CONFLICTING_MERGE_STATES:
+                unresolved_signals.append(f"mergeStateStatus={merge_state}")
+
+            mergeable_conflicting = False
+            if isinstance(mergeable_raw, bool):
+                mergeable_conflicting = not mergeable_raw
+            else:
+                mergeable_conflicting = (
+                    str(mergeable_raw or "").strip().upper()
+                    in _CONFLICTING_MERGEABLE_VALUES
+                )
+            if mergeable_conflicting:
+                unresolved_signals.append(f"mergeable={mergeable_raw}")
+
+            actionable_count = self._coerce_non_negative_int(
+                comments_summary.get("actionableCommentCount")
+            )
+            has_actionable_comments = bool(
+                comments_summary.get("hasActionableComments")
+            )
+            if actionable_count is None:
+                actionable_count = 1 if has_actionable_comments else 0
+            elif actionable_count == 0 and has_actionable_comments:
+                actionable_count = 1
+            if actionable_count > 0:
+                unresolved_signals.append(f"actionableCommentCount={actionable_count}")
+
+            if unresolved_signals:
+                failure_reason = "pr-resolution final state unresolved: " + "; ".join(
+                    unresolved_signals
+                )
+
+        result_payload: dict[str, Any] | None = None
+        if result_path.exists():
+            try:
+                parsed_result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                result_payload = None
+            else:
+                if isinstance(parsed_result, Mapping):
+                    result_payload = dict(parsed_result)
+
+        passed = failure_reason is None
+        report_payload = {
+            "schemaVersion": "v1",
+            "status": "PASS" if passed else "FAIL",
+            "reason": failure_reason or "pr-resolution final state is resolved",
+            "objective": objective,
+            "sources": {
+                "snapshotPath": "artifacts/pr_resolver_snapshot.json",
+                "resultPath": "artifacts/pr_resolver_result.json",
+            },
+            "snapshot": {
+                "available": bool(snapshot_payload),
+                "pr": (
+                    snapshot_payload.get("pr")
+                    if isinstance(snapshot_payload.get("pr"), Mapping)
+                    else {}
+                ),
+                "commentsSummary": (
+                    snapshot_payload.get("commentsSummary")
+                    if isinstance(snapshot_payload.get("commentsSummary"), Mapping)
+                    else {}
+                ),
+            },
+            "result": {
+                "available": bool(result_payload),
+                "mergeOutcome": (
+                    str(result_payload.get("merge_outcome") or "").strip()
+                    if isinstance(result_payload, Mapping)
+                    else None
+                ),
+                "reason": (
+                    str(result_payload.get("reason") or "").strip()
+                    if isinstance(result_payload, Mapping)
+                    else None
+                ),
+            },
+            "signals": {"unresolved": unresolved_signals},
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        redacted = self._redact_payload(report_payload)
+        serialized_report = redacted if isinstance(redacted, dict) else report_payload
+        report_path.write_text(
+            json.dumps(serialized_report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        return StepGateResult(
+            passed=passed,
+            message=failure_reason,
+            artifacts=(
+                ArtifactUpload(
+                    path=report_path,
+                    name="reports/pr_resolution_validation.json",
+                    content_type="application/json",
+                    required=False,
+                ),
+            ),
+        )
+
     def _evaluate_step_gate(
         self,
         *,
@@ -6651,6 +6835,24 @@ class CodexWorker:
             step_artifacts.append(final_patch_artifact)
             if artifact_callback is not None:
                 await artifact_callback((final_patch_artifact,))
+
+        pr_resolution_state = self._validate_pr_resolution_final_state(
+            canonical_payload=canonical_payload,
+            resolved_steps=resolved_steps,
+            prepared=prepared,
+        )
+        if pr_resolution_state.artifacts:
+            pr_resolution_artifacts = list(pr_resolution_state.artifacts)
+            step_artifacts.extend(pr_resolution_artifacts)
+            if artifact_callback is not None:
+                await artifact_callback(pr_resolution_artifacts)
+        if not pr_resolution_state.passed:
+            return WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=pr_resolution_state.message,
+                artifacts=tuple(step_artifacts),
+            )
 
         return WorkerExecutionResult(
             succeeded=True,

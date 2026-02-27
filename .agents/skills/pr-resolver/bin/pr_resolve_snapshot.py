@@ -82,8 +82,9 @@ def _classify_comment_actionability(
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
     - Ignore review comments only when explicitly marked resolved/outdated.
-    - Treat issue comments, review comments, and review bodies as actionable,
-      regardless of whether they were authored by a bot or human.
+    - Treat issue comments and review bodies as actionable.
+    - Treat review comments as actionable except resolved/outdated threads and
+      bot-authored comments (unless explicitly enabled).
     - Ignore unsupported/unknown comment types.
     """
     if not (comment.get("body") or "").strip():
@@ -92,6 +93,8 @@ def _classify_comment_actionability(
     comment_type = comment.get("type")
 
     if comment_type == "review_comment":
+        if is_bot_user(comment.get("user")) and not include_bot_review_comments:
+            return False, "bot_review_comment_excluded"
         if comment.get("thread_resolved", False):
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
@@ -100,8 +103,11 @@ def _classify_comment_actionability(
             not include_bot_review_comments
             and is_bot_user(comment.get("user") or "")
         ):
-            return False, "bot_review_comment"
+            return False, "bot_review_comment_excluded"
         return True, "actionable"
+
+    if is_bot_user(comment.get("user")):
+        return False, "bot_comment_excluded"
 
     if comment_type in {"issue_comment", "review"}:
         return True, "actionable"
@@ -114,7 +120,7 @@ def _is_comment_actionable(
     *,
     include_bot_review_comments: bool = False,
 ) -> bool:
-    actionable, _reason = _classify_comment_actionability(
+    actionable, _ = _classify_comment_actionability(
         comment,
         include_bot_review_comments=include_bot_review_comments,
     )
