@@ -93,8 +93,6 @@ def _classify_comment_actionability(
     comment_type = comment.get("type")
 
     if comment_type == "review_comment":
-        if is_bot_user(comment.get("user")) and not include_bot_review_comments:
-            return False, "bot_review_comment_excluded"
         if comment.get("thread_resolved", False):
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
@@ -172,9 +170,9 @@ def summarize_comments(
         "issueCommentCount": len(issue_comments),
         "reviewBodyCount": len(review_bodies),
         "actionableCommentCount": len(actionable_comments),
+        "includeBotReviewComments": include_bot_review_comments,
         "humanCommentCount": len(human_comments),
         "botCommentCount": len(bot_comments),
-        "includeBotReviewComments": include_bot_review_comments,
         "hasActionableComments": len(actionable_comments) > 0,
         "actionableCommentIds": [c.get("id") for c in actionable_comments],
         "nonActionableReasonCounts": non_actionable_reason_counts,
