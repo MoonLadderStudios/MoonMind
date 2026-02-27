@@ -24,9 +24,11 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
    - **Review / Feedback Comments:** If any of the following indicate unresolved review feedback, you MUST read `.agents/skills/fix-comments/SKILL.md` and follow its procedure before merge:
      - `reviewDecision` indicates changes requested.
      - `commentsSummary.hasActionableComments` is true.
+     - `commentsFetch.succeeded` is false (comment signal unavailable).
     Proceed with comment fixes even if CI is still running.
     Actionability is intentionally broad: bot and human comments are both included by default. Only empty comments and explicitly resolved/outdated review threads are treated as non-actionable.
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
+   - **CI Signal Integrity:** If `ci.signalQuality` is not `"ok"` (for example missing required checks or missing non-security checks on head commit), treat this as blocking CI and do not merge until fixed.
    - **Enable Auto-Merge While CI Runs:** If `ci.isRunning` is true, there are NO CI failures, mergeability is not conflicting, and `commentsSummary.hasActionableComments` is false, execute `gh pr merge --auto --<mergeMethod>`.
    - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `"CLEAN"`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
    - **Blocked:** If CI is running but comments are still actionable or mergeability is conflicting, exit and state why it is blocked.

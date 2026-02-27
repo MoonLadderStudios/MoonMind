@@ -11,6 +11,27 @@
       "properties": {
         "isRunning": { "type": "boolean" },
         "hasFailures": { "type": "boolean" },
+        "totalCheckCount": { "type": "integer" },
+        "securityCheckCount": { "type": "integer" },
+        "nonSecurityCheckCount": { "type": "integer" },
+        "checkNames": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "signalQuality": { "type": "string" },
+        "degradedReasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "requiredChecksKnown": { "type": "boolean" },
+        "requiredChecks": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "missingRequiredChecks": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "failedChecks": {
           "type": "array",
           "items": {
@@ -23,7 +44,28 @@
           }
         }
       },
-      "required": ["isRunning", "hasFailures", "failedChecks"]
+      "required": [
+        "isRunning",
+        "hasFailures",
+        "failedChecks",
+        "totalCheckCount",
+        "securityCheckCount",
+        "nonSecurityCheckCount",
+        "checkNames",
+        "signalQuality",
+        "degradedReasons",
+        "requiredChecksKnown",
+        "requiredChecks",
+        "missingRequiredChecks"
+      ]
+    },
+    "commentsFetch": {
+      "type": "object",
+      "properties": {
+        "succeeded": { "type": "boolean" },
+        "source": { "type": "string" }
+      },
+      "required": ["succeeded", "source"]
     },
     "commentsSummary": {
       "type": "object",
@@ -34,6 +76,7 @@
         "issueCommentCount": { "type": "integer" },
         "reviewBodyCount": { "type": "integer" },
         "actionableCommentCount": { "type": "integer" },
+        "includeBotReviewComments": { "type": "boolean" },
         "humanCommentCount": { "type": "integer" },
         "botCommentCount": { "type": "integer" },
         "hasActionableComments": { "type": "boolean" },
@@ -70,6 +113,7 @@
         "issueCommentCount",
         "reviewBodyCount",
         "actionableCommentCount",
+        "includeBotReviewComments",
         "humanCommentCount",
         "botCommentCount",
         "hasActionableComments",
@@ -83,5 +127,5 @@
       "items": { "type": "object" }
     }
   },
-  "required": ["pr", "ci", "comments", "commentsSummary"]
+  "required": ["pr", "ci", "commentsFetch", "comments", "commentsSummary"]
 }

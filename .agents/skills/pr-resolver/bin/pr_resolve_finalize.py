@@ -36,16 +36,27 @@ def _is_conflicting(pr: dict[str, Any]) -> bool:
 def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
     ci = snapshot.get("ci") if isinstance(snapshot.get("ci"), dict) else {}
+    comments_fetch = (
+        snapshot.get("commentsFetch")
+        if isinstance(snapshot.get("commentsFetch"), dict)
+        else {}
+    )
     comments_summary = (
         snapshot.get("commentsSummary")
         if isinstance(snapshot.get("commentsSummary"), dict)
         else {}
     )
 
+    if not bool(comments_fetch.get("succeeded")):
+        return {"action": "blocked", "reason": "comments_unavailable"}
+    if comments_summary.get("includeBotReviewComments") is not True:
+        return {"action": "blocked", "reason": "comment_policy_not_enforced"}
     if bool(comments_summary.get("hasActionableComments")):
         return {"action": "blocked", "reason": "actionable_comments"}
     if _is_conflicting(pr):
         return {"action": "blocked", "reason": "merge_conflicts"}
+    if _normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
+        return {"action": "blocked", "reason": "ci_signal_degraded"}
     if bool(ci.get("hasFailures")):
         return {"action": "blocked", "reason": "ci_failures"}
     if bool(ci.get("isRunning")):

@@ -109,7 +109,7 @@ def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     assert infer_repo("https://github.com/org") is None
 
 
-def test_review_bot_comments_are_not_actionable_by_default(
+def test_review_bot_comments_are_actionable_by_default(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
     summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
@@ -128,11 +128,11 @@ def test_review_bot_comments_are_not_actionable_by_default(
     ]
 
     summary = summarize_comments(comments)
-    assert summary["actionableCommentCount"] == 1
-    assert summary["includeBotReviewComments"] is False
+    assert summary["actionableCommentCount"] == 2
+    assert summary["includeBotReviewComments"] is True
 
 
-def test_review_bot_comments_can_be_included_when_enabled(
+def test_review_bot_comments_can_be_excluded_when_disabled(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
     summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
@@ -145,9 +145,9 @@ def test_review_bot_comments_can_be_included_when_enabled(
         }
     ]
 
-    summary = summarize_comments(comments, include_bot_review_comments=True)
-    assert summary["actionableCommentCount"] == 1
-    assert summary["includeBotReviewComments"] is True
+    summary = summarize_comments(comments, include_bot_review_comments=False)
+    assert summary["actionableCommentCount"] == 0
+    assert summary["includeBotReviewComments"] is False
 
 
 def test_resolved_review_threads_are_not_actionable(
@@ -173,8 +173,12 @@ def test_finalize_blocks_when_actionable_comments_exist(
     decision = evaluate_finalize_action(
         {
             "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
-            "ci": {"isRunning": True, "hasFailures": False},
-            "commentsSummary": {"hasActionableComments": True},
+            "ci": {"isRunning": True, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": True,
+                "includeBotReviewComments": True,
+            },
         }
     )
 
@@ -189,8 +193,12 @@ def test_finalize_enables_auto_merge_when_ci_running_and_comments_addressed(
     decision = evaluate_finalize_action(
         {
             "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
-            "ci": {"isRunning": True, "hasFailures": False},
-            "commentsSummary": {"hasActionableComments": False},
+            "ci": {"isRunning": True, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
         }
     )
 
@@ -205,9 +213,77 @@ def test_finalize_merges_when_ci_complete_and_clean(
     decision = evaluate_finalize_action(
         {
             "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
-            "ci": {"isRunning": False, "hasFailures": False},
-            "commentsSummary": {"hasActionableComments": False},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
         }
     )
 
     assert decision == {"action": "merge_now", "reason": "ci_complete"}
+
+
+def test_finalize_blocks_when_comments_are_unavailable(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": False, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "comments_unavailable"}
+
+
+def test_finalize_blocks_when_comment_policy_not_enforced(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": False,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "comment_policy_not_enforced"}
+
+
+def test_finalize_blocks_when_ci_signal_is_degraded(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {
+                "isRunning": False,
+                "hasFailures": False,
+                "signalQuality": "degraded",
+            },
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "ci_signal_degraded"}
