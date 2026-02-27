@@ -4744,7 +4744,9 @@ class CodexWorker:
     @staticmethod
     def _load_step_transcript_for_integrity(*, source_path: Path) -> str:
         if source_path.suffix == ".gz":
-            with gzip.open(source_path, "rt", encoding="utf-8", errors="replace") as handle:
+            with gzip.open(
+                source_path, "rt", encoding="utf-8", errors="replace"
+            ) as handle:
                 return handle.read()
         return source_path.read_text(encoding="utf-8", errors="replace")
 
