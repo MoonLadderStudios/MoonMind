@@ -7684,9 +7684,6 @@
     if (normalizedPath === "/tasks/new" || normalizedPath === "/tasks/create") {
       return "/tasks/queue/new";
     }
-    if (normalizedPath === "/tasks/list") {
-      return "/tasks/queue";
-    }
     return normalizedPath;
   }
 

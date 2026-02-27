@@ -244,9 +244,9 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(missing, "/tasks/list?source=queue");
 })();
 
-(function testNormalizeDashboardRoutePathSupportsListAlias() {
-  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list"), "/tasks/queue");
-  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list/"), "/tasks/queue");
+(function testNormalizeDashboardRoutePathKeepsCanonicalListRoute() {
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list"), "/tasks/list");
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list/"), "/tasks/list");
   assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/create"), "/tasks/queue/new");
   assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/new"), "/tasks/queue/new");
 })();
