@@ -836,11 +836,7 @@ async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
     duplicate_block = "same-dup-line\n" * 64
     tail_marker = "TAIL_CONTEXT=git-diff-ending\n"
     unique_chars = max(1, (max_chars + 256) - len(duplicate_block) - len(tail_marker))
-    large_diff = (
-        duplicate_block
-        + ("u" * unique_chars)
-        + tail_marker
-    )
+    large_diff = duplicate_block + ("u" * unique_chars) + tail_marker
 
     class FakeProcess:
         returncode = 0

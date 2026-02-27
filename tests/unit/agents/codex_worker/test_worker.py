@@ -6,7 +6,6 @@ import asyncio
 import gzip
 import json
 import logging
-from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
@@ -1851,9 +1850,7 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
     prefix = "prefix-no-markers\n" * (
         (step_log_max_bytes // len("prefix-no-markers\n")) + 32
     )
-    middle = "middle-content\n" * (
-        (step_log_max_bytes // len("middle-content\n")) + 32
-    )
+    middle = "middle-content\n" * ((step_log_max_bytes // len("middle-content\n")) + 32)
     step_log = tmp_path / "companion-step.log"
     step_log.write_text(
         (
