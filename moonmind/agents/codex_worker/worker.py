@@ -5579,8 +5579,6 @@ class CodexWorker:
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
         git = git_node if isinstance(git_node, Mapping) else {}
-        publish_node = task.get("publish")
-        publish = publish_node if isinstance(publish_node, Mapping) else {}
 
         runtime_mode = (
             str(
@@ -5593,9 +5591,7 @@ class CodexWorker:
         runtime_model = str(runtime.get("model") or "").strip() or None
         runtime_effort = str(runtime.get("effort") or "").strip() or None
         starting_branch = str(git.get("startingBranch") or "").strip() or None
-        publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
-        if publish_mode not in {"none", "branch", "pr"}:
-            publish_mode = "pr"
+        publish_mode = "pr"
 
         return {
             "type": "task",

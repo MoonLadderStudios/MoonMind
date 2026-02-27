@@ -332,6 +332,20 @@ class TaskProposalService:
         except Exception as exc:  # pragma: no cover - validation guard
             raise TaskProposalValidationError("cursor is invalid") from exc
 
+    @staticmethod
+    def _enforce_proposal_pr_publish_mode(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize proposal payloads to PR publish mode for promoted follow-up jobs."""
+
+        normalized_payload = dict(payload)
+        task_node = normalized_payload.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
+        publish["mode"] = "pr"
+        task["publish"] = publish
+        normalized_payload["task"] = task
+        return normalized_payload
+
     def _prepare_task_create_request(
         self, request: dict[str, Any]
     ) -> tuple[dict[str, Any], str]:
@@ -372,6 +386,7 @@ class TaskProposalService:
             normalized_payload = self._queue_service.normalize_task_job_payload(payload)
         except AgentQueueValidationError as exc:
             raise TaskProposalValidationError(str(exc)) from exc
+        normalized_payload = self._enforce_proposal_pr_publish_mode(normalized_payload)
 
         repository = self._clean_str(normalized_payload.get("repository"))
         if not repository:
@@ -652,6 +667,7 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 f"stored task payload is invalid: {exc}"
             ) from exc
+        payload = self._enforce_proposal_pr_publish_mode(payload)
         request["payload"] = payload
 
         priority = request.get("priority", 0)
