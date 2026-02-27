@@ -73,7 +73,9 @@ def is_bot_user(login: str | None) -> bool:
 
 
 def _classify_comment_actionability(
-    comment: dict, include_bot_review_comments: bool = False
+    comment: dict,
+    *,
+    include_bot_review_comments: bool = False,
 ) -> tuple[bool, str]:
     """Determine whether a comment requires action.
 
@@ -97,6 +99,11 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
+        if (
+            not include_bot_review_comments
+            and is_bot_user(comment.get("user") or "")
+        ):
+            return False, "bot_review_comment_excluded"
         return True, "actionable"
 
     if is_bot_user(comment.get("user")):
@@ -109,7 +116,9 @@ def _classify_comment_actionability(
 
 
 def _is_comment_actionable(
-    comment: dict, include_bot_review_comments: bool = False
+    comment: dict,
+    *,
+    include_bot_review_comments: bool = False,
 ) -> bool:
     actionable, _ = _classify_comment_actionability(
         comment,
@@ -119,7 +128,9 @@ def _is_comment_actionable(
 
 
 def summarize_comments(
-    comments: list[dict], include_bot_review_comments: bool = False
+    comments: list[dict],
+    *,
+    include_bot_review_comments: bool = False,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
@@ -255,7 +266,7 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
-    comments_summary = summarize_comments(comments)
+    comments_summary = summarize_comments(comments, include_bot_review_comments=True)
 
     # 4. Construct Snapshot
     snapshot = {

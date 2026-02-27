@@ -11,7 +11,7 @@ from collections import defaultdict, deque
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -23,6 +23,10 @@ from moonmind.utils.env_bool import env_to_bool
 from moonmind.utils.logging import scrub_github_tokens
 
 _MAX_ERROR_MESSAGE_CHARS = 1024
+_COMMAND_START_PREFIX = "[command] $ "
+_COMMAND_COMPLETE_PREFIX = "[command] complete:"
+_COMMAND_CONTROL_TAG = "control=worker"
+_GIT_DIFF_LOG_CAPTURE_MAX_CHARS = 64 * 1024
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -52,6 +56,7 @@ class WorkerExecutionResult:
     summary: str | None
     error_message: str | None
     artifacts: tuple[ArtifactUpload, ...] = ()
+    run_quality_reason: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +238,108 @@ def _truncate_error_message(
     head_chars = min(768, max_chars - 4)
     tail_chars = max_chars - head_chars - 3
     return f"{message[:head_chars]}...{message[-tail_chars:]}"
+
+
+def _is_git_diff_command(command: Sequence[str]) -> bool:
+    if len(command) < 2:
+        return False
+    return (
+        os.path.basename(str(command[0]).strip()) == "git"
+        and str(command[1]).strip() == "diff"
+    )
+
+
+def _dedupe_adjacent_output_lines(text: str) -> tuple[str, int]:
+    if not text:
+        return ("", 0)
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return (text, 0)
+
+    deduped: list[str] = []
+    omitted = 0
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        run_length = 1
+        while index + run_length < len(lines) and lines[index + run_length] == line:
+            run_length += 1
+        deduped.append(line)
+        omitted += max(0, run_length - 1)
+        index += run_length
+    return ("".join(deduped), omitted)
+
+
+def _cap_output_preserving_tail(
+    *,
+    stream: str,
+    text: str,
+    max_chars: int,
+) -> str:
+    if max_chars <= 0 or not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+
+    head_chars = min(16 * 1024, max_chars // 4)
+    tail_chars = max(0, max_chars - head_chars)
+    marker = (
+        "\n"
+        f"[moonmind] {stream} output truncated: omitted "
+        f"{max(0, len(text) - head_chars - tail_chars)} chars from the middle; "
+        f"retained first {head_chars} chars and last {tail_chars} chars "
+        f"(cap={max_chars}).\n"
+    )
+    available = max_chars - len(marker)
+    if available <= 0:
+        return text[-max_chars:]
+    head_chars = min(head_chars, available // 2)
+    tail_chars = max(0, available - head_chars)
+    return f"{text[:head_chars]}{marker}{text[-tail_chars:] if tail_chars else ''}"
+
+
+def _summarize_oversized_command_output(
+    *,
+    stream: str,
+    text: str,
+    max_chars: int,
+) -> str:
+    normalized = text.replace("\r", "")
+    deduped, omitted_lines = _dedupe_adjacent_output_lines(normalized)
+    if omitted_lines:
+        deduped = (
+            f"{deduped}\n"
+            f"[moonmind] {stream} output deduped: omitted "
+            f"{omitted_lines} adjacent duplicate line(s).\n"
+        )
+    return _cap_output_preserving_tail(
+        stream=stream,
+        text=deduped,
+        max_chars=max_chars,
+    )
+
+
+def _summarize_sensitive_command_output(
+    *,
+    stream: str,
+    text: str,
+    max_chars: int,
+) -> str:
+    """Return structured diagnostics without logging sensitive command content."""
+
+    normalized = text.replace("\r", "")
+    _deduped, omitted_lines = _dedupe_adjacent_output_lines(normalized)
+    line_count = normalized.count("\n")
+    if normalized and not normalized.endswith("\n"):
+        line_count += 1
+    return (
+        f"[moonmind] {stream} output captured for sensitive command: "
+        f"chars={len(normalized)}; "
+        f"lines={line_count}; "
+        f"adjacentDuplicateLines={omitted_lines}; "
+        f"truncated={str(len(normalized) > max_chars).lower()}; "
+        "contentLogged=false"
+    )
 
 
 class CodexExecHandler:
@@ -810,10 +917,11 @@ class CodexExecHandler:
         output_chunk_callback: OutputChunkCallback | None = None,
         enable_replay_dedupe: bool = True,
     ) -> CommandResult:
+        defer_stream_output_logging = _is_git_diff_command(command)
         self._append_log(
             log_path,
             self._redact_text(
-                f"[command] $ {' '.join(command)}",
+                f"{_COMMAND_START_PREFIX}{' '.join(command)}; {_COMMAND_CONTROL_TAG}",
                 extra_redaction_values=redaction_values,
             ),
         )
@@ -865,11 +973,30 @@ class CodexExecHandler:
         replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
         replay_snapshot_text: dict[str, str] = {"stdout": "", "stderr": ""}
         replay_snapshot_match_offset: dict[str, int] = {"stdout": 0, "stderr": 0}
+        semantic_replay_prefix_labels = frozenset(
+            {"assistant", "codex", "thinking", "system", "tool", "user"}
+        )
         is_polling_snapshot_command = bool(
             len(command) >= 2
             and os.path.basename(command[0]) == "codex"
             and command[1] == "exec"
         )
+
+        def _normalize_semantic_replay_snapshot(text: str) -> str:
+            lines = text.replace("\r", "").split("\n")
+            while lines:
+                candidate = lines[0].strip()
+                lowered = candidate.lower()
+                if (
+                    not candidate
+                    or lowered in semantic_replay_prefix_labels
+                    or lowered.startswith("**planning")
+                    or lowered.startswith("planning ")
+                ):
+                    lines.pop(0)
+                    continue
+                break
+            return "\n".join(lines).strip()
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -881,6 +1008,9 @@ class CodexExecHandler:
                     self._append_log(log_path, redacted_line)
 
         def _flush_stream_log_buffer(stream: str, *, force: bool) -> None:
+            if defer_stream_output_logging:
+                stream_log_buffers[stream] = ""
+                return
             pending = stream_log_buffers.get(stream, "")
             if not pending:
                 return
@@ -1006,6 +1136,18 @@ class CodexExecHandler:
                         replay_snapshot_match_offset[stream] = len(text)
                         return ""
 
+                    semantic_previous = _normalize_semantic_replay_snapshot(
+                        previous_snapshot
+                    )
+                    semantic_current = _normalize_semantic_replay_snapshot(text)
+                    if (
+                        semantic_previous
+                        and semantic_current
+                        and semantic_previous == semantic_current
+                    ):
+                        replay_snapshot_match_offset[stream] = len(previous_snapshot)
+                        return ""
+
                 if not snapshot_text_updated:
                     if previous_snapshot:
                         replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
@@ -1090,13 +1232,15 @@ class CodexExecHandler:
             deduped_text = _dedupe_replayed_stream_chunk(stream, text)
             if not deduped_text:
                 return
-            stream_log_buffers[stream] = (
-                stream_log_buffers.get(stream, "") + deduped_text
-            )
-            _flush_stream_log_buffer(
-                stream,
-                force=len(stream_log_buffers[stream]) >= max_stream_log_buffer_chars,
-            )
+            if not defer_stream_output_logging:
+                stream_log_buffers[stream] = (
+                    stream_log_buffers.get(stream, "") + deduped_text
+                )
+                _flush_stream_log_buffer(
+                    stream,
+                    force=len(stream_log_buffers[stream])
+                    >= max_stream_log_buffer_chars,
+                )
             await _invoke_output_callback(stream, deduped_text, context="chunk emit")
 
         async def _emit_stream_closed(stream: str) -> None:
@@ -1205,6 +1349,28 @@ class CodexExecHandler:
                         await _flush_pending_replay_candidate("stderr")
                         _flush_stream_log_buffer("stdout", force=True)
                         _flush_stream_log_buffer("stderr", force=True)
+                        if defer_stream_output_logging:
+                            for stream_name, chunks in (
+                                ("stdout", stdout_chunks),
+                                ("stderr", stderr_chunks),
+                            ):
+                                summary = _summarize_sensitive_command_output(
+                                    stream=stream_name,
+                                    text="".join(chunks),
+                                    max_chars=_GIT_DIFF_LOG_CAPTURE_MAX_CHARS,
+                                )
+                                if summary:
+                                    _write_redacted_log_block(summary)
+                            self._append_log(
+                                log_path,
+                                self._redact_text(
+                                    (
+                                        "[moonmind] command cancelled before completion; "
+                                        "sensitive command output omitted from logs"
+                                    ),
+                                    extra_redaction_values=redaction_values,
+                                ),
+                            )
                         with suppress(asyncio.CancelledError, Exception):
                             await wait_task
                         raise CommandCancelledError(
@@ -1234,11 +1400,34 @@ class CodexExecHandler:
             stdout=stdout,
             stderr=stderr,
         )
+        if defer_stream_output_logging:
+            for stream, output in (
+                ("stdout", result.stdout),
+                ("stderr", result.stderr),
+            ):
+                summarized = _summarize_sensitive_command_output(
+                    stream=stream,
+                    text=output,
+                    max_chars=_GIT_DIFF_LOG_CAPTURE_MAX_CHARS,
+                )
+                if summarized:
+                    _write_redacted_log_block(summarized)
+        command_hint = (
+            " ".join(command[:2]) if len(command) > 1 else " ".join(command)
+        ) or "<empty>"
+        self._append_log(
+            log_path,
+            self._redact_text(
+                (
+                    f"{_COMMAND_COMPLETE_PREFIX} rc={result.returncode}; "
+                    f"cmd={command_hint}; stdoutChars={len(result.stdout)}; "
+                    f"stderrChars={len(result.stderr)}; {_COMMAND_CONTROL_TAG}"
+                ),
+                extra_redaction_values=redaction_values,
+            ),
+        )
         if check and result.returncode != 0:
             detail = (stderr or stdout).strip()
-            command_hint = (
-                " ".join(command[:2]) if len(command) > 1 else " ".join(command)
-            ) or "<empty>"
             if detail:
                 tail_line = detail.splitlines()[-1]
                 redacted_tail = self._redact_text(
