@@ -26,7 +26,9 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
     PreparedTaskWorkspace,
+    QueueApiClient,
     QueueClaimResult,
+    QueueClientError,
     QueueHeartbeatResult,
     QueueSystemStatus,
     ResolvedTaskStep,
@@ -53,6 +55,7 @@ class FakeQueueClient:
         self.completed: list[tuple[str, str | None]] = []
         self.completed_finish_payloads: list[dict[str, object]] = []
         self.failed: list[str] = []
+        self.failed_retryable: list[bool] = []
         self.failed_finish_payloads: list[dict[str, object]] = []
         self.cancel_acks: list[tuple[str, str | None]] = []
         self.cancel_ack_finish_payloads: list[dict[str, object]] = []
@@ -153,6 +156,7 @@ class FakeQueueClient:
         finish_summary=None,
     ):
         self.failed.append(f"{job_id}:{error_message}")
+        self.failed_retryable.append(bool(retryable))
         self.failed_finish_payloads.append(
             {
                 "finishOutcomeCode": finish_outcome_code,
@@ -199,6 +203,23 @@ class FakeQueueClient:
     async def create_task_proposal(self, *, proposal):
         self.submitted_proposals.append(dict(proposal))
         return {"id": str(uuid4())}
+
+
+async def test_parse_positive_int_field_rejects_invalid_values() -> None:
+    """Queue payload integer parsing should fail fast on invalid values."""
+
+    with pytest.raises(QueueClientError):
+        QueueApiClient._parse_positive_int_field(
+            node={"attempt": "nope"},
+            field_name="attempt",
+            default=1,
+        )
+    with pytest.raises(QueueClientError):
+        QueueApiClient._parse_positive_int_field(
+            node={"maxAttempts": 0},
+            field_name="maxAttempts",
+            default=3,
+        )
 
 
 class FailingUploadQueueClient(FakeQueueClient):
@@ -1438,6 +1459,251 @@ async def test_run_once_task_step_log_without_truncation_skips_companion_artifac
     assert "logs/steps/step-0000.full.log.metadata.json" not in queue.uploaded
 
 
+async def test_run_once_task_step_transcript_truncated_mid_command_fails_with_retryable_run_quality(
+    tmp_path: Path,
+) -> None:
+    """Incomplete command markers should fail the step with structured run_quality retry."""
+
+    step_log = tmp_path / "incomplete-step.log"
+    step_log.write_text(
+        "[command] $ codex exec run integrity check\n"
+        "partial output that never reached command completion\n",
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert queue.failed_retryable == [True]
+    step_failed_event = next(
+        event for event in queue.events if event["message"] == "task.step.failed"
+    )
+    run_quality = step_failed_event["payload"]["runQuality"]
+    assert run_quality["category"] == "run_quality"
+    assert run_quality["code"] == "step_transcript_truncated_mid_command"
+    assert "retry" in run_quality["tags"]
+    assert "artifact_gap" in run_quality["tags"]
+    finish_summary = queue.failed_finish_payloads[0]["finishSummary"]
+    assert isinstance(finish_summary, dict)
+    assert (
+        finish_summary["runQuality"]["code"] == "step_transcript_truncated_mid_command"
+    )
+
+
+async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A balanced transcript ending with completion marker should pass integrity checks."""
+
+    step_log = tmp_path / "complete-step.log"
+    step_log.write_text(
+        "[command] $ codex exec run integrity check; control=worker\n"
+        "done\n"
+        "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n",
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+    assert any(event["message"] == "task.step.finished" for event in queue.events)
+
+
+async def test_run_once_task_step_transcript_uses_full_companion_when_preview_truncated(
+    tmp_path: Path,
+) -> None:
+    """Integrity checks should prefer full companion logs when preview is truncated."""
+
+    step_log = tmp_path / "companion-step.log"
+    step_log.write_text(
+        (
+            ("prefix-no-markers\n" * 30000)
+            + "[command] $ codex exec run integrity check; control=worker\n"
+            + ("middle-content\n" * 30000)
+            + "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; "
+            "stderrChars=0; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        step_log_max_bytes=4096,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+
+
+async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output(
+    tmp_path: Path,
+) -> None:
+    """Integrity checks should ignore marker-like text not emitted as worker controls."""
+
+    step_log = tmp_path / "quoted-marker-step.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check; control=worker\n"
+            "model output: [command] $ not a worker control marker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+    assert not any(event["message"] == "task.step.failed" for event in queue.events)
+
+
 async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
     tmp_path: Path,
 ) -> None:
@@ -2094,6 +2360,69 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     )
     assert stdout_event_text.count("Result: `802 passed, 8 subtests passed`.") == 1
     assert stdout_event_text.count("Final answer status: tests already green.") == 2
+
+
+async def test_run_once_task_step_and_exec_logs_dedupe_mixed_prefix_final_replays(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mixed-prefix snapshot replays should emit the final summary block once."""
+
+    final_summary_block = (
+        "Implemented and verified.\n"
+        "- Reproduced from run logs: duplicate final block at lines 5274 and 5281.\n"
+        "- Added semantic replay dedupe coverage for mixed prefixes.\n"
+    )
+    replay_a = f"thinking\n**Planning concise final response**\n{final_summary_block}"
+    replay_b = f"codex\n{final_summary_block}"
+    replay_c = final_summary_block
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeStreamingProcess((replay_a, replay_b, replay_c, "done\n"))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = StreamingReplayStepHandler(workdir_root=tmp_path)
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    marker = "Reproduced from run logs: duplicate final block at lines 5274 and 5281."
+    codex_text = codex_log_path.read_text(encoding="utf-8")
+    step_text = step_log_path.read_text(encoding="utf-8")
+    assert codex_text.count(marker) == 1
+    assert step_text.count(marker) == 1
 
 
 def test_load_step_log_offsets_checkpoint_ignores_large_payload(
@@ -3006,6 +3335,264 @@ async def test_run_once_rejects_when_required_capabilities_missing(
     assert len(queue.failed) == 1
     assert "missing required capabilities" in queue.failed[0]
     assert handler.calls == []
+
+
+async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
+    tmp_path: Path,
+) -> None:
+    """Contract validation should reject resolve-PR tasks that cannot self-publish."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #777",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert (
+        "resolve-PR objectives with task.publish.mode='none' require skill 'pr-resolver'"
+        in queue.failed[0]
+    )
+    assert handler.calls == []
+
+
+async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
+    tmp_path: Path,
+) -> None:
+    """resolve-PR runs must fail when final snapshot remains unresolved."""
+
+    step_log = tmp_path / "resolve-pr.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #321",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "instructions": "Follow pr-resolver workflow",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "321"}},
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+
+    class _UnresolvedPrStateHandler(FakeHandler):
+        async def handle_skill(
+            self,
+            *,
+            job_id,
+            payload,
+            selected_skill,
+            fallback=False,
+            cancel_event=None,
+            output_chunk_callback=None,
+        ):
+            snapshot_path = (
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
+            )
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "pr": {
+                            "number": 321,
+                            "mergeable": "CONFLICTING",
+                            "mergeStateStatus": "DIRTY",
+                        },
+                        "commentsSummary": {
+                            "hasActionableComments": True,
+                            "actionableCommentCount": 2,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return await super().handle_skill(
+                job_id=job_id,
+                payload=payload,
+                selected_skill=selected_skill,
+                fallback=fallback,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+    handler = _UnresolvedPrStateHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="resolver completed",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert "pr-resolution final state unresolved" in queue.failed[0]
+    assert "reports/pr_resolution_validation.json" in queue.uploaded
+    assert queue.failed_finish_payloads[0]["finishOutcomeStage"] == "execute"
+    assert queue.failed_finish_payloads[0]["finishOutcomeCode"] == "FAILED"
+    assert not any(
+        event["message"] == "moonmind.task.publish" for event in queue.events
+    )
+    assert handler.calls == ["codex_skill:pr-resolver:True"]
+
+
+async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
+    tmp_path: Path,
+) -> None:
+    """resolve-PR runs should complete when final snapshot has no unresolved signals."""
+
+    step_log = tmp_path / "resolve-pr-ok.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #654",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "instructions": "Follow pr-resolver workflow",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "654"}},
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+
+    class _ResolvedPrStateHandler(FakeHandler):
+        async def handle_skill(
+            self,
+            *,
+            job_id,
+            payload,
+            selected_skill,
+            fallback=False,
+            cancel_event=None,
+            output_chunk_callback=None,
+        ):
+            snapshot_path = (
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
+            )
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "pr": {
+                            "number": 654,
+                            "mergeable": "MERGEABLE",
+                            "mergeStateStatus": "CLEAN",
+                        },
+                        "commentsSummary": {
+                            "hasActionableComments": False,
+                            "actionableCommentCount": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return await super().handle_skill(
+                job_id=job_id,
+                payload=payload,
+                selected_skill=selected_skill,
+                fallback=fallback,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+    handler = _ResolvedPrStateHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="resolver completed",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.failed == []
+    assert len(queue.completed) == 1
+    assert "reports/pr_resolution_validation.json" in queue.uploaded
+    assert handler.calls == ["codex_skill:pr-resolver:True"]
 
 
 async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) -> None:

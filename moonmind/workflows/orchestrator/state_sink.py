@@ -266,6 +266,8 @@ class FallbackStateSink(OrchestratorStateSink):
                 return
             except Exception:
                 self._db_available = False
+                await fallback_call()
+                return
         try:
             await db_call()
             self._db_available = True

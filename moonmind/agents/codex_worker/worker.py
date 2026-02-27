@@ -107,6 +107,27 @@ _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
 _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES = 64 * 1024
 _STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
+_COMMAND_START_PREFIX = "[command] $ "
+_COMMAND_COMPLETE_PREFIX = "[command] complete:"
+_COMMAND_CONTROL_TAG = "control=worker"
+_CONTROLLED_COMMAND_START_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_START_PREFIX)}.+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
+_CONTROLLED_COMMAND_COMPLETE_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
+    rf"stdoutChars=\d+;\s+stderrChars=\d+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
+_LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
+    r"stdoutChars=\d+;\s+stderrChars=\d+$"
+)
+_STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
+    {
+        "step_transcript_truncated_mid_command",
+        "step_transcript_missing_terminal_marker",
+        "step_transcript_invalid_marker_balance",
+    }
+)
 _NON_SOURCE_CHANGE_PREFIXES = (
     ".github/",
     ".specify/",
@@ -169,12 +190,27 @@ _VERIFICATION_COMMAND_PATTERNS = (
     ),
 )
 _VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
+_RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
+    r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
+    re.IGNORECASE,
+)
+_CONFLICTING_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
+_CONFLICTING_MERGEABLE_VALUES = frozenset({"CONFLICTING", "DIRTY", "FALSE"})
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
     """Normalize instruction text for objective/step deduplication checks."""
 
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _is_resolve_pr_objective_text(value: str | None) -> bool:
+    """Return True when instructions target pull-request resolution."""
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return _RESOLVE_PR_OBJECTIVE_PATTERN.search(text) is not None
 
 
 def _normalize_proposal_tags(values: object) -> list[str]:
@@ -869,6 +905,8 @@ class ClaimedJob:
     id: UUID
     type: str
     payload: dict[str, Any]
+    attempt: int = 1
+    max_attempts: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -1054,6 +1092,15 @@ class StepLogCopyResult:
     metadata_path: Path | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class StepTranscriptIntegrityResult:
+    """Structured integrity-check outcome for one step transcript."""
+
+    passed: bool
+    message: str | None = None
+    run_quality_reason: dict[str, Any] | None = None
+
+
 class QueueApiClient:
     """HTTP client wrapper for queue and artifact endpoints."""
 
@@ -1101,10 +1148,22 @@ class QueueApiClient:
         job_data = data.get("job")
         job = None
         if job_data:
+            attempt = self._parse_positive_int_field(
+                node=job_data,
+                field_name="attempt",
+                default=1,
+            )
+            max_attempts = self._parse_positive_int_field(
+                node=job_data,
+                field_name="maxAttempts",
+                default=3,
+            )
             job = ClaimedJob(
                 id=UUID(str(job_data["id"])),
                 type=str(job_data["type"]),
                 payload=dict(job_data.get("payload") or {}),
+                attempt=attempt,
+                max_attempts=max_attempts,
             )
         system = self._parse_system_metadata(data.get("system"))
         return QueueClaimResult(job=job, system=system)
@@ -1313,6 +1372,28 @@ class QueueApiClient:
             return datetime.fromisoformat(normalized)
         except ValueError:
             return None
+
+    @staticmethod
+    def _parse_positive_int_field(
+        *,
+        node: Mapping[str, Any],
+        field_name: str,
+        default: int,
+    ) -> int:
+        raw_value = node.get(field_name)
+        if raw_value is None:
+            return default
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise QueueClientError(
+                f"invalid queue field '{field_name}': expected positive int, got {raw_value!r}"
+            ) from exc
+        if parsed < 1:
+            raise QueueClientError(
+                f"invalid queue field '{field_name}': expected positive int, got {raw_value!r}"
+            )
+        return parsed
 
     async def get_live_session(self, *, job_id: UUID) -> dict[str, Any] | None:
         """Fetch current live-session payload; return ``None`` when no session exists."""
@@ -1789,6 +1870,11 @@ class CodexWorker:
                 publish_base_branch=publish_base_branch,
                 publish_working_branch=publish_working_branch,
                 proposal_report=proposal_report,
+                run_quality_reason=(
+                    dict(result.run_quality_reason)
+                    if result is not None and result.run_quality_reason is not None
+                    else None
+                ),
             )
             artifacts_dir = (
                 prepared.artifacts_dir
@@ -1829,6 +1915,11 @@ class CodexWorker:
                     publish_base_branch=publish_base_branch,
                     publish_working_branch=publish_working_branch,
                     proposal_report=proposal_report,
+                    run_quality_reason=(
+                        dict(result.run_quality_reason)
+                        if result is not None and result.run_quality_reason is not None
+                        else None
+                    ),
                 )
 
             if cancelled:
@@ -1862,6 +1953,15 @@ class CodexWorker:
                 )
                 return
 
+            run_quality_reason = (
+                dict(result.run_quality_reason)
+                if result is not None and result.run_quality_reason is not None
+                else None
+            )
+            retryable_failure = self._should_enqueue_run_quality_retry(
+                job=job,
+                result=result,
+            )
             terminal_error = self._redact_text(
                 (
                     (result.error_message if result is not None else None)
@@ -1873,21 +1973,26 @@ class CodexWorker:
                 job_id=job.id,
                 worker_id=self._config.worker_id,
                 error_message=terminal_error,
-                retryable=False,
+                retryable=retryable_failure,
                 finish_outcome_code=finish_outcome.code,
                 finish_outcome_stage=finish_outcome.stage,
                 finish_outcome_reason=finish_outcome.reason,
                 finish_summary=finish_summary,
             )
+            failed_event_payload: dict[str, Any] = {
+                "error": terminal_error,
+                "jobType": job.type,
+                **skill_meta,
+            }
+            if run_quality_reason is not None:
+                failed_event_payload["runQuality"] = run_quality_reason
+            if retryable_failure:
+                failed_event_payload["retryable"] = True
             await self._emit_event(
                 job_id=job.id,
                 level="error",
                 message="Job failed",
-                payload={
-                    "error": terminal_error,
-                    "jobType": job.type,
-                    **skill_meta,
-                },
+                payload=failed_event_payload,
             )
 
         try:
@@ -2428,6 +2533,7 @@ class CodexWorker:
         publish_base_branch: str | None,
         publish_working_branch: str | None,
         proposal_report: ProposalSubmissionReport,
+        run_quality_reason: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         repository = str(canonical_payload.get("repository") or "").strip()
         patch_path = "patches/changes.patch"
@@ -2483,6 +2589,8 @@ class CodexWorker:
                 "errors": proposal_report.errors,
             },
         }
+        if run_quality_reason is not None:
+            summary["runQuality"] = dict(run_quality_reason)
         redacted = self._redact_payload(summary)
         return redacted if isinstance(redacted, dict) else summary
 
@@ -4633,6 +4741,371 @@ class CodexWorker:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _load_step_transcript_for_integrity(*, source_path: Path) -> str:
+        if source_path.suffix == ".gz":
+            with gzip.open(
+                source_path, "rt", encoding="utf-8", errors="replace"
+            ) as handle:
+                return handle.read()
+        return source_path.read_text(encoding="utf-8", errors="replace")
+
+    @staticmethod
+    def _resolve_step_transcript_integrity_source(*, step_log_path: Path) -> Path:
+        metadata_path = CodexWorker._step_log_companion_metadata_path(step_log_path)
+        full_log_path = CodexWorker._step_log_companion_path(step_log_path)
+        if not (metadata_path.exists() and full_log_path.exists()):
+            return step_log_path
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (
+            OSError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+            UnicodeDecodeError,
+        ):
+            logger.warning(
+                "Ignoring invalid step transcript linkage metadata at %s",
+                metadata_path,
+                exc_info=True,
+            )
+            return step_log_path
+        if isinstance(payload, Mapping) and bool(payload.get("truncated")):
+            return full_log_path
+        return step_log_path
+
+    @staticmethod
+    def _classify_step_transcript_control_lines(
+        lines: Sequence[str],
+    ) -> tuple[Sequence[str], Sequence[str]]:
+        controlled_start = [
+            line for line in lines if _CONTROLLED_COMMAND_START_PATTERN.match(line)
+        ]
+        controlled_complete = [
+            line for line in lines if _CONTROLLED_COMMAND_COMPLETE_PATTERN.match(line)
+        ]
+        if controlled_start or controlled_complete:
+            return controlled_start, controlled_complete
+        legacy_start = [
+            line for line in lines if line.startswith(_COMMAND_START_PREFIX)
+        ]
+        legacy_complete = [
+            line for line in lines if _LEGACY_COMMAND_COMPLETE_PATTERN.match(line)
+        ]
+        return legacy_start, legacy_complete
+
+    def _evaluate_step_transcript_integrity(
+        self,
+        *,
+        step: ResolvedTaskStep,
+        step_log_path: Path,
+    ) -> StepTranscriptIntegrityResult:
+        """Validate command-start/complete markers in a step transcript."""
+
+        if not step_log_path.exists():
+            return StepTranscriptIntegrityResult(passed=True)
+        transcript_source = self._resolve_step_transcript_integrity_source(
+            step_log_path=step_log_path
+        )
+        try:
+            transcript_text = self._load_step_transcript_for_integrity(
+                source_path=transcript_source
+            )
+        except OSError:
+            logger.warning(
+                "Failed reading step transcript for integrity check at %s",
+                transcript_source,
+                exc_info=True,
+            )
+            return StepTranscriptIntegrityResult(passed=True)
+
+        non_empty_lines = [
+            line.strip() for line in transcript_text.splitlines() if line.strip()
+        ]
+        start_markers, complete_markers = self._classify_step_transcript_control_lines(
+            non_empty_lines
+        )
+        start_count = len(start_markers)
+        complete_count = len(complete_markers)
+        if start_count == 0 and complete_count == 0:
+            return StepTranscriptIntegrityResult(passed=True)
+
+        terminal_line = (
+            complete_markers[-1]
+            if complete_markers
+            else (non_empty_lines[-1] if non_empty_lines else "")
+        )
+        if complete_count > start_count:
+            detail = (
+                "step transcript marker counts are invalid "
+                f"(startMarkers={start_count}, completeMarkers={complete_count})"
+            )
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_invalid_marker_balance",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
+        if complete_count < start_count:
+            detail = (
+                "step transcript ended mid-command "
+                f"(startMarkers={start_count}, completeMarkers={complete_count})"
+            )
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_truncated_mid_command",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
+        if not terminal_line.startswith(_COMMAND_COMPLETE_PREFIX):
+            detail = "step transcript missing terminal completion marker"
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_missing_terminal_marker",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
+        return StepTranscriptIntegrityResult(passed=True)
+
+    def _build_step_transcript_run_quality_reason(
+        self,
+        *,
+        code: str,
+        step: ResolvedTaskStep,
+        detail: str,
+        start_markers: int,
+        complete_markers: int,
+        terminal_line: str,
+    ) -> dict[str, Any]:
+        """Build structured run_quality metadata for transcript integrity failures."""
+
+        return {
+            "category": "run_quality",
+            "code": code,
+            "summary": detail,
+            "tags": ["retry", "artifact_gap"],
+            "stepId": step.step_id,
+            "stepIndex": step.step_index,
+            "details": {
+                "startMarkers": start_markers,
+                "completeMarkers": complete_markers,
+                "terminalLine": self._redact_text(terminal_line)[:256],
+            },
+        }
+
+    @staticmethod
+    def _is_retryable_run_quality_reason(reason: Mapping[str, Any] | None) -> bool:
+        if not isinstance(reason, Mapping):
+            return False
+        if str(reason.get("category") or "").strip().lower() != "run_quality":
+            return False
+        code = str(reason.get("code") or "").strip()
+        return code in _STEP_TRANSCRIPT_RETRYABLE_CODES
+
+    def _should_enqueue_run_quality_retry(
+        self,
+        *,
+        job: ClaimedJob,
+        result: WorkerExecutionResult | None,
+    ) -> bool:
+        """Allow at most one queued retry for retry-classified run-quality failures."""
+
+        if result is None or result.succeeded:
+            return False
+        if not self._is_retryable_run_quality_reason(result.run_quality_reason):
+            return False
+        if job.max_attempts <= 1:
+            return False
+        return job.attempt == 1
+
+    @staticmethod
+    def _coerce_non_negative_int(value: object) -> int | None:
+        """Best-effort conversion for non-negative integer fields."""
+
+        try:
+            converted = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return converted if converted >= 0 else None
+
+    def _validate_pr_resolution_final_state(
+        self,
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+        prepared: PreparedTaskWorkspace,
+    ) -> StepGateResult:
+        """Fail resolve-PR runs when final PR state remains unresolved."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        objective = str(task.get("instructions") or "").strip()
+        is_pr_resolution_task = _is_resolve_pr_objective_text(objective) or any(
+            step.effective_skill_id == _PR_RESOLVER_SKILL_ID for step in resolved_steps
+        )
+        if not is_pr_resolution_task:
+            return StepGateResult(passed=True)
+
+        snapshot_path = prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json"
+        result_path = prepared.repo_dir / "artifacts" / "pr_resolver_result.json"
+        report_path = (
+            prepared.artifacts_dir / "reports" / "pr_resolution_validation.json"
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+
+        failure_reason: str | None = None
+        unresolved_signals: list[str] = []
+        snapshot_payload: dict[str, Any] = {}
+        snapshot_error: str | None = None
+        if not snapshot_path.exists():
+            snapshot_error = "missing artifacts/pr_resolver_snapshot.json"
+        else:
+            try:
+                parsed_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                snapshot_error = "artifacts/pr_resolver_snapshot.json is not valid JSON"
+            else:
+                if not isinstance(parsed_snapshot, Mapping):
+                    snapshot_error = (
+                        "artifacts/pr_resolver_snapshot.json must be a JSON object"
+                    )
+                else:
+                    snapshot_payload = dict(parsed_snapshot)
+
+        if snapshot_error is not None:
+            failure_reason = (
+                f"pr-resolution final state validation failed: {snapshot_error}"
+            )
+        else:
+            pr_node = snapshot_payload.get("pr")
+            pr = pr_node if isinstance(pr_node, Mapping) else {}
+            comments_node = snapshot_payload.get("commentsSummary")
+            comments_summary = (
+                comments_node if isinstance(comments_node, Mapping) else {}
+            )
+
+            merge_state = str(pr.get("mergeStateStatus") or "").strip().upper()
+            mergeable_raw = pr.get("mergeable")
+            if merge_state in _CONFLICTING_MERGE_STATES:
+                unresolved_signals.append(f"mergeStateStatus={merge_state}")
+
+            mergeable_conflicting = False
+            if isinstance(mergeable_raw, bool):
+                mergeable_conflicting = not mergeable_raw
+            else:
+                mergeable_conflicting = (
+                    str(mergeable_raw or "").strip().upper()
+                    in _CONFLICTING_MERGEABLE_VALUES
+                )
+            if mergeable_conflicting:
+                unresolved_signals.append(f"mergeable={mergeable_raw}")
+
+            actionable_count = self._coerce_non_negative_int(
+                comments_summary.get("actionableCommentCount")
+            )
+            has_actionable_comments = bool(
+                comments_summary.get("hasActionableComments")
+            )
+            if actionable_count is None:
+                actionable_count = 1 if has_actionable_comments else 0
+            elif actionable_count == 0 and has_actionable_comments:
+                actionable_count = 1
+            if actionable_count > 0:
+                unresolved_signals.append(f"actionableCommentCount={actionable_count}")
+
+            if unresolved_signals:
+                failure_reason = "pr-resolution final state unresolved: " + "; ".join(
+                    unresolved_signals
+                )
+
+        result_payload: dict[str, Any] | None = None
+        if result_path.exists():
+            try:
+                parsed_result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                result_payload = None
+            else:
+                if isinstance(parsed_result, Mapping):
+                    result_payload = dict(parsed_result)
+
+        passed = failure_reason is None
+        report_payload = {
+            "schemaVersion": "v1",
+            "status": "PASS" if passed else "FAIL",
+            "reason": failure_reason or "pr-resolution final state is resolved",
+            "objective": objective,
+            "sources": {
+                "snapshotPath": "artifacts/pr_resolver_snapshot.json",
+                "resultPath": "artifacts/pr_resolver_result.json",
+            },
+            "snapshot": {
+                "available": bool(snapshot_payload),
+                "pr": (
+                    snapshot_payload.get("pr")
+                    if isinstance(snapshot_payload.get("pr"), Mapping)
+                    else {}
+                ),
+                "commentsSummary": (
+                    snapshot_payload.get("commentsSummary")
+                    if isinstance(snapshot_payload.get("commentsSummary"), Mapping)
+                    else {}
+                ),
+            },
+            "result": {
+                "available": bool(result_payload),
+                "mergeOutcome": (
+                    str(result_payload.get("merge_outcome") or "").strip()
+                    if isinstance(result_payload, Mapping)
+                    else None
+                ),
+                "reason": (
+                    str(result_payload.get("reason") or "").strip()
+                    if isinstance(result_payload, Mapping)
+                    else None
+                ),
+            },
+            "signals": {"unresolved": unresolved_signals},
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        redacted = self._redact_payload(report_payload)
+        serialized_report = redacted if isinstance(redacted, dict) else report_payload
+        report_path.write_text(
+            json.dumps(serialized_report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        return StepGateResult(
+            passed=passed,
+            message=failure_reason,
+            artifacts=(
+                ArtifactUpload(
+                    path=report_path,
+                    name="reports/pr_resolution_validation.json",
+                    content_type="application/json",
+                    required=False,
+                ),
+            ),
+        )
+
     def _evaluate_step_gate(
         self,
         *,
@@ -6238,6 +6711,45 @@ class CodexWorker:
             if artifact_callback is not None and normalized_step_artifacts:
                 await artifact_callback(normalized_step_artifacts)
 
+            if step_result.succeeded and runtime_mode == "codex":
+                transcript_integrity = self._evaluate_step_transcript_integrity(
+                    step=step,
+                    step_log_path=step_log_path,
+                )
+                if not transcript_integrity.passed:
+                    integrity_message = (
+                        transcript_integrity.message
+                        or "step transcript integrity check failed"
+                    )
+                    event_payload["summary"] = integrity_message
+                    if transcript_integrity.run_quality_reason is not None:
+                        event_payload["runQuality"] = dict(
+                            transcript_integrity.run_quality_reason
+                        )
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="error",
+                        message="task.step.failed",
+                        payload=event_payload,
+                    )
+                    self._append_stage_log(
+                        prepared.execute_log_path,
+                        (
+                            f"step {step.step_index + 1}/{len(resolved_steps)} failed: "
+                            f"{step.step_id}; error={integrity_message}"
+                        ),
+                    )
+                    return WorkerExecutionResult(
+                        succeeded=False,
+                        summary=None,
+                        error_message=integrity_message,
+                        artifacts=tuple(step_artifacts),
+                        run_quality_reason=(
+                            dict(transcript_integrity.run_quality_reason)
+                            if transcript_integrity.run_quality_reason is not None
+                            else None
+                        ),
+                    )
             if step_result.succeeded:
                 gate_result = self._evaluate_step_gate(step=step, prepared=prepared)
                 if gate_result.artifacts:
@@ -6325,6 +6837,24 @@ class CodexWorker:
             step_artifacts.append(final_patch_artifact)
             if artifact_callback is not None:
                 await artifact_callback((final_patch_artifact,))
+
+        pr_resolution_state = self._validate_pr_resolution_final_state(
+            canonical_payload=canonical_payload,
+            resolved_steps=resolved_steps,
+            prepared=prepared,
+        )
+        if pr_resolution_state.artifacts:
+            pr_resolution_artifacts = list(pr_resolution_state.artifacts)
+            step_artifacts.extend(pr_resolution_artifacts)
+            if artifact_callback is not None:
+                await artifact_callback(pr_resolution_artifacts)
+        if not pr_resolution_state.passed:
+            return WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=pr_resolution_state.message,
+                artifacts=tuple(step_artifacts),
+            )
 
         return WorkerExecutionResult(
             succeeded=True,

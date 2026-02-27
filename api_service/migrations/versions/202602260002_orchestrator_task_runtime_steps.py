@@ -6,8 +6,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202602260001"
-down_revision: str | None = "202602240002"
+revision: str = "202602260002"
+down_revision: str | None = "202602260001"
 
 
 def _json_variant() -> sa.JSON:

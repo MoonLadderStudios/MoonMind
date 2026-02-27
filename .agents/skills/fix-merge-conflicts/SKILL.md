@@ -20,6 +20,24 @@ Fetch the latest main branch from origin, merge origin/main into the current bra
 
 ## Workflow
 
+0. Ensure git identity is available locally before merge/commit:
+- Resolve required identity from env (repository-local > env-provided) and write it into local git config if missing.
+```bash
+git_local_name="$(git config --local --get user.name || true)"
+git_local_email="$(git config --local --get user.email || true)"
+git_env_name="${GIT_AUTHOR_NAME:-${GIT_COMMITTER_NAME:-${MOONMIND_GIT_USER_NAME:-MoonMind}}}"
+git_env_email="${GIT_AUTHOR_EMAIL:-${GIT_COMMITTER_EMAIL:-${MOONMIND_GIT_USER_EMAIL:-noreply@moonmind.local}}}"
+
+if [ -z "$git_local_name" ] || [ -z "$git_local_email" ]; then
+  if [ -z "$git_env_name" ] || [ -z "$git_env_email" ]; then
+    echo "git user.name and user.email are required for merge/commit; set them in environment or local config."
+    exit 1
+  fi
+  git config user.name "$git_env_name"
+  git config user.email "$git_env_email"
+fi
+```
+
 1. Sync remote refs for `main`.
 - Run `git fetch origin main --prune`.
 - Confirm branch state with `git status`.

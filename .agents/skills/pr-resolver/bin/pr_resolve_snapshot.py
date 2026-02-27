@@ -73,15 +73,18 @@ def is_bot_user(login: str | None) -> bool:
 
 
 def _classify_comment_actionability(
-    comment: dict, include_bot_review_comments: bool = False
+    comment: dict,
+    *,
+    include_bot_review_comments: bool = False,
 ) -> tuple[bool, str]:
     """Determine whether a comment requires action.
 
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
     - Ignore review comments only when explicitly marked resolved/outdated.
-    - Treat issue comments, review comments, and review bodies as actionable,
-      regardless of whether they were authored by a bot or human.
+    - Treat issue comments and review bodies as actionable.
+    - Treat review comments as actionable except resolved/outdated threads and
+      bot-authored comments (unless explicitly enabled).
     - Ignore unsupported/unknown comment types.
     """
     if not (comment.get("body") or "").strip():
@@ -94,9 +97,12 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
-        if is_bot_user(comment.get("user") or "") and not include_bot_review_comments:
-            return False, "bot_review_comment"
+        if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
+            return False, "bot_review_comment_excluded"
         return True, "actionable"
+
+    if is_bot_user(comment.get("user")):
+        return False, "bot_comment_excluded"
 
     if comment_type in {"issue_comment", "review"}:
         return True, "actionable"
@@ -105,16 +111,21 @@ def _classify_comment_actionability(
 
 
 def _is_comment_actionable(
-    comment: dict, include_bot_review_comments: bool = False
+    comment: dict,
+    *,
+    include_bot_review_comments: bool = False,
 ) -> bool:
     actionable, _ = _classify_comment_actionability(
-        comment, include_bot_review_comments=include_bot_review_comments
+        comment,
+        include_bot_review_comments=include_bot_review_comments,
     )
     return actionable
 
 
 def summarize_comments(
-    comments: list[dict], include_bot_review_comments: bool = False
+    comments: list[dict],
+    *,
+    include_bot_review_comments: bool = False,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
@@ -129,7 +140,8 @@ def summarize_comments(
 
     for comment in comments:
         actionable, reason = _classify_comment_actionability(
-            comment, include_bot_review_comments=include_bot_review_comments
+            comment,
+            include_bot_review_comments=include_bot_review_comments,
         )
         if actionable:
             actionable_comments.append(comment)
