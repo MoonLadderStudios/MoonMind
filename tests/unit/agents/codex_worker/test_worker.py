@@ -1503,7 +1503,9 @@ async def test_run_once_task_step_transcript_truncated_mid_command_fails_with_re
     assert "artifact_gap" in run_quality["tags"]
     finish_summary = queue.failed_finish_payloads[0]["finishSummary"]
     assert isinstance(finish_summary, dict)
-    assert finish_summary["runQuality"]["code"] == "step_transcript_truncated_mid_command"
+    assert (
+        finish_summary["runQuality"]["code"] == "step_transcript_truncated_mid_command"
+    )
 
 
 async def test_run_once_task_step_transcript_with_completion_marker_succeeds(

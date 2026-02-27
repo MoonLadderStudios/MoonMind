@@ -4700,7 +4700,9 @@ class CodexWorker:
         if not step_log_path.exists():
             return StepTranscriptIntegrityResult(passed=True)
         try:
-            transcript_text = step_log_path.read_text(encoding="utf-8", errors="replace")
+            transcript_text = step_log_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
         except OSError:
             logger.warning(
                 "Failed reading step transcript for integrity check at %s",
@@ -4709,7 +4711,9 @@ class CodexWorker:
             )
             return StepTranscriptIntegrityResult(passed=True)
 
-        non_empty_lines = [line.strip() for line in transcript_text.splitlines() if line.strip()]
+        non_empty_lines = [
+            line.strip() for line in transcript_text.splitlines() if line.strip()
+        ]
         start_count = sum(
             1 for line in non_empty_lines if line.startswith(_COMMAND_START_PREFIX)
         )

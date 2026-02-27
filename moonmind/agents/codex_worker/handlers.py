@@ -1214,7 +1214,8 @@ class CodexExecHandler:
                 )
                 _flush_stream_log_buffer(
                     stream,
-                    force=len(stream_log_buffers[stream]) >= max_stream_log_buffer_chars,
+                    force=len(stream_log_buffers[stream])
+                    >= max_stream_log_buffer_chars,
                 )
             await _invoke_output_callback(stream, deduped_text, context="chunk emit")
 
@@ -1354,7 +1355,10 @@ class CodexExecHandler:
             stderr=stderr,
         )
         if defer_stream_output_logging:
-            for stream, output in (("stdout", result.stdout), ("stderr", result.stderr)):
+            for stream, output in (
+                ("stdout", result.stdout),
+                ("stderr", result.stderr),
+            ):
                 summarized = _summarize_oversized_command_output(
                     stream=stream,
                     text=output,
