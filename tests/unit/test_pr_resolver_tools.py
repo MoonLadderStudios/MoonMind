@@ -43,6 +43,20 @@ def pr_resolve_snapshot_module() -> dict[str, Any]:
     )
 
 
+@pytest.fixture
+def pr_resolve_finalize_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "pr-resolver"
+            / "bin"
+            / "pr_resolve_finalize.py"
+        )
+    )
+
+
 def test_parse_remote_url_accepts_https_and_ssh_urls(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -149,3 +163,51 @@ def test_resolved_review_threads_are_not_actionable(
     }
 
     assert is_comment_actionable(comment) is False
+
+
+def test_finalize_blocks_when_actionable_comments_exist(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
+            "ci": {"isRunning": True, "hasFailures": False},
+            "commentsSummary": {"hasActionableComments": True},
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "actionable_comments"}
+
+
+def test_finalize_enables_auto_merge_when_ci_running_and_comments_addressed(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
+            "ci": {"isRunning": True, "hasFailures": False},
+            "commentsSummary": {"hasActionableComments": False},
+        }
+    )
+
+    assert decision == {"action": "enable_auto_merge", "reason": "ci_running"}
+
+
+def test_finalize_merges_when_ci_complete_and_clean(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": False},
+            "commentsSummary": {"hasActionableComments": False},
+        }
+    )
+
+    assert decision == {"action": "merge_now", "reason": "ci_complete"}

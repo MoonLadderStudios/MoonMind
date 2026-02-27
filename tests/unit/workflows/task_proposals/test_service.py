@@ -24,7 +24,7 @@ async def test_create_proposal_persists_normalized_payload() -> None:
     queue.normalize_task_job_payload = MagicMock(
         return_value={
             "repository": "Moon/Repo",
-            "task": {"instructions": "tests"},
+            "task": {"instructions": "tests", "publish": {"mode": "none"}},
         }
     )
     record = SimpleNamespace(
@@ -79,6 +79,7 @@ async def test_create_proposal_persists_normalized_payload() -> None:
     assert len(kwargs["dedup_hash"]) == 64
     assert kwargs["review_priority"] is TaskProposalReviewPriority.NORMAL
     assert kwargs["priority_override_reason"] is None
+    assert kwargs["task_create_request"]["payload"]["task"]["publish"]["mode"] == "pr"
     service._emit_notification.assert_awaited_once()
     assert proposal is record
 
@@ -303,7 +304,10 @@ async def test_promote_proposal_calls_queue_and_updates_record() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
     queue.normalize_task_job_payload = MagicMock(
-        return_value={"repository": "Moon/Repo", "task": {"instructions": "edited"}}
+        return_value={
+            "repository": "Moon/Repo",
+            "task": {"instructions": "edited", "publish": {"mode": "none"}},
+        }
     )
     job = SimpleNamespace(id=uuid4())
     queue.create_job = AsyncMock(return_value=job)
@@ -339,6 +343,8 @@ async def test_promote_proposal_calls_queue_and_updates_record() -> None:
     repo.refresh.assert_awaited_with(proposal)
     assert updated.status is TaskProposalStatus.PROMOTED
     assert created_job is job
+    _, kwargs = queue.create_job.await_args
+    assert kwargs["payload"]["task"]["publish"]["mode"] == "pr"
 
 
 @pytest.mark.asyncio
@@ -371,7 +377,10 @@ async def test_promote_proposal_accepts_task_override() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
     queue.normalize_task_job_payload = MagicMock(
-        return_value={"repository": "Moon/Repo", "task": {"instructions": "edited"}}
+        return_value={
+            "repository": "Moon/Repo",
+            "task": {"instructions": "edited", "publish": {"mode": "none"}},
+        }
     )
     job = SimpleNamespace(id=uuid4())
     queue.create_job = AsyncMock(return_value=job)
@@ -409,8 +418,9 @@ async def test_promote_proposal_accepts_task_override() -> None:
     )
 
     queue.create_job.assert_awaited_once()
-    args, kwargs = queue.create_job.await_args
+    _, kwargs = queue.create_job.await_args
     assert kwargs["payload"]["task"]["instructions"] == "edited"
+    assert kwargs["payload"]["task"]["publish"]["mode"] == "pr"
 
 
 @pytest.mark.asyncio

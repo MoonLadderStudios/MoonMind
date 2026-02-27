@@ -2275,7 +2275,7 @@
     if (hasExplicitSkill && targetService !== "orchestrator") {
       return {
         ok: false,
-        error: "Explicit skill runs must targetService=orchestrator.",
+        error: "Target service must be orchestrator when Skill ID is set.",
       };
     }
     const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
@@ -2415,31 +2415,6 @@
     return { provided: true, runtime, rawValue: runtimeValue };
   };
 
-  const parseEditJobSearchParam = (searchParams) => {
-    const editJobId = searchParams?.get("editJobId");
-    if (editJobId === null) {
-      return { provided: false, jobId: "", rawValue: "" };
-    }
-    return {
-      provided: true,
-      jobId: normalizeDashboardDetailSegment(editJobId),
-      rawValue: editJobId,
-    };
-  };
-
-  const isEditableQueuedTaskJob = (job) => {
-    if (!job || typeof job !== "object" || Array.isArray(job)) {
-      return false;
-    }
-    const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
-    const jobType = String(pick(job, "type") || "").trim().toLowerCase();
-    return (
-      jobType === "task" &&
-      normalizedStatus === "queued" &&
-      !pick(job, "startedAt")
-    );
-  };
-
   const isWorkerSubmitRuntime = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
     return normalized !== ORCHESTRATOR_RUNTIME && supportedTaskRuntimes.includes(normalized);
@@ -2486,10 +2461,6 @@
       readSubmitDraftStorage,
       resolveSubmitRuntime,
       isWorkerSubmitRuntime,
-      parseEditJobSearchParam,
-      isEditableQueuedTaskJob,
-      stringifySkillArgs,
-      buildQueueSubmissionDraftFromJob,
       normalizeOrchestratorPriority,
       persistSubmitDraftsToStorage,
       submitDraftController,
@@ -3760,89 +3731,51 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage(presetRuntime, options = {}) {
-    const editContext =
-      options &&
-      typeof options === "object" &&
-      !Array.isArray(options) &&
-      options.editContext &&
-      typeof options.editContext === "object"
-        ? options.editContext
-        : null;
-    const isEditMode = Boolean(editContext && editContext.jobId);
+  function renderQueueSubmitPage(presetRuntime) {
     const sanitizedWorkerDraft = submitDraftController.loadWorker();
-    const effectiveWorkerDraft = isEditMode
-      ? editContext.draft || {}
-      : sanitizedWorkerDraft;
-    const draftRuntimeSource = presetRuntime ?? effectiveWorkerDraft.runtime;
     const selectedWorkerRuntime = resolveSubmitRuntime(
-      draftRuntimeSource,
-      isEditMode ? null : defaultTaskRuntime,
+      presetRuntime ?? sanitizedWorkerDraft.runtime,
+      defaultTaskRuntime,
     );
-    if (
-      isEditMode &&
-      !selectedWorkerRuntime &&
-      String(draftRuntimeSource || "").trim()
-    ) {
-      setView(
-        "Edit queued task",
-        `Job ${editContext.jobId}`,
-        `<div class="notice error">Unsupported task runtime for edit mode: ${escapeHtml(String(draftRuntimeSource))}.</div><div class="actions"><a href="/tasks/queue"><button type="button" class="secondary">Back to queue</button></a></div>`,
-      );
-      return;
-    }
-    let activeWorkerRuntime = selectedWorkerRuntime || defaultTaskRuntime;
-    const queueDraftModel = Object.prototype.hasOwnProperty.call(
-      effectiveWorkerDraft,
-      "model",
-    )
-      ? String(effectiveWorkerDraft.model ?? "")
-      : defaultTaskModel;
-    const queueDraftEffort = Object.prototype.hasOwnProperty.call(
-      effectiveWorkerDraft,
-      "effort",
-    )
-      ? String(effectiveWorkerDraft.effort ?? "")
-      : defaultTaskEffort;
-    const queueDraftRepository = String(effectiveWorkerDraft.repository || "").trim();
-    const queueDraftStartingBranch = String(
-      effectiveWorkerDraft.startingBranch || "",
+    let activeWorkerRuntime = selectedWorkerRuntime;
+    const queueDraftModel = String(
+      sanitizedWorkerDraft.model || defaultTaskModel,
     ).trim();
-    const queueDraftNewBranch = String(effectiveWorkerDraft.newBranch || "").trim();
+    const queueDraftEffort = String(
+      sanitizedWorkerDraft.effort || defaultTaskEffort,
+    ).trim();
+    const queueDraftRepository = String(sanitizedWorkerDraft.repository || "").trim();
+    const queueDraftStartingBranch = String(
+      sanitizedWorkerDraft.startingBranch || "",
+    ).trim();
+    const queueDraftNewBranch = String(sanitizedWorkerDraft.newBranch || "").trim();
     const queueDraftPublishMode = (() => {
-      const candidate = Object.prototype.hasOwnProperty.call(effectiveWorkerDraft, "publishMode")
-        ? String(effectiveWorkerDraft.publishMode || "").trim().toLowerCase()
-        : "";
+      const candidate = String(sanitizedWorkerDraft.publishMode || "").trim().toLowerCase();
       return ["none", "branch", "pr"].includes(candidate)
         ? candidate
         : defaultPublishMode;
     })();
     const queueDraftPriority = Number.isInteger(
-      Number(effectiveWorkerDraft.priority),
+      Number(sanitizedWorkerDraft.priority),
     )
-      ? Number(effectiveWorkerDraft.priority)
+      ? Number(sanitizedWorkerDraft.priority)
       : 0;
     const queueDraftMaxAttempts = Number.isInteger(
-      Number(effectiveWorkerDraft.maxAttempts),
+      Number(sanitizedWorkerDraft.maxAttempts),
     )
-      ? Math.max(1, Number(effectiveWorkerDraft.maxAttempts))
+      ? Math.max(1, Number(sanitizedWorkerDraft.maxAttempts))
       : 3;
     const queueDraftProposeTasks = Object.prototype.hasOwnProperty.call(
-      effectiveWorkerDraft,
+      sanitizedWorkerDraft,
       "proposeTasks",
     )
-      ? Boolean(effectiveWorkerDraft.proposeTasks)
+      ? Boolean(sanitizedWorkerDraft.proposeTasks)
       : defaultProposeTasks;
     const queueDraftTemplateFeatureRequest = String(
-      effectiveWorkerDraft.templateFeatureRequest || "",
+      sanitizedWorkerDraft.templateFeatureRequest || "",
     ).trim();
-    const queueDraftSteps = Array.isArray(effectiveWorkerDraft.steps)
-      ? effectiveWorkerDraft.steps
-      : [];
-    const queueDraftAppliedTemplateState = Array.isArray(
-      effectiveWorkerDraft.appliedTemplateState,
-    )
-      ? effectiveWorkerDraft.appliedTemplateState
+    const queueDraftSteps = Array.isArray(sanitizedWorkerDraft.steps)
+      ? sanitizedWorkerDraft.steps
       : [];
     const fallbackOrchestratorDraft = submitDraftController.loadOrchestrator();
     const queueDraftTargetService = String(
@@ -3857,7 +3790,10 @@
       sanitizedWorkerDraft.approvalToken || "",
     ).trim();
 
-    const runtimeOptions = renderRuntimeOptions(submitRuntimeOptions, activeWorkerRuntime);
+    const runtimeOptions = renderRuntimeOptions(
+      submitRuntimeOptions,
+      selectedWorkerRuntime,
+    );
     const repositoryFallback = queueDraftRepository || defaultRepository;
     const repositoryHint = repositoryFallback
       ? `Leave blank to use default repository: ${repositoryFallback}.`
@@ -3892,8 +3828,8 @@
       : "";
 
     setView(
-      isEditMode ? "Edit queued task" : "Submit Queue Task",
-      isEditMode ? `Job ${editContext.jobId}` : "",
+      "Submit Queue Task",
+      "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
@@ -3987,15 +3923,8 @@
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          ${
-            isEditMode
-              ? `<a href="/tasks/queue/${encodeURIComponent(
-                  editContext.jobId,
-                )}"><button type="button" class="secondary">Cancel</button></a>`
-              : ""
-          }
           <button type="submit" class="queue-submit-primary">
-            ${isEditMode ? "Update" : "Create"}
+            Create
           </button>
         </div>
       </form>
@@ -4049,12 +3978,10 @@
         templateFeatureRequest: readQueueTemplateFeatureRequest(),
       };
     };
-    const persistWorkerDraft = isEditMode
-      ? () => {}
-      : () => {
-          submitDraftController.saveWorker(collectWorkerDraftFromForm());
-          persistSubmitDraftsToStorage();
-        };
+    const persistWorkerDraft = () => {
+      submitDraftController.saveWorker(collectWorkerDraftFromForm());
+      persistSubmitDraftsToStorage();
+    };
     const scheduleWorkerDraftPersist = createDraftPersistenceScheduler(
       persistWorkerDraft,
     );
@@ -4239,9 +4166,7 @@
         wrapper.classList.add("hidden");
       }
     };
-    let appliedTemplateState = queueDraftAppliedTemplateState.map((entry) =>
-      normalizeSubmissionDraftForTest(entry),
-    );
+    let appliedTemplateState = [];
     const renderStepEditor = () => {
       if (!stepsList) {
         console.error("[dashboard] #queue-steps-list not found; step editor unavailable");
@@ -5398,44 +5323,26 @@
         priority,
         maxAttempts,
       };
-      if (isEditMode) {
-        requestBody.affinityKey = editContext.affinityKey;
-        if (String(editContext.expectedUpdatedAt || "").trim()) {
-          requestBody.expectedUpdatedAt = editContext.expectedUpdatedAt;
-        }
-      }
 
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
       }
 
       try {
-        const submissionEndpoint = isEditMode
-          ? endpoint(
-              queueSourceConfig.update || "/api/queue/jobs/{id}",
-              { id: editContext.jobId },
-            )
-          : "/api/queue/jobs";
-        const updatedOrCreated = await fetchJson(submissionEndpoint, {
-          method: isEditMode ? "PUT" : "POST",
+        const created = await fetchJson("/api/queue/jobs", {
+          method: "POST",
           body: JSON.stringify(requestBody),
         });
-        if (
-          !updatedOrCreated ||
-          typeof updatedOrCreated.id !== "string" ||
-          !updatedOrCreated.id.trim()
-        ) {
-          throw new Error("queue mutation response missing job id");
+        if (!created || typeof created.id !== "string" || !created.id.trim()) {
+          throw new Error("queue creation response missing job id");
         }
-        if (!isEditMode) {
-          try {
-            clearWorkerSubmissionDraftAfterCreate();
-          } catch (cleanupError) {
-            console.warn("worker draft cleanup failed after queue creation", cleanupError);
-          }
+        try {
+          clearWorkerSubmissionDraftAfterCreate();
+        } catch (cleanupError) {
+          console.warn("worker draft cleanup failed after queue creation", cleanupError);
         }
         window.location.href = buildUnifiedTaskDetailRoute(
-          updatedOrCreated.id,
+          created.id,
           "queue",
         );
       } catch (error) {
@@ -5444,34 +5351,16 @@
         }
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
-        if (isEditMode && Number(error?.status || 0) === 409) {
-          message.textContent =
-            "This task already started or changed. Refresh the detail page and try again.";
-          return;
-        }
-        if (isEditMode && Number(error?.status || 0) === 403) {
-          message.textContent = "You are not authorized to edit this queued task.";
-          return;
-        }
-        const verb = isEditMode ? "update" : "create";
         message.textContent =
-          `Failed to ${verb} queue task: ` +
+          "Failed to create queue task: " +
           String(error?.message || "request failed");
       }
     });
   }
 
-  function renderSubmitWorkPage(presetRuntime, options = {}) {
-    const editContext =
-      options &&
-      typeof options === "object" &&
-      !Array.isArray(options) &&
-      options.editContext &&
-      typeof options.editContext === "object"
-        ? options.editContext
-        : null;
+  function renderSubmitWorkPage(presetRuntime) {
     if (presetRuntime == null) {
-      renderQueueSubmitPage(undefined, { editContext });
+      renderQueueSubmitPage();
       return;
     }
     const normalizedRuntime = validateSubmitRuntime(presetRuntime);
@@ -5488,7 +5377,7 @@
       return;
     }
     if (isWorkerSubmitRuntime(normalizedRuntime)) {
-      renderQueueSubmitPage(normalizedRuntime, { editContext });
+      renderQueueSubmitPage(normalizedRuntime);
       return;
     }
     renderOrchestratorSubmitPage();
@@ -5947,18 +5836,11 @@
       const cancelRequestedAt = pick(job, "cancelRequestedAt");
       const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
       const canCancel = normalizedStatus === "queued" || normalizedStatus === "running";
-      const canEdit = isEditableQueuedTaskJob(job);
       const cancelButtonDisabled = !canCancel || cancelPending;
       const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
       cancelActionsNode.innerHTML = `<div class="actions"><button type="button" id="queue-cancel-button" ${
         cancelButtonDisabled ? "disabled" : ""
-      }>${escapeHtml(cancelButtonLabel)}</button>${
-        canEdit
-          ? `<a href="/tasks/queue/new?editJobId=${encodeURIComponent(
-              String(pick(job, "id") || ""),
-            )}"><button type="button" class="secondary">Edit</button></a>`
-          : ""
-      }</div>`;
+      }>${escapeHtml(cancelButtonLabel)}</button></div>`;
 
       const payload = pick(job, "payload") || {};
       const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
@@ -7859,77 +7741,7 @@
         renderSubmitWorkPage(runtimeParam.rawValue);
         return;
       }
-      const editParam = parseEditJobSearchParam(searchParams);
-      if (!editParam.provided) {
-        renderSubmitWorkPage(runtimeParam.runtime);
-        return;
-      }
-      if (!editParam.jobId) {
-        setView(
-          "Edit queued task",
-          "Invalid edit target.",
-          `<div class="notice error">The editJobId query value is invalid.</div><div class="actions"><a href="/tasks/queue"><button type="button" class="secondary">Back to queue</button></a></div>`,
-        );
-        return;
-      }
-      if (runtimeParam.runtime === ORCHESTRATOR_RUNTIME) {
-        setView(
-          "Edit queued task",
-          `Job ${editParam.jobId}`,
-          `<div class="notice error">Queued task editing only supports worker runtimes.</div><div class="actions"><a href="/tasks/queue/${encodeURIComponent(
-            editParam.jobId,
-          )}"><button type="button" class="secondary">Back to detail</button></a></div>`,
-        );
-        return;
-      }
-
-      setView(
-        "Edit queued task",
-        `Job ${editParam.jobId}`,
-        "<p class='loading'>Loading queued task...</p>",
-      );
-      try {
-        const detailEndpoint = endpoint(
-          queueSourceConfig.detail || "/api/queue/jobs/{id}",
-          { id: editParam.jobId },
-        );
-        const job = await fetchJson(detailEndpoint);
-        if (!isEditableQueuedTaskJob(job)) {
-          setView(
-            "Edit queued task",
-            `Job ${editParam.jobId}`,
-            `<div class="notice error">This task can no longer be edited. It may have started or changed state.</div><div class="actions"><a href="/tasks/queue/${encodeURIComponent(
-              editParam.jobId,
-            )}"><button type="button" class="secondary">Back to detail</button></a></div>`,
-          );
-          return;
-        }
-        const draft = buildQueueSubmissionDraftFromJob(job);
-        renderSubmitWorkPage(runtimeParam.runtime || draft.runtime, {
-          editContext: {
-            jobId: editParam.jobId,
-            expectedUpdatedAt: String(pick(job, "updatedAt") || ""),
-            affinityKey: pick(job, "affinityKey") || null,
-            draft,
-          },
-        });
-      } catch (error) {
-        console.error("Failed to load queued job for edit", error);
-        const statusCode = Number(error?.status || 0);
-        const detailMessage =
-          statusCode === 404
-            ? "The queued job was not found."
-            : statusCode === 403
-              ? "You are not authorized to edit this queued task."
-              : "Failed to load the queued task.";
-        setView(
-          "Edit queued task",
-          `Job ${editParam.jobId}`,
-          `<div class="notice error">${escapeHtml(
-            detailMessage,
-          )}</div><div class="actions"><a href="/tasks/queue"><button type="button" class="secondary">Back to queue</button></a></div>`,
-        );
-      }
+      renderSubmitWorkPage(runtimeParam.runtime);
       return;
     }
     if (normalizedRoute === "/tasks/orchestrator/new") {

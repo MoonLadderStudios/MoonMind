@@ -1,8 +1,8 @@
 # Task Editing System
 
-Status: Active
+Status: Draft (implementation-ready)
 Owners: MoonMind Engineering
-Last Updated: 2026-02-26
+Last Updated: 2026-02-25
 
 ## 1. Purpose
 
@@ -313,8 +313,3 @@ Reason: attachments were designed to be uploaded in the same request as job crea
 
   * Add the new endpoint to `docs/TaskQueueSystem.md` API surface list (which currently enumerates create/get/claim/heartbeat/etc. but no update) .
   * Add the endpoint to `docs/TaskUiArchitecture.md` “Queue endpoints” list .
-### 11.1 Current v1 state
-
-* Queue update endpoint is additive and available at `PUT /api/queue/jobs/{jobId}`.
-* Edit mode runs on `/tasks/queue/new?editJobId=<jobId>` and reuses the queue submit form with an **Update** CTA.
-* Attachment mutation remains intentionally unsupported in v1; update attempts that include attachment edit fields are rejected.

@@ -28,6 +28,7 @@
     "commentsSummary": {
       "type": "object",
       "properties": {
+        "classificationVersion": { "type": "integer" },
         "total": { "type": "integer" },
         "reviewCommentCount": { "type": "integer" },
         "issueCommentCount": { "type": "integer" },
@@ -35,9 +36,35 @@
         "actionableCommentCount": { "type": "integer" },
         "humanCommentCount": { "type": "integer" },
         "botCommentCount": { "type": "integer" },
-        "hasActionableComments": { "type": "boolean" }
+        "hasActionableComments": { "type": "boolean" },
+        "actionableCommentIds": {
+          "type": "array",
+          "items": {}
+        },
+        "nonActionableReasonCounts": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "classifiedComments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {},
+              "type": { "type": ["string", "null"] },
+              "user": { "type": ["string", "null"] },
+              "url": { "type": ["string", "null"] },
+              "path": { "type": ["string", "null"] },
+              "line": { "type": ["integer", "null"] },
+              "actionable": { "type": "boolean" },
+              "reason": { "type": "string" }
+            },
+            "required": ["actionable", "reason"]
+          }
+        }
       },
       "required": [
+        "classificationVersion",
         "total",
         "reviewCommentCount",
         "issueCommentCount",
@@ -45,7 +72,10 @@
         "actionableCommentCount",
         "humanCommentCount",
         "botCommentCount",
-        "hasActionableComments"
+        "hasActionableComments",
+        "actionableCommentIds",
+        "nonActionableReasonCounts",
+        "classifiedComments"
       ]
     },
     "comments": {

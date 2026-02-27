@@ -6,7 +6,6 @@ Gathers PR metadata, CI status, and comments to decide the next fix action.
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -73,66 +72,70 @@ def is_bot_user(login: str | None) -> bool:
     return user.endswith("[bot]") or user == "github-actions[bot]"
 
 
-def _env_flag(name: str, *, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _is_comment_actionable(
-    comment: dict, *, include_bot_review_comments: bool = False
-) -> bool:
+def _classify_comment_actionability(comment: dict) -> tuple[bool, str]:
     """Determine whether a comment requires action.
 
-    - Must have non-empty body text (baseline).
-    - review_comment: NOT actionable if thread_resolved or thread_outdated.
-      Falls back to actionable if thread status keys are absent (GraphQL failed).
-    - review_comment: NOT actionable for bot users unless explicitly enabled.
-    - issue_comment: NOT actionable if from a bot user.
+    Actionability rules are intentionally simple and deterministic:
+    - Ignore comments with empty bodies.
+    - Ignore review comments only when explicitly marked resolved/outdated.
+    - Treat issue comments, review comments, and review bodies as actionable,
+      regardless of whether they were authored by a bot or human.
+    - Ignore unsupported/unknown comment types.
     """
     if not (comment.get("body") or "").strip():
-        return False
+        return False, "empty_body"
 
     comment_type = comment.get("type")
-    comment_user = comment.get("user") or ""
 
     if comment_type == "review_comment":
-        if "thread_resolved" in comment:
-            if comment["thread_resolved"] or comment.get("thread_outdated", False):
-                return False
-        if is_bot_user(comment_user) and not include_bot_review_comments:
-            return False
+        if comment.get("thread_resolved", False):
+            return False, "thread_resolved"
+        if comment.get("thread_outdated", False):
+            return False, "thread_outdated"
+        return True, "actionable"
 
-    if comment_type == "issue_comment":
-        if is_bot_user(comment_user):
-            return False
+    if comment_type in {"issue_comment", "review"}:
+        return True, "actionable"
 
-    return True
+    return False, "unsupported_type"
 
 
-def summarize_comments(
-    comments: list[dict], *, include_bot_review_comments: bool = False
-) -> dict:
+def summarize_comments(comments: list[dict]) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
     review_bodies = [c for c in comments if c.get("type") == "review"]
 
-    all_inline_comments = review_comments + issue_comments
-    human_comments = [
-        c for c in all_inline_comments if not is_bot_user(c.get("user") or "")
-    ]
-    bot_comments = [c for c in all_inline_comments if is_bot_user(c.get("user") or "")]
+    human_comments = [c for c in comments if not is_bot_user(c.get("user") or "")]
+    bot_comments = [c for c in comments if is_bot_user(c.get("user") or "")]
 
-    actionable_comments = [
-        c
-        for c in all_inline_comments
-        if _is_comment_actionable(
-            c, include_bot_review_comments=include_bot_review_comments
+    actionable_comments: list[dict] = []
+    non_actionable_reason_counts: dict[str, int] = {}
+    classified_comments: list[dict] = []
+
+    for comment in comments:
+        actionable, reason = _classify_comment_actionability(comment)
+        if actionable:
+            actionable_comments.append(comment)
+        else:
+            non_actionable_reason_counts[reason] = (
+                non_actionable_reason_counts.get(reason, 0) + 1
+            )
+
+        classified_comments.append(
+            {
+                "id": comment.get("id"),
+                "type": comment.get("type"),
+                "user": comment.get("user"),
+                "url": comment.get("url"),
+                "path": comment.get("path"),
+                "line": comment.get("line"),
+                "actionable": actionable,
+                "reason": reason,
+            }
         )
-    ]
 
     return {
+        "classificationVersion": 2,
         "total": len(comments),
         "reviewCommentCount": len(review_comments),
         "issueCommentCount": len(issue_comments),
@@ -140,8 +143,10 @@ def summarize_comments(
         "actionableCommentCount": len(actionable_comments),
         "humanCommentCount": len(human_comments),
         "botCommentCount": len(bot_comments),
-        "includeBotReviewComments": include_bot_review_comments,
         "hasActionableComments": len(actionable_comments) > 0,
+        "actionableCommentIds": [c.get("id") for c in actionable_comments],
+        "nonActionableReasonCounts": non_actionable_reason_counts,
+        "classifiedComments": classified_comments,
     }
 
 
@@ -226,12 +231,7 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
-    include_bot_review_comments = _env_flag(
-        "PR_RESOLVER_INCLUDE_BOT_REVIEW_COMMENTS", default=False
-    )
-    comments_summary = summarize_comments(
-        comments, include_bot_review_comments=include_bot_review_comments
-    )
+    comments_summary = summarize_comments(comments)
 
     # 4. Construct Snapshot
     snapshot = {

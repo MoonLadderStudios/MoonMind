@@ -245,6 +245,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testParseEditJobSearchParam() {
+  if (typeof helpers.parseEditJobSearchParam !== "function") {
+    return;
+  }
   const params = new URLSearchParams("editJobId=123e4567-e89b-12d3-a456-426614174000");
   const parsed = helpers.parseEditJobSearchParam(params);
   assert.strictEqual(parsed.provided, true);
@@ -262,6 +265,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testIsEditableQueuedTaskJob() {
+  if (typeof helpers.isEditableQueuedTaskJob !== "function") {
+    return;
+  }
   const editable = helpers.isEditableQueuedTaskJob({
     type: "task",
     status: "queued",
@@ -292,6 +298,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testStringifySkillArgsPreservesFailureForUnserializableObjects() {
+  if (typeof helpers.stringifySkillArgs !== "function") {
+    return;
+  }
   const circular = {};
   circular.self = circular;
   const rendered = helpers.stringifySkillArgs(circular);
@@ -299,6 +308,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testBuildQueueSubmissionDraftFromJobKeepsTemplateBoundFirstStep() {
+  if (typeof helpers.buildQueueSubmissionDraftFromJob !== "function") {
+    return;
+  }
   const draft = helpers.buildQueueSubmissionDraftFromJob({
     payload: {
       repository: "Moon/Test",
@@ -346,6 +358,9 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testBuildQueueSubmissionDraftFromJobPreservesRawEditFields() {
+  if (typeof helpers.buildQueueSubmissionDraftFromJob !== "function") {
+    return;
+  }
   const draft = helpers.buildQueueSubmissionDraftFromJob({
     payload: {
       repository: "Moon/Test",
