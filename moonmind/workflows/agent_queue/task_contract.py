@@ -34,6 +34,14 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver"})
+_RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
+    r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
+    re.IGNORECASE,
+)
+_NO_COMMIT_PUSH_PATTERN = re.compile(
+    r"\bdo\s+not\s+commit(?:\s+or\s+push|/push)\b",
+    re.IGNORECASE,
+)
 
 
 class TaskContractError(ValueError):
@@ -80,6 +88,24 @@ def _normalize_publish_mode(value: object) -> str:
         supported = ", ".join(sorted(SUPPORTED_PUBLISH_MODES))
         raise TaskContractError(f"publish.mode must be one of: {supported}")
     return candidate
+
+
+def _is_resolve_pr_objective(value: object) -> bool:
+    """Return True when task instructions target PR resolution behavior."""
+
+    text = _clean_optional_str(value)
+    if not text:
+        return False
+    return _RESOLVE_PR_OBJECTIVE_PATTERN.search(text) is not None
+
+
+def _contains_no_commit_push_constraint(value: object) -> bool:
+    """Return True when text instructs the runtime not to commit/push."""
+
+    text = _clean_optional_str(value)
+    if not text:
+        return False
+    return _NO_COMMIT_PUSH_PATTERN.search(text) is not None
 
 
 def _normalize_capabilities(values: list[object] | tuple[object, ...]) -> list[str]:
@@ -615,6 +641,40 @@ class TaskExecutionSpec(BaseModel):
             raise TaskContractError(
                 "task.publish.mode must be 'none' when using skill 'pr-resolver'"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_resolve_pr_constraints(self) -> "TaskExecutionSpec":
+        """Reject conflicting constraints for resolve-PR task objectives."""
+
+        if not _is_resolve_pr_objective(self.instructions):
+            return self
+
+        skill_ids: set[str] = {str(self.skill.id or "").strip().lower()}
+        instruction_chunks: list[str] = [self.instructions]
+        for step in self.steps:
+            if step.skill is not None:
+                skill_ids.add(str(step.skill.id or "").strip().lower())
+            if step.instructions:
+                instruction_chunks.append(step.instructions)
+
+        if (
+            self.publish.mode == "none"
+            and "pr-resolver" not in skill_ids
+        ):
+            raise TaskContractError(
+                "resolve-PR objectives with task.publish.mode='none' require "
+                "skill 'pr-resolver' so commit/push/merge can be handled directly"
+            )
+
+        if any(
+            _contains_no_commit_push_constraint(chunk)
+            for chunk in instruction_chunks
+        ):
+            raise TaskContractError(
+                "resolve-PR objectives cannot include 'Do NOT commit or push' constraints"
+            )
+
         return self
 
 
