@@ -79,6 +79,50 @@ def test_normalize_task_payload_rejects_pr_resolver_without_publish_none() -> No
         )
 
 
+def test_normalize_task_payload_rejects_resolve_pr_without_pr_resolver() -> None:
+    """resolve-PR objectives with publish mode none require `pr-resolver`."""
+
+    with pytest.raises(
+        TaskContractError,
+        match="resolve-PR objectives with task.publish.mode='none' require skill 'pr-resolver'",
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Resolve PR #456",
+                    "skill": {"id": "auto", "args": {}},
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": "feature/example", "newBranch": None},
+                    "publish": {"mode": "none"},
+                },
+            },
+        )
+
+
+def test_normalize_task_payload_rejects_resolve_pr_no_commit_push_constraint() -> None:
+    """resolve-PR objectives must not include no-commit/push constraints."""
+
+    with pytest.raises(
+        TaskContractError,
+        match="resolve-PR objectives cannot include 'Do NOT commit or push' constraints",
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "Resolve PR #456. Do NOT commit or push.",
+                    "skill": {"id": "pr-resolver", "args": {"pr": "456"}},
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": "feature/example", "newBranch": None},
+                    "publish": {"mode": "none"},
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_respects_default_publish_mode_override(
     monkeypatch,
 ) -> None:

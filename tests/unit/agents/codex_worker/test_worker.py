@@ -3008,6 +3008,264 @@ async def test_run_once_rejects_when_required_capabilities_missing(
     assert handler.calls == []
 
 
+async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
+    tmp_path: Path,
+) -> None:
+    """Contract validation should reject resolve-PR tasks that cannot self-publish."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #777",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert (
+        "resolve-PR objectives with task.publish.mode='none' require skill 'pr-resolver'"
+        in queue.failed[0]
+    )
+    assert handler.calls == []
+
+
+async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
+    tmp_path: Path,
+) -> None:
+    """resolve-PR runs must fail when final snapshot remains unresolved."""
+
+    step_log = tmp_path / "resolve-pr.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #321",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "instructions": "Follow pr-resolver workflow",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "321"}},
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+
+    class _UnresolvedPrStateHandler(FakeHandler):
+        async def handle_skill(
+            self,
+            *,
+            job_id,
+            payload,
+            selected_skill,
+            fallback=False,
+            cancel_event=None,
+            output_chunk_callback=None,
+        ):
+            snapshot_path = (
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
+            )
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "pr": {
+                            "number": 321,
+                            "mergeable": "CONFLICTING",
+                            "mergeStateStatus": "DIRTY",
+                        },
+                        "commentsSummary": {
+                            "hasActionableComments": True,
+                            "actionableCommentCount": 2,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return await super().handle_skill(
+                job_id=job_id,
+                payload=payload,
+                selected_skill=selected_skill,
+                fallback=fallback,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+    handler = _UnresolvedPrStateHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="resolver completed",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert "pr-resolution final state unresolved" in queue.failed[0]
+    assert "reports/pr_resolution_validation.json" in queue.uploaded
+    assert queue.failed_finish_payloads[0]["finishOutcomeStage"] == "execute"
+    assert queue.failed_finish_payloads[0]["finishOutcomeCode"] == "FAILED"
+    assert not any(
+        event["message"] == "moonmind.task.publish" for event in queue.events
+    )
+    assert handler.calls == ["codex_skill:pr-resolver:True"]
+
+
+async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
+    tmp_path: Path,
+) -> None:
+    """resolve-PR runs should complete when final snapshot has no unresolved signals."""
+
+    step_log = tmp_path / "resolve-pr-ok.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #654",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "instructions": "Follow pr-resolver workflow",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "654"}},
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+
+    class _ResolvedPrStateHandler(FakeHandler):
+        async def handle_skill(
+            self,
+            *,
+            job_id,
+            payload,
+            selected_skill,
+            fallback=False,
+            cancel_event=None,
+            output_chunk_callback=None,
+        ):
+            snapshot_path = (
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
+            )
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "pr": {
+                            "number": 654,
+                            "mergeable": "MERGEABLE",
+                            "mergeStateStatus": "CLEAN",
+                        },
+                        "commentsSummary": {
+                            "hasActionableComments": False,
+                            "actionableCommentCount": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return await super().handle_skill(
+                job_id=job_id,
+                payload=payload,
+                selected_skill=selected_skill,
+                fallback=fallback,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+    handler = _ResolvedPrStateHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="resolver completed",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.failed == []
+    assert len(queue.completed) == 1
+    assert "reports/pr_resolution_validation.json" in queue.uploaded
+    assert handler.calls == ["codex_skill:pr-resolver:True"]
+
+
 async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) -> None:
     """Universal worker mode should execute non-codex runtime tasks."""
 
