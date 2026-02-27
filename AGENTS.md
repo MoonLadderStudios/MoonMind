@@ -47,7 +47,7 @@ When creating a new spec folder/feature ID:
 - MoonMind now materializes one per-run active skill set and exposes it to both CLIs through adapter links.
 - Expected adapter layout per run: `.agents/skills -> ../skills_active` and `.gemini/skills -> ../skills_active`.
 - Default local-only mirror root is `.agents/skills/local`; shared mirror root defaults to `.agents/skills` (`.agents/skills/skills` is legacy nested compatibility).
-- Prefer configuring `SPEC_SKILLS_WORKSPACE_ROOT` and `SPEC_SKILLS_CACHE_ROOT` for writable runtime paths in local and CI environments.
+- Prefer configuring `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` for writable runtime paths in local and CI environments.
 
 ## Spec Workflow Verification Checklist
 - Bring up RabbitMQ and the dedicated Celery worker alongside the API service when validating the Spec Kit workflow: `docker compose up rabbitmq celery-worker api`.

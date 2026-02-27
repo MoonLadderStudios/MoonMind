@@ -563,21 +563,14 @@ class SpecWorkflowSettings(BaseSettings):
     )
     skills_cache_root: str = Field(
         "var/skill_cache",
-        env=("WORKFLOW_SKILLS_CACHE_ROOT", "SPEC_SKILLS_CACHE_ROOT"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_CACHE_ROOT",
-            "SPEC_SKILLS_CACHE_ROOT",
-        ),
+        env=("WORKFLOW_SKILLS_CACHE_ROOT",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_CACHE_ROOT"),
         description="Immutable cache root for verified skill artifacts.",
     )
     skills_workspace_root: str = Field(
         "runs",
-        env=("WORKFLOW_SKILLS_WORKSPACE_ROOT", "SPEC_SKILLS_WORKSPACE_ROOT"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_WORKSPACE_ROOT",
-            "SPEC_SKILLS_WORKSPACE_ROOT",
-            "SPEC_WORKFLOW_WORKSPACE_ROOT",
-        ),
+        env=("WORKFLOW_SKILLS_WORKSPACE_ROOT",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_WORKSPACE_ROOT"),
         description="Workspace subdirectory (under WORKFLOW_WORKSPACE_ROOT) for per-run active skills links.",
     )
     skills_registry_source: Optional[str] = Field(

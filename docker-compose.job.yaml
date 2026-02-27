@@ -44,12 +44,13 @@ services:
     command: >-
       celery -A celery_worker.speckit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
-      --queues=${WORKFLOW_CODEX_QUEUE:-${SPEC_WORKFLOW_CODEX_QUEUE:-codex}}
+      --queues=${WORKFLOW_CODEX_QUEUE:-codex}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-moonmind}:${RABBITMQ_PASSWORD?Variable RABBITMQ_PASSWORD is not set}@rabbitmq:5672//
+      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/runs/skill_cache}
     env_file:
       - .env
     volumes:
@@ -85,6 +86,7 @@ services:
       - WORKFLOW_CODEX_QUEUE=codex-0
       - CODEX_VOLUME_NAME=codex_auth_0
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
+      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/runs/skill_cache}
     env_file:
       - .env
     volumes:
@@ -121,6 +123,7 @@ services:
       - WORKFLOW_CODEX_QUEUE=codex-1
       - CODEX_VOLUME_NAME=codex_auth_1
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
+      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/runs/skill_cache}
     env_file:
       - .env
     volumes:
@@ -157,6 +160,7 @@ services:
       - WORKFLOW_CODEX_QUEUE=codex-2
       - CODEX_VOLUME_NAME=codex_auth_2
       - CODEX_SHARDS=${CODEX_SHARDS:-3}
+      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/runs/skill_cache}
     env_file:
       - .env
     volumes:
@@ -184,16 +188,17 @@ services:
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=${WORKFLOW_CELERY_BROKER_URL:-${SPEC_WORKFLOW_CELERY_BROKER_URL:-amqp://${RABBITMQ_USER:-moonmind}:${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}@rabbitmq:5672//}}
-      - CELERY_RESULT_BACKEND=${WORKFLOW_CELERY_RESULT_BACKEND:-${SPEC_WORKFLOW_CELERY_RESULT_BACKEND:-rpc://}}
+      - CELERY_BROKER_URL=${WORKFLOW_CELERY_BROKER_URL:-amqp://${RABBITMQ_USER:-moonmind}:${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}@rabbitmq:5672//}
+      - CELERY_RESULT_BACKEND=${WORKFLOW_CELERY_RESULT_BACKEND:-rpc://}
       - ORCHESTRATOR_CELERY_QUEUE=${ORCHESTRATOR_CELERY_QUEUE:-orchestrator.run}
       - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
       - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-unix:///var/run/docker.sock}
-      - WORKFLOW_REPO_ROOT=${WORKFLOW_REPO_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_REPO_ROOT:-${MOONMIND_ORCHESTRATOR_SPEC_WORKFLOW_REPO_ROOT:-/workspace}}}
-      - WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=${WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_SPEC_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}}}
-      - WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=${WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_SPEC_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}}}
+      - WORKFLOW_REPO_ROOT=${WORKFLOW_REPO_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_REPO_ROOT:-/workspace}}
+      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/tmp/workflow_skill_cache}
+      - WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=${WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}}
+      - WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=${WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_ORCHESTRATOR_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}}
     volumes:
       - .:/workspace
       - /var/run/docker.sock:/var/run/docker.sock

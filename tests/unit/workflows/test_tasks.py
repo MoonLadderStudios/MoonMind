@@ -1232,6 +1232,7 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
 
     runs_root = tmp_path / "runs"
     workspace_root = runs_root / str(run_id)
+    materialize_kwargs: dict[str, object] = {}
     monkeypatch.setattr(
         tasks.settings.spec_workflow,
         "repo_root",
@@ -1253,7 +1254,7 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
     monkeypatch.setattr(
         tasks.settings.spec_workflow,
         "skills_cache_root",
-        str(tmp_path / "cache"),
+        "cache",
         raising=False,
     )
 
@@ -1262,10 +1263,14 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
         "resolve_run_skill_selection",
         lambda **_: DummySelection(),
     )
+    def _fake_materialize_run_skill_workspace(**kwargs):
+        materialize_kwargs.update(kwargs)
+        return DummyWorkspace(workspace_root)
+
     monkeypatch.setattr(
         tasks,
         "materialize_run_skill_workspace",
-        lambda **_: DummyWorkspace(workspace_root),
+        _fake_materialize_run_skill_workspace,
     )
 
     context: dict[str, object] = {}
@@ -1276,6 +1281,7 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
     assert context["agents_skills_path"] == str(workspace_root / ".agents" / "skills")
     assert context["gemini_skills_path"] == str(workspace_root / ".gemini" / "skills")
     assert context["resolved_skills"] == [{"name": "speckit", "version": "local"}]
+    assert materialize_kwargs["cache_root"] == (tmp_path / "cache").resolve()
 
 
 def test_is_existing_skills_workspace_valid_requires_resolvable_skill_targets(tmp_path):

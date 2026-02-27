@@ -1287,12 +1287,11 @@ def _ensure_shared_skills_workspace(
         )
     run_root.mkdir(parents=True, exist_ok=True)
 
-    repo_root = Path(settings.spec_workflow.repo_root).expanduser()
-    if not repo_root.is_absolute():
-        repo_root = (Path.cwd() / repo_root).resolve()
     cache_root = Path(settings.spec_workflow.skills_cache_root).expanduser()
     if not cache_root.is_absolute():
-        cache_root = (repo_root / cache_root).resolve()
+        cache_root = (workspace_root / cache_root).resolve()
+    else:
+        cache_root = cache_root.resolve()
 
     materialized = materialize_run_skill_workspace(
         selection=selection,

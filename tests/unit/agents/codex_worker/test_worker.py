@@ -33,6 +33,7 @@ from moonmind.agents.codex_worker.worker import (
     QueueSystemStatus,
     ResolvedTaskStep,
 )
+from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -4800,6 +4801,23 @@ def codex_worker_components(
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
     return worker, queue, handler
+
+
+def test_resolve_skills_cache_root_uses_worker_workdir_for_relative_paths(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, _, _ = codex_worker_components
+    monkeypatch.setattr(
+        settings.spec_workflow,
+        "skills_cache_root",
+        "var/skill_cache",
+        raising=False,
+    )
+
+    resolved = worker._resolve_skills_cache_root()
+
+    assert resolved == (worker._config.workdir / "var/skill_cache").resolve()
 
 
 async def test_derive_default_pr_title_prefers_first_non_empty_step_title(

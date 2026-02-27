@@ -228,6 +228,9 @@ class TestSpecWorkflowSettings:
             "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
             "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
             "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
+            "WORKFLOW_SKILLS_CACHE_ROOT",
+            "SPEC_SKILLS_CACHE_ROOT",
+            "WORKFLOW_SKILLS_WORKSPACE_ROOT",
             "SPEC_SKILLS_WORKSPACE_ROOT",
             "WORKFLOW_REPO_ROOT",
             "SPEC_WORKFLOW_REPO_ROOT",
@@ -526,6 +529,34 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT", raising=False)
         monkeypatch.delenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT", raising=False)
+
+    def test_skills_cache_and_workspace_roots_use_workflow_env(self, monkeypatch):
+        """Skills cache/workspace roots should read from WORKFLOW_* env names."""
+
+        monkeypatch.setenv("WORKFLOW_SKILLS_CACHE_ROOT", "/tmp/workflow-cache")
+        monkeypatch.setenv("WORKFLOW_SKILLS_WORKSPACE_ROOT", "workflow-runs")
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.skills_cache_root == "/tmp/workflow-cache"
+        assert settings.skills_workspace_root == "workflow-runs"
+
+        monkeypatch.delenv("WORKFLOW_SKILLS_CACHE_ROOT", raising=False)
+        monkeypatch.delenv("WORKFLOW_SKILLS_WORKSPACE_ROOT", raising=False)
+
+    def test_skills_cache_and_workspace_roots_ignore_spec_env(self, monkeypatch):
+        """Legacy SPEC_SKILLS_* names should no longer configure cache/workspace roots."""
+
+        monkeypatch.setenv("SPEC_SKILLS_CACHE_ROOT", "/tmp/spec-cache")
+        monkeypatch.setenv("SPEC_SKILLS_WORKSPACE_ROOT", "spec-runs")
+
+        settings = SpecWorkflowSettings(_env_file=None)
+
+        assert settings.skills_cache_root == "var/skill_cache"
+        assert settings.skills_workspace_root == "runs"
+
+        monkeypatch.delenv("SPEC_SKILLS_CACHE_ROOT", raising=False)
+        monkeypatch.delenv("SPEC_SKILLS_WORKSPACE_ROOT", raising=False)
 
     def test_repo_root_env_override(self, monkeypatch):
         """Spec workflow repo root should honor SPEC_WORKFLOW_REPO_ROOT override."""

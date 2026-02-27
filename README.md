@@ -182,8 +182,8 @@ MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gem
 - `WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`; legacy alias `SPEC_WORKFLOW_DEFAULT_SKILL`).
 - `WORKFLOW_SKILL_POLICY_MODE` – Skill policy mode (`permissive` default, `allowlist` for strict enforcement; legacy alias `SPEC_WORKFLOW_SKILL_POLICY_MODE`).
 - `WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (legacy alias `SPEC_WORKFLOW_ALLOWED_SKILLS`; enforced when policy mode is `allowlist`).
-- `WORKFLOW_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`; legacy aliases: `SPEC_SKILLS_WORKSPACE_ROOT`, `SPEC_WORKFLOW_WORKSPACE_ROOT`).
-- `WORKFLOW_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts (default `var/skill_cache`; legacy alias `SPEC_SKILLS_CACHE_ROOT`).
+- `WORKFLOW_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
+- `WORKFLOW_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts. Use an absolute writable path outside checked-out repos (for example `/work/agent_jobs/skill_cache`).
 - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`; legacy alias `SPEC_SKILLS_LOCAL_MIRROR_ROOT`).
 - `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT` – Shared mirror root checked after the local mirror (default `.agents/skills`; nested `.agents/skills/skills` is still auto-detected for compatibility; legacy alias `SPEC_SKILLS_LEGACY_MIRROR_ROOT`).
 - `WORKFLOW_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (legacy alias `SPEC_SKILLS_VERIFY_SIGNATURES`).

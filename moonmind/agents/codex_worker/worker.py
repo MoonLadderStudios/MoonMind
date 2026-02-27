@@ -5699,9 +5699,11 @@ class CodexWorker:
         return "gh"
 
     def _resolve_skills_cache_root(self) -> Path:
-        cache_root = Path(settings.spec_workflow.skills_cache_root)
+        cache_root = Path(settings.spec_workflow.skills_cache_root).expanduser()
         if not cache_root.is_absolute():
-            cache_root = (Path.cwd() / cache_root).resolve()
+            cache_root = (self._config.workdir / cache_root).resolve()
+        else:
+            cache_root = cache_root.resolve()
         cache_root.mkdir(parents=True, exist_ok=True)
         return cache_root
 
