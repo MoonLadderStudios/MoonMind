@@ -553,6 +553,75 @@ async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
     )
 
 
+async def test_run_command_streaming_deduplicates_mixed_prefix_final_replay(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Semantically identical final blocks should dedupe despite prefix drift."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-mixed-prefix.log"
+    final_summary_block = (
+        "Implemented and verified.\n"
+        "- Reproduced from run logs: duplicate final block at lines 5274 and 5281.\n"
+        "- Added semantic replay dedupe coverage for mixed prefixes.\n"
+    )
+    replay_a = f"thinking\n**Planning concise final response**\n{final_summary_block}"
+    replay_b = f"codex\n{final_summary_block}"
+    replay_c = final_summary_block
+    callback_events: list[tuple[str, str | None]] = []
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader([replay_a, replay_b, replay_c, "file update:\n"])
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    async def output_callback(stream: str, text: str | None) -> None:
+        callback_events.append((stream, text))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["codex", "exec", "test"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        output_chunk_callback=output_callback,
+        enable_replay_dedupe=True,
+    )
+
+    marker = "Reproduced from run logs: duplicate final block at lines 5274 and 5281."
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count(marker) == 1
+    assert text.count("Added semantic replay dedupe coverage for mixed prefixes.") == 1
+    assert "file update:" in text
+    callback_text = "".join(
+        chunk for stream, chunk in callback_events if stream == "stdout" and chunk
+    )
+    assert callback_text.count(marker) == 1
+
+
 async def test_run_command_streaming_keeps_repeated_output_across_turn_boundaries(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -714,6 +783,45 @@ async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
 
     text = log_path.read_text(encoding="utf-8")
     assert text.count("duplicate block") == 2
+
+
+async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Oversized git diff capture should dedupe and cap logs while keeping tail context."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "git-diff-capped.log"
+    large_diff = (
+        ("same-dup-line\n" * 3000)
+        + "".join(f"line-{index:06d}\n" for index in range(20000))
+        + "TAIL_CONTEXT=git-diff-ending\n"
+    )
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (large_diff.encode("utf-8"), b"")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    result = await handler._run_command(
+        ["git", "diff"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    assert result.stdout == large_diff
+    text = log_path.read_text(encoding="utf-8")
+    assert "[moonmind] stdout output deduped:" in text
+    assert "[moonmind] stdout output truncated:" in text
+    assert "TAIL_CONTEXT=git-diff-ending" in text
+    assert len(text) < len(large_diff)
 
 
 async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(

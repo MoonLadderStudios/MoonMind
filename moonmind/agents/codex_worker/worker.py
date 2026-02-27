@@ -107,6 +107,14 @@ _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
 _MAX_STEP_LOG_OFFSET_CHECKPOINT_BYTES = 64 * 1024
 _STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
+_COMMAND_START_PREFIX = "[command] $ "
+_COMMAND_COMPLETE_PREFIX = "[command] complete:"
+_STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
+    {
+        "step_transcript_truncated_mid_command",
+        "step_transcript_missing_terminal_marker",
+    }
+)
 _NON_SOURCE_CHANGE_PREFIXES = (
     ".github/",
     ".specify/",
@@ -869,6 +877,8 @@ class ClaimedJob:
     id: UUID
     type: str
     payload: dict[str, Any]
+    attempt: int = 1
+    max_attempts: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -1054,6 +1064,15 @@ class StepLogCopyResult:
     metadata_path: Path | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class StepTranscriptIntegrityResult:
+    """Structured integrity-check outcome for one step transcript."""
+
+    passed: bool
+    message: str | None = None
+    run_quality_reason: dict[str, Any] | None = None
+
+
 class QueueApiClient:
     """HTTP client wrapper for queue and artifact endpoints."""
 
@@ -1101,10 +1120,20 @@ class QueueApiClient:
         job_data = data.get("job")
         job = None
         if job_data:
+            try:
+                attempt = int(job_data.get("attempt") or 1)
+            except (TypeError, ValueError):
+                attempt = 1
+            try:
+                max_attempts = int(job_data.get("maxAttempts") or 3)
+            except (TypeError, ValueError):
+                max_attempts = 3
             job = ClaimedJob(
                 id=UUID(str(job_data["id"])),
                 type=str(job_data["type"]),
                 payload=dict(job_data.get("payload") or {}),
+                attempt=max(1, attempt),
+                max_attempts=max(1, max_attempts),
             )
         system = self._parse_system_metadata(data.get("system"))
         return QueueClaimResult(job=job, system=system)
@@ -1789,6 +1818,11 @@ class CodexWorker:
                 publish_base_branch=publish_base_branch,
                 publish_working_branch=publish_working_branch,
                 proposal_report=proposal_report,
+                run_quality_reason=(
+                    dict(result.run_quality_reason)
+                    if result is not None and result.run_quality_reason is not None
+                    else None
+                ),
             )
             artifacts_dir = (
                 prepared.artifacts_dir
@@ -1829,6 +1863,11 @@ class CodexWorker:
                     publish_base_branch=publish_base_branch,
                     publish_working_branch=publish_working_branch,
                     proposal_report=proposal_report,
+                    run_quality_reason=(
+                        dict(result.run_quality_reason)
+                        if result is not None and result.run_quality_reason is not None
+                        else None
+                    ),
                 )
 
             if cancelled:
@@ -1862,6 +1901,15 @@ class CodexWorker:
                 )
                 return
 
+            run_quality_reason = (
+                dict(result.run_quality_reason)
+                if result is not None and result.run_quality_reason is not None
+                else None
+            )
+            retryable_failure = self._should_enqueue_run_quality_retry(
+                job=job,
+                result=result,
+            )
             terminal_error = self._redact_text(
                 (
                     (result.error_message if result is not None else None)
@@ -1873,21 +1921,26 @@ class CodexWorker:
                 job_id=job.id,
                 worker_id=self._config.worker_id,
                 error_message=terminal_error,
-                retryable=False,
+                retryable=retryable_failure,
                 finish_outcome_code=finish_outcome.code,
                 finish_outcome_stage=finish_outcome.stage,
                 finish_outcome_reason=finish_outcome.reason,
                 finish_summary=finish_summary,
             )
+            failed_event_payload: dict[str, Any] = {
+                "error": terminal_error,
+                "jobType": job.type,
+                **skill_meta,
+            }
+            if run_quality_reason is not None:
+                failed_event_payload["runQuality"] = run_quality_reason
+            if retryable_failure:
+                failed_event_payload["retryable"] = True
             await self._emit_event(
                 job_id=job.id,
                 level="error",
                 message="Job failed",
-                payload={
-                    "error": terminal_error,
-                    "jobType": job.type,
-                    **skill_meta,
-                },
+                payload=failed_event_payload,
             )
 
         try:
@@ -2428,6 +2481,7 @@ class CodexWorker:
         publish_base_branch: str | None,
         publish_working_branch: str | None,
         proposal_report: ProposalSubmissionReport,
+        run_quality_reason: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         repository = str(canonical_payload.get("repository") or "").strip()
         patch_path = "patches/changes.patch"
@@ -2483,6 +2537,8 @@ class CodexWorker:
                 "errors": proposal_report.errors,
             },
         }
+        if run_quality_reason is not None:
+            summary["runQuality"] = dict(run_quality_reason)
         redacted = self._redact_payload(summary)
         return redacted if isinstance(redacted, dict) else summary
 
@@ -4633,6 +4689,121 @@ class CodexWorker:
             encoding="utf-8",
         )
 
+    def _evaluate_step_transcript_integrity(
+        self,
+        *,
+        step: ResolvedTaskStep,
+        step_log_path: Path,
+    ) -> StepTranscriptIntegrityResult:
+        """Validate command-start/complete markers in a step transcript preview."""
+
+        if not step_log_path.exists():
+            return StepTranscriptIntegrityResult(passed=True)
+        try:
+            transcript_text = step_log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            logger.warning(
+                "Failed reading step transcript for integrity check at %s",
+                step_log_path,
+                exc_info=True,
+            )
+            return StepTranscriptIntegrityResult(passed=True)
+
+        non_empty_lines = [line.strip() for line in transcript_text.splitlines() if line.strip()]
+        start_count = sum(
+            1 for line in non_empty_lines if line.startswith(_COMMAND_START_PREFIX)
+        )
+        complete_count = sum(
+            1 for line in non_empty_lines if line.startswith(_COMMAND_COMPLETE_PREFIX)
+        )
+        if start_count == 0 and complete_count == 0:
+            return StepTranscriptIntegrityResult(passed=True)
+
+        terminal_line = non_empty_lines[-1] if non_empty_lines else ""
+        if complete_count < start_count:
+            detail = (
+                "step transcript ended mid-command "
+                f"(startMarkers={start_count}, completeMarkers={complete_count})"
+            )
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_truncated_mid_command",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
+        if not terminal_line.startswith(_COMMAND_COMPLETE_PREFIX):
+            detail = "step transcript missing terminal completion marker"
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_missing_terminal_marker",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
+        return StepTranscriptIntegrityResult(passed=True)
+
+    def _build_step_transcript_run_quality_reason(
+        self,
+        *,
+        code: str,
+        step: ResolvedTaskStep,
+        detail: str,
+        start_markers: int,
+        complete_markers: int,
+        terminal_line: str,
+    ) -> dict[str, Any]:
+        """Build structured run_quality metadata for transcript integrity failures."""
+
+        return {
+            "category": "run_quality",
+            "code": code,
+            "summary": detail,
+            "tags": ["retry", "artifact_gap"],
+            "stepId": step.step_id,
+            "stepIndex": step.step_index,
+            "details": {
+                "startMarkers": start_markers,
+                "completeMarkers": complete_markers,
+                "terminalLine": self._redact_text(terminal_line)[:256],
+            },
+        }
+
+    @staticmethod
+    def _is_retryable_run_quality_reason(reason: Mapping[str, Any] | None) -> bool:
+        if not isinstance(reason, Mapping):
+            return False
+        if str(reason.get("category") or "").strip().lower() != "run_quality":
+            return False
+        code = str(reason.get("code") or "").strip()
+        return code in _STEP_TRANSCRIPT_RETRYABLE_CODES
+
+    def _should_enqueue_run_quality_retry(
+        self,
+        *,
+        job: ClaimedJob,
+        result: WorkerExecutionResult | None,
+    ) -> bool:
+        """Allow at most one queued retry for retry-classified run-quality failures."""
+
+        if result is None or result.succeeded:
+            return False
+        if not self._is_retryable_run_quality_reason(result.run_quality_reason):
+            return False
+        if job.max_attempts <= 1:
+            return False
+        return job.attempt == 1
+
     def _evaluate_step_gate(
         self,
         *,
@@ -6238,6 +6409,45 @@ class CodexWorker:
             if artifact_callback is not None and normalized_step_artifacts:
                 await artifact_callback(normalized_step_artifacts)
 
+            if step_result.succeeded and runtime_mode == "codex":
+                transcript_integrity = self._evaluate_step_transcript_integrity(
+                    step=step,
+                    step_log_path=step_log_path,
+                )
+                if not transcript_integrity.passed:
+                    integrity_message = (
+                        transcript_integrity.message
+                        or "step transcript integrity check failed"
+                    )
+                    event_payload["summary"] = integrity_message
+                    if transcript_integrity.run_quality_reason is not None:
+                        event_payload["runQuality"] = dict(
+                            transcript_integrity.run_quality_reason
+                        )
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="error",
+                        message="task.step.failed",
+                        payload=event_payload,
+                    )
+                    self._append_stage_log(
+                        prepared.execute_log_path,
+                        (
+                            f"step {step.step_index + 1}/{len(resolved_steps)} failed: "
+                            f"{step.step_id}; error={integrity_message}"
+                        ),
+                    )
+                    return WorkerExecutionResult(
+                        succeeded=False,
+                        summary=None,
+                        error_message=integrity_message,
+                        artifacts=tuple(step_artifacts),
+                        run_quality_reason=(
+                            dict(transcript_integrity.run_quality_reason)
+                            if transcript_integrity.run_quality_reason is not None
+                            else None
+                        ),
+                    )
             if step_result.succeeded:
                 gate_result = self._evaluate_step_gate(step=step, prepared=prepared)
                 if gate_result.artifacts:
