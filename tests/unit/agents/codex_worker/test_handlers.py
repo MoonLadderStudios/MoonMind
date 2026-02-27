@@ -832,10 +832,14 @@ async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "git-diff-capped.log"
+    max_chars = handlers._GIT_DIFF_LOG_CAPTURE_MAX_CHARS
+    duplicate_block = "same-dup-line\n" * 64
+    tail_marker = "TAIL_CONTEXT=git-diff-ending\n"
+    unique_chars = max(1, (max_chars + 256) - len(duplicate_block) - len(tail_marker))
     large_diff = (
-        ("same-dup-line\n" * 3000)
-        + "".join(f"line-{index:06d}\n" for index in range(20000))
-        + "TAIL_CONTEXT=git-diff-ending\n"
+        duplicate_block
+        + ("u" * unique_chars)
+        + tail_marker
     )
 
     class FakeProcess:

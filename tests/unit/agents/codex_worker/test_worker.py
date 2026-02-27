@@ -1847,12 +1847,19 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
 ) -> None:
     """Integrity checks should prefer full companion logs when preview is truncated."""
 
+    step_log_max_bytes = 4096
+    prefix = "prefix-no-markers\n" * (
+        (step_log_max_bytes // len("prefix-no-markers\n")) + 32
+    )
+    middle = "middle-content\n" * (
+        (step_log_max_bytes // len("middle-content\n")) + 32
+    )
     step_log = tmp_path / "companion-step.log"
     step_log.write_text(
         (
-            ("prefix-no-markers\n" * 30000)
+            prefix
             + "[command] $ codex exec run integrity check; control=worker\n"
-            + ("middle-content\n" * 30000)
+            + middle
             + "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; "
             "stderrChars=0; control=worker\n"
         ),
@@ -1891,7 +1898,7 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        step_log_max_bytes=4096,
+        step_log_max_bytes=step_log_max_bytes,
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -4308,7 +4315,9 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
     assert handler.calls == ["codex_skill:custom-skill:True"]
 
 
-async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
+async def test_heartbeat_loop_runs_on_lease_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Heartbeat loop should emit renewals at roughly lease/3 cadence."""
 
     queue = FakeQueueClient(jobs=[])
@@ -4327,6 +4336,29 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
 
     stop_event = asyncio.Event()
     cancel_event = asyncio.Event()
+    original_sleep = asyncio.sleep
+
+    async def _fast_sleep(_seconds: float) -> None:
+        await original_sleep(0)
+
+    heartbeats_target = 2
+    original_heartbeat = queue.heartbeat
+
+    async def _heartbeat_and_stop(*, job_id, worker_id, lease_seconds):
+        result = await original_heartbeat(
+            job_id=job_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
+        if len(queue.heartbeats) >= heartbeats_target:
+            stop_event.set()
+        return result
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.asyncio.sleep",
+        _fast_sleep,
+    )
+    monkeypatch.setattr(queue, "heartbeat", _heartbeat_and_stop)
     task = asyncio.create_task(
         worker._heartbeat_loop(
             job_id=uuid4(),
@@ -4334,16 +4366,15 @@ async def test_heartbeat_loop_runs_on_lease_interval(tmp_path: Path) -> None:
             cancel_event=cancel_event,
         )
     )
-    await asyncio.sleep(2.3)
-    stop_event.set()
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        _ = await task
+    await asyncio.wait_for(stop_event.wait(), timeout=1)
+    await asyncio.wait_for(task, timeout=1)
 
-    assert len(queue.heartbeats) >= 2
+    assert len(queue.heartbeats) >= heartbeats_target
 
 
-async def test_heartbeat_loop_sets_pause_event_for_quiesce(tmp_path: Path) -> None:
+async def test_heartbeat_loop_sets_pause_event_for_quiesce(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Quiesce mode should trigger the worker pause event during heartbeats."""
 
     now = datetime.now(UTC)
@@ -4372,6 +4403,28 @@ async def test_heartbeat_loop_sets_pause_event_for_quiesce(tmp_path: Path) -> No
     stop_event = asyncio.Event()
     cancel_event = asyncio.Event()
     pause_event = asyncio.Event()
+    original_sleep = asyncio.sleep
+
+    async def _fast_sleep(_seconds: float) -> None:
+        await original_sleep(0)
+
+    original_heartbeat = queue.heartbeat
+
+    async def _heartbeat_and_stop(*, job_id, worker_id, lease_seconds):
+        result = await original_heartbeat(
+            job_id=job_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
+        if pause_event.is_set():
+            stop_event.set()
+        return result
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.asyncio.sleep",
+        _fast_sleep,
+    )
+    monkeypatch.setattr(queue, "heartbeat", _heartbeat_and_stop)
     task = asyncio.create_task(
         worker._heartbeat_loop(
             job_id=uuid4(),
@@ -4380,11 +4433,8 @@ async def test_heartbeat_loop_sets_pause_event_for_quiesce(tmp_path: Path) -> No
             pause_event=pause_event,
         )
     )
-    await asyncio.sleep(1.2)
-    stop_event.set()
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        _ = await task
+    await asyncio.wait_for(stop_event.wait(), timeout=1)
+    await asyncio.wait_for(task, timeout=1)
 
     assert pause_event.is_set()
 
@@ -6017,7 +6067,7 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
             cancel_event,
             output_chunk_callback,
         )
-        await asyncio.sleep(0.05)
+        await asyncio.Event().wait()
         return CommandResult(("git", "status"), 0, "", "")
 
     monkeypatch.setattr(handler, "_run_command", _slow_run_command)

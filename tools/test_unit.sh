@@ -43,7 +43,14 @@ else
     exit 127
 fi
 
-"$PYTHON_BIN" -m pytest -q tests/unit
+PYTEST_PARALLEL_ARGS=()
+if "$PYTHON_BIN" -c "import xdist" >/dev/null 2>&1; then
+    PYTEST_PARALLEL_ARGS=(-n auto --dist loadscope)
+else
+    echo "Warning: pytest-xdist is not installed; running unit tests without parallel workers." >&2
+fi
+
+"$PYTHON_BIN" -m pytest -q "${PYTEST_PARALLEL_ARGS[@]}" tests/unit
 
 if command -v node >/dev/null 2>&1; then
     for test_file in \
