@@ -15,6 +15,7 @@ import shutil
 import socket
 import stat
 import time
+from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -115,11 +116,17 @@ _CONTROLLED_COMMAND_START_PATTERN = re.compile(
 )
 _CONTROLLED_COMMAND_COMPLETE_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
-    rf"stdoutChars=\d+;\s+stderrChars=\d+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
+    r"stdoutChars=\d+;\s+stderrChars=\d+"
+    r"(?:;\s+id=[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})?;\s*"
+    rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
 _LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
     r"stdoutChars=\d+;\s+stderrChars=\d+$"
+)
+_CONTROLLED_COMMAND_MARKER_ID_PATTERN = re.compile(
+    r";\s*id=(?P<marker_id>[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}"
+    r"[0-9a-fA-F]{12})\s*;"
 )
 _STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
     {
@@ -2183,7 +2190,32 @@ class CodexWorker:
                     cancel_event=cancel_requested_event
                 )
 
-            if proposal_workflow_enabled:
+            skip_retryable_run_quality_proposals = bool(
+                proposal_workflow_enabled
+                and result is not None
+                and not result.succeeded
+                and self._is_retryable_run_quality_reason(result.run_quality_reason)
+                and job.attempt > 1
+            )
+            if skip_retryable_run_quality_proposals:
+                proposal_report = ProposalSubmissionReport(
+                    requested=False,
+                    hook_skills=[],
+                    generated_count=0,
+                    submitted_count=0,
+                    errors=[],
+                )
+                await self._emit_event(
+                    job_id=job.id,
+                    level="info",
+                    message="task.proposalSubmission.skipped",
+                    payload={
+                        "reason": "retryable run_quality retry attempt",
+                        "attempt": job.attempt,
+                    },
+                )
+
+            if proposal_workflow_enabled and not skip_retryable_run_quality_proposals:
                 proposal_hook_skills = list(
                     self._proposal_hook_skill_ids(
                         include_continuation=bool(result and result.succeeded)
@@ -4795,6 +4827,16 @@ class CodexWorker:
         ]
         return legacy_start, legacy_complete
 
+    @staticmethod
+    def _extract_step_transcript_control_marker_id(line: str) -> str | None:
+        """Extract optional control marker correlation ID from one transcript line."""
+
+        marker_match = _CONTROLLED_COMMAND_MARKER_ID_PATTERN.search(line)
+        if marker_match is None:
+            return None
+        marker_id = str(marker_match.group("marker_id") or "").strip()
+        return marker_id or None
+
     def _evaluate_step_transcript_integrity(
         self,
         *,
@@ -4828,14 +4870,94 @@ class CodexWorker:
         )
         start_count = len(start_markers)
         complete_count = len(complete_markers)
-        if start_count == 0 and complete_count == 0:
-            return StepTranscriptIntegrityResult(passed=True)
-
         terminal_line = (
             complete_markers[-1]
             if complete_markers
             else (non_empty_lines[-1] if non_empty_lines else "")
         )
+        has_controlled_markers = any(
+            _CONTROLLED_COMMAND_START_PATTERN.match(line)
+            or _CONTROLLED_COMMAND_COMPLETE_PATTERN.match(line)
+            for line in non_empty_lines
+        )
+        start_marker_ids = [
+            marker_id
+            for line in start_markers
+            if (marker_id := self._extract_step_transcript_control_marker_id(line))
+        ]
+        complete_marker_ids = [
+            marker_id
+            for line in complete_markers
+            if (marker_id := self._extract_step_transcript_control_marker_id(line))
+        ]
+        if (
+            has_controlled_markers
+            and complete_count > start_count
+            and not (start_marker_ids or complete_marker_ids)
+        ):
+            # Migration tolerance: older logs may split multiline command-start
+            # control markers, so fold in legacy starts before hard-failing.
+            legacy_start_count = sum(
+                1 for line in non_empty_lines if line.startswith(_COMMAND_START_PREFIX)
+            )
+            if legacy_start_count > start_count:
+                start_count = min(legacy_start_count, complete_count)
+        if start_count == 0 and complete_count == 0:
+            return StepTranscriptIntegrityResult(passed=True)
+
+        if has_controlled_markers and (start_marker_ids or complete_marker_ids):
+            start_id_counts = Counter(start_marker_ids)
+            complete_id_counts = Counter(complete_marker_ids)
+            unmatched_complete_with_ids = sum(
+                max(0, complete_id_counts[marker_id] - start_id_counts.get(marker_id, 0))
+                for marker_id in complete_id_counts
+            )
+            unmatched_start_with_ids = sum(
+                max(0, start_id_counts[marker_id] - complete_id_counts.get(marker_id, 0))
+                for marker_id in start_id_counts
+            )
+            unscoped_start_count = max(0, start_count - len(start_marker_ids))
+            unscoped_complete_count = max(0, complete_count - len(complete_marker_ids))
+            unmatched_complete_count = unmatched_complete_with_ids + max(
+                0, unscoped_complete_count - unscoped_start_count
+            )
+            unmatched_start_count = unmatched_start_with_ids + max(
+                0, unscoped_start_count - unscoped_complete_count
+            )
+            if unmatched_complete_count > 0:
+                detail = (
+                    "step transcript marker counts are invalid "
+                    f"(startMarkers={start_count}, completeMarkers={complete_count})"
+                )
+                return StepTranscriptIntegrityResult(
+                    passed=False,
+                    message=f"[run_quality] {detail}",
+                    run_quality_reason=self._build_step_transcript_run_quality_reason(
+                        code="step_transcript_invalid_marker_balance",
+                        step=step,
+                        detail=detail,
+                        start_markers=start_count,
+                        complete_markers=complete_count,
+                        terminal_line=terminal_line,
+                    ),
+                )
+            if unmatched_start_count > 0:
+                detail = (
+                    "step transcript ended mid-command "
+                    f"(startMarkers={start_count}, completeMarkers={complete_count})"
+                )
+                return StepTranscriptIntegrityResult(
+                    passed=False,
+                    message=f"[run_quality] {detail}",
+                    run_quality_reason=self._build_step_transcript_run_quality_reason(
+                        code="step_transcript_truncated_mid_command",
+                        step=step,
+                        detail=detail,
+                        start_markers=start_count,
+                        complete_markers=complete_count,
+                        terminal_line=terminal_line,
+                    ),
+                )
         if complete_count > start_count:
             detail = (
                 "step transcript marker counts are invalid "
@@ -6820,6 +6942,11 @@ class CodexWorker:
                 summary=None,
                 error_message=step_result.error_message,
                 artifacts=tuple(step_artifacts),
+                run_quality_reason=(
+                    dict(step_result.run_quality_reason)
+                    if step_result.run_quality_reason is not None
+                    else None
+                ),
             )
 
         patch_path = prepared.artifacts_dir / "changes.patch"

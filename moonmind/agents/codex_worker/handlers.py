@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from moonmind.agents.codex_worker.utils import verify_cli_is_executable
 from moonmind.rag.context_pack import ContextPack
@@ -238,6 +238,14 @@ def _truncate_error_message(
     head_chars = min(768, max_chars - 4)
     tail_chars = max_chars - head_chars - 3
     return f"{message[:head_chars]}...{message[-tail_chars:]}"
+
+
+def _serialize_command_for_log(command: Sequence[str]) -> str:
+    """Serialize argv for control marker logging without embedded newlines."""
+
+    return " ".join(
+        str(part).replace("\r", "\\r").replace("\n", "\\n") for part in command
+    )
 
 
 def _is_git_diff_command(command: Sequence[str]) -> bool:
@@ -918,10 +926,15 @@ class CodexExecHandler:
         enable_replay_dedupe: bool = True,
     ) -> CommandResult:
         defer_stream_output_logging = _is_git_diff_command(command)
+        command_marker_id = str(uuid4())
+        serialized_command = _serialize_command_for_log(command)
         self._append_log(
             log_path,
             self._redact_text(
-                f"{_COMMAND_START_PREFIX}{' '.join(command)}; {_COMMAND_CONTROL_TAG}",
+                (
+                    f"{_COMMAND_START_PREFIX}{serialized_command}; "
+                    f"id={command_marker_id}; {_COMMAND_CONTROL_TAG}"
+                ),
                 extra_redaction_values=redaction_values,
             ),
         )
@@ -1421,7 +1434,8 @@ class CodexExecHandler:
                 (
                     f"{_COMMAND_COMPLETE_PREFIX} rc={result.returncode}; "
                     f"cmd={command_hint}; stdoutChars={len(result.stdout)}; "
-                    f"stderrChars={len(result.stderr)}; {_COMMAND_CONTROL_TAG}"
+                    f"stderrChars={len(result.stderr)}; id={command_marker_id}; "
+                    f"{_COMMAND_CONTROL_TAG}"
                 ),
                 extra_redaction_values=redaction_values,
             ),

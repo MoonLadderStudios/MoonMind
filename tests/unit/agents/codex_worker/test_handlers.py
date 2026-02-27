@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -176,6 +177,45 @@ async def test_run_command_redacts_sensitive_log_output(
     text = log_path.read_text(encoding="utf-8")
     assert token not in text
     assert "[REDACTED]" in text
+
+
+async def test_run_command_serializes_multiline_start_marker_on_single_line(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Control marker start lines should escape embedded newlines in argv."""
+
+    log_path = tmp_path / "marker.log"
+    handler = CodexExecHandler(workdir_root=tmp_path)
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["codex", "exec", "line1\nline2"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    start_line = log_path.read_text(encoding="utf-8").splitlines()[0]
+    assert (
+        re.search(
+            (
+                r"^\[command\] \$ codex exec line1\\nline2; "
+                r"id=[0-9a-fA-F-]{36}; control=worker$"
+            ),
+            start_line,
+        )
+        is not None
+    )
 
 
 async def test_run_command_streaming_redacts_tokens_split_across_chunks(
