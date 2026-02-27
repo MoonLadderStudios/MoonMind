@@ -244,6 +244,13 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(missing, "/tasks/queue");
 })();
 
+(function testNormalizeDashboardRoutePathSupportsListAlias() {
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list"), "/tasks/queue");
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list/"), "/tasks/queue");
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/create"), "/tasks/queue/new");
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/new"), "/tasks/queue/new");
+})();
+
 (function testParseEditJobSearchParam() {
   if (typeof helpers.parseEditJobSearchParam !== "function") {
     return;

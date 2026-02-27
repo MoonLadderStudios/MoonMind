@@ -837,6 +837,8 @@
     const activePath =
       pathname === "/tasks/queue/new" || pathname === "/tasks/create" || pathname === "/tasks/orchestrator/new"
         ? "/tasks/create"
+        : pathname === "/tasks/queue"
+          ? "/tasks/list"
         : pathname;
     const links = document.querySelectorAll("a[data-nav]");
     links.forEach((link) => {
@@ -2214,6 +2216,7 @@
       submitDraftController,
       normalizeDashboardDetailSegment,
       resolvePromotedQueueRoute,
+      normalizeDashboardRoutePath,
     };
     window.__queueLayoutTest = {
       queueFieldDefinitions,
@@ -7202,15 +7205,26 @@
     );
   }
 
-  async function renderForPath(pathname, searchParams) {
+  function normalizeDashboardRoutePath(pathname) {
     const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
-    const normalizedRoute =
-      normalizedPath === "/tasks/new" || normalizedPath === "/tasks/create"
-        ? "/tasks/queue/new"
-        : normalizedPath;
+    if (normalizedPath === "/tasks/new" || normalizedPath === "/tasks/create") {
+      return "/tasks/queue/new";
+    }
+    if (normalizedPath === "/tasks/list") {
+      return "/tasks/queue";
+    }
+    return normalizedPath;
+  }
+
+  async function renderForPath(pathname, searchParams) {
+    const normalizedRoute = normalizeDashboardRoutePath(pathname);
     stopPolling();
     const navRoute =
-      normalizedRoute === "/tasks/queue/new" ? "/tasks/create" : normalizedRoute;
+      normalizedRoute === "/tasks/queue/new"
+        ? "/tasks/create"
+        : normalizedRoute === "/tasks/queue"
+          ? "/tasks/list"
+          : normalizedRoute;
     activateNav(navRoute);
 
     const queueDetailMatch = normalizedRoute.match(/^\/tasks\/queue\/([^/]+)$/);
