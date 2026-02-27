@@ -4909,11 +4909,15 @@ class CodexWorker:
             start_id_counts = Counter(start_marker_ids)
             complete_id_counts = Counter(complete_marker_ids)
             unmatched_complete_with_ids = sum(
-                max(0, complete_id_counts[marker_id] - start_id_counts.get(marker_id, 0))
+                max(
+                    0, complete_id_counts[marker_id] - start_id_counts.get(marker_id, 0)
+                )
                 for marker_id in complete_id_counts
             )
             unmatched_start_with_ids = sum(
-                max(0, start_id_counts[marker_id] - complete_id_counts.get(marker_id, 0))
+                max(
+                    0, start_id_counts[marker_id] - complete_id_counts.get(marker_id, 0)
+                )
                 for marker_id in start_id_counts
             )
             unscoped_start_count = max(0, start_count - len(start_marker_ids))

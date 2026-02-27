@@ -1826,7 +1826,9 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
     async def _unexpected_submit(*args, **kwargs):
         raise AssertionError("proposal submission should be skipped")
 
-    monkeypatch.setattr(worker, "_run_post_task_proposal_skills", _unexpected_post_skill)
+    monkeypatch.setattr(
+        worker, "_run_post_task_proposal_skills", _unexpected_post_skill
+    )
     monkeypatch.setattr(worker, "_maybe_submit_task_proposals", _unexpected_submit)
 
     processed = await worker.run_once()
