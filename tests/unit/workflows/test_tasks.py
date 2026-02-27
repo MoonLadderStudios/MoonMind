@@ -1263,6 +1263,7 @@ def test_ensure_shared_skills_workspace_populates_context(monkeypatch, tmp_path)
         "resolve_run_skill_selection",
         lambda **_: DummySelection(),
     )
+
     def _fake_materialize_run_skill_workspace(**kwargs):
         materialize_kwargs.update(kwargs)
         return DummyWorkspace(workspace_root)
