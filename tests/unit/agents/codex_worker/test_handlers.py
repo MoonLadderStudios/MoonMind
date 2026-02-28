@@ -1512,6 +1512,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[list[str]] = []
+    job_id = uuid4()
 
     async def fake_run_command(
         command,
@@ -1537,16 +1538,35 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     handler._run_command = fake_run_command  # type: ignore[method-assign]
 
     result = await handler.handle(
-        job_id=uuid4(),
+        job_id=job_id,
         payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "instruction": "Implement publish test",
+            "instruction": (
+                "MoonMind implement publish test for "
+                "123e4567-e89b-12d3-a456-426614174000."
+            ),
             "publish": {"mode": "pr", "baseBranch": "main"},
         },
     )
 
     assert result.succeeded is True
-    assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in calls)
+    commit_cmd = next(cmd for cmd in calls if cmd[:3] == ["git", "commit", "-m"])
+    assert commit_cmd[3] == "implement publish test for job."
+    assert "MoonMind" not in commit_cmd[3]
+    assert "123e4567-e89b-12d3-a456-426614174000" not in commit_cmd[3]
+
+    pr_cmd = next(cmd for cmd in calls if cmd[:3] == ["gh", "pr", "create"])
+    pr_title = pr_cmd[pr_cmd.index("--title") + 1]
+    pr_body = pr_cmd[pr_cmd.index("--body") + 1]
+    assert pr_title == "implement publish test for job."
+    assert "MoonMind" not in pr_title
+    assert "123e4567-e89b-12d3-a456-426614174000" not in pr_title
+    assert "<!-- moonmind:begin -->" in pr_body
+    assert f"MoonMind Job: {job_id}" in pr_body
+    assert "Runtime: codex" in pr_body
+    assert "Base: main" in pr_body
+    assert "Head: moonmind-job-" in pr_body
+    assert "<!-- moonmind:end -->" in pr_body
 
 
 async def test_handle_skill_maps_to_exec_payload_and_marks_summary(

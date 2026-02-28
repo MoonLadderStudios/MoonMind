@@ -5654,7 +5654,7 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
     assert title == "Ship publish title defaults for queue tasks"
 
 
-async def test_derive_default_pr_title_uses_short_correlation_fallback_without_step_titles(
+async def test_derive_default_pr_title_redacts_uuid_from_task_instructions(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
     """Missing step titles should fall back to task instructions when available."""
@@ -5674,7 +5674,7 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback_without_s
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == "Fix publish behavior for 123e4567-e89b-12d3-a456-426614174000."
+    assert title == "Fix publish behavior for job."
     assert str(job_id) not in title
     assert len(title) <= 90
 
@@ -5703,6 +5703,34 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
     assert title == "Fix publish behavior without adding step titles."
     assert str(job_id) not in title
     assert len(title) <= 90
+
+
+async def test_derive_default_publish_subject_uses_commit_length_and_sanitization(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """Commit subject defaults should stay concise and strip UUID/MoonMind markers."""
+
+    worker, _, _ = codex_worker_components
+    payload = {
+        "task": {
+            "instructions": (
+                "MoonMind resolves publish behavior for "
+                "123e4567-e89b-12d3-a456-426614174000 "
+                "with a very long sentence that should be truncated for commit subjects."
+            ),
+            "steps": [{"id": "step-1", "title": " "}],
+        }
+    }
+
+    subject = worker._derive_default_publish_subject(
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+        max_chars=72,
+    )
+
+    assert "MoonMind" not in subject
+    assert "123e4567-e89b-12d3-a456-426614174000" not in subject
+    assert len(subject) <= 72
 
 
 async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
@@ -5734,13 +5762,35 @@ async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
     assert full_uuid not in title
 
 
-async def test_derive_default_pr_title_uses_short_correlation_fallback(
+async def test_derive_default_pr_title_removes_moonmind_branding_in_generated_titles(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
-    """Missing step titles and instructions should fall back to short token title."""
+    """Generated defaults should remove MoonMind branding unless override is explicit."""
 
     worker, _, _ = codex_worker_components
-    job_id = uuid4()
+    payload = {
+        "task": {
+            "instructions": "MoonMind should not appear in generated title.",
+            "steps": [{"id": "step-1", "title": " "}],
+        }
+    }
+
+    title = worker._derive_default_pr_title(
+        job_id=uuid4(),
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+    )
+
+    assert "MoonMind" not in title
+    assert title == "should not appear in generated title."
+
+
+async def test_derive_default_pr_title_uses_neutral_fallback(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """Missing step titles and instructions should fall back to neutral wording."""
+
+    worker, _, _ = codex_worker_components
     payload = {
         "task": {
             "instructions": " ",
@@ -5749,13 +5799,12 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback(
     }
 
     title = worker._derive_default_pr_title(
-        job_id=job_id,
+        job_id=uuid4(),
         canonical_payload=payload,
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == f"MoonMind task result [mm:{str(job_id)[:8]}]"
-    assert str(job_id) not in title
+    assert title == "Automated update"
     assert len(title) <= 90
 
 

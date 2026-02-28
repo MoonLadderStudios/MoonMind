@@ -73,6 +73,7 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+_MOONMIND_WORD_PATTERN = re.compile(r"\bmoonmind\b", re.IGNORECASE)
 _UNHELPFUL_STEP_TITLE_PATTERN = re.compile(r"^\s*[\W_]*\d+(?:[\W_]+\d+)*[\W_]*\s*$")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
     r"""(?ix)
@@ -3404,14 +3405,43 @@ class CodexWorker:
         """Keep generated PR titles concise and optionally redact UUID text."""
 
         sanitized = title
+        sanitized = _MOONMIND_WORD_PATTERN.sub("", sanitized)
         if redact_uuids:
             sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
-        sanitized = sanitized.strip()
+        sanitized = " ".join(sanitized.split())
         if not sanitized:
-            sanitized = "MoonMind task result"
+            sanitized = "Automated update"
         if len(sanitized) <= max_chars:
             return sanitized
         return f"{sanitized[: max_chars - 3].rstrip()}..."
+
+    @classmethod
+    def _derive_default_publish_subject(
+        cls,
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+        max_chars: int,
+    ) -> str:
+        """Derive publish commit/PR subject using a conservative fallback order."""
+
+        for step in resolved_steps:
+            candidate = cls._normalize_publish_text_line(step.title)
+            if cls._is_meaningful_step_title(candidate):
+                return cls._sanitize_pr_title(
+                    candidate,
+                    max_chars=max_chars,
+                    redact_uuids=True,
+                )
+        candidate = cls._extract_first_instructions_sentence(canonical_payload)
+        if candidate:
+            return cls._sanitize_pr_title(
+                candidate,
+                max_chars=max_chars,
+                redact_uuids=True,
+            )
+
+        return cls._sanitize_pr_title("Automated update", max_chars=max_chars)
 
     @classmethod
     def _derive_default_pr_title(
@@ -3423,15 +3453,12 @@ class CodexWorker:
     ) -> str:
         """Derive PR title using a conservative fallback order."""
 
-        for step in resolved_steps:
-            candidate = cls._normalize_publish_text_line(step.title)
-            if cls._is_meaningful_step_title(candidate):
-                return cls._sanitize_pr_title(candidate, redact_uuids=True)
-        candidate = cls._extract_first_instructions_sentence(canonical_payload)
-        if candidate:
-            return cls._sanitize_pr_title(candidate, redact_uuids=False)
-
-        return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
+        _ = job_id
+        return cls._derive_default_publish_subject(
+            canonical_payload=canonical_payload,
+            resolved_steps=resolved_steps,
+            max_chars=90,
+        )
 
     @staticmethod
     def _resolve_publish_runtime_mode(canonical_payload: Mapping[str, Any]) -> str:
@@ -4272,9 +4299,13 @@ class CodexWorker:
                         },
                     )
 
-            commit_message = (
-                self._resolve_publish_text_override(publish.get("commitMessage"))
-                or f"MoonMind task result for job {job_id}"
+            resolved_steps = self._resolve_task_steps(canonical_payload)
+            commit_message = self._resolve_publish_text_override(
+                publish.get("commitMessage")
+            ) or self._derive_default_publish_subject(
+                canonical_payload=canonical_payload,
+                resolved_steps=resolved_steps,
+                max_chars=72,
             )
             await self._run_stage_command(
                 ["git", "commit", "-m", commit_message],
@@ -4302,7 +4333,7 @@ class CodexWorker:
                 ) or self._derive_default_pr_title(
                     job_id=job_id,
                     canonical_payload=canonical_payload,
-                    resolved_steps=self._resolve_task_steps(canonical_payload),
+                    resolved_steps=resolved_steps,
                 )
                 pr_body = self._resolve_publish_text_override(
                     publish.get("prBody")
