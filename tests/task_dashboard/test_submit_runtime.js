@@ -219,6 +219,42 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.normalizeOrchestratorPriority(undefined), "normal");
 })();
 
+(function testResolveQueueSubmitRuntimeUiState() {
+  assert.strictEqual(typeof helpers.resolveQueueSubmitRuntimeUiState, "function");
+  const workerState = helpers.resolveQueueSubmitRuntimeUiState("codex");
+  assert.strictEqual(workerState.isOrchestratorRuntime, false);
+  assert.strictEqual(workerState.showOrchestratorFields, false);
+  assert.strictEqual(workerState.showWorkerPriorityFields, true);
+
+  const orchestratorState = helpers.resolveQueueSubmitRuntimeUiState("orchestrator");
+  assert.strictEqual(orchestratorState.isOrchestratorRuntime, true);
+  assert.strictEqual(orchestratorState.showOrchestratorFields, true);
+  assert.strictEqual(orchestratorState.showWorkerPriorityFields, false);
+})();
+
+(function testResolveQueueSubmitPriorityForRuntime() {
+  assert.strictEqual(typeof helpers.resolveQueueSubmitPriorityForRuntime, "function");
+  const workerPriority = helpers.resolveQueueSubmitPriorityForRuntime("codex", {
+    priority: "7",
+    orchestratorPriority: "high",
+  });
+  assert.strictEqual(workerPriority, 7);
+
+  const orchestratorPriority = helpers.resolveQueueSubmitPriorityForRuntime(
+    "orchestrator",
+    {
+      priority: "12",
+      orchestratorPriority: "HIGH",
+    },
+  );
+  assert.strictEqual(orchestratorPriority, "high");
+
+  const fallbackPriority = helpers.resolveQueueSubmitPriorityForRuntime("codex", {
+    priority: "not-a-number",
+  });
+  assert.strictEqual(fallbackPriority, 0);
+})();
+
 (function testResolvePromotedQueueRoute() {
   const valid = helpers.resolvePromotedQueueRoute({
     job: { id: "123e4567-e89b-12d3-a456-426614174000" },

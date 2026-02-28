@@ -2384,6 +2384,27 @@
     return normalized === "high" ? "high" : "normal";
   };
 
+  const resolveQueueSubmitRuntimeUiState = (runtimeValue) => {
+    const normalizedRuntime = String(runtimeValue || "")
+      .trim()
+      .toLowerCase();
+    const isOrchestratorRuntime = normalizedRuntime === ORCHESTRATOR_RUNTIME;
+    return {
+      isOrchestratorRuntime,
+      showOrchestratorFields: isOrchestratorRuntime,
+      showWorkerPriorityFields: !isOrchestratorRuntime,
+    };
+  };
+
+  const resolveQueueSubmitPriorityForRuntime = (runtimeMode, priorityValues = {}) => {
+    const uiState = resolveQueueSubmitRuntimeUiState(runtimeMode);
+    if (uiState.isOrchestratorRuntime) {
+      return normalizeOrchestratorPriority(priorityValues.orchestratorPriority || "normal");
+    }
+    const priorityValue = Number(priorityValues.priority || 0);
+    return Number.isFinite(priorityValue) ? priorityValue : 0;
+  };
+
   const resolveSubmitRuntime = (runtimeValue, fallback) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
     if (!normalized) {
@@ -2492,6 +2513,8 @@
       parseEditJobSearchParam,
       isEditableQueuedTaskJob,
       normalizeOrchestratorPriority,
+      resolveQueueSubmitRuntimeUiState,
+      resolveQueueSubmitPriorityForRuntime,
       persistSubmitDraftsToStorage,
       submitDraftController,
       normalizeDashboardDetailSegment,
@@ -3895,7 +3918,7 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div class="grid-2">
+        <div class="grid-2" data-runtime-visibility="orchestrator">
           <label>Target Service (Orchestrator)
             <input name="targetService" value="${escapeHtml(
               queueDraftTargetService || "orchestrator",
@@ -3907,7 +3930,7 @@
             )}" placeholder="optional" />
           </label>
         </div>
-        <label>Orchestrator Priority
+        <label data-runtime-visibility="orchestrator">Orchestrator Priority
           <select name="orchestratorPriority">
             <option value="normal" ${queueDraftOrchestratorPriority === "normal" ? "selected" : ""}>normal</option>
             <option value="high" ${queueDraftOrchestratorPriority === "high" ? "selected" : ""}>high</option>
@@ -3961,7 +3984,7 @@
             <option value="none" ${queueDraftPublishMode === "none" ? "selected" : ""}>none</option>
           </select>
         </label>
-        <div class="grid-2">
+        <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
             <input type="number" name="priority" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" />
           </label>
@@ -4099,6 +4122,21 @@
     };
     let activeDefaultModel = "";
     let activeDefaultEffort = "";
+    const applyQueueSubmitRuntimeUiState = (runtimeValue) => {
+      const uiState = resolveQueueSubmitRuntimeUiState(runtimeValue);
+      const updateVisibility = (mode, isVisible) => {
+        const nodes = form.querySelectorAll(`[data-runtime-visibility="${mode}"]`);
+        nodes.forEach((node) => {
+          if (isVisible) {
+            node.classList.remove("hidden");
+          } else {
+            node.classList.add("hidden");
+          }
+        });
+      };
+      updateVisibility("orchestrator", uiState.showOrchestratorFields);
+      updateVisibility("worker", uiState.showWorkerPriorityFields);
+    };
     const applyRuntimeDefaults = (runtime) => {
       if (!modelInputElement || !effortInputElement) {
         return;
@@ -4151,6 +4189,7 @@
     };
     loadRuntimeCapabilities();
     if (runtimeSelect) {
+      applyQueueSubmitRuntimeUiState(runtimeSelect.value);
       applyRuntimeDefaults(runtimeSelect.value);
       runtimeSelect.addEventListener("change", (event) => {
         const selectedRuntime =
@@ -4163,12 +4202,14 @@
         }
         if (selectedRuntime === ORCHESTRATOR_RUNTIME) {
           activeWorkerRuntime = selectedRuntime;
+          applyQueueSubmitRuntimeUiState(selectedRuntime);
           applyRuntimeDefaults(defaultTaskRuntime);
           refreshSkillDatalist();
           return;
         }
         const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
         activeWorkerRuntime = nextRuntime || activeWorkerRuntime;
+        applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
@@ -5071,8 +5112,13 @@
         return;
       }
 
-      const priority = Number(formData.get("priority") || 0);
-      if (!Number.isInteger(priority)) {
+      const priority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
+        priority: formData.get("priority"),
+      });
+      if (
+        runtimeMode !== ORCHESTRATOR_RUNTIME &&
+        !Number.isInteger(priority)
+      ) {
         message.className = "notice error queue-submit-message";
         message.textContent = "Priority must be an integer.";
         return;
@@ -5172,9 +5218,9 @@
           message.textContent = "Target service is required for orchestrator tasks.";
           return;
         }
-        const orchestratorPriority = normalizeOrchestratorPriority(
-          formData.get("orchestratorPriority") || "normal",
-        );
+        const orchestratorPriority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
+          orchestratorPriority: formData.get("orchestratorPriority"),
+        });
         const approvalToken = String(formData.get("approvalToken") || "").trim();
         const orchestratorSteps = [];
         for (let index = 0; index < stepState.length; index += 1) {
