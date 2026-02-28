@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 from collections import defaultdict, deque
 from contextlib import suppress
@@ -27,6 +28,8 @@ _COMMAND_START_PREFIX = "[command] $ "
 _COMMAND_COMPLETE_PREFIX = "[command] complete:"
 _COMMAND_CONTROL_TAG = "control=worker"
 _GIT_DIFF_LOG_CAPTURE_MAX_CHARS = 64 * 1024
+_COMPLETION_EVENT_MARKER_PREFIX = "[moonmind] completion-event key="
+_CONTROLLED_COMPLETION_EVENT_MARKER_SUFFIX = "; control=worker"
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -248,6 +251,30 @@ def _serialize_command_for_log(command: Sequence[str]) -> str:
     )
 
 
+def _build_completion_event_key(
+    *,
+    run_id: str,
+    phase: str,
+    step_id: str,
+    step_index: str,
+    stream: str,
+    command_fingerprint: str,
+) -> str:
+    """Build deterministic idempotency key for Codex completion-event output."""
+
+    raw = "|".join(
+        (
+            f"run={run_id}",
+            f"phase={phase}",
+            f"step={step_id}",
+            f"stepIndex={step_index}",
+            f"stream={stream}",
+            f"command={command_fingerprint}",
+        )
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _is_git_diff_command(command: Sequence[str]) -> bool:
     if len(command) < 2:
         return False
@@ -406,6 +433,12 @@ class CodexExecHandler:
 
         try:
             parsed = CodexExecPayload.from_payload(payload)
+            completion_scope_node = payload.get("_moonmindCompletionScope")
+            completion_scope = (
+                dict(completion_scope_node)
+                if isinstance(completion_scope_node, Mapping)
+                else None
+            )
             artifacts_dir.mkdir(parents=True, exist_ok=True)
 
             repo_dir = await self._prepare_repository(
@@ -436,6 +469,7 @@ class CodexExecHandler:
                 cancel_event=cancel_event,
                 output_chunk_callback=output_chunk_callback,
                 enable_replay_dedupe=True,
+                completion_scope=completion_scope,
             )
 
             diff_result = await self._run_command(
@@ -552,6 +586,9 @@ class CodexExecHandler:
             codex_overrides["effort"] = parsed.codex_effort
         if codex_overrides:
             mapped_payload["codex"] = codex_overrides
+        completion_scope_node = payload.get("_moonmindCompletionScope")
+        if isinstance(completion_scope_node, Mapping):
+            mapped_payload["_moonmindCompletionScope"] = dict(completion_scope_node)
 
         if cancel_event is None:
             result = await self.handle(
@@ -924,10 +961,14 @@ class CodexExecHandler:
         cancel_event: asyncio.Event | None = None,
         output_chunk_callback: OutputChunkCallback | None = None,
         enable_replay_dedupe: bool = True,
+        completion_scope: Mapping[str, Any] | None = None,
     ) -> CommandResult:
         defer_stream_output_logging = _is_git_diff_command(command)
         command_marker_id = str(uuid4())
         serialized_command = _serialize_command_for_log(command)
+        command_fingerprint = hashlib.sha256(
+            serialized_command.encode("utf-8")
+        ).hexdigest()
         self._append_log(
             log_path,
             self._redact_text(
@@ -994,6 +1035,42 @@ class CodexExecHandler:
             and os.path.basename(command[0]) == "codex"
             and command[1] == "exec"
         )
+        completion_scope_node = (
+            completion_scope if isinstance(completion_scope, Mapping) else {}
+        )
+
+        def _get_scope_value(keys: tuple[str, ...], default: str) -> str:
+            for key in keys:
+                value = completion_scope_node.get(key)
+                if value is not None:
+                    return str(value).strip() or default
+            return default
+
+        completion_scope_run_id = _get_scope_value(("runId", "run_id"), "unknown")
+        completion_scope_phase = _get_scope_value(("phase",), "execute")
+        completion_scope_step_id = _get_scope_value(("stepId", "step_id"), "none")
+        completion_scope_step_index = _get_scope_value(
+            ("stepIndex", "step_index"), "-1"
+        )
+        completion_event_keys: dict[str, str] = {
+            stream: _build_completion_event_key(
+                run_id=completion_scope_run_id,
+                phase=completion_scope_phase,
+                step_id=completion_scope_step_id,
+                step_index=completion_scope_step_index,
+                stream=stream,
+                command_fingerprint=command_fingerprint,
+            )
+            for stream in ("stdout", "stderr")
+        }
+        completion_event_seen_signatures: dict[str, set[str]] = {
+            "stdout": set(),
+            "stderr": set(),
+        }
+        completion_event_marker_emitted: dict[str, bool] = {
+            "stdout": False,
+            "stderr": False,
+        }
 
         def _normalize_semantic_replay_snapshot(text: str) -> str:
             lines = text.replace("\r", "").split("\n")
@@ -1010,6 +1087,23 @@ class CodexExecHandler:
                     continue
                 break
             return "\n".join(lines).strip()
+
+        def _completion_event_signature(text: str) -> str | None:
+            # Identity idempotency is scoped per run/step/phase/stream, and this
+            # normalized signature catches exact/near duplicate snapshot resends.
+            if len(text) < min_replay_candidate_chars or "\n" not in text:
+                return None
+            normalized = _normalize_semantic_replay_snapshot(text)
+            if not normalized:
+                return None
+            lines = [line for line in normalized.splitlines() if line.strip()]
+            if len(lines) < 2:
+                return None
+            compact_lines = [re.sub(r"\s+", " ", line.strip()) for line in lines]
+            compact = "\n".join(compact_lines).strip()
+            if not compact:
+                return None
+            return hashlib.sha256(compact.encode("utf-8")).hexdigest()
 
         def _write_redacted_log_block(text: str) -> None:
             normalized = text.replace("\r", "")
@@ -1101,6 +1195,13 @@ class CodexExecHandler:
                 return text
             if not text:
                 return ""
+            if is_polling_snapshot_command and completion_scope_node:
+                completion_signature = _completion_event_signature(text)
+                if completion_signature:
+                    seen_signatures = completion_event_seen_signatures[stream]
+                    if completion_signature in seen_signatures:
+                        return ""
+                    seen_signatures.add(completion_signature)
 
             if is_polling_snapshot_command and len(text) >= min_replay_candidate_chars:
                 previous_snapshot = replay_snapshot_text.get(stream, "")
@@ -1259,6 +1360,23 @@ class CodexExecHandler:
         async def _emit_stream_closed(stream: str) -> None:
             await _flush_pending_replay_candidate(stream)
             _flush_stream_log_buffer(stream, force=True)
+            if (
+                completion_scope_node
+                and not completion_event_marker_emitted[stream]
+                and stream == "stdout"
+            ):
+                self._append_log(
+                    log_path,
+                    self._redact_text(
+                        (
+                            f"{_COMPLETION_EVENT_MARKER_PREFIX}"
+                            f"{completion_event_keys[stream]}"
+                            f"{_CONTROLLED_COMPLETION_EVENT_MARKER_SUFFIX}"
+                        ),
+                        extra_redaction_values=redaction_values,
+                    ),
+                )
+                completion_event_marker_emitted[stream] = True
             await _invoke_output_callback(stream, None, context="stream close")
 
         stdout_reader = getattr(process, "stdout", None)
