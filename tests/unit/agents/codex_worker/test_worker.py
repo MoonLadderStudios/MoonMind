@@ -5733,6 +5733,28 @@ async def test_derive_default_publish_subject_uses_commit_length_and_sanitizatio
     assert len(subject) <= 72
 
 
+async def test_derive_default_publish_subject_redacts_secret_like_instructions(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    """Commit subject defaults should redact secret-like content from instructions."""
+
+    worker, _, _ = codex_worker_components
+    payload = {
+        "task": {
+            "instructions": "Publish token=top-secret immediately.",
+            "steps": [{"id": "step-1", "title": " "}],
+        }
+    }
+
+    subject = worker._derive_default_publish_subject(
+        canonical_payload=payload,
+        resolved_steps=worker._resolve_task_steps(payload),
+        max_chars=72,
+    )
+
+    assert subject == "[REDACTED]"
+
+
 async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:

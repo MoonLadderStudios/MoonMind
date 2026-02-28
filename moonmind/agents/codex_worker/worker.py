@@ -3402,13 +3402,15 @@ class CodexWorker:
     def _sanitize_pr_title(
         title: str, *, max_chars: int = 90, redact_uuids: bool = True
     ) -> str:
-        """Keep generated PR titles concise and optionally redact UUID text."""
+        """Keep generated publish subjects concise and scrub known secret patterns."""
 
         sanitized = title
         sanitized = _MOONMIND_WORD_PATTERN.sub("", sanitized)
         if redact_uuids:
             sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
         sanitized = " ".join(sanitized.split())
+        if _SECRET_LIKE_METADATA_PATTERN.search(sanitized):
+            sanitized = "[REDACTED]"
         if not sanitized:
             sanitized = "Automated update"
         if len(sanitized) <= max_chars:
