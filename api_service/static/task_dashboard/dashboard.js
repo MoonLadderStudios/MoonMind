@@ -5508,10 +5508,7 @@
         renderQueueSubmitPage(prefillDraft.runtime, {
           jobId: resolvedEditJobId,
           expectedUpdatedAt: String(pick(detail, "updatedAt") || "").trim(),
-          prefillDraft: {
-            ...prefillDraft,
-            affinityKey: String(pick(detail, "affinityKey") || "").trim(),
-          },
+          prefillDraft,
         });
       } catch (error) {
         console.error("queue edit preload failed", error);
