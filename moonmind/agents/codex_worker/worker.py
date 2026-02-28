@@ -3548,9 +3548,7 @@ class CodexWorker:
         return normalized
 
     @classmethod
-    def _extract_verification_command_from_log_line(
-        cls, line: str
-    ) -> str | None:
+    def _extract_verification_command_from_log_line(cls, line: str) -> str | None:
         """Extract one candidate verification command from a log line."""
 
         if not line.startswith(_VERIFICATION_COMMAND_LOG_PREFIX):
@@ -3650,9 +3648,10 @@ class CodexWorker:
                         with suppress(TypeError, ValueError):
                             if int(raw_returncode) != 0:
                                 continue
-                    command_artifact = " ".join(
-                        str(payload.get("logArtifact") or "").split()
-                    ) or artifact_name
+                    command_artifact = (
+                        " ".join(str(payload.get("logArtifact") or "").split())
+                        or artifact_name
+                    )
                     command_line = line_number
                     raw_line_number = payload.get("line")
                     with suppress(TypeError, ValueError):
