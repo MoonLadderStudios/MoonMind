@@ -646,7 +646,8 @@ class TaskExecutionSpec(BaseModel):
         if primary_step and _has_explicit_skill_selection(primary_step.skill):
             return self
         raise TaskContractError(
-            "task.instructions is required unless the primary step selects an explicit skill"
+            "task.instructions is required unless task.skill or the primary step "
+            "selects an explicit skill"
         )
 
     @model_validator(mode="after")

@@ -113,7 +113,10 @@ def test_normalize_task_payload_requires_instructions_without_explicit_primary_s
 
     with pytest.raises(
         TaskContractError,
-        match="task.instructions is required unless the primary step selects an explicit skill",
+        match=(
+            "task.instructions is required unless task.skill or the primary step "
+            "selects an explicit skill"
+        ),
     ):
         normalize_queue_job_payload(
             job_type="task",

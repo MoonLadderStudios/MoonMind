@@ -215,6 +215,7 @@ const helpers = loadSubmitRuntimeHelpers();
 
 (function testValidatePrimaryStepSubmissionAllowsInstructionsOrExplicitSkill() {
   assert.strictEqual(typeof helpers.validatePrimaryStepSubmission, "function");
+  assert.strictEqual(typeof helpers.validatePrimaryStepForAdditionalWorkerSteps, "function");
   assert.strictEqual(typeof helpers.hasExplicitSkillSelection, "function");
 
   const withInstructions = helpers.validatePrimaryStepSubmission({
@@ -241,6 +242,19 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.hasExplicitSkillSelection("batch-pr-resolver"), true);
   assert.strictEqual(helpers.hasExplicitSkillSelection("AUTO"), false);
   assert.strictEqual(helpers.hasExplicitSkillSelection(""), false);
+
+  const additionalStepRequiresInstructions =
+    helpers.validatePrimaryStepForAdditionalWorkerSteps("", 1);
+  assert.strictEqual(additionalStepRequiresInstructions.ok, false);
+  assert.ok(/required when additional steps/i.test(additionalStepRequiresInstructions.error));
+
+  const additionalStepAllowedWhenPrimarySet =
+    helpers.validatePrimaryStepForAdditionalWorkerSteps("Plan work", 1);
+  assert.strictEqual(additionalStepAllowedWhenPrimarySet.ok, true);
+
+  const noAdditionalStepAllowedWithoutPrimary =
+    helpers.validatePrimaryStepForAdditionalWorkerSteps("", 0);
+  assert.strictEqual(noAdditionalStepAllowedWithoutPrimary.ok, true);
 })();
 
 (function testNormalizeOrchestratorPriority() {

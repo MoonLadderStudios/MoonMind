@@ -2356,6 +2356,21 @@
     };
   };
 
+  const validatePrimaryStepForAdditionalWorkerSteps = (
+    primaryInstructions,
+    additionalStepsCount,
+  ) => {
+    const instructions = String(primaryInstructions || "").trim();
+    const normalizedAdditionalCount = Number(additionalStepsCount) || 0;
+    if (normalizedAdditionalCount <= 0 || instructions) {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: "Primary step instructions are required when additional steps are provided.",
+    };
+  };
+
   const SUBMIT_DRAFT_STORAGE_KEY = "moonmind.submitWorkDrafts.v1";
   const readSubmitDraftStorage = () => {
     try {
@@ -2535,6 +2550,7 @@
       determineSubmitDestination,
       validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
+      validatePrimaryStepForAdditionalWorkerSteps,
       hasExplicitSkillSelection,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
@@ -5234,6 +5250,15 @@
           stepPayload.skill = skillPayload;
         }
         additionalSteps.push({ sourceIndex: index, payload: stepPayload });
+      }
+      const additionalStepValidation = validatePrimaryStepForAdditionalWorkerSteps(
+        instructions,
+        additionalSteps.length,
+      );
+      if (!additionalStepValidation.ok) {
+        message.className = "notice error queue-submit-message";
+        message.textContent = additionalStepValidation.error;
+        return;
       }
 
       if (runtimeMode === ORCHESTRATOR_RUNTIME) {
