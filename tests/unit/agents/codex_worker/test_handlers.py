@@ -218,6 +218,46 @@ async def test_run_command_serializes_multiline_start_marker_on_single_line(
     )
 
 
+async def test_run_command_masks_sensitive_command_args_in_start_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Start-marker command logs should mask publish-style sensitive argv values."""
+
+    log_path = tmp_path / "marker-masked.log"
+    handler = CodexExecHandler(workdir_root=tmp_path)
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            "very sensitive title",
+            "--body=token=top-secret",
+        ],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+    )
+
+    start_line = log_path.read_text(encoding="utf-8").splitlines()[0]
+    assert "very sensitive title" not in start_line
+    assert "token=top-secret" not in start_line
+    assert "--title [REDACTED]" in start_line
+    assert "--body=[REDACTED]" in start_line
+
+
 async def test_run_command_streaming_redacts_tokens_split_across_chunks(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1511,7 +1551,8 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     """Publish mode `pr` should invoke gh PR creation command."""
 
     handler = CodexExecHandler(workdir_root=tmp_path)
-    calls: list[list[str]] = []
+    calls: list[dict[str, object]] = []
+    job_id = uuid4()
 
     async def fake_run_command(
         command,
@@ -1526,7 +1567,22 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
         enable_replay_dedupe=False,
         completion_scope=None,
     ):
-        calls.append(list(command))
+        _ = (
+            cwd,
+            log_path,
+            check,
+            env,
+            cancel_event,
+            output_chunk_callback,
+            enable_replay_dedupe,
+            completion_scope,
+        )
+        calls.append(
+            {
+                "command": [str(part) for part in command],
+                "redaction_values": tuple(str(value) for value in redaction_values),
+            }
+        )
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")
         if command[:2] == ["git", "diff"]:
@@ -1537,16 +1593,60 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     handler._run_command = fake_run_command  # type: ignore[method-assign]
 
     result = await handler.handle(
-        job_id=uuid4(),
+        job_id=job_id,
         payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "instruction": "Implement publish test",
+            "instruction": (
+                "MoonMind implement publish test for "
+                "123e4567-e89b-12d3-a456-426614174000."
+            ),
             "publish": {"mode": "pr", "baseBranch": "main"},
         },
     )
 
     assert result.succeeded is True
-    assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in calls)
+    commit_call = next(
+        call for call in calls if tuple(call["command"][:3]) == ("git", "commit", "-m")
+    )
+    commit_cmd = commit_call["command"]
+    assert commit_cmd[3] == "implement publish test for job."
+    assert "MoonMind" not in commit_cmd[3]
+    assert "123e4567-e89b-12d3-a456-426614174000" not in commit_cmd[3]
+    assert commit_call["redaction_values"] == (commit_cmd[3],)
+
+    pr_call = next(
+        call for call in calls if tuple(call["command"][:3]) == ("gh", "pr", "create")
+    )
+    pr_cmd = pr_call["command"]
+    pr_title = pr_cmd[pr_cmd.index("--title") + 1]
+    pr_body = pr_cmd[pr_cmd.index("--body") + 1]
+    assert pr_title == "implement publish test for job."
+    assert "MoonMind" not in pr_title
+    assert "123e4567-e89b-12d3-a456-426614174000" not in pr_title
+    assert "<!-- moonmind:begin -->" in pr_body
+    assert f"MoonMind Job: {job_id}" in pr_body
+    assert "Runtime: codex" in pr_body
+    assert "Base: main" in pr_body
+    assert "Head: moonmind-job-" in pr_body
+    assert "<!-- moonmind:end -->" in pr_body
+    assert pr_call["redaction_values"] == (pr_title, pr_body)
+
+
+async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
+    """Generated handler footer should redact secret-like metadata values."""
+
+    job_id = uuid4()
+    body = CodexExecHandler._derive_default_pr_body(
+        job_id=job_id,
+        runtime_mode="codex\nRuntime: forged",
+        base_branch="main\nHead: forged",
+        head_branch="feature/token=supersecret",
+    )
+
+    assert f"MoonMind Job: {job_id}" in body
+    assert "Runtime: codex Runtime: forged" in body
+    assert "Base: main Head: forged" in body
+    assert "Head: [REDACTED]" in body
 
 
 async def test_handle_skill_maps_to_exec_payload_and_marks_summary(

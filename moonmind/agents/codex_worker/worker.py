@@ -36,6 +36,10 @@ from moonmind.agents.codex_worker.handlers import (
     OutputChunkCallback,
     WorkerExecutionResult,
 )
+from moonmind.agents.codex_worker.publish_sanitization import (
+    sanitize_metadata_footer_value,
+    sanitize_publish_subject,
+)
 from moonmind.agents.codex_worker.secret_refs import (
     SecretReferenceError,
     VaultSecretResolver,
@@ -72,21 +76,7 @@ logger = logging.getLogger(__name__)
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
-_FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _UNHELPFUL_STEP_TITLE_PATTERN = re.compile(r"^\s*[\W_]*\d+(?:[\W_]+\d+)*[\W_]*\s*$")
-_SECRET_LIKE_METADATA_PATTERN = re.compile(
-    r"""(?ix)
-    (?:
-        gh[pousr]_[A-Za-z0-9]{8,}
-        | github_pat_[A-Za-z0-9_]{10,}
-        | AIza[0-9A-Za-z_-]{10,}
-        | ATATT[A-Za-z0-9_-]{6,}
-        | AKIA[0-9A-Z]{8,}
-        | -----BEGIN [A-Z ]+PRIVATE KEY-----
-        | (?:token|password|secret)\s*[:=]
-    )
-    """
-)
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 _MOONMIND_SIGNAL_TAGS = frozenset(
     {
@@ -3370,28 +3360,47 @@ class CodexWorker:
     ) -> str:
         """Normalize footer values and redact secret-like tokens."""
 
-        normalized = " ".join(str(value or "").split())
-        if not normalized:
-            return fallback
-        if _SECRET_LIKE_METADATA_PATTERN.search(normalized):
-            return "[REDACTED]"
-        return normalized
+        return sanitize_metadata_footer_value(value, fallback=fallback)
 
     @staticmethod
     def _sanitize_pr_title(
         title: str, *, max_chars: int = 90, redact_uuids: bool = True
     ) -> str:
-        """Keep generated PR titles concise and optionally redact UUID text."""
+        """Keep generated publish subjects concise and scrub known secret patterns."""
 
-        sanitized = title
-        if redact_uuids:
-            sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
-        sanitized = sanitized.strip()
-        if not sanitized:
-            sanitized = "MoonMind task result"
-        if len(sanitized) <= max_chars:
-            return sanitized
-        return f"{sanitized[: max_chars - 3].rstrip()}..."
+        return sanitize_publish_subject(
+            title,
+            max_chars=max_chars,
+            redact_uuids=redact_uuids,
+        )
+
+    @classmethod
+    def _derive_default_publish_subject(
+        cls,
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+        max_chars: int,
+    ) -> str:
+        """Derive publish commit/PR subject using a conservative fallback order."""
+
+        for step in resolved_steps:
+            candidate = cls._normalize_publish_text_line(step.title)
+            if cls._is_meaningful_step_title(candidate):
+                return cls._sanitize_pr_title(
+                    candidate,
+                    max_chars=max_chars,
+                    redact_uuids=True,
+                )
+        candidate = cls._extract_first_instructions_sentence(canonical_payload)
+        if candidate:
+            return cls._sanitize_pr_title(
+                candidate,
+                max_chars=max_chars,
+                redact_uuids=True,
+            )
+
+        return cls._sanitize_pr_title("Automated update", max_chars=max_chars)
 
     @classmethod
     def _derive_default_pr_title(
@@ -3403,15 +3412,12 @@ class CodexWorker:
     ) -> str:
         """Derive PR title using a conservative fallback order."""
 
-        for step in resolved_steps:
-            candidate = cls._normalize_publish_text_line(step.title)
-            if cls._is_meaningful_step_title(candidate):
-                return cls._sanitize_pr_title(candidate, redact_uuids=True)
-        candidate = cls._extract_first_instructions_sentence(canonical_payload)
-        if candidate:
-            return cls._sanitize_pr_title(candidate, redact_uuids=False)
-
-        return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
+        _ = job_id
+        return cls._derive_default_publish_subject(
+            canonical_payload=canonical_payload,
+            resolved_steps=resolved_steps,
+            max_chars=90,
+        )
 
     @staticmethod
     def _resolve_publish_runtime_mode(canonical_payload: Mapping[str, Any]) -> str:
@@ -4295,9 +4301,13 @@ class CodexWorker:
                     )
                     raise
 
-            commit_message = (
-                self._resolve_publish_text_override(publish.get("commitMessage"))
-                or f"MoonMind task result for job {job_id}"
+            resolved_steps = self._resolve_task_steps(canonical_payload)
+            commit_message = self._resolve_publish_text_override(
+                publish.get("commitMessage")
+            ) or self._derive_default_publish_subject(
+                canonical_payload=canonical_payload,
+                resolved_steps=resolved_steps,
+                max_chars=72,
             )
             await self._run_stage_command(
                 ["git", "commit", "-m", commit_message],
@@ -4319,7 +4329,7 @@ class CodexWorker:
                 ) or self._derive_default_pr_title(
                     job_id=job_id,
                     canonical_payload=canonical_payload,
-                    resolved_steps=self._resolve_task_steps(canonical_payload),
+                    resolved_steps=resolved_steps,
                 )
                 pr_body = self._resolve_publish_text_override(
                     publish.get("prBody")
