@@ -2327,6 +2327,35 @@
     return { ok: true, value };
   };
 
+  const hasExplicitSkillSelection = (skillId) => {
+    const normalized = String(skillId || "").trim().toLowerCase();
+    return Boolean(normalized) && normalized !== "auto";
+  };
+
+  const validatePrimaryStepSubmission = (primaryStep = {}) => {
+    if (!primaryStep || typeof primaryStep !== "object" || Array.isArray(primaryStep)) {
+      return {
+        ok: false,
+        error: "Add at least one step before submitting.",
+      };
+    }
+    const instructions = String(primaryStep.instructions || "").trim();
+    const skillId = String(primaryStep.skillId || "").trim();
+    if (instructions || hasExplicitSkillSelection(skillId)) {
+      return {
+        ok: true,
+        value: {
+          instructions,
+          skillId,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: "Primary step requires instructions or an explicit skill selection.",
+    };
+  };
+
   const SUBMIT_DRAFT_STORAGE_KEY = "moonmind.submitWorkDrafts.v1";
   const readSubmitDraftStorage = () => {
     try {
@@ -2505,6 +2534,8 @@
       createSubmitDraftController,
       determineSubmitDestination,
       validateOrchestratorSubmission,
+      validatePrimaryStepSubmission,
+      hasExplicitSkillSelection,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
       readSubmitDraftStorage,
@@ -4297,7 +4328,7 @@
             ? "auto (default), speckit-orchestrate, ..."
             : "inherit primary step skill";
           const instructionsLabel = isPrimaryStep
-            ? "Instructions (required for primary step)"
+            ? "Instructions (optional when a primary skill is selected)"
             : "Instructions (optional)";
           const instructionsPlaceholder = isPrimaryStep
             ? "Describe the task to execute against the repository."
@@ -4306,7 +4337,7 @@
           const downDisabled = index === stepState.length - 1 ? "disabled" : "";
           const removeDisabled = "";
           const defaultHint = isPrimaryStep
-            ? "Leave blank to auto-select a skill."
+            ? "Primary step must include instructions or an explicit skill."
             : "Leave skill blank to inherit primary step defaults.";
           const showSkillArgsField = shouldShowSkillArgs(step);
           const skillArgsLabelClasses = ["queue-step-skill-args-field"];
@@ -5053,17 +5084,13 @@
 
       const formData = new FormData(form);
       const primaryStep = stepState[0] || null;
-      if (!primaryStep) {
+      const primaryValidation = validatePrimaryStepSubmission(primaryStep);
+      if (!primaryValidation.ok) {
         message.className = "notice error queue-submit-message";
-        message.textContent = "Add at least one step before submitting.";
+        message.textContent = primaryValidation.error;
         return;
       }
-      const instructions = String(primaryStep.instructions || "").trim();
-      if (!instructions) {
-        message.className = "notice error queue-submit-message";
-        message.textContent = "Primary step instructions are required.";
-        return;
-      }
+      const instructions = primaryValidation.value.instructions;
       const objectiveInstructions = resolveObjectiveInstructions(instructions);
 
       const repositoryInput = String(formData.get("repository") || "").trim();
@@ -5132,7 +5159,7 @@
       }
       const proposeTasks = formData.get("proposeTasks") !== null;
 
-      const skillId = String(primaryStep.skillId || "").trim() || "auto";
+      const skillId = String(primaryValidation.value.skillId || "").trim() || "auto";
       const skillArgsRaw = shouldShowSkillArgs(primaryStep)
         ? String(primaryStep.skillArgs || "").trim()
         : "";

@@ -57,6 +57,73 @@ def test_normalize_task_payload_defaults_publish_mode_to_pr() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
+def test_normalize_task_payload_allows_blank_instructions_with_explicit_primary_skill() -> None:
+    """Primary explicit task skill should satisfy objective requirement when instructions are blank."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "",
+                "skill": {"id": "batch-pr-resolver", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert normalized["task"]["instructions"] is None
+    assert normalized["task"]["skill"]["id"] == "batch-pr-resolver"
+
+
+def test_normalize_task_payload_allows_blank_instructions_with_primary_step_skill() -> None:
+    """Primary step skill should satisfy objective requirement when task instructions are blank."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"skill": {"id": "batch-pr-resolver", "args": {}}},
+                ],
+            },
+        },
+    )
+
+    assert normalized["task"]["instructions"] is None
+    assert normalized["task"]["steps"][0]["skill"]["id"] == "batch-pr-resolver"
+
+
+def test_normalize_task_payload_requires_instructions_without_explicit_primary_skill() -> None:
+    """Blank task objective requires explicit task/primary-step skill selection."""
+
+    with pytest.raises(
+        TaskContractError,
+        match="task.instructions is required unless the primary step selects an explicit skill",
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "",
+                    "skill": {"id": "auto", "args": {}},
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_rejects_pr_resolver_without_publish_none() -> None:
     """`pr-resolver` tasks must disable worker publish stage explicitly."""
 
