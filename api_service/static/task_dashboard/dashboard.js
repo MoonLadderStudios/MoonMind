@@ -7093,31 +7093,21 @@
         return;
       }
       const consumeTargets = Array.from(
-        document.querySelectorAll("tr[data-proposal-id], .queue-card[data-proposal-id]"),
+        root.querySelectorAll("tr[data-proposal-id], .queue-card[data-proposal-id]"),
       ).filter(
         (node) => String(node.getAttribute("data-proposal-id") || "") === normalizedProposalId,
       );
       consumeTargets.forEach((node) => {
-        node.style.transition = "opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease";
-        node.style.opacity = "0.55";
-        node.style.transform = "scale(0.985)";
-        node.style.boxShadow = "0 0 0 3px rgb(var(--mm-ok) / 0.25)";
-        if (String(node.tagName || "").toUpperCase() === "TR") {
-          Array.from(node.cells || []).forEach((cell) => {
-            cell.style.backgroundColor = "rgb(var(--mm-ok) / 0.14)";
-          });
-        } else {
-          node.style.backgroundColor = "rgb(var(--mm-ok) / 0.12)";
-        }
-        window.setTimeout(() => {
-          node.style.boxShadow = "0 0 0 0 rgb(var(--mm-ok) / 0)";
-        }, 120);
+        node.classList.add("proposal-consuming");
       });
       if (consumeTargets.length) {
         await new Promise((resolve) => {
           window.setTimeout(resolve, proposalConsumedFlashMs);
         });
       }
+      consumeTargets.forEach((node) => {
+        node.classList.remove("proposal-consuming");
+      });
       state.rows = (state.rows || []).filter(
         (row) => String(pick(row, "id") || "") !== normalizedProposalId,
       );
@@ -7563,13 +7553,22 @@
         renderDetail(detail);
       } catch (error) {
         console.error("proposal detail load failed", error);
-        if (!silent) {
-          setView(
-            "Proposal Detail",
-            `Proposal ${proposalId}`,
-            "<div class='notice error'>Failed to load proposal.</div>",
-          );
+        if (silent && !detailNotice) {
+          return;
         }
+        const detailNoticeMarkup = detailNotice
+          ? `<div class="notice ok">${escapeHtml(detailNotice)}</div>`
+          : "";
+        const errorMessage = detailNotice
+          ? "Failed to refresh proposal details after consume. It may already be removed from the queue."
+          : "Failed to load proposal.";
+        setView(
+          "Proposal Detail",
+          `Proposal ${proposalId}`,
+          `${detailNoticeMarkup}
+           <div class='notice error'>${escapeHtml(errorMessage)}</div>
+           <p class='small'><a href='/tasks/proposals'>Back to proposals list</a></p>`,
+        );
       }
     };
 
