@@ -2432,6 +2432,23 @@
     };
   };
 
+  const applyElementVisibility = (node, isVisible) => {
+    if (!node) {
+      return;
+    }
+    if (isVisible) {
+      node.hidden = false;
+      if (node.classList && typeof node.classList.remove === "function") {
+        node.classList.remove("hidden");
+      }
+      return;
+    }
+    node.hidden = true;
+    if (node.classList && typeof node.classList.add === "function") {
+      node.classList.add("hidden");
+    }
+  };
+
   const resolveQueueSubmitPriorityForRuntime = (runtimeMode, priorityValues = {}) => {
     const uiState = resolveQueueSubmitRuntimeUiState(runtimeMode);
     if (uiState.isOrchestratorRuntime) {
@@ -2553,6 +2570,7 @@
       normalizeOrchestratorPriority,
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
+      applyElementVisibility,
       persistSubmitDraftsToStorage,
       submitDraftController,
       normalizeDashboardDetailSegment,
@@ -4165,11 +4183,7 @@
       const updateVisibility = (mode, isVisible) => {
         const nodes = form.querySelectorAll(`[data-runtime-visibility="${mode}"]`);
         nodes.forEach((node) => {
-          if (isVisible) {
-            node.classList.remove("hidden");
-          } else {
-            node.classList.add("hidden");
-          }
+          applyElementVisibility(node, isVisible);
         });
       };
       updateVisibility("orchestrator", uiState.showOrchestratorFields);

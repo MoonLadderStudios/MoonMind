@@ -290,6 +290,33 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(orchestratorState.showWorkerPriorityFields, false);
 })();
 
+(function testApplyElementVisibilityTogglesHiddenAttributeAndClass() {
+  assert.strictEqual(typeof helpers.applyElementVisibility, "function");
+  const classNames = new Set(["grid-2"]);
+  const node = {
+    hidden: false,
+    classList: {
+      add(name) {
+        classNames.add(name);
+      },
+      remove(name) {
+        classNames.delete(name);
+      },
+      contains(name) {
+        return classNames.has(name);
+      },
+    },
+  };
+
+  helpers.applyElementVisibility(node, false);
+  assert.strictEqual(node.hidden, true);
+  assert.strictEqual(node.classList.contains("hidden"), true);
+
+  helpers.applyElementVisibility(node, true);
+  assert.strictEqual(node.hidden, false);
+  assert.strictEqual(node.classList.contains("hidden"), false);
+})();
+
 (function testResolveQueueSubmitPriorityForRuntime() {
   assert.strictEqual(typeof helpers.resolveQueueSubmitPriorityForRuntime, "function");
   const workerPriority = helpers.resolveQueueSubmitPriorityForRuntime("codex", {
