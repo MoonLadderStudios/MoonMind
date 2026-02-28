@@ -435,6 +435,11 @@ class StreamingReplayStepHandler(FakeHandler):
             check=True,
             output_chunk_callback=output_chunk_callback,
             enable_replay_dedupe=True,
+            completion_scope=(
+                dict(payload.get("_moonmindCompletionScope"))
+                if isinstance(payload.get("_moonmindCompletionScope"), dict)
+                else None
+            ),
         )
         return WorkerExecutionResult(
             succeeded=True,
@@ -1536,6 +1541,7 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     step_log.write_text(
         "[command] $ codex exec run integrity check; control=worker\n"
         "done\n"
+        "[moonmind] completion-event key=test-step-1\n"
         "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n",
         encoding="utf-8",
     )
@@ -1596,6 +1602,7 @@ async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds
             "[command] $ codex exec run integrity check; "
             f"id={marker_id}; control=worker\n"
             "done\n"
+            "[moonmind] completion-event key=test-step-1\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
             f"id={marker_id}; control=worker\n"
         ),
@@ -1656,6 +1663,7 @@ async def test_run_once_task_step_transcript_reconciles_legacy_multiline_start_m
             "MOONMIND TASK OBJECTIVE:\n"
             "line one\n"
             "line two; control=worker\n"
+            "[moonmind] completion-event key=test-step-1\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
             "control=worker\n"
         ),
@@ -1716,6 +1724,7 @@ async def test_run_once_task_step_transcript_with_mismatched_marker_ids_fails(
         (
             "[command] $ codex exec run integrity check; "
             f"id={start_id}; control=worker\n"
+            "[moonmind] completion-event key=test-step-1\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
             f"id={complete_id}; control=worker\n"
         ),
@@ -1857,6 +1866,7 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
             prefix
             + "[command] $ codex exec run integrity check; control=worker\n"
             + middle
+            + "[moonmind] completion-event key=test-step-1\n"
             + "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; "
             "stderrChars=0; control=worker\n"
         ),
@@ -1917,6 +1927,7 @@ async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output
         (
             "[command] $ codex exec run integrity check; control=worker\n"
             "model output: [command] $ not a worker control marker\n"
+            "[moonmind] completion-event key=test-step-1\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n"
         ),
         encoding="utf-8",
@@ -2622,6 +2633,214 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     )
     assert stdout_event_text.count("Result: `802 passed, 8 subtests passed`.") == 1
     assert stdout_event_text.count("Final answer status: tests already green.") == 2
+
+
+async def test_run_once_task_step_completion_identity_dedupes_exact_duplicate_resend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact duplicate completion resend should emit once across all sinks."""
+
+    completion_block = (
+        "assistant\n"
+        "**Completion Summary**\n"
+        "- Added deterministic completion keys.\n"
+    )
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeStreamingProcess((completion_block, completion_block, "done\n"))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = StreamingReplayStepHandler(workdir_root=tmp_path)
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    codex_text = codex_log_path.read_text(encoding="utf-8")
+    step_text = step_log_path.read_text(encoding="utf-8")
+    marker_text = "Added deterministic completion keys."
+    assert codex_text.count(marker_text) == 1
+    assert step_text.count(marker_text) == 1
+    assert codex_text.count("[moonmind] completion-event key=") == 1
+    assert step_text.count("[moonmind] completion-event key=") == 1
+    stdout_event_text = "".join(
+        str(event["message"])
+        for event in queue.events
+        if event["payload"].get("kind") == "log"
+        and event["payload"].get("stream") == "stdout"
+    )
+    assert stdout_event_text.count(marker_text) == 1
+
+
+async def test_run_once_task_step_completion_identity_dedupes_near_duplicate_resend_with_chunk_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace/chunk-drift replay should still dedupe for one completion identity."""
+
+    completion_block = (
+        "assistant\n"
+        "**Completion Summary**\n"
+        "- Added deterministic completion keys.\n"
+    )
+    replay_with_whitespace_drift = (
+        "assistant\n\n**Completion Summary**\n"
+        "- Added deterministic completion keys.\n\n"
+    )
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeStreamingProcess(
+            (
+                completion_block,
+                replay_with_whitespace_drift,
+                "done\n",
+            )
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = StreamingReplayStepHandler(workdir_root=tmp_path)
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
+    step_log_path = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    codex_text = codex_log_path.read_text(encoding="utf-8")
+    step_text = step_log_path.read_text(encoding="utf-8")
+    marker_text = "Added deterministic completion keys."
+    assert codex_text.count(marker_text) == 1
+    assert step_text.count(marker_text) == 1
+    assert codex_text.count("[moonmind] completion-event key=") == 1
+    assert step_text.count("[moonmind] completion-event key=") == 1
+
+
+async def test_run_once_task_step_completion_identity_preserves_repeated_text_across_distinct_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical assistant text in distinct step identities should be preserved."""
+
+    completion_block = (
+        "assistant\n"
+        "**Completion Summary**\n"
+        "- Added deterministic completion keys.\n"
+    )
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeStreamingProcess((completion_block, "done\n"))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"id": "step-1", "instructions": "Do step 1"},
+                    {"id": "step-2", "instructions": "Do step 2"},
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = StreamingReplayStepHandler(workdir_root=tmp_path)
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
+    step_one_log = tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    step_two_log = tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    marker_text = "Added deterministic completion keys."
+    codex_text = codex_log_path.read_text(encoding="utf-8")
+    step_one_text = step_one_log.read_text(encoding="utf-8")
+    step_two_text = step_two_log.read_text(encoding="utf-8")
+    assert codex_text.count(marker_text) == 2
+    assert step_one_text.count(marker_text) == 1
+    assert step_two_text.count(marker_text) == 1
+    assert codex_text.count("[moonmind] completion-event key=") == 2
+    assert step_one_text.count("[moonmind] completion-event key=") == 1
+    assert step_two_text.count("[moonmind] completion-event key=") == 1
 
 
 async def test_run_once_task_step_and_exec_logs_dedupe_mixed_prefix_final_replays(

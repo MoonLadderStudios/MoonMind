@@ -1071,6 +1071,7 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1124,6 +1125,7 @@ async def test_handler_injects_retrieved_context_when_available(
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1235,6 +1237,7 @@ async def test_handler_falls_back_when_retrieval_raises(
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1281,6 +1284,7 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1326,6 +1330,7 @@ async def test_handler_preserves_codex_model_and_effort(
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1377,6 +1382,7 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1421,6 +1427,7 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:2] == ["git", "diff"]:
@@ -1461,6 +1468,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         calls.append(list(command))
         if command[:3] == ["git", "status", "--porcelain"]:
@@ -1560,6 +1568,7 @@ async def test_handler_publish_commit_failure_returns_failed_result(
         cancel_event=None,
         output_chunk_callback=None,
         enable_replay_dedupe=False,
+        completion_scope=None,
     ):
         if command[:3] == ["git", "status", "--porcelain"]:
             return CommandResult(tuple(command), 0, " M changed.py\n", "")

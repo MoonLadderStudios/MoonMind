@@ -111,6 +111,7 @@ _STEP_LOG_OFFSET_CHECKPOINT_VERSION = 1
 _COMMAND_START_PREFIX = "[command] $ "
 _COMMAND_COMPLETE_PREFIX = "[command] complete:"
 _COMMAND_CONTROL_TAG = "control=worker"
+_COMPLETION_EVENT_MARKER_PREFIX = "[moonmind] completion-event key="
 _CONTROLLED_COMMAND_START_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_START_PREFIX)}.+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
@@ -133,6 +134,7 @@ _STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
         "step_transcript_truncated_mid_command",
         "step_transcript_missing_terminal_marker",
         "step_transcript_invalid_marker_balance",
+        "step_transcript_invalid_completion_marker_count",
     }
 )
 _NON_SOURCE_CHANGE_PREFIXES = (
@@ -2979,6 +2981,23 @@ class CodexWorker:
             payload["codex"] = codex_overrides
         return payload
 
+    @staticmethod
+    def _build_completion_scope_payload(
+        *,
+        job_id: UUID,
+        phase: str,
+        step_id: str,
+        step_index: int,
+    ) -> dict[str, Any]:
+        """Build deterministic completion-event scope metadata for codex handlers."""
+
+        return {
+            "runId": str(job_id),
+            "phase": str(phase).strip() or "execute",
+            "stepId": str(step_id).strip() or "none",
+            "stepIndex": int(step_index),
+        }
+
     async def _run_prepare_stage(
         self,
         *,
@@ -5097,6 +5116,11 @@ class CodexWorker:
         start_markers, complete_markers = self._classify_step_transcript_control_lines(
             non_empty_lines
         )
+        completion_markers = [
+            line
+            for line in non_empty_lines
+            if line.startswith(_COMPLETION_EVENT_MARKER_PREFIX)
+        ]
         start_count = len(start_markers)
         complete_count = len(complete_markers)
         terminal_line = (
@@ -5133,6 +5157,9 @@ class CodexWorker:
                 start_count = min(legacy_start_count, complete_count)
         if start_count == 0 and complete_count == 0:
             return StepTranscriptIntegrityResult(passed=True)
+        has_codex_exec_start = any(
+            line.startswith(f"{_COMMAND_START_PREFIX}codex exec") for line in start_markers
+        )
 
         if has_controlled_markers and (start_marker_ids or complete_marker_ids):
             start_id_counts = Counter(start_marker_ids)
@@ -5218,6 +5245,23 @@ class CodexWorker:
                 message=f"[run_quality] {detail}",
                 run_quality_reason=self._build_step_transcript_run_quality_reason(
                     code="step_transcript_truncated_mid_command",
+                    step=step,
+                    detail=detail,
+                    start_markers=start_count,
+                    complete_markers=complete_count,
+                    terminal_line=terminal_line,
+                ),
+            )
+        if has_codex_exec_start and len(completion_markers) != 1:
+            detail = (
+                "step transcript completion marker count is invalid "
+                f"(completionMarkers={len(completion_markers)})"
+            )
+            return StepTranscriptIntegrityResult(
+                passed=False,
+                message=f"[run_quality] {detail}",
+                run_quality_reason=self._build_step_transcript_run_quality_reason(
+                    code="step_transcript_invalid_completion_marker_count",
                     step=step,
                     detail=detail,
                     start_markers=start_count,
@@ -6737,20 +6781,29 @@ class CodexWorker:
                     artifacts_path=artifacts_path,
                 )
                 if runtime_mode == "codex":
+                    proposal_payload = self._build_skill_payload(
+                        canonical_payload=canonical_payload,
+                        selected_skill=skill_id,
+                        source_payload=source_payload,
+                        instruction_override=instruction,
+                        skill_args_override=skill_args,
+                        ref_override=None,
+                        publish_mode_override="none",
+                        publish_base_override=None,
+                        workdir_mode_override="reuse",
+                        include_ref=False,
+                    )
+                    proposal_payload["_moonmindCompletionScope"] = (
+                        self._build_completion_scope_payload(
+                            job_id=job.id,
+                            phase="proposals",
+                            step_id=skill_id,
+                            step_index=skill_index,
+                        )
+                    )
                     skill_result = await self._codex_exec_handler.handle_skill(
                         job_id=job.id,
-                        payload=self._build_skill_payload(
-                            canonical_payload=canonical_payload,
-                            selected_skill=skill_id,
-                            source_payload=source_payload,
-                            instruction_override=instruction,
-                            skill_args_override=skill_args,
-                            ref_override=None,
-                            publish_mode_override="none",
-                            publish_base_override=None,
-                            workdir_mode_override="reuse",
-                            include_ref=False,
-                        ),
+                        payload=proposal_payload,
                         selected_skill=skill_id,
                         fallback=True,
                         cancel_event=cancel_event,
@@ -6973,6 +7026,26 @@ class CodexWorker:
             try:
                 if runtime_mode == "codex":
                     if step.effective_skill_id != "auto":
+                        skill_payload = self._build_skill_payload(
+                            canonical_payload=canonical_payload,
+                            selected_skill=step.effective_skill_id,
+                            source_payload=source_payload,
+                            instruction_override=instruction,
+                            skill_args_override=step.effective_skill_args,
+                            ref_override=None,
+                            publish_mode_override="none",
+                            publish_base_override=None,
+                            workdir_mode_override="reuse",
+                            include_ref=False,
+                        )
+                        skill_payload["_moonmindCompletionScope"] = (
+                            self._build_completion_scope_payload(
+                                job_id=job_id,
+                                phase="execute",
+                                step_id=step.step_id,
+                                step_index=step.step_index,
+                            )
+                        )
                         step_log_callback = self._build_live_log_chunk_callback(
                             job_id=job_id,
                             stage="moonmind.task.execute",
@@ -6981,18 +7054,7 @@ class CodexWorker:
                         )
                         step_result = await self._codex_exec_handler.handle_skill(
                             job_id=job_id,
-                            payload=self._build_skill_payload(
-                                canonical_payload=canonical_payload,
-                                selected_skill=step.effective_skill_id,
-                                source_payload=source_payload,
-                                instruction_override=instruction,
-                                skill_args_override=step.effective_skill_args,
-                                ref_override=None,
-                                publish_mode_override="none",
-                                publish_base_override=None,
-                                workdir_mode_override="reuse",
-                                include_ref=False,
-                            ),
+                            payload=skill_payload,
                             selected_skill=step.effective_skill_id,
                             fallback=step.effective_skill_id != "speckit",
                             cancel_event=cancel_event,
@@ -7016,6 +7078,14 @@ class CodexWorker:
                             codex_overrides["effort"] = runtime_effort
                         if codex_overrides:
                             exec_payload["codex"] = codex_overrides
+                        exec_payload["_moonmindCompletionScope"] = (
+                            self._build_completion_scope_payload(
+                                job_id=job_id,
+                                phase="execute",
+                                step_id=step.step_id,
+                                step_index=step.step_index,
+                            )
+                        )
                         step_log_callback = self._build_live_log_chunk_callback(
                             job_id=job_id,
                             stage="moonmind.task.execute",
