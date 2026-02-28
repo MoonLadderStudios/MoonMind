@@ -5465,6 +5465,67 @@ def test_collect_verification_evidence_records_log_read_errors(
     )
 
 
+def test_collect_verification_evidence_prefers_structured_report_records(
+    tmp_path: Path,
+) -> None:
+    """Structured verification records should count as evidence when commands passed."""
+
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path,
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    report_path = prepared.artifacts_dir / "reports" / "verification_commands.jsonl"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schemaVersion": "v1",
+                        "command": "./tools/test_unit.sh",
+                        "status": "passed",
+                        "returncode": 0,
+                        "logArtifact": "logs/publish.log",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schemaVersion": "v1",
+                        "command": "pytest -q",
+                        "status": "failed",
+                        "returncode": 1,
+                        "logArtifact": "logs/publish.log",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence, read_errors = CodexWorker._collect_verification_evidence(
+        prepared=prepared
+    )
+
+    assert len(read_errors) == 0
+    assert len(evidence) == 1
+    assert evidence[0]["command"] == "./tools/test_unit.sh"
+    assert evidence[0]["artifact"] == "logs/publish.log"
+
+
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5688,6 +5749,110 @@ async def test_run_publish_stage_fails_without_verification_evidence_for_source_
     assert (
         "publish preflight failed: source-code changes detected"
         in publish_payload["reason"]
+    )
+
+
+async def test_run_publish_stage_auto_runs_default_test_script_when_evidence_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish should run `./tools/test_unit.sh` when source changes have no evidence."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+    real_run_stage_command = worker._run_stage_command
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        run_calls.append(tuple(command))
+        if tuple(command[:2]) == ("git", "status"):
+            return CommandResult(
+                tuple(command),
+                0,
+                " M moonmind/agents/codex_worker/worker.py\n",
+                "",
+            )
+        return await real_run_stage_command(
+            command,
+            cwd=cwd,
+            log_path=log_path,
+            check=check,
+            env=env,
+            redaction_values=redaction_values,
+            cancel_event=cancel_event,
+        )
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    script_path = prepared.repo_dir / "tools" / "test_unit.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    script_path.chmod(0o755)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={"task": {"publish": {"mode": "branch"}}},
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert publish_note == "published branch feature/branch"
+    assert ("./tools/test_unit.sh",) in run_calls
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["verification"]["status"] == "passed"
+    assert publish_payload["verification"]["evidenceCount"] >= 1
+    assert any(
+        entry["command"] == "./tools/test_unit.sh"
+        for entry in publish_payload["verification"]["evidence"]
     )
 
 
@@ -6020,6 +6185,50 @@ async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
     assert "token=top-secret" not in log_content
     assert "secret commit body" not in log_content
     assert "[REDACTED]" in log_content
+
+
+async def test_run_stage_command_records_structured_verification_report(
+    tmp_path: Path,
+) -> None:
+    """Verification-like commands should be recorded in structured report artifacts."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    artifacts_dir = tmp_path / "artifacts"
+    log_path = artifacts_dir / "logs" / "publish.log"
+    await worker._run_stage_command(
+        ["./tools/test_unit.sh"],
+        cwd=tmp_path,
+        log_path=log_path,
+    )
+
+    report_path = artifacts_dir / "reports" / "verification_commands.jsonl"
+    assert report_path.exists()
+    records = [
+        json.loads(line)
+        for line in report_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(records) == 1
+    assert records[0]["command"] == "./tools/test_unit.sh"
+    assert records[0]["status"] == "passed"
+    assert records[0]["returncode"] == 0
+    assert records[0]["logArtifact"] == "logs/publish.log"
 
 
 async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -> None:

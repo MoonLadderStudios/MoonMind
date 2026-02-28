@@ -173,6 +173,10 @@ _NON_SOURCE_CHANGE_EXTENSIONS = frozenset(
 )
 _VERIFICATION_COMMAND_PATTERNS = (
     re.compile(r"(?:^|\s)(?:\./)?tools/test_unit\.sh(?:\s|$)", re.IGNORECASE),
+    re.compile(
+        r"(?:^|\s)(?:bash|sh)\s+(?:\./)?tools/test_unit\.sh(?:\s|$)",
+        re.IGNORECASE,
+    ),
     re.compile(r"(?:^|\s)(?:python(?:3)?\s+-m\s+pytest|pytest)(?:\s|$)", re.IGNORECASE),
     re.compile(r"(?:^|\s)(?:tox|nox|ruff|flake8|pylint|mypy)(?:\s|$)", re.IGNORECASE),
     re.compile(
@@ -197,6 +201,7 @@ _VERIFICATION_COMMAND_PATTERNS = (
     ),
 )
 _VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
+_VERIFICATION_REPORT_RELATIVE_PATH = Path("reports/verification_commands.jsonl")
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
     re.IGNORECASE,
@@ -3509,23 +3514,82 @@ class CodexWorker:
     ) -> str:
         """Resolve artifact-relative path label for preflight evidence."""
 
+        return cls._artifact_name_for_path_from_root(
+            path=path, artifacts_root=prepared.artifacts_dir
+        )
+
+    @classmethod
+    def _artifact_name_for_path_from_root(
+        cls, *, path: Path, artifacts_root: Path
+    ) -> str:
+        """Resolve artifact-relative path label for a known artifacts root."""
+
         resolved = path.resolve(strict=False)
-        artifacts_root = prepared.artifacts_dir.resolve(strict=False)
-        if cls._is_relative_to(resolved, artifacts_root):
-            relative = resolved.relative_to(artifacts_root).as_posix()
+        artifacts_root_resolved = artifacts_root.resolve(strict=False)
+        if cls._is_relative_to(resolved, artifacts_root_resolved):
+            relative = resolved.relative_to(artifacts_root_resolved).as_posix()
             return relative if relative != "." else path.name
         return path.name
+
+    @staticmethod
+    def _normalize_verification_command(command: str) -> str:
+        """Strip structured command-log metadata and normalize whitespace."""
+
+        normalized = " ".join(str(command or "").split())
+        if not normalized:
+            return ""
+        marker_id = normalized.find("; id=")
+        if marker_id > 0:
+            normalized = normalized[:marker_id].rstrip()
+        control_tag = f"; {_COMMAND_CONTROL_TAG}"
+        control_idx = normalized.find(control_tag)
+        if control_idx > 0:
+            normalized = normalized[:control_idx].rstrip()
+        return normalized
+
+    @classmethod
+    def _extract_verification_command_from_log_line(
+        cls, line: str
+    ) -> str | None:
+        """Extract one candidate verification command from a log line."""
+
+        if not line.startswith(_VERIFICATION_COMMAND_LOG_PREFIX):
+            return None
+        raw_command = line[len(_VERIFICATION_COMMAND_LOG_PREFIX) :].strip()
+        command = cls._normalize_verification_command(raw_command)
+        if not command:
+            return None
+        if not cls._looks_like_verification_command(command):
+            return None
+        return command
+
+    @staticmethod
+    def _verification_report_path(artifacts_dir: Path) -> Path:
+        return artifacts_dir / _VERIFICATION_REPORT_RELATIVE_PATH
+
+    @staticmethod
+    def _artifacts_dir_from_log_path(log_path: Path) -> Path | None:
+        """Infer artifacts directory from a stage-log path."""
+
+        for parent in log_path.parents:
+            if parent.name == "logs":
+                return parent.parent
+        return None
 
     @classmethod
     def _collect_verification_evidence(
         cls, *, prepared: PreparedTaskWorkspace
     ) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
-        """Collect verification-command evidence from stage log artifacts."""
+        """Collect verification-command evidence from structured artifacts + logs."""
 
+        structured_report_path = cls._verification_report_path(prepared.artifacts_dir)
         candidate_paths: list[Path] = [
+            structured_report_path,
             prepared.execute_log_path,
+            prepared.publish_log_path,
             prepared.artifacts_dir / "logs" / "execute.log",
             prepared.artifacts_dir / "logs" / "codex_exec.log",
+            prepared.artifacts_dir / "logs" / "publish.log",
         ]
         step_logs_dir = prepared.artifacts_dir / "logs" / "steps"
         if step_logs_dir.is_dir():
@@ -3542,6 +3606,7 @@ class CodexWorker:
             unique_paths.append(path)
 
         evidence: list[dict[str, Any]] = []
+        seen_evidence_keys: set[tuple[str, str, int]] = set()
         for log_path in unique_paths:
             if not log_path.exists() or not log_path.is_file():
                 continue
@@ -3561,12 +3626,58 @@ class CodexWorker:
             artifact_name = cls._artifact_name_for_path(
                 path=log_path, prepared=prepared
             )
+            if log_path.resolve(strict=False) == structured_report_path.resolve(
+                strict=False
+            ):
+                for line_number, line in enumerate(lines, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, Mapping):
+                        continue
+                    command = cls._normalize_verification_command(
+                        str(payload.get("command") or "")
+                    )
+                    if not command:
+                        continue
+                    if not cls._looks_like_verification_command(command):
+                        continue
+                    raw_returncode = payload.get("returncode")
+                    if raw_returncode is not None:
+                        with suppress(TypeError, ValueError):
+                            if int(raw_returncode) != 0:
+                                continue
+                    command_artifact = " ".join(
+                        str(payload.get("logArtifact") or "").split()
+                    ) or artifact_name
+                    command_line = line_number
+                    raw_line_number = payload.get("line")
+                    with suppress(TypeError, ValueError):
+                        if raw_line_number is not None:
+                            command_line = int(raw_line_number)
+                    evidence_key = (command, command_artifact, command_line)
+                    if evidence_key in seen_evidence_keys:
+                        continue
+                    seen_evidence_keys.add(evidence_key)
+                    evidence.append(
+                        {
+                            "command": command,
+                            "artifact": command_artifact,
+                            "line": command_line,
+                        }
+                    )
+                continue
             for line_number, line in enumerate(lines, start=1):
-                if not line.startswith(_VERIFICATION_COMMAND_LOG_PREFIX):
+                command = cls._extract_verification_command_from_log_line(line)
+                if command is None:
                     continue
-                command = line[len(_VERIFICATION_COMMAND_LOG_PREFIX) :].strip()
-                if not cls._looks_like_verification_command(command):
+                evidence_key = (command, artifact_name, line_number)
+                if evidence_key in seen_evidence_keys:
                     continue
+                seen_evidence_keys.add(evidence_key)
                 evidence.append(
                     {
                         "command": command,
@@ -3653,6 +3764,108 @@ class CodexWorker:
         if not base:
             return suffix.lstrip()
         return f"{base}\n{suffix}"
+
+    def _record_verification_command_result(
+        self,
+        *,
+        command: str,
+        log_path: Path,
+        returncode: int | None,
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        """Append one structured verification-command record for publish preflight."""
+
+        artifacts_dir = self._artifacts_dir_from_log_path(log_path)
+        if artifacts_dir is None:
+            return
+        report_path = self._verification_report_path(artifacts_dir)
+        record = {
+            "schemaVersion": "v1",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "command": command,
+            "status": status,
+            "returncode": returncode,
+            "logArtifact": self._artifact_name_for_path_from_root(
+                path=log_path,
+                artifacts_root=artifacts_dir,
+            ),
+            "stage": self._infer_stage_from_log_path(log_path),
+        }
+        if error_message:
+            record["error"] = str(error_message)
+        redacted = self._redact_payload(record)
+        serialized = redacted if isinstance(redacted, dict) else record
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with report_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(serialized, sort_keys=True))
+                handle.write("\n")
+        except OSError:
+            logger.warning(
+                "failed to append verification command report record at %s",
+                report_path,
+                exc_info=True,
+            )
+
+    async def _run_default_publish_verification_if_needed(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        publish: Mapping[str, Any],
+        status_output: str,
+    ) -> None:
+        """Run repository default verification when source changes have no evidence."""
+
+        changed_paths = self._parse_git_status_paths(status_output)
+        source_code_paths = tuple(
+            path for path in changed_paths if self._is_source_code_change_path(path)
+        )
+        if not source_code_paths:
+            return
+
+        verification_evidence, _log_errors = self._collect_verification_evidence(
+            prepared=prepared
+        )
+        if verification_evidence:
+            return
+
+        try:
+            skip_reason = self._resolve_publish_verification_skip_reason(publish)
+        except ValueError:
+            return
+        if skip_reason is not None:
+            return
+
+        verification_script = prepared.repo_dir / "tools" / "test_unit.sh"
+        if not verification_script.is_file():
+            return
+
+        command = (
+            ["./tools/test_unit.sh"]
+            if os.access(verification_script, os.X_OK)
+            else ["bash", "./tools/test_unit.sh"]
+        )
+        rendered_command = " ".join(command)
+        self._append_stage_log(
+            prepared.publish_log_path,
+            (
+                "publish verification auto-run: source-code changes detected without "
+                f"evidence; running {rendered_command}"
+            ),
+        )
+        try:
+            await self._run_stage_command(
+                command,
+                cwd=prepared.repo_dir,
+                log_path=prepared.publish_log_path,
+                env=prepared.publish_command_env,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "publish verification auto-run failed while executing "
+                f"{rendered_command}: {exc}"
+            ) from exc
 
     def _run_publish_preflight(
         self,
@@ -3857,6 +4070,11 @@ class CodexWorker:
                 )
                 return "publish skipped: no local changes"
 
+            await self._run_default_publish_verification_if_needed(
+                prepared=prepared,
+                publish=publish,
+                status_output=status.stdout,
+            )
             preflight_result = self._run_publish_preflight(
                 prepared=prepared,
                 publish=publish,
@@ -3870,6 +4088,18 @@ class CodexWorker:
                     content_type="application/json",
                 )
             )
+            verification_report_path = self._verification_report_path(
+                prepared.artifacts_dir
+            )
+            if verification_report_path.exists():
+                staged_artifacts.append(
+                    ArtifactUpload(
+                        path=verification_report_path,
+                        name=_VERIFICATION_REPORT_RELATIVE_PATH.as_posix(),
+                        content_type="application/json",
+                        required=False,
+                    )
+                )
             verification_payload["required"] = bool(preflight_result.source_code_paths)
             verification_payload["evidenceCount"] = len(
                 preflight_result.verification_evidence
@@ -5735,10 +5965,17 @@ class CodexWorker:
             if timeout_seconds is None
             else float(timeout_seconds)
         )
+        redacted_command = self._redact_command_for_log(
+            command, redaction_values=merged_redaction_values
+        )
+        rendered_redacted_command = " ".join(redacted_command)
+        capture_verification_record = self._looks_like_verification_command(
+            rendered_redacted_command
+        )
         runner = getattr(self._codex_exec_handler, "_run_command", None)
         if callable(runner):
             try:
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     runner(
                         command,
                         cwd=cwd,
@@ -5751,23 +5988,54 @@ class CodexWorker:
                     ),
                     timeout=effective_timeout_seconds,
                 )
+                if capture_verification_record:
+                    verification_status = (
+                        "passed" if result.returncode == 0 else "failed"
+                    )
+                    self._record_verification_command_result(
+                        command=rendered_redacted_command,
+                        log_path=log_path,
+                        returncode=result.returncode,
+                        status=verification_status,
+                    )
+                return result
             except asyncio.TimeoutError as exc:
-                redacted_command = self._redact_command_for_log(
-                    command, redaction_values=merged_redaction_values
-                )
                 timeout_display = f"{effective_timeout_seconds:g}"
                 timeout_msg = (
                     "command timed out after "
-                    f"{timeout_display}s: {' '.join(redacted_command)}"
+                    f"{timeout_display}s: {rendered_redacted_command}"
                 )
                 self._append_stage_log(log_path, timeout_msg)
+                if capture_verification_record:
+                    self._record_verification_command_result(
+                        command=rendered_redacted_command,
+                        log_path=log_path,
+                        returncode=None,
+                        status="timeout",
+                        error_message=timeout_msg,
+                    )
                 raise asyncio.TimeoutError(timeout_msg) from exc
-        redacted_command = self._redact_command_for_log(
-            command, redaction_values=merged_redaction_values
-        )
+            except Exception as exc:
+                if capture_verification_record:
+                    self._record_verification_command_result(
+                        command=rendered_redacted_command,
+                        log_path=log_path,
+                        returncode=None,
+                        status="error",
+                        error_message=str(exc),
+                    )
+                raise
         self._append_stage_log(
-            log_path, f"{_VERIFICATION_COMMAND_LOG_PREFIX}{' '.join(redacted_command)}"
+            log_path, f"{_VERIFICATION_COMMAND_LOG_PREFIX}{rendered_redacted_command}"
         )
+        if capture_verification_record:
+            self._record_verification_command_result(
+                command=rendered_redacted_command,
+                log_path=log_path,
+                returncode=None,
+                status="error",
+                error_message="Codex execution handler is missing command runner",
+            )
         raise RuntimeError("Codex execution handler is missing command runner")
 
     @staticmethod
