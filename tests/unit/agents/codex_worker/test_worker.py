@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
@@ -222,14 +223,16 @@ async def test_parse_positive_int_field_rejects_invalid_values() -> None:
         )
 
 
-class _RecordingPutClient:
-    """Minimal async HTTP client stub capturing PUT calls."""
+class _RecordingRequestClient:
+    """Minimal async HTTP client stub capturing JSON request calls."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
 
-    async def put(self, path: str, *, json: dict[str, object]) -> object:
-        self.calls.append((path, dict(json)))
+    async def request(
+        self, method: str, path: str, *, json: dict[str, object]
+    ) -> object:
+        self.calls.append((method, path, dict(json)))
         return _QueueApiResponseStub()
 
 
@@ -254,7 +257,7 @@ async def test_replace_worker_runtime_capabilities_uses_put(
         base_url="http://moonmind.test",
         worker_token="token",
     )
-    recorder = _RecordingPutClient()
+    recorder = _RecordingRequestClient()
     monkeypatch.setattr(client, "_client", recorder)
     runtime_caps = {"gemini": {"models": ["gemini-3-pro"], "efforts": []}}
 
@@ -264,6 +267,7 @@ async def test_replace_worker_runtime_capabilities_uses_put(
 
     assert recorder.calls == [
         (
+            "PUT",
             "/api/queue/workers/tokens/capabilities",
             {"runtimeCapabilities": runtime_caps},
         )
@@ -441,6 +445,93 @@ def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWor
         repo_command_env=None,
         publish_command_env=None,
     )
+
+
+def test_prepare_post_task_proposal_evidence_paths_rejects_symlink_sources(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should not read symlinked task context/log sources."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    secret_context = tmp_path / "secret-task-context.json"
+    secret_context.write_text('{"secret":"value"}\n', encoding="utf-8")
+    source_task_context.symlink_to(secret_context)
+    shutil.rmtree(source_logs_dir)
+    external_logs = tmp_path / "external-logs"
+    external_logs.mkdir(parents=True, exist_ok=True)
+    (external_logs / "sensitive.log").write_text("sensitive\n", encoding="utf-8")
+    source_logs_dir.symlink_to(external_logs, target_is_directory=True)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == "{}\n"
+    assert mirrored_logs_dir.is_dir()
+    assert list(mirrored_logs_dir.iterdir()) == []
+
+
+def test_prepare_post_task_proposal_evidence_paths_preserves_log_symlinks(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should keep symlink entries as symlinks instead of dereferencing."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+    external_log = tmp_path / "outside.log"
+    external_log.write_text("outside\n", encoding="utf-8")
+    (source_logs_dir / "external.log").symlink_to(external_log)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+    mirrored_external = mirrored_logs_dir / "external.log"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
+    assert mirrored_external.is_symlink()
+    assert mirrored_external.resolve() == external_log.resolve()
 
 
 def _build_resolved_step(
