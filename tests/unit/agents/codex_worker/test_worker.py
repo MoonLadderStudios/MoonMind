@@ -6441,7 +6441,6 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     )
 
 
-
 @pytest.fixture
 def publish_stage_test_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     queue = FakeQueueClient(jobs=[])
