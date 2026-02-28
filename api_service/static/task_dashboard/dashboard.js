@@ -2332,7 +2332,7 @@
     return Boolean(normalized) && normalized !== "auto";
   };
 
-  const validatePrimaryStepSubmission = (primaryStep = {}) => {
+  const validatePrimaryStepSubmission = (primaryStep = {}, options = {}) => {
     if (!primaryStep || typeof primaryStep !== "object" || Array.isArray(primaryStep)) {
       return {
         ok: false,
@@ -2341,6 +2341,13 @@
     }
     const instructions = String(primaryStep.instructions || "").trim();
     const skillId = String(primaryStep.skillId || "").trim();
+    const additionalStepsCount = Number(options.additionalStepsCount) || 0;
+    if (!instructions && additionalStepsCount > 0) {
+      return {
+        ok: false,
+        error: "Primary step instructions are required when additional steps are provided.",
+      };
+    }
     if (instructions || hasExplicitSkillSelection(skillId)) {
       return {
         ok: true,
@@ -2353,21 +2360,6 @@
     return {
       ok: false,
       error: "Primary step requires instructions or an explicit skill selection.",
-    };
-  };
-
-  const validatePrimaryStepForAdditionalWorkerSteps = (
-    primaryInstructions,
-    additionalStepsCount,
-  ) => {
-    const instructions = String(primaryInstructions || "").trim();
-    const normalizedAdditionalCount = Number(additionalStepsCount) || 0;
-    if (normalizedAdditionalCount <= 0 || instructions) {
-      return { ok: true };
-    }
-    return {
-      ok: false,
-      error: "Primary step instructions are required when additional steps are provided.",
     };
   };
 
@@ -2550,7 +2542,6 @@
       determineSubmitDestination,
       validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
-      validatePrimaryStepForAdditionalWorkerSteps,
       hasExplicitSkillSelection,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
@@ -5251,16 +5242,14 @@
         }
         additionalSteps.push({ sourceIndex: index, payload: stepPayload });
       }
-      const additionalStepValidation = validatePrimaryStepForAdditionalWorkerSteps(
-        instructions,
-        additionalSteps.length,
-      );
+      const additionalStepValidation = validatePrimaryStepSubmission(primaryStep, {
+        additionalStepsCount: additionalSteps.length,
+      });
       if (!additionalStepValidation.ok) {
         message.className = "notice error queue-submit-message";
         message.textContent = additionalStepValidation.error;
         return;
       }
-
       if (runtimeMode === ORCHESTRATOR_RUNTIME) {
         const targetService = String(
           formData.get("targetService") || "orchestrator",
