@@ -3430,9 +3430,55 @@ class CodexWorker:
     def _resolve_pr_base_branch(
         *,
         publish: Mapping[str, Any],
-        starting_branch: str,
-    ) -> str:
-        return str(publish.get("prBaseBranch") or "").strip() or starting_branch
+        starting_branch: str | None,
+        default_branch: str | None,
+        head_branch: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        requested_base = str(publish.get("prBaseBranch") or "").strip() or None
+        configured_target = str(starting_branch or "").strip() or None
+        repo_default = str(default_branch or "").strip() or None
+        head = str(head_branch or "").strip()
+
+        candidate_sources: list[tuple[str, str]] = []
+        for source, raw_value in (
+            ("requested", requested_base),
+            ("configured", configured_target),
+            ("default", repo_default),
+        ):
+            value = str(raw_value or "").strip()
+            if not value:
+                continue
+            if any(value == existing for _, existing in candidate_sources):
+                continue
+            candidate_sources.append((source, value))
+
+        for source, candidate in candidate_sources:
+            if candidate == head:
+                continue
+            warning_payload: dict[str, Any] | None = None
+            if requested_base is None or requested_base == head:
+                warning_payload = {
+                    "reason": (
+                        "missing_pr_base_branch"
+                        if requested_base is None
+                        else "pr_base_equals_head"
+                    ),
+                    "requestedBaseBranch": requested_base,
+                    "configuredTargetBranch": configured_target,
+                    "defaultBranch": repo_default,
+                    "resolvedBaseBranch": candidate,
+                    "resolvedBaseSource": source,
+                    "headBranch": head,
+                }
+            return candidate, warning_payload
+
+        raise RuntimeError(
+            "publish PR base branch resolution failed: no valid base branch distinct "
+            f"from head '{head}' (requested={requested_base or '<none>'}, "
+            f"configured={configured_target or '<none>'}, "
+            f"default={repo_default or '<none>'}); refusing non-actionable GraphQL "
+            "branch-comparison call"
+        )
 
     @classmethod
     def _derive_default_pr_body(
@@ -4208,12 +4254,30 @@ class CodexWorker:
             )
 
             pr_url: str | None = None
+            publish_base_branch = prepared.starting_branch
             publish_note = f"published branch {prepared.working_branch}"
             if publish_mode == "pr":
-                pr_base = self._resolve_pr_base_branch(
+                pr_base, base_resolution_warning = self._resolve_pr_base_branch(
                     publish=publish,
                     starting_branch=prepared.starting_branch,
+                    default_branch=prepared.default_branch,
+                    head_branch=prepared.working_branch,
                 )
+                publish_base_branch = pr_base
+                if base_resolution_warning is not None:
+                    self._append_stage_log(
+                        prepared.publish_log_path,
+                        (
+                            "publish PR base-branch fallback: "
+                            f"{json.dumps(base_resolution_warning, sort_keys=True)}"
+                        ),
+                    )
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="warn",
+                        message="moonmind.task.publish.pr_base_branch_resolution",
+                        payload={**base_resolution_warning, **dict(skill_meta)},
+                    )
                 pr_title = self._resolve_publish_text_override(
                     publish.get("prTitle")
                 ) or self._derive_default_pr_title(
@@ -4271,7 +4335,7 @@ class CodexWorker:
             result_payload = {
                 "mode": publish_mode,
                 "branch": prepared.working_branch,
-                "baseBranch": prepared.starting_branch,
+                "baseBranch": publish_base_branch,
                 "prUrl": pr_url,
                 "skipped": False,
                 "verification": verification_payload,

@@ -6440,6 +6440,299 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     )
 
 
+async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing publish.prBaseBranch should resolve deterministically and emit warning."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(command_tuple, 0, " M worker.py\n", "")
+        if command_tuple[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                command_tuple,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/111\n",
+                "",
+            )
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="feature/branch",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
+
+    await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={"task": {"publish": {"mode": "pr"}}},
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=[],
+    )
+
+    pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
+    assert pr_call[pr_call.index("--base") + 1] == "main"
+
+    warning_event = next(
+        event
+        for event in queue.events
+        if event["message"] == "moonmind.task.publish.pr_base_branch_resolution"
+    )
+    payload = warning_event["payload"]
+    assert payload["reason"] == "missing_pr_base_branch"
+    assert payload["resolvedBaseBranch"] == "main"
+    assert payload["headBranch"] == "feature/branch"
+
+
+async def test_run_publish_stage_pr_mode_rejects_base_equal_head_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit base=head should fallback before invoking gh pr create."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(command_tuple, 0, " M worker.py\n", "")
+        if command_tuple[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                command_tuple,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/112\n",
+                "",
+            )
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="develop",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
+
+    await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={
+            "task": {
+                "publish": {"mode": "pr", "prBaseBranch": "feature/branch"},
+            }
+        },
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=[],
+    )
+
+    pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
+    assert pr_call[pr_call.index("--base") + 1] == "develop"
+
+    warning_event = next(
+        event
+        for event in queue.events
+        if event["message"] == "moonmind.task.publish.pr_base_branch_resolution"
+    )
+    payload = warning_event["payload"]
+    assert payload["reason"] == "pr_base_equals_head"
+    assert payload["requestedBaseBranch"] == "feature/branch"
+    assert payload["resolvedBaseBranch"] == "develop"
+
+
+async def test_run_publish_stage_pr_mode_fails_fast_when_no_valid_base_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR publish should fail before gh call when every base candidate equals head."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(command_tuple, 0, " M worker.py\n", "")
+        if command_tuple[:3] == ("gh", "pr", "create"):
+            return CommandResult(command_tuple, 0, "unexpected\n", "")
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="feature/branch",
+        starting_branch="feature/branch",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="no valid base branch distinct from head",
+    ):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={
+                "task": {
+                    "publish": {"mode": "pr", "prBaseBranch": "feature/branch"},
+                }
+            },
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=[],
+        )
+
+    assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
+
+
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
     tmp_path: Path,
 ) -> None:
@@ -6597,22 +6890,17 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
 
 
 async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
-    """PR base should use override when present, otherwise starting branch."""
+    """PR base should use explicit override when valid, without warning."""
 
-    assert (
-        CodexWorker._resolve_pr_base_branch(
-            publish={"prBaseBranch": "release/1.2"},
-            starting_branch="main",
-        )
-        == "release/1.2"
+    base_branch, warning = CodexWorker._resolve_pr_base_branch(
+        publish={"prBaseBranch": "release/1.2"},
+        starting_branch="main",
+        default_branch="main",
+        head_branch="feature/branch",
     )
-    assert (
-        CodexWorker._resolve_pr_base_branch(
-            publish={"prBaseBranch": " "},
-            starting_branch="develop",
-        )
-        == "develop"
-    )
+
+    assert base_branch == "release/1.2"
+    assert warning is None
 
 
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
