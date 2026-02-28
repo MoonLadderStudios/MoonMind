@@ -207,7 +207,9 @@ def test_pin_pythonpath_to_repo_root_handles_runtimeerror_from_resolve(
     monkeypatch.setattr(
         skill_executor,
         "Path",
-        lambda value: _BrokenPath(value) if str(value) == "/bad" else original_path(value),
+        lambda value: (
+            _BrokenPath(value) if str(value) == "/bad" else original_path(value)
+        ),
     )
 
     updated = skill_executor._pin_pythonpath_to_repo_root(env, repo_root)
