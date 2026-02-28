@@ -5633,11 +5633,9 @@
       );
       return;
     }
-    if (isWorkerSubmitRuntime(normalizedRuntime)) {
-      renderQueueSubmitPage(normalizedRuntime);
-      return;
-    }
-    renderOrchestratorSubmitPage();
+    // Use the unified queue submit form for every supported runtime so runtime
+    // visibility toggles are consistently applied from one code path.
+    renderQueueSubmitPage(normalizedRuntime);
   }
 
   function renderOrchestratorSubmitPage() {
