@@ -5115,7 +5115,10 @@
       const priority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
         priority: formData.get("priority"),
       });
-      if (!Number.isInteger(priority)) {
+      if (
+        runtimeMode !== ORCHESTRATOR_RUNTIME &&
+        !Number.isInteger(priority)
+      ) {
         message.className = "notice error queue-submit-message";
         message.textContent = "Priority must be an integer.";
         return;
@@ -5215,11 +5218,9 @@
           message.textContent = "Target service is required for orchestrator tasks.";
           return;
         }
-        const orchestratorPriority = normalizeOrchestratorPriority(
-          resolveQueueSubmitPriorityForRuntime(runtimeMode, {
-            orchestratorPriority: formData.get("orchestratorPriority"),
-          }),
-        );
+        const orchestratorPriority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
+          orchestratorPriority: formData.get("orchestratorPriority"),
+        });
         const approvalToken = String(formData.get("approvalToken") || "").trim();
         const orchestratorSteps = [];
         for (let index = 0; index < stepState.length; index += 1) {
