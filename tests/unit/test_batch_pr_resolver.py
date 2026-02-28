@@ -4,6 +4,8 @@ import runpy
 from pathlib import Path
 from typing import Any
 
+from moonmind.workflows.agent_queue.task_contract import normalize_queue_job_payload
+
 
 def _load_module() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
@@ -85,6 +87,29 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
     assert git["newBranch"] == "feature/example"
+
+
+def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+    runtime_selection = module["RuntimeSelection"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=77,
+        branch="feature/enqueue-check",
+        runtime=runtime_selection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=1,
+        max_attempts=4,
+    )
+
+    normalized = normalize_queue_job_payload(
+        job_type=request["type"], payload=request["payload"]
+    )
+    assert normalized["task"]["skill"]["id"] == "pr-resolver"
+    assert normalized["task"]["publish"]["mode"] == "none"
 
 
 def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):

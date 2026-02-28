@@ -16,6 +16,7 @@ from typing import Any
 
 from api_service.db.base import get_async_session_context
 from moonmind.workflows import get_agent_queue_service
+from moonmind.workflows.agent_queue.task_contract import resolve_publish_mode_for_skill
 
 
 @dataclass
@@ -264,6 +265,7 @@ def _build_queue_request(
     priority: int,
     max_attempts: int,
 ) -> dict[str, Any]:
+    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
     runtime_payload: dict[str, Any] = {"mode": runtime.mode}
     if runtime.model:
         runtime_payload["model"] = runtime.model
@@ -296,7 +298,7 @@ def _build_queue_request(
                     "newBranch": branch,
                 },
                 # `pr-resolver` performs commit/push/merge itself.
-                "publish": {"mode": "none"},
+                "publish": {"mode": publish_mode},
             },
         },
     }
