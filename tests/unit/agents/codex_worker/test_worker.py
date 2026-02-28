@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
@@ -222,6 +223,57 @@ async def test_parse_positive_int_field_rejects_invalid_values() -> None:
         )
 
 
+class _RecordingRequestClient:
+    """Minimal async HTTP client stub capturing JSON request calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def request(
+        self, method: str, path: str, *, json: dict[str, object]
+    ) -> object:
+        self.calls.append((method, path, dict(json)))
+        return _QueueApiResponseStub()
+
+
+class _QueueApiResponseStub:
+    """Minimal response shim implementing QueueApiClient JSON access contract."""
+
+    content = b"{}"
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {}
+
+
+async def test_replace_worker_runtime_capabilities_uses_put(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime capability sync should use the queue endpoint's PUT contract."""
+
+    client = QueueApiClient(
+        base_url="http://moonmind.test",
+        worker_token="token",
+    )
+    recorder = _RecordingRequestClient()
+    monkeypatch.setattr(client, "_client", recorder)
+    runtime_caps = {"gemini": {"models": ["gemini-3-pro"], "efforts": []}}
+
+    await client.replace_worker_runtime_capabilities(
+        runtime_capabilities=runtime_caps,
+    )
+
+    assert recorder.calls == [
+        (
+            "PUT",
+            "/api/queue/workers/tokens/capabilities",
+            {"runtimeCapabilities": runtime_caps},
+        )
+    ]
+
+
 class FailingUploadQueueClient(FakeQueueClient):
     """Queue client stub that simulates artifact upload failures."""
 
@@ -393,6 +445,93 @@ def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWor
         repo_command_env=None,
         publish_command_env=None,
     )
+
+
+def test_prepare_post_task_proposal_evidence_paths_rejects_symlink_sources(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should not read symlinked task context/log sources."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    secret_context = tmp_path / "secret-task-context.json"
+    secret_context.write_text('{"secret":"value"}\n', encoding="utf-8")
+    source_task_context.symlink_to(secret_context)
+    shutil.rmtree(source_logs_dir)
+    external_logs = tmp_path / "external-logs"
+    external_logs.mkdir(parents=True, exist_ok=True)
+    (external_logs / "sensitive.log").write_text("sensitive\n", encoding="utf-8")
+    source_logs_dir.symlink_to(external_logs, target_is_directory=True)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == "{}\n"
+    assert mirrored_logs_dir.is_dir()
+    assert list(mirrored_logs_dir.iterdir()) == []
+
+
+def test_prepare_post_task_proposal_evidence_paths_preserves_log_symlinks(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should keep symlink entries as symlinks instead of dereferencing."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+    external_log = tmp_path / "outside.log"
+    external_log.write_text("outside\n", encoding="utf-8")
+    (source_logs_dir / "external.log").symlink_to(external_log)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+    mirrored_external = mirrored_logs_dir / "external.log"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
+    assert mirrored_external.is_symlink()
+    assert mirrored_external.resolve() == external_log.resolve()
 
 
 def _build_resolved_step(
@@ -6475,6 +6614,198 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
         artifact.name == "reports/publish_preflight.json"
         for artifact in staged_artifacts
     )
+
+
+async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_matches_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR publish should use default branch when no override is set and base=head."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(command_tuple, 0, " M docs/README.md\n", "")
+        if command_tuple[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                command_tuple,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/778\n",
+                "",
+            )
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="task/feature-123",
+        new_branch=None,
+        working_branch="task/feature-123",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={
+            "task": {
+                "runtime": {"mode": "codex"},
+                "publish": {"mode": "pr", "prBaseBranch": None},
+            }
+        },
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    assert (
+        publish_note
+        == "published PR https://github.com/MoonLadderStudios/MoonMind/pull/778"
+    )
+    pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
+    assert pr_call[pr_call.index("--base") + 1] == "main"
+    assert pr_call[pr_call.index("--head") + 1] == "task/feature-123"
+    assert any(
+        event["message"] == "moonmind.task.publish"
+        and event["payload"].get("warning") == "pr_base_fallback"
+        for event in queue.events
+    )
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["baseBranch"] == "main"
+
+
+async def test_run_publish_stage_fails_when_explicit_pr_base_matches_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit PR base override matching head should fail before PR creation."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(command_tuple, 0, " M docs/README.md\n", "")
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="task/feature-456",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+
+    staged_artifacts: list[ArtifactUpload] = []
+    with pytest.raises(
+        RuntimeError,
+        match="task.publish.prBaseBranch resolves to the working branch",
+    ):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={
+                "task": {
+                    "publish": {"mode": "pr", "prBaseBranch": "task/feature-456"},
+                }
+            },
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=staged_artifacts,
+        )
+
+    assert not any(call[:3] == ("gh", "pr", "create") for call in run_calls)
+    assert not any(call[:3] == ("git", "commit", "-m") for call in run_calls)
 
 
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(

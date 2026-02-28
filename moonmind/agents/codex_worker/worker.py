@@ -1476,13 +1476,21 @@ class QueueApiClient:
                     f"artifact upload failed for job {job_id}: {exc}"
                 ) from exc
 
-    async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+    async def _request_json(
+        self, method: str, path: str, *, json: dict[str, Any]
+    ) -> dict[str, Any]:
         try:
-            response = await self._client.post(path, json=json)
+            response = await self._client.request(method, path, json=json)
             response.raise_for_status()
             return dict(response.json()) if response.content else {}
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
+
+    async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json("POST", path, json=json)
+
+    async def _put_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json("PUT", path, json=json)
 
     async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
         """Submit a task proposal to the MoonMind API."""
@@ -1496,7 +1504,7 @@ class QueueApiClient:
     ) -> None:
         """Publish worker runtime capabilities to queue metadata."""
 
-        await self._post_json(
+        await self._put_json(
             "/api/queue/workers/tokens/capabilities",
             json={"runtimeCapabilities": runtime_capabilities},
         )
@@ -3442,6 +3450,44 @@ class CodexWorker:
         return str(publish.get("prBaseBranch") or "").strip() or starting_branch
 
     @classmethod
+    def _resolve_pr_base_branch_for_publish(
+        cls,
+        *,
+        publish: Mapping[str, Any],
+        starting_branch: str,
+        working_branch: str,
+        default_branch: str,
+    ) -> tuple[str, str | None]:
+        """Resolve PR base branch with a safety fallback when base/head collide."""
+
+        requested_base = str(publish.get("prBaseBranch") or "").strip()
+        resolved_base = cls._resolve_pr_base_branch(
+            publish=publish,
+            starting_branch=starting_branch,
+        )
+        if resolved_base != working_branch:
+            return resolved_base, None
+
+        fallback_base = str(default_branch or "").strip()
+        if not requested_base and fallback_base and fallback_base != working_branch:
+            warning = (
+                "task.publish.prBaseBranch not set and starting branch matches head; "
+                f"using default branch '{fallback_base}' as PR base"
+            )
+            return fallback_base, warning
+
+        if requested_base:
+            raise RuntimeError(
+                "publish preflight failed: task.publish.prBaseBranch resolves to "
+                f"the working branch '{working_branch}'. Choose a different PR base."
+            )
+        raise RuntimeError(
+            "publish preflight failed: resolved PR base equals the working branch "
+            f"'{working_branch}' and no fallback base is available. Set "
+            "task.publish.prBaseBranch explicitly."
+        )
+
+    @classmethod
     def _derive_default_pr_body(
         cls,
         *,
@@ -4196,6 +4242,31 @@ class CodexWorker:
                 env=prepared.publish_command_env,
             )
 
+            pr_base: str | None = None
+            resolved_base_branch = prepared.starting_branch
+            if publish_mode == "pr":
+                pr_base, pr_base_warning = self._resolve_pr_base_branch_for_publish(
+                    publish=publish,
+                    starting_branch=prepared.starting_branch,
+                    working_branch=prepared.working_branch,
+                    default_branch=prepared.default_branch,
+                )
+                resolved_base_branch = pr_base
+                if pr_base_warning:
+                    self._append_stage_log(prepared.publish_log_path, pr_base_warning)
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="warn",
+                        message="moonmind.task.publish",
+                        payload={
+                            "status": "warning",
+                            "warning": "pr_base_fallback",
+                            "resolvedBaseBranch": pr_base,
+                            "workingBranch": prepared.working_branch,
+                            **dict(skill_meta),
+                        },
+                    )
+
             commit_message = (
                 self._resolve_publish_text_override(publish.get("commitMessage"))
                 or f"MoonMind task result for job {job_id}"
@@ -4217,10 +4288,10 @@ class CodexWorker:
             pr_url: str | None = None
             publish_note = f"published branch {prepared.working_branch}"
             if publish_mode == "pr":
-                pr_base = self._resolve_pr_base_branch(
-                    publish=publish,
-                    starting_branch=prepared.starting_branch,
-                )
+                if pr_base is None:
+                    raise RuntimeError(
+                        "publish preflight failed: PR base branch was not resolved."
+                    )
                 pr_title = self._resolve_publish_text_override(
                     publish.get("prTitle")
                 ) or self._derive_default_pr_title(
@@ -4278,7 +4349,7 @@ class CodexWorker:
             result_payload = {
                 "mode": publish_mode,
                 "branch": prepared.working_branch,
-                "baseBranch": prepared.starting_branch,
+                "baseBranch": resolved_base_branch,
                 "prUrl": pr_url,
                 "skipped": False,
                 "verification": verification_payload,
@@ -6694,6 +6765,44 @@ class CodexWorker:
 
         return artifacts
 
+    def _prepare_post_task_proposal_evidence_paths(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+    ) -> tuple[str, str]:
+        """Mirror worker artifacts into repo-local paths accessible to CLI tools."""
+
+        evidence_root = prepared.repo_dir / ".artifacts" / "proposal_inputs"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+
+        source_task_context = prepared.artifacts_dir / "task_context.json"
+        mirrored_task_context = evidence_root / "task_context.json"
+        if source_task_context.is_file() and not source_task_context.is_symlink():
+            shutil.copy2(
+                source_task_context, mirrored_task_context, follow_symlinks=False
+            )
+        else:
+            mirrored_task_context.write_text("{}\n", encoding="utf-8")
+
+        source_logs_dir = prepared.artifacts_dir / "logs"
+        mirrored_logs_dir = evidence_root / "logs"
+        if mirrored_logs_dir.exists():
+            if mirrored_logs_dir.is_symlink() or mirrored_logs_dir.is_file():
+                mirrored_logs_dir.unlink()
+            else:
+                shutil.rmtree(mirrored_logs_dir)
+        if source_logs_dir.is_dir() and not source_logs_dir.is_symlink():
+            shutil.copytree(
+                source_logs_dir,
+                mirrored_logs_dir,
+                symlinks=True,
+                ignore_dangling_symlinks=True,
+            )
+        else:
+            mirrored_logs_dir.mkdir(parents=True, exist_ok=True)
+
+        return str(mirrored_task_context.resolve()), str(evidence_root.resolve())
+
     async def _run_post_task_proposal_skills(
         self,
         *,
@@ -6754,10 +6863,21 @@ class CodexWorker:
             encoding="utf-8"
         )
         proposal_output_path_str = str(proposal_output_path_for_skill)
-        task_context_path = str(
-            (prepared.artifacts_dir / "task_context.json").resolve()
-        )
-        artifacts_path = str(prepared.artifacts_dir.resolve())
+        try:
+            task_context_path, artifacts_path = (
+                self._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+            )
+        except (OSError, shutil.Error):
+            logger.warning(
+                "Failed to mirror proposal evidence into repo workspace for job %s; "
+                "falling back to worker artifact paths.",
+                job.id,
+                exc_info=True,
+            )
+            task_context_path = str(
+                (prepared.artifacts_dir / "task_context.json").resolve()
+            )
+            artifacts_path = str(prepared.artifacts_dir.resolve())
         cancel_event = getattr(self, "_active_cancel_event", None)
         (prepared.artifacts_dir / "codex_exec.log").unlink(missing_ok=True)
         (prepared.artifacts_dir / "changes.patch").unlink(missing_ok=True)
