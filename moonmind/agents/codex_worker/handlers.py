@@ -30,6 +30,10 @@ _COMMAND_CONTROL_TAG = "control=worker"
 _GIT_DIFF_LOG_CAPTURE_MAX_CHARS = 64 * 1024
 _COMPLETION_EVENT_MARKER_PREFIX = "[moonmind] completion-event key="
 _CONTROLLED_COMPLETION_EVENT_MARKER_SUFFIX = "; control=worker"
+_LOOP_WARNING_PREFIX = "[moonmind] loop warning:"
+_REPEATED_HUNK_MIN_CHARS = 48
+_REPEATED_HUNK_TRIGGER_COUNT = 4
+_REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS = 4096
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -1027,6 +1031,10 @@ class CodexExecHandler:
         replay_pending_candidate_text: dict[str, str] = {"stdout": "", "stderr": ""}
         replay_snapshot_text: dict[str, str] = {"stdout": "", "stderr": ""}
         replay_snapshot_match_offset: dict[str, int] = {"stdout": 0, "stderr": 0}
+        repeated_hunk_last_text: dict[str, str] = {"stdout": "", "stderr": ""}
+        repeated_hunk_seen_count: dict[str, int] = {"stdout": 0, "stderr": 0}
+        repeated_hunk_suppressed_count: dict[str, int] = {"stdout": 0, "stderr": 0}
+        repeated_hunk_suppressed_chars: dict[str, int] = {"stdout": 0, "stderr": 0}
         semantic_replay_prefix_labels = frozenset(
             {"assistant", "codex", "thinking", "system", "tool", "user"}
         )
@@ -1190,6 +1198,15 @@ class CodexExecHandler:
             if candidate is not None and candidate[0] not in stream_history_index:
                 replay_candidate[stream] = None
 
+        def _record_loop_suppression(stream: str, text: str) -> None:
+            if (
+                repeated_hunk_suppressed_count[stream]
+                >= _REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS
+            ):
+                return
+            repeated_hunk_suppressed_count[stream] += 1
+            repeated_hunk_suppressed_chars[stream] += len(text)
+
         def _dedupe_replayed_stream_chunk(stream: str, text: str) -> str:
             if not enable_replay_dedupe:
                 return text
@@ -1200,6 +1217,7 @@ class CodexExecHandler:
                 if completion_signature:
                     seen_signatures = completion_event_seen_signatures[stream]
                     if completion_signature in seen_signatures:
+                        _record_loop_suppression(stream, text)
                         return ""
                     seen_signatures.add(completion_signature)
 
@@ -1220,16 +1238,19 @@ class CodexExecHandler:
                                 replay_snapshot_match_offset[stream] = (
                                     snapshot_match_offset + len(text)
                                 )
+                                _record_loop_suppression(stream, text)
                                 return ""
 
                             text = text[len(remaining_snapshot) :]
                             replay_snapshot_match_offset[stream] = 0
                             if not text:
+                                _record_loop_suppression(stream, remaining_snapshot)
                                 return ""
                         elif remaining_snapshot.startswith(text):
                             replay_snapshot_match_offset[stream] = (
                                 snapshot_match_offset + len(text)
                             )
+                            _record_loop_suppression(stream, text)
                             return ""
                         else:
                             replay_snapshot_match_offset[stream] = 0
@@ -1237,17 +1258,20 @@ class CodexExecHandler:
                 if previous_snapshot:
                     if text == previous_snapshot:
                         replay_snapshot_match_offset[stream] = len(previous_snapshot)
+                        _record_loop_suppression(stream, text)
                         return ""
 
                     if text.startswith(previous_snapshot):
                         text = text[len(previous_snapshot) :]
                         if not text:
+                            _record_loop_suppression(stream, previous_snapshot)
                             return ""
                         replay_snapshot_text[stream] = f"{previous_snapshot}{text}"
                         snapshot_text_updated = True
 
                     elif previous_snapshot.startswith(text):
                         replay_snapshot_match_offset[stream] = len(text)
+                        _record_loop_suppression(stream, text)
                         return ""
 
                     semantic_previous = _normalize_semantic_replay_snapshot(
@@ -1260,6 +1284,7 @@ class CodexExecHandler:
                         and semantic_previous == semantic_current
                     ):
                         replay_snapshot_match_offset[stream] = len(previous_snapshot)
+                        _record_loop_suppression(stream, text)
                         return ""
 
                 if not snapshot_text_updated:
@@ -1277,6 +1302,7 @@ class CodexExecHandler:
                 if expected is not None and text == expected:
                     replay_cursor[stream] = cursor + 1
                     replay_suppressed_chunks[stream].append(text)
+                    _record_loop_suppression(stream, text)
                     return ""
 
                 replay_cursor[stream] = None
@@ -1299,6 +1325,7 @@ class CodexExecHandler:
                     replay_cursor[stream] = expected_seq + 1
                     replay_pending_candidate_text[stream] = ""
                     replay_suppressed_chunks[stream] = [pending_text, text]
+                    _record_loop_suppression(stream, text)
                     return ""
                 emitted_prefix = replay_pending_candidate_text[stream]
                 if not emitted_prefix:
@@ -1325,6 +1352,70 @@ class CodexExecHandler:
             _append_chunk_history(stream, text)
             return f"{emitted_prefix}{text}"
 
+        def _is_repeated_hunk_candidate(text: str) -> bool:
+            if len(text) < _REPEATED_HUNK_MIN_CHARS:
+                return False
+            return "\n" in text or len(text) >= 256
+
+        def _consume_repeated_hunk_summary(stream: str) -> str:
+            suppressed_count = repeated_hunk_suppressed_count[stream]
+            if suppressed_count <= 0:
+                return ""
+            suppressed_chars = repeated_hunk_suppressed_chars[stream]
+            repeated_hunk_suppressed_count[stream] = 0
+            repeated_hunk_suppressed_chars[stream] = 0
+            return (
+                f"{_LOOP_WARNING_PREFIX} suppressed {suppressed_count} repeated "
+                f"{stream} chunk(s) ({suppressed_chars} chars) during this command;"
+                " control=worker\n"
+            )
+
+        def _suppress_repeated_hunks(stream: str, text: str) -> str:
+            if not text:
+                return ""
+            if not (enable_replay_dedupe and is_polling_snapshot_command):
+                return f"{_consume_repeated_hunk_summary(stream)}{text}"
+            if not _is_repeated_hunk_candidate(text):
+                repeated_hunk_last_text[stream] = text
+                repeated_hunk_seen_count[stream] = 1
+                return f"{_consume_repeated_hunk_summary(stream)}{text}"
+
+            if text == repeated_hunk_last_text[stream]:
+                repeated_hunk_seen_count[stream] += 1
+                if repeated_hunk_seen_count[stream] >= _REPEATED_HUNK_TRIGGER_COUNT:
+                    if (
+                        repeated_hunk_suppressed_count[stream]
+                        < _REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS
+                    ):
+                        repeated_hunk_suppressed_count[stream] += 1
+                        repeated_hunk_suppressed_chars[stream] += len(text)
+                    return ""
+                return text
+
+            prefix = _consume_repeated_hunk_summary(stream)
+            repeated_hunk_last_text[stream] = text
+            repeated_hunk_seen_count[stream] = 1
+            return f"{prefix}{text}"
+
+        async def _flush_repeated_hunk_summary(stream: str) -> None:
+            summary = _consume_repeated_hunk_summary(stream)
+            if not summary:
+                return
+            if not defer_stream_output_logging:
+                stream_log_buffers[stream] = (
+                    stream_log_buffers.get(stream, "") + summary
+                )
+                _flush_stream_log_buffer(
+                    stream,
+                    force=len(stream_log_buffers[stream])
+                    >= max_stream_log_buffer_chars,
+                )
+            await _invoke_output_callback(
+                stream,
+                summary,
+                context="loop warning flush",
+            )
+
         async def _flush_pending_replay_candidate(stream: str) -> None:
             candidate = replay_candidate.get(stream)
             if candidate is None:
@@ -1346,6 +1437,9 @@ class CodexExecHandler:
             deduped_text = _dedupe_replayed_stream_chunk(stream, text)
             if not deduped_text:
                 return
+            deduped_text = _suppress_repeated_hunks(stream, deduped_text)
+            if not deduped_text:
+                return
             if not defer_stream_output_logging:
                 stream_log_buffers[stream] = (
                     stream_log_buffers.get(stream, "") + deduped_text
@@ -1359,6 +1453,7 @@ class CodexExecHandler:
 
         async def _emit_stream_closed(stream: str) -> None:
             await _flush_pending_replay_candidate(stream)
+            await _flush_repeated_hunk_summary(stream)
             _flush_stream_log_buffer(stream, force=True)
             if (
                 completion_scope_node
@@ -1478,6 +1573,8 @@ class CodexExecHandler:
                             await asyncio.gather(stdout_task, stderr_task)
                         await _flush_pending_replay_candidate("stdout")
                         await _flush_pending_replay_candidate("stderr")
+                        await _flush_repeated_hunk_summary("stdout")
+                        await _flush_repeated_hunk_summary("stderr")
                         _flush_stream_log_buffer("stdout", force=True)
                         _flush_stream_log_buffer("stderr", force=True)
                         if defer_stream_output_logging:

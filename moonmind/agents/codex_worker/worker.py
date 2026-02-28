@@ -112,6 +112,7 @@ _COMMAND_START_PREFIX = "[command] $ "
 _COMMAND_COMPLETE_PREFIX = "[command] complete:"
 _COMMAND_CONTROL_TAG = "control=worker"
 _COMPLETION_EVENT_MARKER_PREFIX = "[moonmind] completion-event key="
+_LOOP_WARNING_PREFIX = "[moonmind] loop warning:"
 _CONTROLLED_COMMAND_START_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_START_PREFIX)}.+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
@@ -123,6 +124,10 @@ _CONTROLLED_COMMAND_COMPLETE_PATTERN = re.compile(
 )
 _CONTROLLED_COMPLETION_EVENT_PATTERN = re.compile(
     rf"^{re.escape(_COMPLETION_EVENT_MARKER_PREFIX)}[0-9a-f]{{64}};\s*"
+    rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
+_CONTROLLED_LOOP_WARNING_PATTERN = re.compile(
+    rf"^(?P<message>{re.escape(_LOOP_WARNING_PREFIX)}.+);\s*"
     rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
 _LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
@@ -5961,6 +5966,23 @@ class CodexWorker:
                 last_flush_monotonic = time.monotonic()
             buffers[stream] = pending
 
+        async def _emit_loop_warning(stream: str, message: str) -> None:
+            payload: dict[str, Any] = {
+                "kind": "loop_warning",
+                "stream": stream,
+                "stage": stage,
+            }
+            if step_id:
+                payload["stepId"] = step_id
+            if step_index is not None:
+                payload["stepIndex"] = step_index
+            await self._emit_event(
+                job_id=job_id,
+                level="warn",
+                message=message,
+                payload=payload,
+            )
+
         async def _on_output_chunk(stream: str, text: str | None) -> None:
             if stream not in buffers:
                 return
@@ -5969,6 +5991,13 @@ class CodexWorker:
                 return
             if not text:
                 return
+            for line in text.replace("\r", "").splitlines():
+                candidate = line.strip()
+                loop_warning_match = _CONTROLLED_LOOP_WARNING_PATTERN.match(candidate)
+                if loop_warning_match:
+                    await _emit_loop_warning(
+                        stream, loop_warning_match.group("message")
+                    )
             buffers[stream] = f"{buffers[stream]}{text}"
             now = time.monotonic()
             interval_elapsed = (now - last_flush_monotonic) >= flush_interval_seconds
