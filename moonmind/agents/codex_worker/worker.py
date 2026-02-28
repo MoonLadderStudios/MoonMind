@@ -586,10 +586,11 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_GEMINI_APPROVAL_MODE", "yolo")).strip().lower()
             or "yolo"
         )
-        if gemini_approval_mode not in {"default", "auto_edit", "yolo", "plan"}:
+        allowed_approval_modes = {"default", "auto_edit", "yolo", "plan"}
+        if gemini_approval_mode not in allowed_approval_modes:
             raise ValueError(
                 "MOONMIND_GEMINI_APPROVAL_MODE must be one of: "
-                "default, auto_edit, yolo, plan"
+                f"{', '.join(sorted(allowed_approval_modes))}"
             )
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
