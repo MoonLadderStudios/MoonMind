@@ -4920,7 +4920,9 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.gemini_approval_mode == "yolo"
 
 
-async def test_config_from_env_rejects_invalid_gemini_approval_mode(monkeypatch) -> None:
+async def test_config_from_env_rejects_invalid_gemini_approval_mode(
+    monkeypatch,
+) -> None:
     """Gemini approval mode should fail fast on unsupported values."""
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
