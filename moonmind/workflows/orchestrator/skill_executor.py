@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -242,6 +243,157 @@ def _validate_skill_id(skill_id: str) -> str:
     return normalized
 
 
+def _pin_pythonpath_to_repo_root(
+    env: Mapping[str, str],
+    repo_path: Path,
+) -> dict[str, str]:
+    """Return a process environment with repo path pinned first in PYTHONPATH."""
+
+    process_env = dict(env)
+    repo_root = str(repo_path.resolve())
+    raw_pythonpath = str(process_env.get("PYTHONPATH", ""))
+    entries = [entry for entry in raw_pythonpath.split(os.pathsep) if entry.strip()]
+    normalized_repo = str(Path(repo_root).resolve())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        try:
+            normalized = str(Path(entry).expanduser().resolve())
+        except OSError:
+            normalized = entry
+        if normalized == normalized_repo:
+            continue
+        if normalized in seen:
+            continue
+        deduped.append(entry)
+        seen.add(normalized)
+
+    process_env["PYTHONPATH"] = os.pathsep.join([repo_root, *deduped])
+    return process_env
+
+
+def _extract_package_root(path: Path, package_name: str) -> Path | None:
+    parts = path.parts
+    for index, part in enumerate(parts):
+        if part == package_name:
+            return Path(*parts[: index + 1]).resolve()
+    return None
+
+
+def _analyze_import_probe(
+    *,
+    repo_path: Path,
+    probe_payload: Mapping[str, Any],
+) -> str | None:
+    """Return warning text when the imported moonmind package root mismatches repo."""
+
+    module_file_raw = str(probe_payload.get("module_file", "")).strip()
+    if not module_file_raw:
+        return None
+
+    workspace_root = repo_path.resolve()
+    workspace_package_root = (workspace_root / "moonmind").resolve()
+    imported_package_root = _extract_package_root(
+        Path(module_file_raw).expanduser().resolve(),
+        "moonmind",
+    )
+    if imported_package_root is None:
+        return None
+    if imported_package_root == workspace_package_root:
+        return None
+
+    sys_path_entries = probe_payload.get("sys_path")
+    if isinstance(sys_path_entries, list):
+        sys_path_sample = ", ".join(str(item) for item in sys_path_entries[:8])
+    else:
+        sys_path_sample = "<unavailable>"
+
+    has_workspace_entry = False
+    has_app_entry = False
+    if isinstance(sys_path_entries, list):
+        for raw in sys_path_entries:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            with suppress(OSError):
+                resolved = Path(text).expanduser().resolve()
+                if resolved == workspace_root:
+                    has_workspace_entry = True
+            if text == "/app" or text.startswith("/app/"):
+                has_app_entry = True
+
+    qualifier = (
+        "mixed module roots detected"
+        if has_workspace_entry and has_app_entry
+        else "module root mismatch detected"
+    )
+    return (
+        "skill-executor warning: "
+        f"{qualifier}; expected moonmind under {workspace_package_root}, "
+        f"but imported from {imported_package_root} (module_file={module_file_raw}); "
+        f"sys.path sample=[{sys_path_sample}]"
+    )
+
+
+def _runtime_import_probe(
+    *,
+    repo_path: Path,
+    process_env: Mapping[str, str],
+) -> str | None:
+    """Probe moonmind import resolution and return diagnostics when roots diverge."""
+
+    probe_script = (
+        "import json, sys\n"
+        "try:\n"
+        "    import moonmind  # type: ignore\n"
+        "except Exception as exc:\n"
+        "    print(json.dumps({'error': str(exc), 'sys_path': sys.path}), end='')\n"
+        "else:\n"
+        "    print(json.dumps({'module_file': getattr(moonmind, '__file__', ''), "
+        "'sys_path': sys.path}), end='')\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", probe_script],
+            cwd=str(repo_path),
+            env=dict(process_env),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        return f"skill-executor warning: failed to run import probe: {exc}"
+
+    if result.returncode != 0:
+        error_tail = (result.stderr or result.stdout or "").strip()
+        if error_tail:
+            return (
+                "skill-executor warning: import probe exited non-zero "
+                f"(rc={result.returncode}): {error_tail}"
+            )
+        return (
+            "skill-executor warning: import probe exited non-zero "
+            f"(rc={result.returncode})"
+        )
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return (
+            "skill-executor warning: import probe emitted invalid JSON; "
+            f"stdout={result.stdout!r}"
+        )
+    if not isinstance(payload, dict):
+        return "skill-executor warning: import probe payload was not a JSON object"
+    if payload.get("error"):
+        return (
+            "skill-executor warning: unable to import moonmind during probe: "
+            f"{payload.get('error')}"
+        )
+    return _analyze_import_probe(repo_path=repo_path, probe_payload=payload)
+
+
 def is_runnable_skill(skill_id: str, workspace_root: Path | None = None) -> bool:
     root = workspace_root or _resolve_workspace_root()
     try:
@@ -311,6 +463,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     process_env = os.environ.copy()
+    process_env = _pin_pythonpath_to_repo_root(process_env, repo_path)
+    diagnostic = _runtime_import_probe(repo_path=repo_path, process_env=process_env)
+    if diagnostic:
+        print(diagnostic, file=sys.stderr)
     if step_instructions:
         process_env[_TASK_INSTRUCTIONS_ENV] = step_instructions
 
