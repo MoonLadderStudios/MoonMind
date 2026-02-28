@@ -1303,12 +1303,15 @@
           return;
         }
       }
+      const preservePrimarySkillDefaults = isPrimaryMirror && firstStepHasTemplateBinding;
       steps.push({
         id: String(rawStep.id || "").trim(),
         instructions: stepInstructions,
-        skillId: stepSkillId,
-        skillArgs: stepSkillArgs,
-        skillRequiredCapabilities: stepSkillCaps,
+        skillId: preservePrimarySkillDefaults ? primaryStep.skillId : stepSkillId,
+        skillArgs: preservePrimarySkillDefaults ? primaryStep.skillArgs : stepSkillArgs,
+        skillRequiredCapabilities: preservePrimarySkillDefaults
+          ? primaryStep.skillRequiredCapabilities
+          : stepSkillCaps,
         templateStepId: "",
         templateInstructions: "",
       });

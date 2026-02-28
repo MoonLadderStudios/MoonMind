@@ -361,6 +361,38 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(draft.affinityKey, "group-42");
 })();
 
+(function testBuildQueueSubmissionDraftFromJobPreservesPrimarySkillInTemplateBoundStep() {
+  assert.strictEqual(typeof helpers.buildQueueSubmissionDraftFromJob, "function");
+  const draft = helpers.buildQueueSubmissionDraftFromJob({
+    payload: {
+      repository: "Moon/Test",
+      task: {
+        instructions: "Ship queued fix",
+        skill: {
+          id: "pr-resolver",
+          args: { lane: "hotfix" },
+          requiredCapabilities: ["git", "gh"],
+        },
+        steps: [
+          {
+            id: "step-1",
+            instructions: "Ship queued fix",
+            skill: {
+              id: "",
+            },
+          },
+        ],
+      },
+    },
+  });
+  assert.strictEqual(draft.steps.length, 1);
+  assert.strictEqual(draft.steps[0].id, "step-1");
+  assert.strictEqual(draft.steps[0].instructions, "Ship queued fix");
+  assert.strictEqual(draft.steps[0].skillId, "pr-resolver");
+  assert.deepStrictEqual(JSON.parse(draft.steps[0].skillArgs), { lane: "hotfix" });
+  assert.strictEqual(draft.steps[0].skillRequiredCapabilities, "git, gh");
+})();
+
 (function testBuildQueueSubmissionDraftFromJobPreservesRawEditFields() {
   assert.strictEqual(typeof helpers.buildQueueSubmissionDraftFromJob, "function");
   const draft = helpers.buildQueueSubmissionDraftFromJob({
