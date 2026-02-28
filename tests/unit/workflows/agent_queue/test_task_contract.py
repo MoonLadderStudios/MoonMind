@@ -57,7 +57,9 @@ def test_normalize_task_payload_defaults_publish_mode_to_pr() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
-def test_normalize_task_payload_allows_blank_instructions_with_explicit_primary_skill() -> None:
+def test_normalize_task_payload_allows_blank_instructions_with_explicit_primary_skill() -> (
+    None
+):
     """Primary explicit task skill should satisfy objective requirement when instructions are blank."""
 
     normalized = normalize_queue_job_payload(
@@ -78,7 +80,9 @@ def test_normalize_task_payload_allows_blank_instructions_with_explicit_primary_
     assert normalized["task"]["skill"]["id"] == "batch-pr-resolver"
 
 
-def test_normalize_task_payload_allows_blank_instructions_with_primary_step_skill() -> None:
+def test_normalize_task_payload_allows_blank_instructions_with_primary_step_skill() -> (
+    None
+):
     """Primary step skill should satisfy objective requirement when task instructions are blank."""
 
     normalized = normalize_queue_job_payload(
@@ -102,7 +106,9 @@ def test_normalize_task_payload_allows_blank_instructions_with_primary_step_skil
     assert normalized["task"]["steps"][0]["skill"]["id"] == "batch-pr-resolver"
 
 
-def test_normalize_task_payload_requires_instructions_without_explicit_primary_skill() -> None:
+def test_normalize_task_payload_requires_instructions_without_explicit_primary_skill() -> (
+    None
+):
     """Blank task objective requires explicit task/primary-step skill selection."""
 
     with pytest.raises(
