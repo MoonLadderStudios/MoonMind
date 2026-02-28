@@ -34,9 +34,7 @@ _LOOP_WARNING_PREFIX = "[moonmind] loop warning:"
 _REPEATED_HUNK_MIN_CHARS = 48
 _REPEATED_HUNK_TRIGGER_COUNT = 4
 _REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS = 4096
-_FULL_UUID_PATTERN = re.compile(
-    r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
-)
+_FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _MOONMIND_WORD_PATTERN = re.compile(r"\bmoonmind\b", re.IGNORECASE)
 
 
