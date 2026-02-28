@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -164,3 +165,79 @@ def test_main_returns_error_code_without_traceback_for_runtime_errors(
 ) -> None:
     rc = skill_executor.main(["--skill-id", "../nope", "--skill-args-json", "{}"])
     assert rc == 2
+
+
+def test_pin_pythonpath_to_repo_root_prepends_repo() -> None:
+    repo_root = Path("/work/repo")
+    env = {"PYTHONPATH": f"/app{os.pathsep}/tmp/site-packages{os.pathsep}/work/repo"}
+
+    updated = skill_executor._pin_pythonpath_to_repo_root(env, repo_root)
+
+    entries = [item for item in updated["PYTHONPATH"].split(os.pathsep) if item]
+    assert entries[0] == str(repo_root.resolve())
+    assert "/app" in entries
+    assert entries.count(str(repo_root.resolve())) == 1
+
+
+def test_pin_pythonpath_to_repo_root_rejects_pathsep_in_repo() -> None:
+    repo_root = Path(f"/work/repo{os.pathsep}evil")
+    env = {"PYTHONPATH": "/app"}
+
+    with pytest.raises(RuntimeError, match="contains path separator"):
+        skill_executor._pin_pythonpath_to_repo_root(env, repo_root)
+
+
+def test_pin_pythonpath_to_repo_root_handles_runtimeerror_from_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path("/work/repo")
+    env = {"PYTHONPATH": "/bad"}
+
+    class _BrokenPath:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def expanduser(self) -> "_BrokenPath":
+            return self
+
+        def resolve(self) -> Path:
+            raise RuntimeError("Symlink loop from recursive filesystem")
+
+    original_path = skill_executor.Path
+    monkeypatch.setattr(
+        skill_executor,
+        "Path",
+        lambda value: _BrokenPath(value) if str(value) == "/bad" else original_path(value),
+    )
+
+    updated = skill_executor._pin_pythonpath_to_repo_root(env, repo_root)
+    entries = [item for item in updated["PYTHONPATH"].split(os.pathsep) if item]
+    assert entries[0] == str(repo_root.resolve())
+    assert "/bad" in entries
+
+
+def test_analyze_import_probe_reports_mixed_roots(tmp_path: Path) -> None:
+    warning = skill_executor._analyze_import_probe(
+        workspace_root=tmp_path,
+        probe_payload={
+            "module_file": "/app/moonmind/__init__.py",
+            "sys_path": [str(tmp_path), "/app", "/usr/lib/python3.11"],
+        },
+    )
+
+    assert warning is not None
+    assert "mixed module roots detected" in warning
+    assert str((tmp_path / "moonmind").resolve()) in warning
+    assert "/app/moonmind" in warning
+
+
+def test_analyze_import_probe_allows_workspace_root(tmp_path: Path) -> None:
+    warning = skill_executor._analyze_import_probe(
+        workspace_root=tmp_path,
+        probe_payload={
+            "module_file": str(tmp_path / "moonmind" / "__init__.py"),
+            "sys_path": [str(tmp_path), "/usr/lib/python3.11"],
+        },
+    )
+
+    assert warning is None
