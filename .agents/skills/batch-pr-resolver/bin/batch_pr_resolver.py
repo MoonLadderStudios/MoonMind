@@ -295,7 +295,8 @@ def _build_queue_request(
                     "startingBranch": branch,
                     "newBranch": branch,
                 },
-                "publish": {"mode": "branch"},
+                # `pr-resolver` performs commit/push/merge itself.
+                "publish": {"mode": "none"},
             },
         },
     }
