@@ -9,7 +9,9 @@ from moonmind.workflows.agent_queue.task_contract import (
     TaskContractError,
     build_canonical_task_view,
     build_task_stage_plan,
+    is_self_managed_publish_skill,
     normalize_queue_job_payload,
+    resolve_publish_mode_for_skill,
 )
 
 pytestmark = [pytest.mark.speckit]
@@ -57,6 +59,82 @@ def test_normalize_task_payload_defaults_publish_mode_to_pr() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
+def test_normalize_task_payload_allows_blank_instructions_with_explicit_primary_skill() -> (
+    None
+):
+    """Primary explicit task skill should satisfy objective requirement when instructions are blank."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "",
+                "skill": {"id": "batch-pr-resolver", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert normalized["task"]["instructions"] is None
+    assert normalized["task"]["skill"]["id"] == "batch-pr-resolver"
+
+
+def test_normalize_task_payload_allows_blank_instructions_with_primary_step_skill() -> (
+    None
+):
+    """Primary step skill should satisfy objective requirement when task instructions are blank."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "task": {
+                "instructions": "",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {"skill": {"id": "batch-pr-resolver", "args": {}}},
+                ],
+            },
+        },
+    )
+
+    assert normalized["task"]["instructions"] is None
+    assert normalized["task"]["steps"][0]["skill"]["id"] == "batch-pr-resolver"
+
+
+def test_normalize_task_payload_requires_instructions_without_explicit_primary_skill() -> (
+    None
+):
+    """Blank task objective requires explicit task/primary-step skill selection."""
+
+    with pytest.raises(
+        TaskContractError,
+        match=(
+            "task.instructions is required unless task.skill or the primary step "
+            "selects an explicit skill"
+        ),
+    ):
+        normalize_queue_job_payload(
+            job_type="task",
+            payload={
+                "repository": "Moon/Mind",
+                "task": {
+                    "instructions": "",
+                    "skill": {"id": "auto", "args": {}},
+                    "runtime": {"mode": "codex"},
+                    "git": {"startingBranch": None, "newBranch": None},
+                    "publish": {"mode": "none"},
+                },
+            },
+        )
+
+
 def test_normalize_task_payload_rejects_pr_resolver_without_publish_none() -> None:
     """`pr-resolver` tasks must disable worker publish stage explicitly."""
 
@@ -77,6 +155,25 @@ def test_normalize_task_payload_rejects_pr_resolver_without_publish_none() -> No
                 },
             },
         )
+
+
+def test_resolve_publish_mode_for_self_managed_skill_requires_none() -> None:
+    """Self-managed skills should always resolve to publish.mode='none'."""
+
+    assert is_self_managed_publish_skill("pr-resolver") is True
+    assert resolve_publish_mode_for_skill("pr-resolver", "none") == "none"
+    with pytest.raises(
+        TaskContractError,
+        match="task.publish.mode must be 'none' when using skill 'pr-resolver'",
+    ):
+        resolve_publish_mode_for_skill("pr-resolver", "branch")
+
+
+def test_resolve_publish_mode_for_non_self_managed_skill_preserves_mode() -> None:
+    """Non self-managed skills should retain requested publish mode."""
+
+    assert is_self_managed_publish_skill("batch-pr-resolver") is False
+    assert resolve_publish_mode_for_skill("batch-pr-resolver", "branch") == "branch"
 
 
 def test_normalize_task_payload_rejects_resolve_pr_without_pr_resolver() -> None:

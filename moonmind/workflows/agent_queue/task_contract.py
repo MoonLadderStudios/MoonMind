@@ -90,6 +90,29 @@ def _normalize_publish_mode(value: object) -> str:
     return candidate
 
 
+def _normalize_skill_id(value: object) -> str:
+    return (_clean_optional_str(value) or "").lower()
+
+
+def is_self_managed_publish_skill(skill_id: object) -> bool:
+    """Return True when the selected skill handles commit/push/merge directly."""
+
+    return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
+
+
+def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> str:
+    """Resolve publish mode for a skill while enforcing self-managed constraints."""
+
+    publish_mode = _normalize_publish_mode(requested_mode)
+    if is_self_managed_publish_skill(skill_id):
+        if publish_mode != "none":
+            raise TaskContractError(
+                f"task.publish.mode must be 'none' when using skill '{_normalize_skill_id(skill_id)}'"
+            )
+        return "none"
+    return publish_mode
+
+
 def _is_resolve_pr_objective(value: object) -> bool:
     """Return True when task instructions target PR resolution behavior."""
 
@@ -106,6 +129,19 @@ def _contains_no_commit_push_constraint(value: object) -> bool:
     if not text:
         return False
     return _NO_COMMIT_PUSH_PATTERN.search(text) is not None
+
+
+def _has_explicit_skill_selection(value: object) -> bool:
+    """Return True when a skill identifier is explicitly set (not blank/auto)."""
+
+    if isinstance(value, Mapping):
+        skill_id = value.get("id")
+    else:
+        skill_id = getattr(value, "id", None)
+    normalized = _clean_optional_str(skill_id)
+    if normalized is None:
+        return False
+    return _normalize_skill_id(normalized) != "auto"
 
 
 def _normalize_capabilities(values: list[object] | tuple[object, ...]) -> list[str]:
@@ -546,8 +582,8 @@ class TaskExecutionSpec(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    instructions: str = Field(
-        ...,
+    instructions: str | None = Field(
+        None,
         alias="instructions",
         validation_alias=AliasChoices("instructions", "instruction"),
     )
@@ -568,11 +604,8 @@ class TaskExecutionSpec(BaseModel):
 
     @field_validator("instructions", mode="before")
     @classmethod
-    def _normalize_instructions(cls, value: object) -> str:
-        cleaned = _clean_optional_str(value)
-        if not cleaned:
-            raise TaskContractError("task.instructions is required")
-        return cleaned
+    def _normalize_instructions(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
 
     @field_validator("propose_tasks", mode="before")
     @classmethod
@@ -627,20 +660,29 @@ class TaskExecutionSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_primary_objective_or_skill(self) -> "TaskExecutionSpec":
+        if self.instructions:
+            return self
+        if _has_explicit_skill_selection(self.skill):
+            return self
+        primary_step = self.steps[0] if self.steps else None
+        if primary_step and _has_explicit_skill_selection(primary_step.skill):
+            return self
+        raise TaskContractError(
+            "task.instructions is required unless task.skill or the primary step "
+            "selects an explicit skill"
+        )
+
+    @model_validator(mode="after")
     def _validate_skill_publish_compatibility(self) -> "TaskExecutionSpec":
-        skill_ids: set[str] = {str(self.skill.id or "").strip().lower()}
+        skill_ids: set[str] = {_normalize_skill_id(self.skill.id)}
         for step in self.steps:
             if step.skill is None:
                 continue
-            skill_ids.add(str(step.skill.id or "").strip().lower())
+            skill_ids.add(_normalize_skill_id(step.skill.id))
 
-        requires_self_managed_publish = bool(
-            skill_ids.intersection(_SELF_MANAGED_PUBLISH_SKILLS)
-        )
-        if requires_self_managed_publish and self.publish.mode != "none":
-            raise TaskContractError(
-                "task.publish.mode must be 'none' when using skill 'pr-resolver'"
-            )
+        for skill_id in skill_ids:
+            resolve_publish_mode_for_skill(skill_id, self.publish.mode)
         return self
 
     @model_validator(mode="after")
@@ -1043,16 +1085,21 @@ def build_canonical_task_view(
             if isinstance(source_publish, Mapping):
                 source_publish_mode = source_publish.get("mode")
 
-    publish_mode = _normalize_publish_mode(
+    publish_mode_candidate = (
         source_publish_mode
         if normalized_type == CANONICAL_TASK_JOB_TYPE
         else ((canonical.get("task") or {}).get("publish") or {}).get("mode")
     )
+    task_node = canonical.get("task")
+    task = task_node if isinstance(task_node, Mapping) else {}
+    skill_node = task.get("skill") or {}
+    skill = skill_node if isinstance(skill_node, Mapping) else {}
+    skill_id = skill.get("id")
+    publish_mode = resolve_publish_mode_for_skill(skill_id, publish_mode_candidate)
     canonical["task"]["publish"]["mode"] = publish_mode
     if publish_mode == "pr":
         required.append("gh")
 
-    skill_node = (canonical.get("task") or {}).get("skill") or {}
     skill_caps = skill_node.get("requiredCapabilities")
     if isinstance(skill_caps, list):
         required.extend(skill_caps)
@@ -1222,5 +1269,7 @@ __all__ = [
     "build_task_stage_plan",
     "build_canonical_task_view",
     "has_attachment_mutation_fields",
+    "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
+    "resolve_publish_mode_for_skill",
 ]

@@ -5189,6 +5189,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_MODEL_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("MODEL_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_CAPABILITIES", raising=False)
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
     monkeypatch.delenv("MOONMIND_DOCKER_BINARY", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)

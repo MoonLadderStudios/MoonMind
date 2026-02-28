@@ -322,6 +322,33 @@ tbody tr:hover {
   gap: 0.85rem;
 }
 
+@keyframes proposal-consume-flash {
+  0%,
+  37.5% {
+    box-shadow: 0 0 0 3px rgb(var(--mm-ok) / 0.25);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgb(var(--mm-ok) / 0);
+  }
+}
+
+tr[data-proposal-id].proposal-consuming,
+.queue-card[data-proposal-id].proposal-consuming {
+  transition: opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  opacity: 0.55;
+  transform: scale(0.985);
+  animation: proposal-consume-flash 320ms ease-out;
+}
+
+tr[data-proposal-id].proposal-consuming td {
+  background-color: rgb(var(--mm-ok) / 0.14);
+}
+
+.queue-card[data-proposal-id].proposal-consuming {
+  background-color: rgb(var(--mm-ok) / 0.12);
+}
+
 .queue-card-header {
   display: flex;
   justify-content: space-between;

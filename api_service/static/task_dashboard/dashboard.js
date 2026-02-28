@@ -1988,7 +1988,7 @@
         const titleWithId = rowId ? `${title} · ${rowId}` : title;
         const encodedRowId = encodeURIComponent(String(id || ""));
         return `
-          <li class="queue-card">
+          <li class="queue-card" data-proposal-id="${escapeHtml(rowId)}">
             <div data-proposal-id="${escapeHtml(rowId)}"
               data-proposal-title="${escapeHtml(title)}"
               data-proposal-repo="${escapeHtml(repo)}"></div>
@@ -2327,6 +2327,42 @@
     return { ok: true, value };
   };
 
+  const hasExplicitSkillSelection = (skillId) => {
+    const normalized = String(skillId || "").trim().toLowerCase();
+    return Boolean(normalized) && normalized !== "auto";
+  };
+
+  const validatePrimaryStepSubmission = (primaryStep = {}, options = {}) => {
+    if (!primaryStep || typeof primaryStep !== "object" || Array.isArray(primaryStep)) {
+      return {
+        ok: false,
+        error: "Add at least one step before submitting.",
+      };
+    }
+    const instructions = String(primaryStep.instructions || "").trim();
+    const skillId = String(primaryStep.skillId || "").trim();
+    const additionalStepsCount = Number(options.additionalStepsCount) || 0;
+    if (!instructions && additionalStepsCount > 0) {
+      return {
+        ok: false,
+        error: "Primary step instructions are required when additional steps are provided.",
+      };
+    }
+    if (instructions || hasExplicitSkillSelection(skillId)) {
+      return {
+        ok: true,
+        value: {
+          instructions,
+          skillId,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: "Primary step requires instructions or an explicit skill selection.",
+    };
+  };
+
   const SUBMIT_DRAFT_STORAGE_KEY = "moonmind.submitWorkDrafts.v1";
   const readSubmitDraftStorage = () => {
     try {
@@ -2382,6 +2418,27 @@
   const normalizeOrchestratorPriority = (value) => {
     const normalized = String(value || "normal").trim().toLowerCase();
     return normalized === "high" ? "high" : "normal";
+  };
+
+  const resolveQueueSubmitRuntimeUiState = (runtimeValue) => {
+    const normalizedRuntime = String(runtimeValue || "")
+      .trim()
+      .toLowerCase();
+    const isOrchestratorRuntime = normalizedRuntime === ORCHESTRATOR_RUNTIME;
+    return {
+      isOrchestratorRuntime,
+      showOrchestratorFields: isOrchestratorRuntime,
+      showWorkerPriorityFields: !isOrchestratorRuntime,
+    };
+  };
+
+  const resolveQueueSubmitPriorityForRuntime = (runtimeMode, priorityValues = {}) => {
+    const uiState = resolveQueueSubmitRuntimeUiState(runtimeMode);
+    if (uiState.isOrchestratorRuntime) {
+      return normalizeOrchestratorPriority(priorityValues.orchestratorPriority || "normal");
+    }
+    const priorityValue = Number(priorityValues.priority || 0);
+    return Number.isFinite(priorityValue) ? priorityValue : 0;
   };
 
   const resolveSubmitRuntime = (runtimeValue, fallback) => {
@@ -2484,6 +2541,8 @@
       createSubmitDraftController,
       determineSubmitDestination,
       validateOrchestratorSubmission,
+      validatePrimaryStepSubmission,
+      hasExplicitSkillSelection,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
       readSubmitDraftStorage,
@@ -2492,6 +2551,8 @@
       parseEditJobSearchParam,
       isEditableQueuedTaskJob,
       normalizeOrchestratorPriority,
+      resolveQueueSubmitRuntimeUiState,
+      resolveQueueSubmitPriorityForRuntime,
       persistSubmitDraftsToStorage,
       submitDraftController,
       normalizeDashboardDetailSegment,
@@ -3895,7 +3956,7 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div class="grid-2">
+        <div class="grid-2" data-runtime-visibility="orchestrator">
           <label>Target Service (Orchestrator)
             <input name="targetService" value="${escapeHtml(
               queueDraftTargetService || "orchestrator",
@@ -3907,7 +3968,7 @@
             )}" placeholder="optional" />
           </label>
         </div>
-        <label>Orchestrator Priority
+        <label data-runtime-visibility="orchestrator">Orchestrator Priority
           <select name="orchestratorPriority">
             <option value="normal" ${queueDraftOrchestratorPriority === "normal" ? "selected" : ""}>normal</option>
             <option value="high" ${queueDraftOrchestratorPriority === "high" ? "selected" : ""}>high</option>
@@ -3961,7 +4022,7 @@
             <option value="none" ${queueDraftPublishMode === "none" ? "selected" : ""}>none</option>
           </select>
         </label>
-        <div class="grid-2">
+        <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
             <input type="number" name="priority" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" />
           </label>
@@ -4099,6 +4160,21 @@
     };
     let activeDefaultModel = "";
     let activeDefaultEffort = "";
+    const applyQueueSubmitRuntimeUiState = (runtimeValue) => {
+      const uiState = resolveQueueSubmitRuntimeUiState(runtimeValue);
+      const updateVisibility = (mode, isVisible) => {
+        const nodes = form.querySelectorAll(`[data-runtime-visibility="${mode}"]`);
+        nodes.forEach((node) => {
+          if (isVisible) {
+            node.classList.remove("hidden");
+          } else {
+            node.classList.add("hidden");
+          }
+        });
+      };
+      updateVisibility("orchestrator", uiState.showOrchestratorFields);
+      updateVisibility("worker", uiState.showWorkerPriorityFields);
+    };
     const applyRuntimeDefaults = (runtime) => {
       if (!modelInputElement || !effortInputElement) {
         return;
@@ -4151,6 +4227,7 @@
     };
     loadRuntimeCapabilities();
     if (runtimeSelect) {
+      applyQueueSubmitRuntimeUiState(runtimeSelect.value);
       applyRuntimeDefaults(runtimeSelect.value);
       runtimeSelect.addEventListener("change", (event) => {
         const selectedRuntime =
@@ -4163,12 +4240,14 @@
         }
         if (selectedRuntime === ORCHESTRATOR_RUNTIME) {
           activeWorkerRuntime = selectedRuntime;
+          applyQueueSubmitRuntimeUiState(selectedRuntime);
           applyRuntimeDefaults(defaultTaskRuntime);
           refreshSkillDatalist();
           return;
         }
         const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
         activeWorkerRuntime = nextRuntime || activeWorkerRuntime;
+        applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
@@ -4256,7 +4335,7 @@
             ? "auto (default), speckit-orchestrate, ..."
             : "inherit primary step skill";
           const instructionsLabel = isPrimaryStep
-            ? "Instructions (required for primary step)"
+            ? "Instructions (optional when a primary skill is selected)"
             : "Instructions (optional)";
           const instructionsPlaceholder = isPrimaryStep
             ? "Describe the task to execute against the repository."
@@ -4265,7 +4344,7 @@
           const downDisabled = index === stepState.length - 1 ? "disabled" : "";
           const removeDisabled = "";
           const defaultHint = isPrimaryStep
-            ? "Leave blank to auto-select a skill."
+            ? "Primary step must include instructions or an explicit skill."
             : "Leave skill blank to inherit primary step defaults.";
           const showSkillArgsField = shouldShowSkillArgs(step);
           const skillArgsLabelClasses = ["queue-step-skill-args-field"];
@@ -5012,17 +5091,13 @@
 
       const formData = new FormData(form);
       const primaryStep = stepState[0] || null;
-      if (!primaryStep) {
+      const primaryValidation = validatePrimaryStepSubmission(primaryStep);
+      if (!primaryValidation.ok) {
         message.className = "notice error queue-submit-message";
-        message.textContent = "Add at least one step before submitting.";
+        message.textContent = primaryValidation.error;
         return;
       }
-      const instructions = String(primaryStep.instructions || "").trim();
-      if (!instructions) {
-        message.className = "notice error queue-submit-message";
-        message.textContent = "Primary step instructions are required.";
-        return;
-      }
+      const instructions = primaryValidation.value.instructions;
       const objectiveInstructions = resolveObjectiveInstructions(instructions);
 
       const repositoryInput = String(formData.get("repository") || "").trim();
@@ -5071,8 +5146,13 @@
         return;
       }
 
-      const priority = Number(formData.get("priority") || 0);
-      if (!Number.isInteger(priority)) {
+      const priority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
+        priority: formData.get("priority"),
+      });
+      if (
+        runtimeMode !== ORCHESTRATOR_RUNTIME &&
+        !Number.isInteger(priority)
+      ) {
         message.className = "notice error queue-submit-message";
         message.textContent = "Priority must be an integer.";
         return;
@@ -5086,7 +5166,7 @@
       }
       const proposeTasks = formData.get("proposeTasks") !== null;
 
-      const skillId = String(primaryStep.skillId || "").trim() || "auto";
+      const skillId = String(primaryValidation.value.skillId || "").trim() || "auto";
       const skillArgsRaw = shouldShowSkillArgs(primaryStep)
         ? String(primaryStep.skillArgs || "").trim()
         : "";
@@ -5162,7 +5242,14 @@
         }
         additionalSteps.push({ sourceIndex: index, payload: stepPayload });
       }
-
+      const additionalStepValidation = validatePrimaryStepSubmission(primaryStep, {
+        additionalStepsCount: additionalSteps.length,
+      });
+      if (!additionalStepValidation.ok) {
+        message.className = "notice error queue-submit-message";
+        message.textContent = additionalStepValidation.error;
+        return;
+      }
       if (runtimeMode === ORCHESTRATOR_RUNTIME) {
         const targetService = String(
           formData.get("targetService") || "orchestrator",
@@ -5172,9 +5259,9 @@
           message.textContent = "Target service is required for orchestrator tasks.";
           return;
         }
-        const orchestratorPriority = normalizeOrchestratorPriority(
-          formData.get("orchestratorPriority") || "normal",
-        );
+        const orchestratorPriority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
+          orchestratorPriority: formData.get("orchestratorPriority"),
+        });
         const approvalToken = String(formData.get("approvalToken") || "").trim();
         const orchestratorSteps = [];
         for (let index = 0; index < stepState.length; index += 1) {
@@ -5546,11 +5633,9 @@
       );
       return;
     }
-    if (isWorkerSubmitRuntime(normalizedRuntime)) {
-      renderQueueSubmitPage(normalizedRuntime);
-      return;
-    }
-    renderOrchestratorSubmitPage();
+    // Use the unified queue submit form for every supported runtime so runtime
+    // visibility toggles are consistently applied from one code path.
+    renderQueueSubmitPage(normalizedRuntime);
   }
 
   function renderOrchestratorSubmitPage() {
@@ -7083,6 +7168,38 @@
       originId: initialOriginId,
       rows: [],
       notice: "",
+      noticeLevel: "",
+    };
+    const proposalConsumedFlashMs = 320;
+
+    const consumeProposalRow = async (proposalId, actionLabel) => {
+      const normalizedProposalId = String(proposalId || "");
+      if (!normalizedProposalId) {
+        return;
+      }
+      const consumeTargets = Array.from(
+        root.querySelectorAll("tr[data-proposal-id], .queue-card[data-proposal-id]"),
+      ).filter(
+        (node) => String(node.getAttribute("data-proposal-id") || "") === normalizedProposalId,
+      );
+      consumeTargets.forEach((node) => {
+        node.classList.add("proposal-consuming");
+      });
+      if (consumeTargets.length) {
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, proposalConsumedFlashMs);
+        });
+      }
+      consumeTargets.forEach((node) => {
+        node.classList.remove("proposal-consuming");
+      });
+      state.rows = (state.rows || []).filter(
+        (row) => String(pick(row, "id") || "") !== normalizedProposalId,
+      );
+      const shortId = normalizedProposalId.slice(0, 8) || normalizedProposalId;
+      state.notice = `Proposal ${shortId} ${actionLabel} and removed from this queue view.`;
+      state.noticeLevel = "ok";
+      renderView();
     };
 
     const renderFilters = () => {
@@ -7203,16 +7320,18 @@
           button.disabled = true;
           try {
             if (action === "promote") {
-              const response = await apiPromoteProposal(proposalId);
-              window.location.href = resolvePromotedQueueRoute(response);
+              await apiPromoteProposal(proposalId);
+              await consumeProposalRow(proposalId, "promoted");
               return;
             } else if (action === "dismiss") {
               await apiDismissProposal(proposalId);
+              await consumeProposalRow(proposalId, "dismissed");
+              return;
             }
-            await load();
           } catch (error) {
             console.error(`proposal ${action} failed`, error);
             state.notice = `Failed to ${action} proposal ${proposalId}.`;
+            state.noticeLevel = "error";
             renderView();
           } finally {
             button.disabled = false;
@@ -7222,8 +7341,9 @@
     };
 
     const renderView = () => {
+      const noticeClass = state.noticeLevel === "ok" ? "notice ok" : "notice error";
       const noticeHtml = state.notice
-        ? `<div class="notice error">${escapeHtml(state.notice)}</div>`
+        ? `<div class="${noticeClass}">${escapeHtml(state.notice)}</div>`
         : "";
       setView(
         "Task Proposals",
@@ -7257,10 +7377,12 @@
         const payload = await fetchJson(`${listEndpoint}?${params.toString()}`);
         state.rows = payload?.items || [];
         state.notice = "";
+        state.noticeLevel = "";
       } catch (error) {
         console.error("proposals list load failed", error);
         state.rows = [];
         state.notice = "Failed to load proposals.";
+        state.noticeLevel = "error";
       }
       renderView();
     };
@@ -7281,6 +7403,8 @@
       `Proposal ${proposalId}`,
       "<p class='loading'>Loading proposal...</p>",
     );
+
+    let detailNotice = "";
 
     const renderDetail = (row) => {
       const origin = pick(row, "origin") || {};
@@ -7333,10 +7457,14 @@
             }>${escapeHtml(value.toUpperCase())}</option>`,
         )
         .join("");
+      const detailNoticeMarkup = detailNotice
+        ? `<div class="notice ok">${escapeHtml(detailNotice)}</div>`
+        : "";
       setView(
         "Proposal Detail",
         `Proposal ${proposalId}`,
         `
+          ${detailNoticeMarkup}
           <div class="grid-2">
             <div class="card"><strong>Status:</strong> ${statusBadge(
               "proposals",
@@ -7416,8 +7544,9 @@
         promoteButton.addEventListener("click", async () => {
           promoteButton.disabled = true;
           try {
-            const response = await apiPromoteProposal(proposalId);
-            window.location.href = resolvePromotedQueueRoute(response);
+            await apiPromoteProposal(proposalId);
+            detailNotice = "Proposal promoted and consumed. It will disappear from the queue list.";
+            await load(true);
             return;
           } catch (error) {
             console.error("proposal promote failed", error);
@@ -7459,8 +7588,9 @@
           }
           editButton.disabled = true;
           try {
-            const response = await apiPromoteProposal(proposalId, overrides);
-            window.location.href = resolvePromotedQueueRoute(response);
+            await apiPromoteProposal(proposalId, overrides);
+            detailNotice = "Proposal promoted and consumed. It will disappear from the queue list.";
+            await load(true);
             return;
           } catch (error) {
             console.error("proposal edit-promote failed", error);
@@ -7508,13 +7638,22 @@
         renderDetail(detail);
       } catch (error) {
         console.error("proposal detail load failed", error);
-        if (!silent) {
-          setView(
-            "Proposal Detail",
-            `Proposal ${proposalId}`,
-            "<div class='notice error'>Failed to load proposal.</div>",
-          );
+        if (silent && !detailNotice) {
+          return;
         }
+        const detailNoticeMarkup = detailNotice
+          ? `<div class="notice ok">${escapeHtml(detailNotice)}</div>`
+          : "";
+        const errorMessage = detailNotice
+          ? "Failed to refresh proposal details after consume. It may already be removed from the queue."
+          : "Failed to load proposal.";
+        setView(
+          "Proposal Detail",
+          `Proposal ${proposalId}`,
+          `${detailNoticeMarkup}
+           <div class='notice error'>${escapeHtml(errorMessage)}</div>
+           <p class='small'><a href='/tasks/proposals'>Back to proposals list</a></p>`,
+        );
       }
     };
 
