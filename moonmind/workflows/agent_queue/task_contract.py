@@ -108,6 +108,19 @@ def _contains_no_commit_push_constraint(value: object) -> bool:
     return _NO_COMMIT_PUSH_PATTERN.search(text) is not None
 
 
+def _has_explicit_skill_selection(value: object) -> bool:
+    """Return True when a skill identifier is explicitly set (not blank/auto)."""
+
+    if isinstance(value, Mapping):
+        skill_id = value.get("id")
+    else:
+        skill_id = getattr(value, "id", None)
+    normalized = _clean_optional_str(skill_id)
+    if normalized is None:
+        return False
+    return normalized.lower() != "auto"
+
+
 def _normalize_capabilities(values: list[object] | tuple[object, ...]) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -546,8 +559,8 @@ class TaskExecutionSpec(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    instructions: str = Field(
-        ...,
+    instructions: str | None = Field(
+        None,
         alias="instructions",
         validation_alias=AliasChoices("instructions", "instruction"),
     )
@@ -568,11 +581,8 @@ class TaskExecutionSpec(BaseModel):
 
     @field_validator("instructions", mode="before")
     @classmethod
-    def _normalize_instructions(cls, value: object) -> str:
-        cleaned = _clean_optional_str(value)
-        if not cleaned:
-            raise TaskContractError("task.instructions is required")
-        return cleaned
+    def _normalize_instructions(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
 
     @field_validator("propose_tasks", mode="before")
     @classmethod
@@ -625,6 +635,20 @@ class TaskExecutionSpec(BaseModel):
                 "task.steps is not supported when task.container.enabled=true"
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_primary_objective_or_skill(self) -> "TaskExecutionSpec":
+        if self.instructions:
+            return self
+        if _has_explicit_skill_selection(self.skill):
+            return self
+        primary_step = self.steps[0] if self.steps else None
+        if primary_step and _has_explicit_skill_selection(primary_step.skill):
+            return self
+        raise TaskContractError(
+            "task.instructions is required unless task.skill or the primary step "
+            "selects an explicit skill"
+        )
 
     @model_validator(mode="after")
     def _validate_skill_publish_compatibility(self) -> "TaskExecutionSpec":

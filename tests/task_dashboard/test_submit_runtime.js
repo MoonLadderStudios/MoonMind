@@ -213,6 +213,64 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(noInstructionWithSkill.value.instruction, "");
 })();
 
+(function testValidatePrimaryStepSubmissionAllowsInstructionsOrExplicitSkill() {
+  assert.strictEqual(typeof helpers.validatePrimaryStepSubmission, "function");
+  assert.strictEqual(typeof helpers.hasExplicitSkillSelection, "function");
+
+  const withInstructions = helpers.validatePrimaryStepSubmission({
+    instructions: "Implement change",
+    skillId: "",
+  });
+  assert.strictEqual(withInstructions.ok, true);
+  assert.strictEqual(withInstructions.value.instructions, "Implement change");
+
+  const withSkillOnly = helpers.validatePrimaryStepSubmission({
+    instructions: "",
+    skillId: "batch-pr-resolver",
+  });
+  assert.strictEqual(withSkillOnly.ok, true);
+  assert.strictEqual(withSkillOnly.value.skillId, "batch-pr-resolver");
+
+  const withAutoSkillOnly = helpers.validatePrimaryStepSubmission({
+    instructions: "",
+    skillId: "auto",
+  });
+  assert.strictEqual(withAutoSkillOnly.ok, false);
+  assert.ok(/instructions or an explicit skill/i.test(withAutoSkillOnly.error));
+
+  assert.strictEqual(helpers.hasExplicitSkillSelection("batch-pr-resolver"), true);
+  assert.strictEqual(helpers.hasExplicitSkillSelection("AUTO"), false);
+  assert.strictEqual(helpers.hasExplicitSkillSelection(""), false);
+
+  const additionalStepRequiresInstructions = helpers.validatePrimaryStepSubmission(
+    {
+      instructions: "",
+      skillId: "batch-pr-resolver",
+    },
+    { additionalStepsCount: 1 },
+  );
+  assert.strictEqual(additionalStepRequiresInstructions.ok, false);
+  assert.ok(/required when additional steps/i.test(additionalStepRequiresInstructions.error));
+
+  const additionalStepAllowedWhenPrimarySet = helpers.validatePrimaryStepSubmission(
+    {
+      instructions: "Plan work",
+      skillId: "batch-pr-resolver",
+    },
+    { additionalStepsCount: 1 },
+  );
+  assert.strictEqual(additionalStepAllowedWhenPrimarySet.ok, true);
+
+  const noAdditionalStepAllowedWithoutPrimary = helpers.validatePrimaryStepSubmission(
+    {
+      instructions: "",
+      skillId: "batch-pr-resolver",
+    },
+    { additionalStepsCount: 0 },
+  );
+  assert.strictEqual(noAdditionalStepAllowedWithoutPrimary.ok, true);
+})();
+
 (function testNormalizeOrchestratorPriority() {
   assert.strictEqual(helpers.normalizeOrchestratorPriority("HIGH"), "high");
   assert.strictEqual(helpers.normalizeOrchestratorPriority("low"), "normal");
