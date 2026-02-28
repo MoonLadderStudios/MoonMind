@@ -222,6 +222,54 @@ async def test_parse_positive_int_field_rejects_invalid_values() -> None:
         )
 
 
+class _RecordingPutClient:
+    """Minimal async HTTP client stub capturing PUT calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def put(self, path: str, *, json: dict[str, object]) -> object:
+        self.calls.append((path, dict(json)))
+        return _QueueApiResponseStub()
+
+
+class _QueueApiResponseStub:
+    """Minimal response shim implementing QueueApiClient JSON access contract."""
+
+    content = b"{}"
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {}
+
+
+async def test_replace_worker_runtime_capabilities_uses_put(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime capability sync should use the queue endpoint's PUT contract."""
+
+    client = QueueApiClient(
+        base_url="http://moonmind.test",
+        worker_token="token",
+    )
+    recorder = _RecordingPutClient()
+    monkeypatch.setattr(client, "_client", recorder)
+    runtime_caps = {"gemini": {"models": ["gemini-3-pro"], "efforts": []}}
+
+    await client.replace_worker_runtime_capabilities(
+        runtime_capabilities=runtime_caps,
+    )
+
+    assert recorder.calls == [
+        (
+            "/api/queue/workers/tokens/capabilities",
+            {"runtimeCapabilities": runtime_caps},
+        )
+    ]
+
+
 class FailingUploadQueueClient(FakeQueueClient):
     """Queue client stub that simulates artifact upload failures."""
 

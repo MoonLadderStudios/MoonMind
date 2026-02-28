@@ -1484,6 +1484,14 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
+    async def _put_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await self._client.put(path, json=json)
+            response.raise_for_status()
+            return dict(response.json()) if response.content else {}
+        except httpx.HTTPError as exc:
+            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
+
     async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
         """Submit a task proposal to the MoonMind API."""
 
@@ -1496,7 +1504,7 @@ class QueueApiClient:
     ) -> None:
         """Publish worker runtime capabilities to queue metadata."""
 
-        await self._post_json(
+        await self._put_json(
             "/api/queue/workers/tokens/capabilities",
             json={"runtimeCapabilities": runtime_capabilities},
         )
@@ -6694,6 +6702,34 @@ class CodexWorker:
 
         return artifacts
 
+    def _prepare_post_task_proposal_evidence_paths(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+    ) -> tuple[str, str]:
+        """Mirror worker artifacts into repo-local paths accessible to CLI tools."""
+
+        evidence_root = prepared.repo_dir / ".artifacts" / "proposal_inputs"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+
+        source_task_context = prepared.artifacts_dir / "task_context.json"
+        mirrored_task_context = evidence_root / "task_context.json"
+        if source_task_context.exists():
+            shutil.copy2(source_task_context, mirrored_task_context)
+        else:
+            mirrored_task_context.write_text("{}\n", encoding="utf-8")
+
+        source_logs_dir = prepared.artifacts_dir / "logs"
+        mirrored_logs_dir = evidence_root / "logs"
+        if mirrored_logs_dir.exists():
+            shutil.rmtree(mirrored_logs_dir)
+        if source_logs_dir.exists():
+            shutil.copytree(source_logs_dir, mirrored_logs_dir)
+        else:
+            mirrored_logs_dir.mkdir(parents=True, exist_ok=True)
+
+        return str(mirrored_task_context.resolve()), str(evidence_root.resolve())
+
     async def _run_post_task_proposal_skills(
         self,
         *,
@@ -6754,10 +6790,21 @@ class CodexWorker:
             encoding="utf-8"
         )
         proposal_output_path_str = str(proposal_output_path_for_skill)
-        task_context_path = str(
-            (prepared.artifacts_dir / "task_context.json").resolve()
-        )
-        artifacts_path = str(prepared.artifacts_dir.resolve())
+        try:
+            task_context_path, artifacts_path = (
+                self._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+            )
+        except OSError:
+            logger.warning(
+                "Failed to mirror proposal evidence into repo workspace for job %s; "
+                "falling back to worker artifact paths.",
+                job.id,
+                exc_info=True,
+            )
+            task_context_path = str(
+                (prepared.artifacts_dir / "task_context.json").resolve()
+            )
+            artifacts_path = str(prepared.artifacts_dir.resolve())
         cancel_event = getattr(self, "_active_cancel_event", None)
         (prepared.artifacts_dir / "codex_exec.log").unlink(missing_ok=True)
         (prepared.artifacts_dir / "changes.patch").unlink(missing_ok=True)

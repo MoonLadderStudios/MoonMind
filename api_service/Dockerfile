@@ -269,6 +269,7 @@ RUN apt-get update && \
         openssh-client \
         tmux \
         tmate \
+        procps \
         gnupg \
         nodejs && \
     install -m 0755 -d /etc/apt/keyrings && \
@@ -312,6 +313,8 @@ RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 # Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
 RUN pip install -e .
 RUN pip install readmeai~=0.6.3 --no-deps
+# Keep test runners available in all worker images (codex/gemini/claude).
+RUN pip install pytest pytest-xdist
 
 # Install test extras when requested so compose-driven test runs have pytest and
 # related dependencies baked into the image, avoiding runtime network installs.
