@@ -293,8 +293,24 @@ const helpers = loadSubmitRuntimeHelpers();
 (function testApplyElementVisibilityTogglesHiddenAttributeAndClass() {
   assert.strictEqual(typeof helpers.applyElementVisibility, "function");
   const classNames = new Set(["grid-2"]);
+  let displayValue = "";
+  let displayPriority = "";
   const node = {
     hidden: false,
+    style: {
+      setProperty(name, value, priority) {
+        if (name === "display") {
+          displayValue = value;
+          displayPriority = priority || "";
+        }
+      },
+      removeProperty(name) {
+        if (name === "display") {
+          displayValue = "";
+          displayPriority = "";
+        }
+      },
+    },
     classList: {
       add(name) {
         classNames.add(name);
@@ -311,10 +327,14 @@ const helpers = loadSubmitRuntimeHelpers();
   helpers.applyElementVisibility(node, false);
   assert.strictEqual(node.hidden, true);
   assert.strictEqual(node.classList.contains("hidden"), true);
+  assert.strictEqual(displayValue, "none");
+  assert.strictEqual(displayPriority, "important");
 
   helpers.applyElementVisibility(node, true);
   assert.strictEqual(node.hidden, false);
   assert.strictEqual(node.classList.contains("hidden"), false);
+  assert.strictEqual(displayValue, "");
+  assert.strictEqual(displayPriority, "");
 })();
 
 (function testResolveQueueSubmitPriorityForRuntime() {

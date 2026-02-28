@@ -2436,14 +2436,27 @@
     if (!node) {
       return;
     }
+    const style =
+      node.style &&
+      typeof node.style === "object" &&
+      typeof node.style.setProperty === "function" &&
+      typeof node.style.removeProperty === "function"
+        ? node.style
+        : null;
     if (isVisible) {
       node.hidden = false;
+      if (style) {
+        style.removeProperty("display");
+      }
       if (node.classList && typeof node.classList.remove === "function") {
         node.classList.remove("hidden");
       }
       return;
     }
     node.hidden = true;
+    if (style) {
+      style.setProperty("display", "none", "important");
+    }
     if (node.classList && typeof node.classList.add === "function") {
       node.classList.add("hidden");
     }
