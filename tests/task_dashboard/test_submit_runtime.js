@@ -252,9 +252,7 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testParseEditJobSearchParam() {
-  if (typeof helpers.parseEditJobSearchParam !== "function") {
-    return;
-  }
+  assert.strictEqual(typeof helpers.parseEditJobSearchParam, "function");
   const params = new URLSearchParams("editJobId=123e4567-e89b-12d3-a456-426614174000");
   const parsed = helpers.parseEditJobSearchParam(params);
   assert.strictEqual(parsed.provided, true);
@@ -272,9 +270,7 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testIsEditableQueuedTaskJob() {
-  if (typeof helpers.isEditableQueuedTaskJob !== "function") {
-    return;
-  }
+  assert.strictEqual(typeof helpers.isEditableQueuedTaskJob, "function");
   const editable = helpers.isEditableQueuedTaskJob({
     type: "task",
     status: "queued",
@@ -305,9 +301,7 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testStringifySkillArgsPreservesFailureForUnserializableObjects() {
-  if (typeof helpers.stringifySkillArgs !== "function") {
-    return;
-  }
+  assert.strictEqual(typeof helpers.stringifySkillArgs, "function");
   const circular = {};
   circular.self = circular;
   const rendered = helpers.stringifySkillArgs(circular);
@@ -315,10 +309,10 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testBuildQueueSubmissionDraftFromJobKeepsTemplateBoundFirstStep() {
-  if (typeof helpers.buildQueueSubmissionDraftFromJob !== "function") {
-    return;
-  }
+  assert.strictEqual(typeof helpers.buildQueueSubmissionDraftFromJob, "function");
   const draft = helpers.buildQueueSubmissionDraftFromJob({
+    id: "00000000-0000-0000-0000-000000000000",
+    affinityKey: "group-42",
     payload: {
       repository: "Moon/Test",
       task: {
@@ -362,13 +356,49 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(draft.publishMode, "pr");
   assert.strictEqual(draft.model, "");
   assert.strictEqual(draft.effort, "");
+  assert.strictEqual(draft.editJobId, "00000000-0000-0000-0000-000000000000");
+  assert.strictEqual(draft.expectedUpdatedAt, "2026-02-26T00:00:00Z");
+  assert.strictEqual(draft.affinityKey, "group-42");
+})();
+
+(function testBuildQueueSubmissionDraftFromJobPreservesPrimarySkillInTemplateBoundStep() {
+  assert.strictEqual(typeof helpers.buildQueueSubmissionDraftFromJob, "function");
+  const draft = helpers.buildQueueSubmissionDraftFromJob({
+    payload: {
+      repository: "Moon/Test",
+      task: {
+        instructions: "Ship queued fix",
+        skill: {
+          id: "pr-resolver",
+          args: { lane: "hotfix" },
+          requiredCapabilities: ["git", "gh"],
+        },
+        steps: [
+          {
+            id: "step-1",
+            instructions: "Ship queued fix",
+            skill: {
+              id: "",
+            },
+          },
+        ],
+      },
+    },
+  });
+  assert.strictEqual(draft.steps.length, 1);
+  assert.strictEqual(draft.steps[0].id, "step-1");
+  assert.strictEqual(draft.steps[0].instructions, "Ship queued fix");
+  assert.strictEqual(draft.steps[0].skillId, "pr-resolver");
+  assert.deepStrictEqual(JSON.parse(draft.steps[0].skillArgs), { lane: "hotfix" });
+  assert.strictEqual(draft.steps[0].skillRequiredCapabilities, "git, gh");
 })();
 
 (function testBuildQueueSubmissionDraftFromJobPreservesRawEditFields() {
-  if (typeof helpers.buildQueueSubmissionDraftFromJob !== "function") {
-    return;
-  }
+  assert.strictEqual(typeof helpers.buildQueueSubmissionDraftFromJob, "function");
   const draft = helpers.buildQueueSubmissionDraftFromJob({
+    id: "d9a9448b-cddf-47a0-aa72-08b4fba58715",
+    updatedAt: "2026-02-25T01:23:45.678Z",
+    affinityKey: "affinity-a",
     payload: {
       repository: "Moon/Test",
       task: {
@@ -387,4 +417,7 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(draft.model, " model-with-space ");
   assert.strictEqual(draft.effort, " fast ");
   assert.strictEqual(draft.publishMode, " PR ");
+  assert.strictEqual(draft.editJobId, "d9a9448b-cddf-47a0-aa72-08b4fba58715");
+  assert.strictEqual(draft.expectedUpdatedAt, "2026-02-25T01:23:45.678Z");
+  assert.strictEqual(draft.affinityKey, "affinity-a");
 })();
