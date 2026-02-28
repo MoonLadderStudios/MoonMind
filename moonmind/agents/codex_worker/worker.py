@@ -3439,6 +3439,12 @@ class CodexWorker:
         repo_default = str(default_branch or "").strip() or None
         head = str(head_branch or "").strip()
 
+        if requested_base and requested_base == head:
+            raise RuntimeError(
+                f"publish preflight failed: task.publish.prBaseBranch resolves to "
+                f"the working branch '{head}'. Choose a different PR base."
+            )
+
         candidate_sources: list[tuple[str, str]] = []
         for source, raw_value in (
             ("requested", requested_base),
@@ -3456,13 +3462,9 @@ class CodexWorker:
             if candidate == head:
                 continue
             warning_payload: dict[str, Any] | None = None
-            if requested_base is None or requested_base == head:
+            if requested_base is None:
                 warning_payload = {
-                    "reason": (
-                        "missing_pr_base_branch"
-                        if requested_base is None
-                        else "pr_base_equals_head"
-                    ),
+                    "reason": "missing_pr_base_branch",
                     "requestedBaseBranch": requested_base,
                     "configuredTargetBranch": configured_target,
                     "defaultBranch": repo_default,
@@ -4235,6 +4237,64 @@ class CodexWorker:
                 env=prepared.publish_command_env,
             )
 
+            pr_url: str | None = None
+            publish_base_branch = prepared.starting_branch
+            publish_note = f"published branch {prepared.working_branch}"
+            pr_base: str | None = None
+
+            if publish_mode == "pr":
+                try:
+                    pr_base, base_resolution_warning = self._resolve_pr_base_branch(
+                        publish=publish,
+                        starting_branch=prepared.starting_branch,
+                        default_branch=prepared.default_branch,
+                        head_branch=prepared.working_branch,
+                    )
+                    publish_base_branch = pr_base
+                    if base_resolution_warning is not None:
+                        self._append_stage_log(
+                            prepared.publish_log_path,
+                            (
+                                "publish PR base-branch fallback: "
+                                f"{json.dumps(base_resolution_warning, sort_keys=True)}"
+                            ),
+                        )
+                        await self._emit_event(
+                            job_id=job_id,
+                            level="warn",
+                            message="moonmind.task.publish.pr_base_branch_resolution",
+                            payload={**base_resolution_warning, **dict(skill_meta)},
+                        )
+                except RuntimeError as exc:
+                    result_payload = {
+                        "mode": publish_mode,
+                        "branch": prepared.working_branch,
+                        "baseBranch": publish_base_branch,
+                        "prUrl": None,
+                        "skipped": True,
+                        "reason": str(exc),
+                        "verification": verification_payload,
+                    }
+                    prepared.publish_result_path.write_text(
+                        json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    staged_artifacts.extend(
+                        [
+                            ArtifactUpload(
+                                path=prepared.publish_log_path,
+                                name="logs/publish.log",
+                                content_type="text/plain",
+                            ),
+                            ArtifactUpload(
+                                path=prepared.publish_result_path,
+                                name="publish_result.json",
+                                content_type="application/json",
+                            ),
+                        ]
+                    )
+                    raise
+
             commit_message = (
                 self._resolve_publish_text_override(publish.get("commitMessage"))
                 or f"MoonMind task result for job {job_id}"
@@ -4253,31 +4313,7 @@ class CodexWorker:
                 env=prepared.publish_command_env,
             )
 
-            pr_url: str | None = None
-            publish_base_branch = prepared.starting_branch
-            publish_note = f"published branch {prepared.working_branch}"
-            if publish_mode == "pr":
-                pr_base, base_resolution_warning = self._resolve_pr_base_branch(
-                    publish=publish,
-                    starting_branch=prepared.starting_branch,
-                    default_branch=prepared.default_branch,
-                    head_branch=prepared.working_branch,
-                )
-                publish_base_branch = pr_base
-                if base_resolution_warning is not None:
-                    self._append_stage_log(
-                        prepared.publish_log_path,
-                        (
-                            "publish PR base-branch fallback: "
-                            f"{json.dumps(base_resolution_warning, sort_keys=True)}"
-                        ),
-                    )
-                    await self._emit_event(
-                        job_id=job_id,
-                        level="warn",
-                        message="moonmind.task.publish.pr_base_branch_resolution",
-                        payload={**base_resolution_warning, **dict(skill_meta)},
-                    )
+            if publish_mode == "pr" and pr_base is not None:
                 pr_title = self._resolve_publish_text_override(
                     publish.get("prTitle")
                 ) or self._derive_default_pr_title(
