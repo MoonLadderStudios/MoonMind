@@ -36,6 +36,10 @@ from moonmind.agents.codex_worker.handlers import (
     OutputChunkCallback,
     WorkerExecutionResult,
 )
+from moonmind.agents.codex_worker.publish_sanitization import (
+    sanitize_metadata_footer_value,
+    sanitize_publish_subject,
+)
 from moonmind.agents.codex_worker.secret_refs import (
     SecretReferenceError,
     VaultSecretResolver,
@@ -72,22 +76,7 @@ logger = logging.getLogger(__name__)
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
-_FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-_MOONMIND_WORD_PATTERN = re.compile(r"\bmoonmind\b", re.IGNORECASE)
 _UNHELPFUL_STEP_TITLE_PATTERN = re.compile(r"^\s*[\W_]*\d+(?:[\W_]+\d+)*[\W_]*\s*$")
-_SECRET_LIKE_METADATA_PATTERN = re.compile(
-    r"""(?ix)
-    (?:
-        gh[pousr]_[A-Za-z0-9]{8,}
-        | github_pat_[A-Za-z0-9_]{10,}
-        | AIza[0-9A-Za-z_-]{10,}
-        | ATATT[A-Za-z0-9_-]{6,}
-        | AKIA[0-9A-Z]{8,}
-        | -----BEGIN [A-Z ]+PRIVATE KEY-----
-        | (?:token|password|secret)\s*[:=]
-    )
-    """
-)
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 _MOONMIND_SIGNAL_TAGS = frozenset(
     {
@@ -3391,12 +3380,7 @@ class CodexWorker:
     ) -> str:
         """Normalize footer values and redact secret-like tokens."""
 
-        normalized = " ".join(str(value or "").split())
-        if not normalized:
-            return fallback
-        if _SECRET_LIKE_METADATA_PATTERN.search(normalized):
-            return "[REDACTED]"
-        return normalized
+        return sanitize_metadata_footer_value(value, fallback=fallback)
 
     @staticmethod
     def _sanitize_pr_title(
@@ -3404,18 +3388,11 @@ class CodexWorker:
     ) -> str:
         """Keep generated publish subjects concise and scrub known secret patterns."""
 
-        sanitized = title
-        sanitized = _MOONMIND_WORD_PATTERN.sub("", sanitized)
-        if redact_uuids:
-            sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
-        sanitized = " ".join(sanitized.split())
-        if _SECRET_LIKE_METADATA_PATTERN.search(sanitized):
-            sanitized = "[REDACTED]"
-        if not sanitized:
-            sanitized = "Automated update"
-        if len(sanitized) <= max_chars:
-            return sanitized
-        return f"{sanitized[: max_chars - 3].rstrip()}..."
+        return sanitize_publish_subject(
+            title,
+            max_chars=max_chars,
+            redact_uuids=redact_uuids,
+        )
 
     @classmethod
     def _derive_default_publish_subject(

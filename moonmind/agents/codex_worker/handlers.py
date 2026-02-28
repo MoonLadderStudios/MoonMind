@@ -16,6 +16,10 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+from moonmind.agents.codex_worker.publish_sanitization import (
+    sanitize_metadata_footer_value,
+    sanitize_publish_subject,
+)
 from moonmind.agents.codex_worker.utils import verify_cli_is_executable
 from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
@@ -34,21 +38,6 @@ _LOOP_WARNING_PREFIX = "[moonmind] loop warning:"
 _REPEATED_HUNK_MIN_CHARS = 48
 _REPEATED_HUNK_TRIGGER_COUNT = 4
 _REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS = 4096
-_FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-_MOONMIND_WORD_PATTERN = re.compile(r"\bmoonmind\b", re.IGNORECASE)
-_SECRET_LIKE_METADATA_PATTERN = re.compile(
-    r"""(?ix)
-    (?:
-        gh[pousr]_[A-Za-z0-9]{8,}
-        | github_pat_[A-Za-z0-9_]{10,}
-        | AIza[0-9A-Za-z_-]{10,}
-        | ATATT[A-Za-z0-9_-]{6,}
-        | AKIA[0-9A-Z]{8,}
-        | -----BEGIN [A-Z ]+PRIVATE KEY-----
-        | (?:token|password|secret)\s*[:=]
-    )
-    """
-)
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 
 
@@ -906,27 +895,17 @@ class CodexExecHandler:
 
     @classmethod
     def _sanitize_publish_subject(cls, value: str, *, max_chars: int) -> str:
-        sanitized = _MOONMIND_WORD_PATTERN.sub("", value)
-        sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
-        sanitized = " ".join(sanitized.split())
-        if _SECRET_LIKE_METADATA_PATTERN.search(sanitized):
-            sanitized = "[REDACTED]"
-        if not sanitized:
-            sanitized = "Automated update"
-        if len(sanitized) <= max_chars:
-            return sanitized
-        return f"{sanitized[: max_chars - 3].rstrip()}..."
+        return sanitize_publish_subject(
+            value,
+            max_chars=max_chars,
+            redact_uuids=True,
+        )
 
     @staticmethod
     def _sanitize_metadata_footer_value(
         value: str | None, *, fallback: str = "unknown"
     ) -> str:
-        normalized = " ".join(str(value or "").split())
-        if not normalized:
-            return fallback
-        if _SECRET_LIKE_METADATA_PATTERN.search(normalized):
-            return "[REDACTED]"
-        return normalized
+        return sanitize_metadata_footer_value(value, fallback=fallback)
 
     @classmethod
     def _derive_default_publish_subject(
