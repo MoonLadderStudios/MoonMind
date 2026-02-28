@@ -126,6 +126,10 @@ _CONTROLLED_COMPLETION_EVENT_PATTERN = re.compile(
     rf"^{re.escape(_COMPLETION_EVENT_MARKER_PREFIX)}[0-9a-f]{{64}};\s*"
     rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
+_CONTROLLED_LOOP_WARNING_PATTERN = re.compile(
+    rf"^(?P<message>{re.escape(_LOOP_WARNING_PREFIX)}.+);\s*"
+    rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
 _LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
     r"stdoutChars=\d+;\s+stderrChars=\d+$"
@@ -5906,8 +5910,11 @@ class CodexWorker:
                 return
             for line in text.replace("\r", "").splitlines():
                 candidate = line.strip()
-                if candidate.startswith(_LOOP_WARNING_PREFIX):
-                    await _emit_loop_warning(stream, candidate)
+                loop_warning_match = _CONTROLLED_LOOP_WARNING_PATTERN.match(candidate)
+                if loop_warning_match:
+                    await _emit_loop_warning(
+                        stream, loop_warning_match.group("message")
+                    )
             buffers[stream] = f"{buffers[stream]}{text}"
             now = time.monotonic()
             interval_elapsed = (now - last_flush_monotonic) >= flush_interval_seconds

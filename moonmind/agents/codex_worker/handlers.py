@@ -1366,7 +1366,8 @@ class CodexExecHandler:
             repeated_hunk_suppressed_chars[stream] = 0
             return (
                 f"{_LOOP_WARNING_PREFIX} suppressed {suppressed_count} repeated "
-                f"{stream} chunk(s) ({suppressed_chars} chars) during this command.\n"
+                f"{stream} chunk(s) ({suppressed_chars} chars) during this command;"
+                " control=worker\n"
             )
 
         def _suppress_repeated_hunks(stream: str, text: str) -> str:

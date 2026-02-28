@@ -5005,6 +5005,10 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
         "stdout",
         "[moonmind] loop warning: suppressed 7 repeated stdout chunk(s) (700 chars) during this command.\n",
     )
+    await callback(
+        "stdout",
+        "[moonmind] loop warning: suppressed 8 repeated stdout chunk(s) (800 chars) during this command; control=worker\n",
+    )
     await callback("stdout", None)
     await callback("stderr", None)
 
@@ -5028,6 +5032,10 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
         if event["payload"].get("kind") == "loop_warning"
     ]
     assert len(loop_warning_events) == 1
+    assert (
+        loop_warning_events[0]["message"]
+        == "[moonmind] loop warning: suppressed 8 repeated stdout chunk(s) (800 chars) during this command"
+    )
     assert loop_warning_events[0]["payload"]["stream"] == "stdout"
     assert loop_warning_events[0]["payload"]["stage"] == "moonmind.task.execute"
     assert loop_warning_events[0]["payload"]["stepId"] == "step-2"
