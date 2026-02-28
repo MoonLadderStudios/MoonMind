@@ -6612,7 +6612,10 @@ async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_mat
         staged_artifacts=staged_artifacts,
     )
 
-    assert publish_note == "published PR https://github.com/MoonLadderStudios/MoonMind/pull/778"
+    assert (
+        publish_note
+        == "published PR https://github.com/MoonLadderStudios/MoonMind/pull/778"
+    )
     pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
     assert pr_call[pr_call.index("--base") + 1] == "main"
     assert pr_call[pr_call.index("--head") + 1] == "task/feature-123"
@@ -6621,7 +6624,9 @@ async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_mat
         and event["payload"].get("warning") == "pr_base_fallback"
         for event in queue.events
     )
-    publish_payload = json.loads(prepared.publish_result_path.read_text(encoding="utf-8"))
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
     assert publish_payload["baseBranch"] == "main"
 
 
