@@ -42,7 +42,9 @@ def sanitize_publish_subject(
     return f"{sanitized[: max_chars - 3].rstrip()}..."
 
 
-def sanitize_metadata_footer_value(value: str | None, *, fallback: str = "unknown") -> str:
+def sanitize_metadata_footer_value(
+    value: str | None, *, fallback: str = "unknown"
+) -> str:
     """Normalize metadata footer values and replace secret-like tokens."""
 
     normalized = " ".join(str(value or "").split())
