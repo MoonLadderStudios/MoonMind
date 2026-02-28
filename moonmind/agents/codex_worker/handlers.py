@@ -29,6 +29,7 @@ _COMMAND_COMPLETE_PREFIX = "[command] complete:"
 _COMMAND_CONTROL_TAG = "control=worker"
 _GIT_DIFF_LOG_CAPTURE_MAX_CHARS = 64 * 1024
 _COMPLETION_EVENT_MARKER_PREFIX = "[moonmind] completion-event key="
+_CONTROLLED_COMPLETION_EVENT_MARKER_SUFFIX = "; control=worker"
 
 
 class CodexWorkerHandlerError(RuntimeError):
@@ -1037,32 +1038,19 @@ class CodexExecHandler:
         completion_scope_node = (
             completion_scope if isinstance(completion_scope, Mapping) else {}
         )
-        completion_scope_run_id = (
-            str(
-                completion_scope_node.get("runId")
-                or completion_scope_node.get("run_id")
-                or ""
-            ).strip()
-            or "unknown"
-        )
-        completion_scope_phase = (
-            str(completion_scope_node.get("phase") or "").strip() or "execute"
-        )
-        completion_scope_step_id = (
-            str(
-                completion_scope_node.get("stepId")
-                or completion_scope_node.get("step_id")
-                or ""
-            ).strip()
-            or "none"
-        )
-        completion_scope_step_index = (
-            str(
-                completion_scope_node.get("stepIndex")
-                or completion_scope_node.get("step_index")
-                or ""
-            ).strip()
-            or "-1"
+
+        def _get_scope_value(keys: tuple[str, ...], default: str) -> str:
+            for key in keys:
+                value = completion_scope_node.get(key)
+                if value is not None:
+                    return str(value).strip() or default
+            return default
+
+        completion_scope_run_id = _get_scope_value(("runId", "run_id"), "unknown")
+        completion_scope_phase = _get_scope_value(("phase",), "execute")
+        completion_scope_step_id = _get_scope_value(("stepId", "step_id"), "none")
+        completion_scope_step_index = _get_scope_value(
+            ("stepIndex", "step_index"), "-1"
         )
         completion_event_keys: dict[str, str] = {
             stream: _build_completion_event_key(
@@ -1207,12 +1195,13 @@ class CodexExecHandler:
                 return text
             if not text:
                 return ""
-            completion_signature = _completion_event_signature(text)
-            if completion_signature:
-                seen_signatures = completion_event_seen_signatures[stream]
-                if completion_signature in seen_signatures:
-                    return ""
-                seen_signatures.add(completion_signature)
+            if is_polling_snapshot_command and completion_scope_node:
+                completion_signature = _completion_event_signature(text)
+                if completion_signature:
+                    seen_signatures = completion_event_seen_signatures[stream]
+                    if completion_signature in seen_signatures:
+                        return ""
+                    seen_signatures.add(completion_signature)
 
             if is_polling_snapshot_command and len(text) >= min_replay_candidate_chars:
                 previous_snapshot = replay_snapshot_text.get(stream, "")
@@ -1382,6 +1371,7 @@ class CodexExecHandler:
                         (
                             f"{_COMPLETION_EVENT_MARKER_PREFIX}"
                             f"{completion_event_keys[stream]}"
+                            f"{_CONTROLLED_COMPLETION_EVENT_MARKER_SUFFIX}"
                         ),
                         extra_redaction_values=redaction_values,
                     ),

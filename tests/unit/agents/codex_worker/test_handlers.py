@@ -783,7 +783,10 @@ async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "stream-no-dedupe.log"
-    repeated = "duplicate block\n"
+    repeated = (
+        "multi-line duplicate block that is deliberately longer than thirty-two chars\n"
+        "second line of duplicate block\n"
+    )
 
     class FakeReader:
         def __init__(self, chunks: list[str]) -> None:
@@ -822,7 +825,7 @@ async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
     )
 
     text = log_path.read_text(encoding="utf-8")
-    assert text.count("duplicate block") == 2
+    assert text.count("multi-line duplicate block") == 2
 
 
 async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(

@@ -1541,7 +1541,7 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     step_log.write_text(
         "[command] $ codex exec run integrity check; control=worker\n"
         "done\n"
-        "[moonmind] completion-event key=test-step-1\n"
+        "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
         "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n",
         encoding="utf-8",
     )
@@ -1590,6 +1590,65 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     assert any(event["message"] == "task.step.finished" for event in queue.events)
 
 
+async def test_run_once_task_step_transcript_ignores_untrusted_completion_marker_like_output(
+    tmp_path: Path,
+) -> None:
+    """Integrity check should only count controlled completion markers."""
+
+    step_log = tmp_path / "complete-step-with-untrusted-marker.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check; control=worker\n"
+            "model output starts here\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=24; stderrChars=0; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+
+
 async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds(
     tmp_path: Path,
 ) -> None:
@@ -1602,7 +1661,7 @@ async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds
             "[command] $ codex exec run integrity check; "
             f"id={marker_id}; control=worker\n"
             "done\n"
-            "[moonmind] completion-event key=test-step-1\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
             f"id={marker_id}; control=worker\n"
         ),
@@ -1663,7 +1722,7 @@ async def test_run_once_task_step_transcript_reconciles_legacy_multiline_start_m
             "MOONMIND TASK OBJECTIVE:\n"
             "line one\n"
             "line two; control=worker\n"
-            "[moonmind] completion-event key=test-step-1\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
             "control=worker\n"
         ),
@@ -1724,7 +1783,7 @@ async def test_run_once_task_step_transcript_with_mismatched_marker_ids_fails(
         (
             "[command] $ codex exec run integrity check; "
             f"id={start_id}; control=worker\n"
-            "[moonmind] completion-event key=test-step-1\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
             f"id={complete_id}; control=worker\n"
         ),
@@ -1866,7 +1925,7 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
             prefix
             + "[command] $ codex exec run integrity check; control=worker\n"
             + middle
-            + "[moonmind] completion-event key=test-step-1\n"
+            + "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
             + "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; "
             "stderrChars=0; control=worker\n"
         ),
@@ -1927,7 +1986,7 @@ async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output
         (
             "[command] $ codex exec run integrity check; control=worker\n"
             "model output: [command] $ not a worker control marker\n"
-            "[moonmind] completion-event key=test-step-1\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
             "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n"
         ),
         encoding="utf-8",

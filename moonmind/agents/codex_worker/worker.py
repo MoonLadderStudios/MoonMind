@@ -121,6 +121,10 @@ _CONTROLLED_COMMAND_COMPLETE_PATTERN = re.compile(
     r"(?:;\s+id=[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})?;\s*"
     rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
+_CONTROLLED_COMPLETION_EVENT_PATTERN = re.compile(
+    rf"^{re.escape(_COMPLETION_EVENT_MARKER_PREFIX)}[0-9a-f]{{64}};\s*"
+    rf"{re.escape(_COMMAND_CONTROL_TAG)}$"
+)
 _LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_COMPLETE_PREFIX)}\s+rc=-?\d+;\s+cmd=.+;\s+"
     r"stdoutChars=\d+;\s+stderrChars=\d+$"
@@ -5119,7 +5123,7 @@ class CodexWorker:
         completion_markers = [
             line
             for line in non_empty_lines
-            if line.startswith(_COMPLETION_EVENT_MARKER_PREFIX)
+            if _CONTROLLED_COMPLETION_EVENT_PATTERN.match(line)
         ]
         start_count = len(start_markers)
         complete_count = len(complete_markers)
