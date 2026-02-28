@@ -3450,6 +3450,44 @@ class CodexWorker:
         return str(publish.get("prBaseBranch") or "").strip() or starting_branch
 
     @classmethod
+    def _resolve_pr_base_branch_for_publish(
+        cls,
+        *,
+        publish: Mapping[str, Any],
+        starting_branch: str,
+        working_branch: str,
+        default_branch: str,
+    ) -> tuple[str, str | None]:
+        """Resolve PR base branch with a safety fallback when base/head collide."""
+
+        requested_base = str(publish.get("prBaseBranch") or "").strip()
+        resolved_base = cls._resolve_pr_base_branch(
+            publish=publish,
+            starting_branch=starting_branch,
+        )
+        if resolved_base != working_branch:
+            return resolved_base, None
+
+        fallback_base = str(default_branch or "").strip()
+        if not requested_base and fallback_base and fallback_base != working_branch:
+            warning = (
+                "task.publish.prBaseBranch not set and starting branch matches head; "
+                f"using default branch '{fallback_base}' as PR base"
+            )
+            return fallback_base, warning
+
+        if requested_base:
+            raise RuntimeError(
+                "publish preflight failed: task.publish.prBaseBranch resolves to "
+                f"the working branch '{working_branch}'. Choose a different PR base."
+            )
+        raise RuntimeError(
+            "publish preflight failed: resolved PR base equals the working branch "
+            f"'{working_branch}' and no fallback base is available. Set "
+            "task.publish.prBaseBranch explicitly."
+        )
+
+    @classmethod
     def _derive_default_pr_body(
         cls,
         *,
@@ -4204,6 +4242,31 @@ class CodexWorker:
                 env=prepared.publish_command_env,
             )
 
+            pr_base: str | None = None
+            resolved_base_branch = prepared.starting_branch
+            if publish_mode == "pr":
+                pr_base, pr_base_warning = self._resolve_pr_base_branch_for_publish(
+                    publish=publish,
+                    starting_branch=prepared.starting_branch,
+                    working_branch=prepared.working_branch,
+                    default_branch=prepared.default_branch,
+                )
+                resolved_base_branch = pr_base
+                if pr_base_warning:
+                    self._append_stage_log(prepared.publish_log_path, pr_base_warning)
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="warn",
+                        message="moonmind.task.publish",
+                        payload={
+                            "status": "warning",
+                            "warning": "pr_base_fallback",
+                            "resolvedBaseBranch": pr_base,
+                            "workingBranch": prepared.working_branch,
+                            **dict(skill_meta),
+                        },
+                    )
+
             commit_message = (
                 self._resolve_publish_text_override(publish.get("commitMessage"))
                 or f"MoonMind task result for job {job_id}"
@@ -4225,10 +4288,10 @@ class CodexWorker:
             pr_url: str | None = None
             publish_note = f"published branch {prepared.working_branch}"
             if publish_mode == "pr":
-                pr_base = self._resolve_pr_base_branch(
-                    publish=publish,
-                    starting_branch=prepared.starting_branch,
-                )
+                if pr_base is None:
+                    raise RuntimeError(
+                        "publish preflight failed: PR base branch was not resolved."
+                    )
                 pr_title = self._resolve_publish_text_override(
                     publish.get("prTitle")
                 ) or self._derive_default_pr_title(
@@ -4286,7 +4349,7 @@ class CodexWorker:
             result_payload = {
                 "mode": publish_mode,
                 "branch": prepared.working_branch,
-                "baseBranch": prepared.starting_branch,
+                "baseBranch": resolved_base_branch,
                 "prUrl": pr_url,
                 "skipped": False,
                 "verification": verification_payload,
