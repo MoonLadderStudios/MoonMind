@@ -107,7 +107,7 @@ def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> 
     if is_self_managed_publish_skill(skill_id):
         if publish_mode != "none":
             raise TaskContractError(
-                "task.publish.mode must be 'none' when using skill 'pr-resolver'"
+                f"task.publish.mode must be 'none' when using skill '{_normalize_skill_id(skill_id)}'"
             )
         return "none"
     return publish_mode
@@ -1092,7 +1092,7 @@ def build_canonical_task_view(
     )
     task_node = canonical.get("task")
     task = task_node if isinstance(task_node, Mapping) else {}
-    skill_node = task.get("skill")
+    skill_node = task.get("skill") or {}
     skill = skill_node if isinstance(skill_node, Mapping) else {}
     skill_id = skill.get("id")
     publish_mode = resolve_publish_mode_for_skill(skill_id, publish_mode_candidate)
