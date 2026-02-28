@@ -1401,10 +1401,13 @@ class CodexExecHandler:
             if not summary:
                 return
             if not defer_stream_output_logging:
-                stream_log_buffers[stream] = stream_log_buffers.get(stream, "") + summary
+                stream_log_buffers[stream] = (
+                    stream_log_buffers.get(stream, "") + summary
+                )
                 _flush_stream_log_buffer(
                     stream,
-                    force=len(stream_log_buffers[stream]) >= max_stream_log_buffer_chars,
+                    force=len(stream_log_buffers[stream])
+                    >= max_stream_log_buffer_chars,
                 )
             await _invoke_output_callback(
                 stream,

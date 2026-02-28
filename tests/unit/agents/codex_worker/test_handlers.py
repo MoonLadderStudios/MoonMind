@@ -835,10 +835,7 @@ async def test_run_command_streaming_caps_repeated_hunks_and_emits_loop_warning(
 
     handler = CodexExecHandler(workdir_root=tmp_path)
     log_path = tmp_path / "stream-loop-warning.log"
-    repeated = (
-        "looping chunk payload to exceed repeated-hunk detection threshold "
-        * 8
-    )
+    repeated = "looping chunk payload to exceed repeated-hunk detection threshold " * 8
     unique_tail = "unique tail context for debugging\n"
 
     class FakeReader:
