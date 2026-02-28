@@ -15,6 +15,7 @@ from typing import Any, Mapping
 _SKILL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _TASK_EXECUTION_CONTEXT_ENV = "MOONMIND_ORCHESTRATOR_TASK_STEP_EXECUTION"
 _TASK_INSTRUCTIONS_ENV = "MOONMIND_ORCHESTRATOR_TASK_STEP_INSTRUCTIONS"
+_IMPORT_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 def _resolve_workspace_root() -> Path:
@@ -251,18 +252,19 @@ def _pin_pythonpath_to_repo_root(
 
     process_env = dict(env)
     repo_root = str(repo_path.resolve())
+    if os.pathsep in repo_root:
+        raise RuntimeError(f"Resolved repo path contains path separator: {repo_root}")
     raw_pythonpath = str(process_env.get("PYTHONPATH", ""))
     entries = [entry for entry in raw_pythonpath.split(os.pathsep) if entry.strip()]
-    normalized_repo = str(Path(repo_root).resolve())
 
     deduped: list[str] = []
     seen: set[str] = set()
     for entry in entries:
         try:
             normalized = str(Path(entry).expanduser().resolve())
-        except OSError:
+        except (OSError, RuntimeError):
             normalized = entry
-        if normalized == normalized_repo:
+        if normalized == repo_root:
             continue
         if normalized in seen:
             continue
@@ -283,7 +285,7 @@ def _extract_package_root(path: Path, package_name: str) -> Path | None:
 
 def _analyze_import_probe(
     *,
-    repo_path: Path,
+    workspace_root: Path,
     probe_payload: Mapping[str, Any],
 ) -> str | None:
     """Return warning text when the imported moonmind package root mismatches repo."""
@@ -292,7 +294,7 @@ def _analyze_import_probe(
     if not module_file_raw:
         return None
 
-    workspace_root = repo_path.resolve()
+    workspace_root = workspace_root.resolve()
     workspace_package_root = (workspace_root / "moonmind").resolve()
     imported_package_root = _extract_package_root(
         Path(module_file_raw).expanduser().resolve(),
@@ -338,29 +340,36 @@ def _analyze_import_probe(
 
 def _runtime_import_probe(
     *,
-    repo_path: Path,
+    workspace_root: Path,
     process_env: Mapping[str, str],
 ) -> str | None:
     """Probe moonmind import resolution and return diagnostics when roots diverge."""
 
     probe_script = (
-        "import json, sys\n"
+        "import importlib.util, json, sys\n"
         "try:\n"
-        "    import moonmind  # type: ignore\n"
+        "    spec = importlib.util.find_spec('moonmind')\n"
+        "    module_file = '' if spec is None else (spec.origin or '')\n"
         "except Exception as exc:\n"
         "    print(json.dumps({'error': str(exc), 'sys_path': sys.path}), end='')\n"
         "else:\n"
-        "    print(json.dumps({'module_file': getattr(moonmind, '__file__', ''), "
-        "'sys_path': sys.path}), end='')\n"
+        "    print(json.dumps({'module_file': module_file, 'sys_path': sys.path}), "
+        "end='')\n"
     )
     try:
         result = subprocess.run(
             [sys.executable, "-c", probe_script],
-            cwd=str(repo_path),
+            cwd=str(workspace_root),
             env=dict(process_env),
             text=True,
             capture_output=True,
             check=False,
+            timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            "skill-executor warning: import probe timed out "
+            f"after {_IMPORT_PROBE_TIMEOUT_SECONDS:.1f}s"
         )
     except OSError as exc:
         return f"skill-executor warning: failed to run import probe: {exc}"
@@ -388,10 +397,13 @@ def _runtime_import_probe(
         return "skill-executor warning: import probe payload was not a JSON object"
     if payload.get("error"):
         return (
-            "skill-executor warning: unable to import moonmind during probe: "
+            "skill-executor warning: unable to resolve moonmind during probe: "
             f"{payload.get('error')}"
         )
-    return _analyze_import_probe(repo_path=repo_path, probe_payload=payload)
+    return _analyze_import_probe(
+        workspace_root=workspace_root,
+        probe_payload=payload,
+    )
 
 
 def is_runnable_skill(skill_id: str, workspace_root: Path | None = None) -> bool:
@@ -463,8 +475,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     process_env = os.environ.copy()
-    process_env = _pin_pythonpath_to_repo_root(process_env, repo_path)
-    diagnostic = _runtime_import_probe(repo_path=repo_path, process_env=process_env)
+    process_env = _pin_pythonpath_to_repo_root(process_env, workspace_root)
+    diagnostic = _runtime_import_probe(
+        workspace_root=workspace_root,
+        process_env=process_env,
+    )
     if diagnostic:
         print(diagnostic, file=sys.stderr)
     if step_instructions:
