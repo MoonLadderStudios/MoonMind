@@ -5038,6 +5038,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "false")
     monkeypatch.setenv("MOONMIND_STEP_LOG_MAX_BYTES", "2097152")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
+    monkeypatch.setenv("MOONMIND_GEMINI_APPROVAL_MODE", "auto_edit")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
 
@@ -5059,6 +5060,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.stage_command_timeout_seconds == 2400
     assert config.artifact_upload_incremental is False
     assert config.step_log_max_bytes == 2097152
+    assert config.gemini_approval_mode == "auto_edit"
     assert config.git_user_name == "Nate Sticco"
     assert config.git_user_email == "nsticco@gmail.com"
 
@@ -5197,6 +5199,22 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.stage_command_timeout_seconds == 3600
     assert config.artifact_upload_incremental is True
     assert config.step_log_max_bytes == 1024 * 1024
+    assert config.gemini_approval_mode == "yolo"
+
+
+async def test_config_from_env_rejects_invalid_gemini_approval_mode(
+    monkeypatch,
+) -> None:
+    """Gemini approval mode should fail fast on unsupported values."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_GEMINI_APPROVAL_MODE", "unsafe")
+
+    with pytest.raises(
+        ValueError,
+        match="MOONMIND_GEMINI_APPROVAL_MODE must be one of",
+    ):
+        CodexWorkerConfig.from_env()
 
 
 async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
@@ -5365,6 +5383,48 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     )
     assert model_override == "gemini-2.5-pro"
     assert effort_override == "high"
+
+
+async def test_build_non_codex_runtime_command_uses_gemini_approval_mode(
+    tmp_path: Path,
+) -> None:
+    """Gemini runtime command should include explicit non-interactive approval mode."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="gemini",
+        gemini_binary="gemini",
+        gemini_approval_mode="yolo",
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    command = worker._build_non_codex_runtime_command(
+        runtime_mode="gemini",
+        instruction="Apply patch and run tests.",
+        model="gemini-2.5-pro",
+        effort="high",
+    )
+
+    assert command == [
+        "gemini",
+        "--approval-mode",
+        "yolo",
+        "--prompt",
+        "Apply patch and run tests.",
+        "--model",
+        "gemini-2.5-pro",
+        "--effort",
+        "high",
+    ]
 
 
 @pytest.fixture

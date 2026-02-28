@@ -344,6 +344,7 @@ class CodexWorkerConfig:
     default_claude_effort: str | None = None
     gemini_binary: str = "gemini"
     gemini_cli_auth_mode: str = "api_key"
+    gemini_approval_mode: str = "yolo"
     claude_binary: str = "claude"
     worker_capabilities: tuple[str, ...] = ("codex", "git", "gh")
     docker_binary: str = "docker"
@@ -586,6 +587,16 @@ class CodexWorkerConfig:
         if gemini_cli_auth_mode not in {"api_key", "oauth"}:
             raise ValueError(
                 "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
+            )
+        gemini_approval_mode = (
+            str(source.get("MOONMIND_GEMINI_APPROVAL_MODE", "yolo")).strip().lower()
+            or "yolo"
+        )
+        allowed_approval_modes = {"default", "auto_edit", "yolo", "plan"}
+        if gemini_approval_mode not in allowed_approval_modes:
+            raise ValueError(
+                "MOONMIND_GEMINI_APPROVAL_MODE must be one of: "
+                f"{', '.join(sorted(allowed_approval_modes))}"
             )
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
@@ -886,6 +897,7 @@ class CodexWorkerConfig:
             default_claude_effort=default_claude_effort,
             gemini_binary=gemini_binary,
             gemini_cli_auth_mode=gemini_cli_auth_mode,
+            gemini_approval_mode=gemini_approval_mode,
             claude_binary=claude_binary,
             worker_capabilities=worker_capabilities,
             docker_binary=docker_binary,
@@ -7825,7 +7837,13 @@ class CodexWorker:
         effort: str | None,
     ) -> list[str]:
         if runtime_mode == "gemini":
-            command = [self._config.gemini_binary, "--prompt", instruction]
+            command = [
+                self._config.gemini_binary,
+                "--approval-mode",
+                self._config.gemini_approval_mode,
+                "--prompt",
+                instruction,
+            ]
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
