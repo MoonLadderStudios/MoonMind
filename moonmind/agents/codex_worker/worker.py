@@ -112,6 +112,7 @@ _COMMAND_START_PREFIX = "[command] $ "
 _COMMAND_COMPLETE_PREFIX = "[command] complete:"
 _COMMAND_CONTROL_TAG = "control=worker"
 _COMPLETION_EVENT_MARKER_PREFIX = "[moonmind] completion-event key="
+_LOOP_WARNING_PREFIX = "[moonmind] loop warning:"
 _CONTROLLED_COMMAND_START_PATTERN = re.compile(
     rf"^{re.escape(_COMMAND_START_PREFIX)}.+;\s*{re.escape(_COMMAND_CONTROL_TAG)}$"
 )
@@ -5878,6 +5879,23 @@ class CodexWorker:
                 last_flush_monotonic = time.monotonic()
             buffers[stream] = pending
 
+        async def _emit_loop_warning(stream: str, message: str) -> None:
+            payload: dict[str, Any] = {
+                "kind": "loop_warning",
+                "stream": stream,
+                "stage": stage,
+            }
+            if step_id:
+                payload["stepId"] = step_id
+            if step_index is not None:
+                payload["stepIndex"] = step_index
+            await self._emit_event(
+                job_id=job_id,
+                level="warn",
+                message=message,
+                payload=payload,
+            )
+
         async def _on_output_chunk(stream: str, text: str | None) -> None:
             if stream not in buffers:
                 return
@@ -5886,6 +5904,10 @@ class CodexWorker:
                 return
             if not text:
                 return
+            for line in text.replace("\r", "").splitlines():
+                candidate = line.strip()
+                if candidate.startswith(_LOOP_WARNING_PREFIX):
+                    await _emit_loop_warning(stream, candidate)
             buffers[stream] = f"{buffers[stream]}{text}"
             now = time.monotonic()
             interval_elapsed = (now - last_flush_monotonic) >= flush_interval_seconds

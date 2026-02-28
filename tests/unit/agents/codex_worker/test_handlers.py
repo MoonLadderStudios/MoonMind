@@ -828,6 +828,62 @@ async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
     assert text.count("multi-line duplicate block") == 2
 
 
+async def test_run_command_streaming_caps_repeated_hunks_and_emits_loop_warning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Polling codex output loops should be compacted with a warning marker."""
+
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    log_path = tmp_path / "stream-loop-warning.log"
+    repeated = (
+        "looping chunk payload to exceed repeated-hunk detection threshold "
+        * 8
+    )
+    unique_tail = "unique tail context for debugging\n"
+
+    class FakeReader:
+        def __init__(self, chunks: list[str]) -> None:
+            self._chunks = [chunk.encode("utf-8") for chunk in chunks]
+
+        async def read(self, _size: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = FakeReader([repeated] * 10 + [unique_tail])
+            self.stderr = FakeReader([])
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await handler._run_command(
+        ["codex", "exec", "looping-task"],
+        cwd=tmp_path,
+        log_path=log_path,
+        check=False,
+        enable_replay_dedupe=True,
+    )
+
+    text = log_path.read_text(encoding="utf-8")
+    assert text.count("looping chunk payload to exceed repeated-hunk detection") < 10
+    assert "[moonmind] loop warning: suppressed " in text
+    assert unique_tail in text
+
+
 async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
     tmp_path: Path, monkeypatch
 ) -> None:
