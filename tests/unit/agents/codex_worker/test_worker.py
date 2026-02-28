@@ -2829,8 +2829,12 @@ async def test_run_once_task_step_completion_identity_preserves_repeated_text_ac
 
     assert processed is True
     codex_log_path = tmp_path / str(job.id) / "artifacts" / "codex_exec.log"
-    step_one_log = tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
-    step_two_log = tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    step_one_log = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0000.log"
+    )
+    step_two_log = (
+        tmp_path / str(job.id) / "artifacts" / "logs" / "steps" / "step-0001.log"
+    )
     marker_text = "Added deterministic completion keys."
     codex_text = codex_log_path.read_text(encoding="utf-8")
     step_one_text = step_one_log.read_text(encoding="utf-8")

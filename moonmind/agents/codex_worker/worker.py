@@ -5158,7 +5158,8 @@ class CodexWorker:
         if start_count == 0 and complete_count == 0:
             return StepTranscriptIntegrityResult(passed=True)
         has_codex_exec_start = any(
-            line.startswith(f"{_COMMAND_START_PREFIX}codex exec") for line in start_markers
+            line.startswith(f"{_COMMAND_START_PREFIX}codex exec")
+            for line in start_markers
         )
 
         if has_controlled_markers and (start_marker_ids or complete_marker_ids):
