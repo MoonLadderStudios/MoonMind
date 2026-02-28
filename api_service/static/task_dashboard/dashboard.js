@@ -1988,7 +1988,7 @@
         const titleWithId = rowId ? `${title} · ${rowId}` : title;
         const encodedRowId = encodeURIComponent(String(id || ""));
         return `
-          <li class="queue-card">
+          <li class="queue-card" data-proposal-id="${escapeHtml(rowId)}">
             <div data-proposal-id="${escapeHtml(rowId)}"
               data-proposal-title="${escapeHtml(title)}"
               data-proposal-repo="${escapeHtml(repo)}"></div>
@@ -7083,6 +7083,38 @@
       originId: initialOriginId,
       rows: [],
       notice: "",
+      noticeLevel: "",
+    };
+    const proposalConsumedFlashMs = 320;
+
+    const consumeProposalRow = async (proposalId, actionLabel) => {
+      const normalizedProposalId = String(proposalId || "");
+      if (!normalizedProposalId) {
+        return;
+      }
+      const consumeTargets = Array.from(
+        root.querySelectorAll("tr[data-proposal-id], .queue-card[data-proposal-id]"),
+      ).filter(
+        (node) => String(node.getAttribute("data-proposal-id") || "") === normalizedProposalId,
+      );
+      consumeTargets.forEach((node) => {
+        node.classList.add("proposal-consuming");
+      });
+      if (consumeTargets.length) {
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, proposalConsumedFlashMs);
+        });
+      }
+      consumeTargets.forEach((node) => {
+        node.classList.remove("proposal-consuming");
+      });
+      state.rows = (state.rows || []).filter(
+        (row) => String(pick(row, "id") || "") !== normalizedProposalId,
+      );
+      const shortId = normalizedProposalId.slice(0, 8) || normalizedProposalId;
+      state.notice = `Proposal ${shortId} ${actionLabel} and removed from this queue view.`;
+      state.noticeLevel = "ok";
+      renderView();
     };
 
     const renderFilters = () => {
@@ -7203,16 +7235,18 @@
           button.disabled = true;
           try {
             if (action === "promote") {
-              const response = await apiPromoteProposal(proposalId);
-              window.location.href = resolvePromotedQueueRoute(response);
+              await apiPromoteProposal(proposalId);
+              await consumeProposalRow(proposalId, "promoted");
               return;
             } else if (action === "dismiss") {
               await apiDismissProposal(proposalId);
+              await consumeProposalRow(proposalId, "dismissed");
+              return;
             }
-            await load();
           } catch (error) {
             console.error(`proposal ${action} failed`, error);
             state.notice = `Failed to ${action} proposal ${proposalId}.`;
+            state.noticeLevel = "error";
             renderView();
           } finally {
             button.disabled = false;
@@ -7222,8 +7256,9 @@
     };
 
     const renderView = () => {
+      const noticeClass = state.noticeLevel === "ok" ? "notice ok" : "notice error";
       const noticeHtml = state.notice
-        ? `<div class="notice error">${escapeHtml(state.notice)}</div>`
+        ? `<div class="${noticeClass}">${escapeHtml(state.notice)}</div>`
         : "";
       setView(
         "Task Proposals",
@@ -7257,10 +7292,12 @@
         const payload = await fetchJson(`${listEndpoint}?${params.toString()}`);
         state.rows = payload?.items || [];
         state.notice = "";
+        state.noticeLevel = "";
       } catch (error) {
         console.error("proposals list load failed", error);
         state.rows = [];
         state.notice = "Failed to load proposals.";
+        state.noticeLevel = "error";
       }
       renderView();
     };
@@ -7281,6 +7318,8 @@
       `Proposal ${proposalId}`,
       "<p class='loading'>Loading proposal...</p>",
     );
+
+    let detailNotice = "";
 
     const renderDetail = (row) => {
       const origin = pick(row, "origin") || {};
@@ -7333,10 +7372,14 @@
             }>${escapeHtml(value.toUpperCase())}</option>`,
         )
         .join("");
+      const detailNoticeMarkup = detailNotice
+        ? `<div class="notice ok">${escapeHtml(detailNotice)}</div>`
+        : "";
       setView(
         "Proposal Detail",
         `Proposal ${proposalId}`,
         `
+          ${detailNoticeMarkup}
           <div class="grid-2">
             <div class="card"><strong>Status:</strong> ${statusBadge(
               "proposals",
@@ -7416,8 +7459,9 @@
         promoteButton.addEventListener("click", async () => {
           promoteButton.disabled = true;
           try {
-            const response = await apiPromoteProposal(proposalId);
-            window.location.href = resolvePromotedQueueRoute(response);
+            await apiPromoteProposal(proposalId);
+            detailNotice = "Proposal promoted and consumed. It will disappear from the queue list.";
+            await load(true);
             return;
           } catch (error) {
             console.error("proposal promote failed", error);
@@ -7459,8 +7503,9 @@
           }
           editButton.disabled = true;
           try {
-            const response = await apiPromoteProposal(proposalId, overrides);
-            window.location.href = resolvePromotedQueueRoute(response);
+            await apiPromoteProposal(proposalId, overrides);
+            detailNotice = "Proposal promoted and consumed. It will disappear from the queue list.";
+            await load(true);
             return;
           } catch (error) {
             console.error("proposal edit-promote failed", error);
@@ -7508,13 +7553,22 @@
         renderDetail(detail);
       } catch (error) {
         console.error("proposal detail load failed", error);
-        if (!silent) {
-          setView(
-            "Proposal Detail",
-            `Proposal ${proposalId}`,
-            "<div class='notice error'>Failed to load proposal.</div>",
-          );
+        if (silent && !detailNotice) {
+          return;
         }
+        const detailNoticeMarkup = detailNotice
+          ? `<div class="notice ok">${escapeHtml(detailNotice)}</div>`
+          : "";
+        const errorMessage = detailNotice
+          ? "Failed to refresh proposal details after consume. It may already be removed from the queue."
+          : "Failed to load proposal.";
+        setView(
+          "Proposal Detail",
+          `Proposal ${proposalId}`,
+          `${detailNoticeMarkup}
+           <div class='notice error'>${escapeHtml(errorMessage)}</div>
+           <p class='small'><a href='/tasks/proposals'>Back to proposals list</a></p>`,
+        );
       }
     };
 
