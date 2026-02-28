@@ -1606,9 +1606,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
 
     assert result.succeeded is True
     commit_call = next(
-        call
-        for call in calls
-        if tuple(call["command"][:3]) == ("git", "commit", "-m")
+        call for call in calls if tuple(call["command"][:3]) == ("git", "commit", "-m")
     )
     commit_cmd = commit_call["command"]
     assert commit_cmd[3] == "implement publish test for job."
