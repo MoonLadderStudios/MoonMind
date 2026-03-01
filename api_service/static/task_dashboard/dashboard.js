@@ -979,16 +979,16 @@
     const payloadCodexNode = extractObject(payload, "codex");
     const payloadInputsCodexNode = extractObject(extractObject(payload, "inputs"), "codex");
 
-    const candidates = [
-      pick(taskRuntimeNode, fieldName),
-      pick(taskCodexNode, fieldName),
-      pick(payloadCodexNode, fieldName),
-      pick(payloadInputsCodexNode, fieldName),
-      pick(payload, fieldName),
+    const candidateNodes = [
+      taskRuntimeNode,
+      taskCodexNode,
+      payloadCodexNode,
+      payloadInputsCodexNode,
+      payload,
     ];
 
-    for (const candidate of candidates) {
-      const normalized = String(candidate ?? "").trim();
+    for (const node of candidateNodes) {
+      const normalized = String(pick(node, fieldName) ?? "").trim();
       if (normalized) {
         return normalized;
       }
