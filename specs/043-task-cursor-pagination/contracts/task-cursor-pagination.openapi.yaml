@@ -1,0 +1,163 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Task Cursor Pagination API Contract
+  version: 0.1.0
+  description: |
+    Task list pagination contract for keyset cursor navigation on /api/tasks.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /api/tasks:
+    get:
+      summary: List tasks with keyset cursor pagination.
+      operationId: listTasks
+      parameters:
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/Type'
+        - $ref: '#/components/parameters/Summary'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/OffsetCompat'
+      responses:
+        '200':
+          description: Task list page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskListPageResponse'
+        '422':
+          description: Invalid pagination or filter parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  parameters:
+    Status:
+      name: status
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Optional status filter.
+    Type:
+      name: type
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Optional type filter.
+    Summary:
+      name: summary
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+      description: Return compact payload fields when true.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      description: Effective page size after server clamp.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Opaque base64url cursor token for next page traversal.
+    OffsetCompat:
+      name: offset
+      in: query
+      required: false
+      deprecated: true
+      schema:
+        type: integer
+        minimum: 0
+      description: Legacy compatibility path; must not be combined with cursor.
+  schemas:
+    TaskSummary:
+      type: object
+      required:
+        - id
+        - type
+        - status
+        - priority
+        - payload
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        priority:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TaskListPageResponse:
+      type: object
+      required:
+        - items
+        - page_size
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskSummary'
+        page_size:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: Effective clamped page size.
+        next_cursor:
+          type: string
+          nullable: true
+          description: Null indicates no additional pages.
+        offset:
+          type: integer
+          minimum: 0
+          description: Legacy compatibility metadata.
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: Legacy compatibility metadata.
+        hasMore:
+          type: boolean
+          description: Legacy compatibility metadata derived from next_cursor.
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_status_filter
+                - invalid_pagination_args
+                - queue_validation_error
+                - queue_internal_error
+            message:
+              type: string

@@ -83,6 +83,90 @@ async def test_create_and_list_jobs(tmp_path):
     assert codex_skill_jobs[0].attempt == 1
 
 
+async def test_list_jobs_page_supports_cursor_pagination(tmp_path):
+    """Keyset pages should continue from cursor without duplicates."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            first = await _create_job(repo, payload={"instruction": "first"})
+            second = await _create_job(repo, payload={"instruction": "second"})
+            third = await _create_job(repo, payload={"instruction": "third"})
+            base = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+            first.created_at = base
+            second.created_at = base - timedelta(minutes=1)
+            third.created_at = base - timedelta(minutes=2)
+            await repo.commit()
+
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            page_one, has_more_one = await repo.list_jobs_page(limit=2)
+            assert has_more_one is True
+            assert [job.id for job in page_one] == [first.id, second.id]
+
+            cursor = (page_one[-1].created_at, page_one[-1].id)
+            page_two, has_more_two = await repo.list_jobs_page(limit=2, cursor=cursor)
+
+    assert has_more_two is False
+    assert [job.id for job in page_two] == [third.id]
+
+
+async def test_list_jobs_page_applies_filters_before_pagination(tmp_path):
+    """Status/type filters should be applied before keyset page boundaries."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            keep_new = await _create_job(
+                repo,
+                job_type="task",
+                payload={"instruction": "keep-new"},
+            )
+            skip_type = await _create_job(
+                repo,
+                job_type="manifest",
+                payload={"instruction": "skip-type"},
+            )
+            keep_old = await _create_job(
+                repo,
+                job_type="task",
+                payload={"instruction": "keep-old"},
+            )
+            skip_status = await _create_job(
+                repo,
+                job_type="task",
+                payload={"instruction": "skip-status"},
+            )
+            skip_status.status = models.AgentJobStatus.RUNNING
+            base = datetime(2026, 3, 1, 14, 0, tzinfo=UTC)
+            keep_new.created_at = base
+            skip_type.created_at = base - timedelta(minutes=1)
+            keep_old.created_at = base - timedelta(minutes=2)
+            skip_status.created_at = base - timedelta(minutes=3)
+            await repo.commit()
+
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            page_one, has_more_one = await repo.list_jobs_page(
+                status=models.AgentJobStatus.QUEUED,
+                job_type="task",
+                limit=1,
+            )
+            assert has_more_one is True
+            assert [job.id for job in page_one] == [keep_new.id]
+
+            cursor = (page_one[-1].created_at, page_one[-1].id)
+            page_two, has_more_two = await repo.list_jobs_page(
+                status=models.AgentJobStatus.QUEUED,
+                job_type="task",
+                limit=1,
+                cursor=cursor,
+            )
+
+    assert has_more_two is False
+    assert [job.id for job in page_two] == [keep_old.id]
+
+
 async def test_claim_prioritizes_highest_priority_then_oldest(tmp_path):
     """Claim should pick highest priority first, then oldest creation time."""
 

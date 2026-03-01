@@ -6,14 +6,17 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
+from api_service.api.routers.agent_queue import _get_service, list_jobs
 from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
+from moonmind.schemas.agent_queue_models import JobListResponse
+from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.orchestrator.skill_executor import list_runnable_skill_names
 from moonmind.workflows.skills.resolver import list_available_skill_names
 
@@ -192,6 +195,36 @@ async def list_dashboard_skills(
             "orchestrator": orchestrator_skills,
         },
         legacyItems=[DashboardSkillOption(id=skill_id) for skill_id in legacy_sorted],
+    )
+
+
+@router.get(
+    "/api/tasks",
+    response_model=JobListResponse,
+    response_model_exclude={"items": {"__all__": {"finish_summary"}}},
+)
+async def list_dashboard_tasks(
+    *,
+    status_filter: str | None = Query(None, alias="status"),
+    type_filter: str | None = Query(None, alias="type"),
+    limit: int = Query(50),
+    cursor: str | None = Query(None, alias="cursor"),
+    offset: int = Query(0, ge=0),
+    summary: bool = Query(False, alias="summary"),
+    service: AgentQueueService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> JobListResponse:
+    """Task-centric alias for queue task listing with cursor pagination support."""
+
+    return await list_jobs(
+        status_filter=status_filter,
+        type_filter=type_filter,
+        limit=limit,
+        cursor=cursor,
+        offset=offset,
+        summary=summary,
+        service=service,
+        _user=_user,
     )
 
 

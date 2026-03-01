@@ -798,7 +798,8 @@ async def list_jobs(
     *,
     status_filter: Optional[str] = Query(None, alias="status"),
     type_filter: Optional[str] = Query(None, alias="type"),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50),
+    cursor: str | None = Query(None, alias="cursor"),
     offset: int = Query(0, ge=0),
     summary: bool = Query(False, alias="summary"),
     service: AgentQueueService = Depends(_get_service),
@@ -819,24 +820,53 @@ async def list_jobs(
                 },
             ) from exc
 
-    try:
-        fetch_limit = limit + 1
-        jobs = await service.list_jobs(
-            status=parsed_status,
-            job_type=type_filter,
-            limit=fetch_limit,
-            offset=offset,
+    page_size = max(1, min(int(limit), 200))
+    cursor_token = str(cursor).strip() if cursor is not None else None
+    if cursor_token == "":
+        cursor_token = None
+    if cursor_token is not None and offset > 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_pagination_args",
+                "message": "cursor and offset cannot be used together.",
+            },
         )
+
+    try:
+        if cursor_token is not None or offset == 0:
+            page = await service.list_jobs_page(
+                status=parsed_status,
+                job_type=type_filter,
+                limit=page_size,
+                cursor=cursor_token,
+            )
+            items = list(page.items)
+            next_cursor = page.next_cursor
+            has_more = next_cursor is not None
+            effective_offset = 0
+        else:
+            fetch_limit = page_size + 1
+            jobs = await service.list_jobs(
+                status=parsed_status,
+                job_type=type_filter,
+                limit=fetch_limit,
+                offset=offset,
+            )
+            has_more = len(jobs) > page_size
+            items = jobs[:page_size]
+            next_cursor = None
+            effective_offset = offset
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
 
-    has_more = len(jobs) > limit
-    items = jobs[:limit]
     return JobListResponse(
         items=[_serialize_job_for_list(job, compact_payload=summary) for job in items],
-        offset=offset,
-        limit=limit,
+        offset=effective_offset,
+        limit=page_size,
         has_more=has_more,
+        page_size=page_size,
+        next_cursor=next_cursor,
     )
 
 

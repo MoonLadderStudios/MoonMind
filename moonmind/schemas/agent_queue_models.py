@@ -301,6 +301,8 @@ class JobListResponse(BaseModel):
     offset: int = Field(0, alias="offset", ge=0)
     limit: int = Field(0, alias="limit", ge=0)
     has_more: bool = Field(False, alias="hasMore")
+    page_size: int = Field(0, alias="page_size", ge=0)
+    next_cursor: str | None = Field(None, alias="next_cursor")
 
 
 class ArtifactModel(BaseModel):
