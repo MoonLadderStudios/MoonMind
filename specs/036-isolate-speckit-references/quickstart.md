@@ -2,8 +2,7 @@
 
 ## 1. Validate canonical and legacy workflow API routes
 
-- Call canonical route: `GET /api/workflows/runs`
-- Call canonical route and verify payload semantics.
+- Call canonical route `GET /api/workflows/runs` and verify payload semantics.
 
 ## 2. Validate adapter resolution behavior
 

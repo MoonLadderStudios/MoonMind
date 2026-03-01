@@ -54,9 +54,31 @@ if [[ -n "$EXCEPTIONS_FILE" && ! -f "$EXCEPTIONS_FILE" ]]; then
   exit 2
 fi
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "required command not found: rg" >&2
+  exit 2
+fi
+
 PATTERN='SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\.spec_workflow|var/artifacts/spec_workflows'
 DOCS_SPEC_GLOBS=(--glob '*.md' --glob '*.yaml' --glob '*.yml' --glob '!specs/task/**')
 RUNTIME_GLOBS=(--glob '*.py' --glob '*.sh' --glob '*.md' --glob '*.yaml' --glob '*.yml')
+
+run_rg_or_fail() {
+  local mode="$1"
+  local matches=""
+  local rg_status=0
+  if ! matches="$(rg -n "${@:2}" 2>&1)"; then
+    rg_status=$?
+    if [[ "$rg_status" -eq 1 ]]; then
+      matches=""
+    elif [[ "$rg_status" -ge 2 ]]; then
+      echo "[$mode] ERROR: ripgrep failed during command execution." >&2
+      printf '%s\n' "$matches" >&2
+      return 2
+    fi
+  fi
+  printf '%s' "$matches"
+}
 
 scan_mode() {
   local mode="$1"
@@ -72,13 +94,27 @@ scan_mode() {
     globs=("${RUNTIME_GLOBS[@]}")
   fi
 
-  raw="$(rg -n "$PATTERN" "${paths[@]}" "${globs[@]}" || true)"
+  raw="$(run_rg_or_fail "$mode" "$PATTERN" "${paths[@]}" "${globs[@]}")"
+  if [[ "$?" -ne 0 ]]; then
+    return 2
+  fi
 
   if [[ -n "$EXCEPTIONS_FILE" ]]; then
     filtered="$raw"
+    local line_number=0
     while IFS= read -r exception || [[ -n "$exception" ]]; do
+      ((line_number += 1))
       [[ -z "$exception" || "$exception" =~ ^[[:space:]]*# ]] && continue
-      filtered="$(printf '%s\n' "$filtered" | rg -v "$exception" || true)"
+      if ! filtered="$(printf '%s\n' "$filtered" | rg -v -e "$exception" 2>&1)"; then
+        local filter_status=$?
+        if [[ "$filter_status" -eq 1 ]]; then
+          filtered=""
+        else
+          echo "[$mode] ERROR: invalid exception regex at $EXCEPTIONS_FILE:$line_number: $exception" >&2
+          printf '%s\n' "$filtered" >&2
+          return 2
+        fi
+      fi
     done < "$EXCEPTIONS_FILE"
   else
     filtered="$raw"
@@ -103,7 +139,7 @@ if [[ "$MODE" == "docs-spec" || "$MODE" == "all" ]]; then
 fi
 
 if [[ "$MODE" == "runtime" || "$MODE" == "all" ]]; then
-  if ! scan_mode "runtime" api_service moonmind services tests; then
+  if ! scan_mode "runtime" api_service moonmind services tests celery_worker; then
     status=1
   fi
 fi

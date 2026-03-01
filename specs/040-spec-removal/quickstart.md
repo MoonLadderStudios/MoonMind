@@ -12,7 +12,7 @@
 ## 2. Baseline discovery (docs/spec surfaces)
 
 ```bash
-rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
+rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
   docs specs \
   --glob '*.md' --glob '*.yaml' --glob '*.yml'
 ```
@@ -20,8 +20,8 @@ rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speck
 ## 3. Baseline discovery (runtime surfaces)
 
 ```bash
-rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
-  api_service services tests \
+rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
+  api_service services tests celery_worker \
   --glob '*.py' --glob '*.md' --glob '*.yaml' --glob '*.yml' --glob '*.sh'
 ```
 

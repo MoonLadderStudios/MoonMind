@@ -1,6 +1,6 @@
 # Implementation Plan: Canonical Workflow Surface Naming
 
-**Branch**: `040-spec-removal` | **Date**: 2026-03-01 | **Spec**: [`/specs/040-spec-removal/spec.md`](/work/agent_jobs/dcb0d51c-3d0f-48ce-8ee0-85e6f114e3d1/repo/specs/040-spec-removal/spec.md)
+**Branch**: `040-spec-removal` | **Date**: 2026-03-01 | **Spec**: [`/specs/040-spec-removal/spec.md`](specs/040-spec-removal/spec.md)
 **Input**: Feature specification from `/specs/040-spec-removal/spec.md`
 
 ## Summary
