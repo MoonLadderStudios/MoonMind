@@ -1693,7 +1693,7 @@
       <table>
         <thead>
           <tr>
-            <th>Source</th>
+            <th>Type</th>
             <th>ID</th>
             ${primaryHeaders}
             <th>Status</th>
@@ -1729,10 +1729,10 @@
             `,
           )
           .join("");
-        const queueLabel = row.queueName || defaultQueueName;
         const skillLabel = row.skillId || "";
-        const metaParts = [queueLabel, skillLabel].filter(Boolean);
-        const metaText = metaParts.join(" · ") || queueLabel;
+        const runtimeLabel = row.runtimeMode || "";
+        const metaParts = [runtimeLabel, skillLabel].filter(Boolean);
+        const metaText = metaParts.join(" · ") || "Task";
         const linkTarget = row.link ? escapeHtml(row.link) : "#";
         const titleBase = row.title ? row.title : "Queue Job";
         const titleWithId = row.id ? `${titleBase} · ${row.id}` : titleBase;
@@ -1847,7 +1847,7 @@
       const summarizedTitle = summarizeInstructionPreview(rawInstructions);
       return {
         source: "queue",
-        sourceLabel: "Queue",
+        sourceLabel: "Task",
         id: pick(item, "id") || "",
         payload,
         queueName: defaultQueueName,
@@ -2127,12 +2127,6 @@
   // expanding queue metadata, update docs/TaskUiQueue.md ("Extending queue
   // fields") and add tests that exercise the new label/value pairs.
   const queueFieldDefinitions = [
-    {
-      key: "queueName",
-      label: "Queue",
-      render: (row) => escapeHtml(row.queueName || defaultQueueName),
-      tableSection: "primary",
-    },
     {
       key: "finishOutcome",
       label: "Outcome",
@@ -3256,7 +3250,7 @@
         toQueueRows(payload?.items || []).map((row) => ({
           ...row,
           source: "manifests",
-          sourceLabel: "Manifests",
+          sourceLabel: "Manifest",
         })),
       );
       setView(

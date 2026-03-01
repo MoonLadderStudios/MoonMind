@@ -141,7 +141,6 @@ function createProposalRow(overrides = {}) {
 (function testQueueFieldDefinitionsProvideSingleSourceOfTruth() {
   const keys = queueFieldDefinitions.map((definition) => definition.key);
   const expectedKeys = [
-    "queueName",
     "finishOutcome",
     "runtimeMode",
     "skillId",
@@ -152,24 +151,22 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(keys.length, expectedKeys.length);
   assert.strictEqual(keys.join(","), expectedKeys.join(","));
   const labels = queueFieldDefinitions.map((definition) => definition.label);
-  assert(labels.includes("Queue"));
   assert(labels.includes("Outcome"));
   assert(labels.includes("Finished"));
   const rendered = renderQueueFieldValue(
     {
-      queueName: "ops",
       runtimeMode: "codex",
       skillId: "auto",
       createdAt: "2026-02-23T12:00:00Z",
     },
-    queueFieldDefinitions[0],
+    queueFieldDefinitions.find((definition) => definition.key === "skillId"),
   );
-  assert.strictEqual(rendered, "ops");
+  assert.strictEqual(rendered, "auto");
 })();
 
 (function testRenderQueueTableUsesFieldDefinitions() {
   const html = renderQueueTable([createQueueRow()]);
-  assert(html.includes('data-field="queueName"'));
+  assert(html.includes("<th>Type</th>"));
   assert(html.includes('data-field="finishedAt"'));
   assert(html.includes("status-running"));
 })();
@@ -194,7 +191,7 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderRowsTableDelegatesToQueueTable() {
   const html = renderRowsTable([createQueueRow()]);
-  assert(html.includes('data-field="queueName"'));
+  assert(html.includes("<th>Type</th>"));
 })();
 
 (function testRenderQueueCardsRendersOnlyQueueRows() {
