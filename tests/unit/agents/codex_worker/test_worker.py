@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+import moonmind.agents.codex_worker.worker as worker_module
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
@@ -402,6 +403,76 @@ class CumulativeStepLogHandler(FakeHandler):
         )
 
 
+class ProposalEvidenceAwareHandler(FakeHandler):
+    """Proposal skill stub that only emits output when evidence was sanitized."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="proposal analyzed",
+                error_message=None,
+            )
+        )
+
+    async def handle_skill(
+        self,
+        *,
+        job_id,
+        payload,
+        selected_skill,
+        fallback=False,
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        del job_id, cancel_event, output_chunk_callback
+        self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
+        self.skill_payloads.append(dict(payload))
+
+        inputs_node = payload.get("inputs")
+        inputs = inputs_node if isinstance(inputs_node, dict) else {}
+        artifacts_path = Path(str(inputs.get("artifactsPath") or ""))
+        proposal_output_path = Path(str(inputs.get("proposalOutputPath") or ""))
+        mirrored_codex_exec = artifacts_path / "logs" / "codex_exec.log"
+        mirrored_step_log = artifacts_path / "logs" / "steps" / "step-0000.log"
+        if not mirrored_step_log.exists():
+            return self._next_result()
+
+        mirrored_content = mirrored_step_log.read_text(encoding="utf-8")
+        codex_exec_markers = mirrored_content.count("[command] $ codex exec")
+        capped_lines = len(mirrored_content.splitlines()) <= 20
+        if (
+            not mirrored_codex_exec.exists()
+            and codex_exec_markers == 1
+            and capped_lines
+        ):
+            proposal_output_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "title": "[run_quality] Harden recursive proposal logs",
+                            "summary": "Prevent recursive codex log ingestion in fix-proposal runs.",
+                            "category": "run_quality",
+                            "tags": ["duplicate_output"],
+                            "signal": {
+                                "severity": "high",
+                                "evidence": "nested codex exec block duplication",
+                            },
+                            "taskCreateRequest": {
+                                "type": "task",
+                                "payload": {
+                                    "repository": "MoonLadderStudios/MoonMind",
+                                    "task": {"instructions": "Add regression coverage"},
+                                },
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        return self._next_result()
+
+
 def _build_execute_stage_payloads() -> tuple[dict[str, object], dict[str, object]]:
     """Return minimal payloads for direct execute-stage tests."""
 
@@ -532,6 +603,103 @@ def test_prepare_post_task_proposal_evidence_paths_preserves_log_symlinks(
     assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
     assert mirrored_external.is_symlink()
     assert mirrored_external.resolve() == external_log.resolve()
+
+
+async def test_run_post_task_proposal_skills_sanitizes_recursive_logs_for_fix_proposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix-proposal should receive bounded evidence without active codex_exec recursion."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = ProposalEvidenceAwareHandler()
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        worker,
+        "_ensure_post_task_proposal_skills_materialized",
+        lambda **kwargs: True,
+    )
+    worker._active_cancel_event = asyncio.Event()
+    monkeypatch.setattr(worker_module, "_POST_TASK_PROPOSAL_LOG_MAX_BYTES", 4096)
+    monkeypatch.setattr(worker_module, "_POST_TASK_PROPOSAL_LOG_MAX_LINES", 20)
+    monkeypatch.setattr(
+        worker_module,
+        "_POST_TASK_PROPOSAL_LOG_TRUNCATION_NOTICE",
+        "[moonmind] proposal evidence truncated: test cap hit.\n",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job.id)
+    (prepared.artifacts_dir / "task_context.json").write_text(
+        '{"task":"context"}\n', encoding="utf-8"
+    )
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    (source_logs_dir / "steps").mkdir(parents=True, exist_ok=True)
+    duplicated_block = (
+        "[command] $ codex exec --json\n"
+        "assistant output\n"
+        "[command] complete: rc=0; cmd=codex exec --json; stdoutChars=17; stderrChars=0\n"
+    )
+    (source_logs_dir / "steps" / "step-0000.log").write_text(
+        duplicated_block
+        + duplicated_block
+        + "".join(f"line-{index:04d}\n" for index in range(80)),
+        encoding="utf-8",
+    )
+    (source_logs_dir / "codex_exec.log").write_text(
+        "[command] $ codex exec --json\nactive run log\n", encoding="utf-8"
+    )
+
+    artifacts = await worker._run_post_task_proposal_skills(
+        job=job,
+        canonical_payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Investigate retries",
+                "runtime": {"mode": "codex"},
+                "publish": {"mode": "none"},
+            },
+        },
+        source_payload=job.payload,
+        runtime_mode="codex",
+        prepared=prepared,
+        task_result=WorkerExecutionResult(
+            succeeded=False,
+            summary="failed",
+            error_message="step failed",
+            run_quality_reason={
+                "category": "run_quality",
+                "code": "step_transcript_invalid_marker_balance",
+                "tags": ["duplicate_output"],
+            },
+        ),
+        selected_skills=("auto",),
+    )
+
+    proposals_path = prepared.artifacts_dir / "task_proposals.json"
+    proposals_payload = json.loads(proposals_path.read_text(encoding="utf-8"))
+
+    assert len(proposals_payload) == 1
+    proposal = proposals_payload[0]
+    assert proposal["category"] == "run_quality"
+    assert "duplicate_output" in proposal["tags"]
+    assert isinstance(proposal.get("taskCreateRequest"), dict)
+    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
 
 
 def _build_resolved_step(

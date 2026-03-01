@@ -208,6 +208,17 @@ _VERIFICATION_COMMAND_PATTERNS = (
 )
 _VERIFICATION_COMMAND_LOG_PREFIX = "[command] $ "
 _VERIFICATION_REPORT_RELATIVE_PATH = Path("reports/verification_commands.jsonl")
+_POST_TASK_PROPOSAL_LOG_MAX_BYTES = 256 * 1024
+_POST_TASK_PROPOSAL_LOG_MAX_LINES = 4000
+_POST_TASK_PROPOSAL_LOG_TRUNCATION_NOTICE = (
+    "[moonmind] proposal evidence truncated: file capped to "
+    f"{_POST_TASK_PROPOSAL_LOG_MAX_BYTES} bytes and "
+    f"{_POST_TASK_PROPOSAL_LOG_MAX_LINES} lines.\n"
+)
+_CODEX_EXEC_COMMAND_START_PATTERN = re.compile(
+    rf"^{re.escape(_COMMAND_START_PREFIX)}.*\bcodex\s+exec\b",
+    re.IGNORECASE,
+)
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
     re.IGNORECASE,
@@ -6792,16 +6803,117 @@ class CodexWorker:
             else:
                 shutil.rmtree(mirrored_logs_dir)
         if source_logs_dir.is_dir() and not source_logs_dir.is_symlink():
-            shutil.copytree(
-                source_logs_dir,
-                mirrored_logs_dir,
-                symlinks=True,
-                ignore_dangling_symlinks=True,
-            )
+            mirrored_logs_dir.mkdir(parents=True, exist_ok=True)
+            for source_path in source_logs_dir.rglob("*"):
+                relative_path = source_path.relative_to(source_logs_dir)
+                destination_path = mirrored_logs_dir / relative_path
+                if source_path.is_dir():
+                    destination_path.mkdir(parents=True, exist_ok=True)
+                    continue
+                if self._is_excluded_post_task_proposal_log(relative_path):
+                    continue
+                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                if source_path.is_symlink():
+                    destination_path.symlink_to(os.readlink(source_path))
+                    continue
+                if source_path.is_file():
+                    bounded_content = self._read_bounded_post_task_proposal_log_text(
+                        source_path
+                    )
+                    sanitized_content = self._collapse_nested_codex_exec_blocks(
+                        bounded_content
+                    )
+                    destination_path.write_text(sanitized_content, encoding="utf-8")
         else:
             mirrored_logs_dir.mkdir(parents=True, exist_ok=True)
 
         return str(mirrored_task_context.resolve()), str(evidence_root.resolve())
+
+    @staticmethod
+    def _is_excluded_post_task_proposal_log(relative_path: Path) -> bool:
+        """Exclude active/runtime proposal logs that can recursively self-ingest."""
+
+        parts_lower = [part.lower() for part in relative_path.parts]
+        name_lower = relative_path.name.lower()
+        if name_lower == "codex_exec.log":
+            return True
+        if parts_lower and parts_lower[0] == "proposals":
+            return True
+        return False
+
+    @staticmethod
+    def _read_bounded_post_task_proposal_log_text(source_path: Path) -> str:
+        """Read log text with hard per-file byte/line limits for proposal safety."""
+
+        collected: list[bytes] = []
+        bytes_read = 0
+        lines_read = 0
+        truncated = False
+        with source_path.open("rb") as handle:
+            while (
+                bytes_read < _POST_TASK_PROPOSAL_LOG_MAX_BYTES
+                and lines_read < _POST_TASK_PROPOSAL_LOG_MAX_LINES
+            ):
+                remaining_bytes = _POST_TASK_PROPOSAL_LOG_MAX_BYTES - bytes_read
+                chunk = handle.readline(max(1, remaining_bytes + 1))
+                if not chunk:
+                    break
+                if len(chunk) > remaining_bytes:
+                    chunk = chunk[:remaining_bytes]
+                    truncated = True
+                collected.append(chunk)
+                bytes_read += len(chunk)
+                lines_read += 1
+                if truncated:
+                    break
+
+            if not truncated and (
+                lines_read >= _POST_TASK_PROPOSAL_LOG_MAX_LINES
+                or bytes_read >= _POST_TASK_PROPOSAL_LOG_MAX_BYTES
+            ):
+                if handle.read(1):
+                    truncated = True
+
+        content = b"".join(collected).decode("utf-8", errors="replace")
+        if truncated:
+            notice = _POST_TASK_PROPOSAL_LOG_TRUNCATION_NOTICE
+            if content and not content.endswith("\n"):
+                content += "\n"
+            content += notice
+        return content
+
+    @staticmethod
+    def _collapse_nested_codex_exec_blocks(content: str) -> str:
+        """Drop repeated nested `codex exec` command blocks from mirrored evidence."""
+
+        lines = content.splitlines(keepends=True)
+        if not lines:
+            return content
+
+        deduped: list[str] = []
+        seen_blocks: set[str] = set()
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            if _CODEX_EXEC_COMMAND_START_PATTERN.match(line):
+                block_end = index + 1
+                while block_end < len(lines):
+                    if lines[block_end].startswith(_COMMAND_COMPLETE_PREFIX):
+                        block_end += 1
+                        break
+                    block_end += 1
+                block_text = "".join(lines[index:block_end])
+                block_hash = hashlib.sha256(block_text.encode("utf-8")).hexdigest()
+                if block_hash not in seen_blocks:
+                    seen_blocks.add(block_hash)
+                    deduped.extend(lines[index:block_end])
+                index = block_end
+                continue
+
+            deduped.append(line)
+            index += 1
+
+        return "".join(deduped)
 
     async def _run_post_task_proposal_skills(
         self,
