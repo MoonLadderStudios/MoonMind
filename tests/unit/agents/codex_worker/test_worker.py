@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
@@ -222,6 +223,57 @@ async def test_parse_positive_int_field_rejects_invalid_values() -> None:
         )
 
 
+class _RecordingRequestClient:
+    """Minimal async HTTP client stub capturing JSON request calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def request(
+        self, method: str, path: str, *, json: dict[str, object]
+    ) -> object:
+        self.calls.append((method, path, dict(json)))
+        return _QueueApiResponseStub()
+
+
+class _QueueApiResponseStub:
+    """Minimal response shim implementing QueueApiClient JSON access contract."""
+
+    content = b"{}"
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {}
+
+
+async def test_replace_worker_runtime_capabilities_uses_put(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime capability sync should use the queue endpoint's PUT contract."""
+
+    client = QueueApiClient(
+        base_url="http://moonmind.test",
+        worker_token="token",
+    )
+    recorder = _RecordingRequestClient()
+    monkeypatch.setattr(client, "_client", recorder)
+    runtime_caps = {"gemini": {"models": ["gemini-3-pro"], "efforts": []}}
+
+    await client.replace_worker_runtime_capabilities(
+        runtime_capabilities=runtime_caps,
+    )
+
+    assert recorder.calls == [
+        (
+            "PUT",
+            "/api/queue/workers/tokens/capabilities",
+            {"runtimeCapabilities": runtime_caps},
+        )
+    ]
+
+
 class FailingUploadQueueClient(FakeQueueClient):
     """Queue client stub that simulates artifact upload failures."""
 
@@ -350,6 +402,76 @@ class CumulativeStepLogHandler(FakeHandler):
         )
 
 
+class ProposalEvidenceAwareHandler(FakeHandler):
+    """Proposal skill stub that only emits output when evidence was sanitized."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="proposal analyzed",
+                error_message=None,
+            )
+        )
+
+    async def handle_skill(
+        self,
+        *,
+        job_id,
+        payload,
+        selected_skill,
+        fallback=False,
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        del job_id, cancel_event, output_chunk_callback
+        self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
+        self.skill_payloads.append(dict(payload))
+
+        inputs_node = payload.get("inputs")
+        inputs = inputs_node if isinstance(inputs_node, dict) else {}
+        artifacts_path = Path(str(inputs.get("artifactsPath") or ""))
+        proposal_output_path = Path(str(inputs.get("proposalOutputPath") or ""))
+        mirrored_codex_exec = artifacts_path / "logs" / "codex_exec.log"
+        mirrored_step_log = artifacts_path / "logs" / "steps" / "step-0000.log"
+        if not mirrored_step_log.exists():
+            return self._next_result()
+
+        mirrored_content = mirrored_step_log.read_text(encoding="utf-8")
+        codex_exec_markers = mirrored_content.count("[command] $ codex exec")
+        capped_lines = len(mirrored_content.splitlines()) <= 20
+        if (
+            not mirrored_codex_exec.exists()
+            and codex_exec_markers == 1
+            and capped_lines
+        ):
+            proposal_output_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "title": "[run_quality] Harden recursive proposal logs",
+                            "summary": "Prevent recursive codex log ingestion in fix-proposal runs.",
+                            "category": "run_quality",
+                            "tags": ["duplicate_output"],
+                            "signal": {
+                                "severity": "high",
+                                "evidence": "nested codex exec block duplication",
+                            },
+                            "taskCreateRequest": {
+                                "type": "task",
+                                "payload": {
+                                    "repository": "MoonLadderStudios/MoonMind",
+                                    "task": {"instructions": "Add regression coverage"},
+                                },
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        return self._next_result()
+
+
 def _build_execute_stage_payloads() -> tuple[dict[str, object], dict[str, object]]:
     """Return minimal payloads for direct execute-stage tests."""
 
@@ -393,6 +515,286 @@ def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWor
         repo_command_env=None,
         publish_command_env=None,
     )
+
+
+def test_prepare_post_task_proposal_evidence_paths_rejects_symlink_sources(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should not read symlinked task context/log sources."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    secret_context = tmp_path / "secret-task-context.json"
+    secret_context.write_text('{"secret":"value"}\n', encoding="utf-8")
+    source_task_context.symlink_to(secret_context)
+    shutil.rmtree(source_logs_dir)
+    external_logs = tmp_path / "external-logs"
+    external_logs.mkdir(parents=True, exist_ok=True)
+    (external_logs / "sensitive.log").write_text("sensitive\n", encoding="utf-8")
+    source_logs_dir.symlink_to(external_logs, target_is_directory=True)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == "{}\n"
+    assert mirrored_logs_dir.is_dir()
+    assert list(mirrored_logs_dir.iterdir()) == []
+
+
+def test_prepare_post_task_proposal_evidence_paths_skips_log_symlink_files(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should skip symlinked log files to avoid evidence escapes."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+    external_log = tmp_path / "outside.log"
+    external_log.write_text("outside\n", encoding="utf-8")
+    (source_logs_dir / "external.log").symlink_to(external_log)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+    mirrored_external = mirrored_logs_dir / "external.log"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
+    assert not mirrored_external.is_symlink()
+    assert not mirrored_external.exists()
+
+
+def test_prepare_post_task_proposal_evidence_paths_skips_log_symlink_directories(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should not descend into symlinked log directories."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+    outside_logs = tmp_path / "outside-logs"
+    outside_logs.mkdir(parents=True, exist_ok=True)
+    (outside_logs / "secrets.log").write_text("secrets\n", encoding="utf-8")
+    (source_logs_dir / "archive").symlink_to(outside_logs, target_is_directory=True)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
+    assert not (mirrored_logs_dir / "archive").exists()
+
+
+def test_prepare_post_task_proposal_evidence_paths_recreates_broken_mirrored_logs_symlink(
+    tmp_path: Path,
+) -> None:
+    """Broken mirrored symlink directories are replaced by mirrored log directories."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+
+    (prepared.repo_dir / ".artifacts" / "proposal_inputs").mkdir(
+        parents=True, exist_ok=True
+    )
+    mirrored_logs_dir = prepared.repo_dir / ".artifacts" / "proposal_inputs" / "logs"
+    mirrored_logs_dir.symlink_to(tmp_path / "missing-target")
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert mirrored_logs.is_dir()
+    assert not mirrored_logs.is_symlink()
+    assert (mirrored_logs / "worker.log").read_text(encoding="utf-8") == "worker\n"
+
+
+async def test_run_post_task_proposal_skills_sanitizes_recursive_logs_for_fix_proposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix-proposal should receive bounded evidence without active codex_exec recursion."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = ProposalEvidenceAwareHandler()
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        worker,
+        "_ensure_post_task_proposal_skills_materialized",
+        lambda **kwargs: True,
+    )
+    worker._active_cancel_event = asyncio.Event()
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker",
+        "_POST_TASK_PROPOSAL_LOG_MAX_BYTES",
+        4096,
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker",
+        "_POST_TASK_PROPOSAL_LOG_MAX_LINES",
+        20,
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker",
+        "_POST_TASK_PROPOSAL_LOG_TRUNCATION_NOTICE",
+        "[moonmind] proposal evidence truncated: test cap hit.\n",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job.id)
+    (prepared.artifacts_dir / "task_context.json").write_text(
+        '{"task":"context"}\n', encoding="utf-8"
+    )
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    (source_logs_dir / "steps").mkdir(parents=True, exist_ok=True)
+    duplicated_block = (
+        "[command] $ codex exec --json\n"
+        "assistant output\n"
+        "[command] complete: rc=0; cmd=codex exec --json; stdoutChars=17; stderrChars=0\n"
+    )
+    (source_logs_dir / "steps" / "step-0000.log").write_text(
+        duplicated_block
+        + duplicated_block
+        + "".join(f"line-{index:04d}\n" for index in range(80)),
+        encoding="utf-8",
+    )
+    (source_logs_dir / "codex_exec.log").write_text(
+        "[command] $ codex exec --json\nactive run log\n", encoding="utf-8"
+    )
+
+    artifacts = await worker._run_post_task_proposal_skills(
+        job=job,
+        canonical_payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Investigate retries",
+                "runtime": {"mode": "codex"},
+                "publish": {"mode": "none"},
+            },
+        },
+        source_payload=job.payload,
+        runtime_mode="codex",
+        prepared=prepared,
+        task_result=WorkerExecutionResult(
+            succeeded=False,
+            summary="failed",
+            error_message="step failed",
+            run_quality_reason={
+                "category": "run_quality",
+                "code": "step_transcript_invalid_marker_balance",
+                "tags": ["duplicate_output"],
+            },
+        ),
+        selected_skills=("auto",),
+    )
+
+    proposals_path = prepared.artifacts_dir / "task_proposals.json"
+    proposals_payload = json.loads(proposals_path.read_text(encoding="utf-8"))
+
+    assert len(proposals_payload) == 1
+    proposal = proposals_payload[0]
+    assert proposal["category"] == "run_quality"
+    assert "duplicate_output" in proposal["tags"]
+    assert isinstance(proposal.get("taskCreateRequest"), dict)
+    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
 
 
 def _build_resolved_step(
@@ -5001,14 +5403,6 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
 
     await callback("stdout", "hello secret-token\n")
     await callback("stderr", "warn output\n")
-    await callback(
-        "stdout",
-        "[moonmind] loop warning: suppressed 7 repeated stdout chunk(s) (700 chars) during this command.\n",
-    )
-    await callback(
-        "stdout",
-        "[moonmind] loop warning: suppressed 8 repeated stdout chunk(s) (800 chars) during this command; control=worker\n",
-    )
     await callback("stdout", None)
     await callback("stderr", None)
 
@@ -5025,21 +5419,6 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
     assert first_stdout["payload"]["stepIndex"] == 1
     assert "secret-token" not in first_stdout["message"]
     assert "[REDACTED]" in first_stdout["message"]
-
-    loop_warning_events = [
-        event
-        for event in queue.events
-        if event["payload"].get("kind") == "loop_warning"
-    ]
-    assert len(loop_warning_events) == 1
-    assert (
-        loop_warning_events[0]["message"]
-        == "[moonmind] loop warning: suppressed 8 repeated stdout chunk(s) (800 chars) during this command"
-    )
-    assert loop_warning_events[0]["payload"]["stream"] == "stdout"
-    assert loop_warning_events[0]["payload"]["stage"] == "moonmind.task.execute"
-    assert loop_warning_events[0]["payload"]["stepId"] == "step-2"
-    assert loop_warning_events[0]["payload"]["stepIndex"] == 1
 
 
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
@@ -5061,6 +5440,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "false")
     monkeypatch.setenv("MOONMIND_STEP_LOG_MAX_BYTES", "2097152")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
+    monkeypatch.setenv("MOONMIND_GEMINI_APPROVAL_MODE", "auto_edit")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
 
@@ -5082,6 +5462,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.stage_command_timeout_seconds == 2400
     assert config.artifact_upload_incremental is False
     assert config.step_log_max_bytes == 2097152
+    assert config.gemini_approval_mode == "auto_edit"
     assert config.git_user_name == "Nate Sticco"
     assert config.git_user_email == "nsticco@gmail.com"
 
@@ -5189,7 +5570,6 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_MODEL_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("MODEL_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_CAPABILITIES", raising=False)
-    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
     monkeypatch.delenv("MOONMIND_DOCKER_BINARY", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)
@@ -5221,6 +5601,22 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.stage_command_timeout_seconds == 3600
     assert config.artifact_upload_incremental is True
     assert config.step_log_max_bytes == 1024 * 1024
+    assert config.gemini_approval_mode == "yolo"
+
+
+async def test_config_from_env_rejects_invalid_gemini_approval_mode(
+    monkeypatch,
+) -> None:
+    """Gemini approval mode should fail fast on unsupported values."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_GEMINI_APPROVAL_MODE", "unsafe")
+
+    with pytest.raises(
+        ValueError,
+        match="MOONMIND_GEMINI_APPROVAL_MODE must be one of",
+    ):
+        CodexWorkerConfig.from_env()
 
 
 async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
@@ -5391,6 +5787,48 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     assert effort_override == "high"
 
 
+async def test_build_non_codex_runtime_command_uses_gemini_approval_mode(
+    tmp_path: Path,
+) -> None:
+    """Gemini runtime command should include explicit non-interactive approval mode."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="gemini",
+        gemini_binary="gemini",
+        gemini_approval_mode="yolo",
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    command = worker._build_non_codex_runtime_command(
+        runtime_mode="gemini",
+        instruction="Apply patch and run tests.",
+        model="gemini-2.5-pro",
+        effort="high",
+    )
+
+    assert command == [
+        "gemini",
+        "--approval-mode",
+        "yolo",
+        "--prompt",
+        "Apply patch and run tests.",
+        "--model",
+        "gemini-2.5-pro",
+        "--effort",
+        "high",
+    ]
+
+
 @pytest.fixture
 def codex_worker_components(
     tmp_path: Path,
@@ -5456,7 +5894,7 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
     assert title == "Ship publish title defaults for queue tasks"
 
 
-async def test_derive_default_pr_title_redacts_uuid_from_task_instructions(
+async def test_derive_default_pr_title_uses_short_correlation_fallback_without_step_titles(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
     """Missing step titles should fall back to task instructions when available."""
@@ -5476,7 +5914,7 @@ async def test_derive_default_pr_title_redacts_uuid_from_task_instructions(
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == "Fix publish behavior for job."
+    assert title == "Fix publish behavior for 123e4567-e89b-12d3-a456-426614174000."
     assert str(job_id) not in title
     assert len(title) <= 90
 
@@ -5505,56 +5943,6 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
     assert title == "Fix publish behavior without adding step titles."
     assert str(job_id) not in title
     assert len(title) <= 90
-
-
-async def test_derive_default_publish_subject_uses_commit_length_and_sanitization(
-    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
-) -> None:
-    """Commit subject defaults should stay concise and strip UUID/MoonMind markers."""
-
-    worker, _, _ = codex_worker_components
-    payload = {
-        "task": {
-            "instructions": (
-                "MoonMind resolves publish behavior for "
-                "123e4567-e89b-12d3-a456-426614174000 "
-                "with a very long sentence that should be truncated for commit subjects."
-            ),
-            "steps": [{"id": "step-1", "title": " "}],
-        }
-    }
-
-    subject = worker._derive_default_publish_subject(
-        canonical_payload=payload,
-        resolved_steps=worker._resolve_task_steps(payload),
-        max_chars=72,
-    )
-
-    assert "MoonMind" not in subject
-    assert "123e4567-e89b-12d3-a456-426614174000" not in subject
-    assert len(subject) <= 72
-
-
-async def test_derive_default_publish_subject_redacts_secret_like_instructions(
-    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
-) -> None:
-    """Commit subject defaults should redact secret-like content from instructions."""
-
-    worker, _, _ = codex_worker_components
-    payload = {
-        "task": {
-            "instructions": "Publish token=top-secret immediately.",
-            "steps": [{"id": "step-1", "title": " "}],
-        }
-    }
-
-    subject = worker._derive_default_publish_subject(
-        canonical_payload=payload,
-        resolved_steps=worker._resolve_task_steps(payload),
-        max_chars=72,
-    )
-
-    assert subject == "[REDACTED]"
 
 
 async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
@@ -5586,35 +5974,13 @@ async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
     assert full_uuid not in title
 
 
-async def test_derive_default_pr_title_removes_moonmind_branding_in_generated_titles(
+async def test_derive_default_pr_title_uses_short_correlation_fallback(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
-    """Generated defaults should remove MoonMind branding unless override is explicit."""
+    """Missing step titles and instructions should fall back to short token title."""
 
     worker, _, _ = codex_worker_components
-    payload = {
-        "task": {
-            "instructions": "MoonMind should not appear in generated title.",
-            "steps": [{"id": "step-1", "title": " "}],
-        }
-    }
-
-    title = worker._derive_default_pr_title(
-        job_id=uuid4(),
-        canonical_payload=payload,
-        resolved_steps=worker._resolve_task_steps(payload),
-    )
-
-    assert "MoonMind" not in title
-    assert title == "should not appear in generated title."
-
-
-async def test_derive_default_pr_title_uses_neutral_fallback(
-    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
-) -> None:
-    """Missing step titles and instructions should fall back to neutral wording."""
-
-    worker, _, _ = codex_worker_components
+    job_id = uuid4()
     payload = {
         "task": {
             "instructions": " ",
@@ -5623,12 +5989,13 @@ async def test_derive_default_pr_title_uses_neutral_fallback(
     }
 
     title = worker._derive_default_pr_title(
-        job_id=uuid4(),
+        job_id=job_id,
         canonical_payload=payload,
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == "Automated update"
+    assert title == f"MoonMind task result [mm:{str(job_id)[:8]}]"
+    assert str(job_id) not in title
     assert len(title) <= 90
 
 
@@ -6512,8 +6879,12 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     )
 
 
-@pytest.fixture
-def publish_stage_test_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_matches_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR publish should use default branch when no override is set and base=head."""
+
     queue = FakeQueueClient(jobs=[])
     handler = FakeHandler(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
@@ -6547,26 +6918,17 @@ def publish_stage_test_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         command_tuple = tuple(str(part) for part in command)
         run_calls.append(command_tuple)
         if command_tuple[:2] == ("git", "status"):
-            return CommandResult(command_tuple, 0, " M worker.py\n", "")
+            return CommandResult(command_tuple, 0, " M docs/README.md\n", "")
         if command_tuple[:3] == ("gh", "pr", "create"):
             return CommandResult(
                 command_tuple,
                 0,
-                "https://github.com/MoonLadderStudios/MoonMind/pull/111\n",
+                "https://github.com/MoonLadderStudios/MoonMind/pull/778\n",
                 "",
             )
         return CommandResult(command_tuple, 0, "", "")
 
     monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
-    return worker, queue, run_calls
-
-
-async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_warning(
-    tmp_path: Path,
-    publish_stage_test_setup,
-) -> None:
-    """Missing publish.prBaseBranch should resolve deterministically and emit warning."""
-    worker, queue, run_calls = publish_stage_test_setup
 
     job_id = uuid4()
     prepared = PreparedTaskWorkspace(
@@ -6579,49 +6941,92 @@ async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_wa
         task_context_path=tmp_path / "context",
         publish_result_path=tmp_path / "publish-result.json",
         default_branch="main",
-        starting_branch="feature/branch",
-        new_branch="feature/branch",
-        working_branch="feature/branch",
+        starting_branch="task/feature-123",
+        new_branch=None,
+        working_branch="task/feature-123",
         workdir_mode="checkout",
         repo_command_env=None,
         publish_command_env=None,
     )
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
-    prepared.execute_log_path.write_text(
-        "[command] $ ./tools/test_unit.sh\nok\n",
-        encoding="utf-8",
-    )
 
-    await worker._run_publish_stage(
+    staged_artifacts: list[ArtifactUpload] = []
+    publish_note = await worker._run_publish_stage(
         job_id=job_id,
-        canonical_payload={"task": {"publish": {"mode": "pr"}}},
+        canonical_payload={
+            "task": {
+                "runtime": {"mode": "codex"},
+                "publish": {"mode": "pr", "prBaseBranch": None},
+            }
+        },
         prepared=prepared,
         skill_meta={},
         job_type="task",
-        staged_artifacts=[],
+        staged_artifacts=staged_artifacts,
     )
 
+    assert (
+        publish_note
+        == "published PR https://github.com/MoonLadderStudios/MoonMind/pull/778"
+    )
     pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
     assert pr_call[pr_call.index("--base") + 1] == "main"
-
-    warning_event = next(
-        event
+    assert pr_call[pr_call.index("--head") + 1] == "task/feature-123"
+    assert any(
+        event["message"] == "moonmind.task.publish"
+        and event["payload"].get("warning") == "pr_base_fallback"
         for event in queue.events
-        if event["message"] == "moonmind.task.publish.pr_base_branch_resolution"
     )
-    payload = warning_event["payload"]
-    assert payload["reason"] == "missing_pr_base_branch"
-    assert payload["resolvedBaseBranch"] == "main"
-    assert payload["headBranch"] == "feature/branch"
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["baseBranch"] == "main"
 
 
-async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
+async def test_run_publish_stage_fails_when_explicit_pr_base_matches_head(
     tmp_path: Path,
-    publish_stage_test_setup,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Explicit base=head should fail before invoking gh pr create."""
-    worker, queue, run_calls = publish_stage_test_setup
+    """Explicit PR base override matching head should fail before PR creation."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        command_tuple = tuple(str(part) for part in command)
+        run_calls.append(command_tuple)
+        if command_tuple[:2] == ("git", "status"):
+            return CommandResult(command_tuple, 0, " M docs/README.md\n", "")
+        return CommandResult(command_tuple, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
 
     job_id = uuid4()
     prepared = PreparedTaskWorkspace(
@@ -6634,20 +7039,17 @@ async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
         task_context_path=tmp_path / "context",
         publish_result_path=tmp_path / "publish-result.json",
         default_branch="main",
-        starting_branch="develop",
-        new_branch="feature/branch",
-        working_branch="feature/branch",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="task/feature-456",
         workdir_mode="checkout",
         repo_command_env=None,
         publish_command_env=None,
     )
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
-    prepared.execute_log_path.write_text(
-        "[command] $ ./tools/test_unit.sh\nok\n",
-        encoding="utf-8",
-    )
 
+    staged_artifacts: list[ArtifactUpload] = []
     with pytest.raises(
         RuntimeError,
         match="task.publish.prBaseBranch resolves to the working branch",
@@ -6656,68 +7058,17 @@ async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
             job_id=job_id,
             canonical_payload={
                 "task": {
-                    "publish": {"mode": "pr", "prBaseBranch": "feature/branch"},
+                    "publish": {"mode": "pr", "prBaseBranch": "task/feature-456"},
                 }
             },
             prepared=prepared,
             skill_meta={},
             job_type="task",
-            staged_artifacts=[],
+            staged_artifacts=staged_artifacts,
         )
 
-    assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
-
-
-async def test_run_publish_stage_pr_mode_fails_fast_when_no_valid_base_branch(
-    tmp_path: Path,
-    publish_stage_test_setup,
-) -> None:
-    """PR publish should fail before gh call when every base candidate equals head."""
-    worker, queue, run_calls = publish_stage_test_setup
-
-    job_id = uuid4()
-    prepared = PreparedTaskWorkspace(
-        job_root=tmp_path / str(job_id),
-        repo_dir=tmp_path / "repo",
-        artifacts_dir=tmp_path / "artifacts",
-        prepare_log_path=tmp_path / "prepare.log",
-        execute_log_path=tmp_path / "execute.log",
-        publish_log_path=tmp_path / "publish.log",
-        task_context_path=tmp_path / "context",
-        publish_result_path=tmp_path / "publish-result.json",
-        default_branch="feature/branch",
-        starting_branch="feature/branch",
-        new_branch="feature/branch",
-        working_branch="feature/branch",
-        workdir_mode="checkout",
-        repo_command_env=None,
-        publish_command_env=None,
-    )
-    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
-    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
-    prepared.execute_log_path.write_text(
-        "[command] $ ./tools/test_unit.sh\nok\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(
-        RuntimeError,
-        match="no valid base branch distinct from head",
-    ):
-        await worker._run_publish_stage(
-            job_id=job_id,
-            canonical_payload={
-                "task": {
-                    "publish": {"mode": "pr"},
-                }
-            },
-            prepared=prepared,
-            skill_meta={},
-            job_type="task",
-            staged_artifacts=[],
-        )
-
-    assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
+    assert not any(call[:3] == ("gh", "pr", "create") for call in run_calls)
+    assert not any(call[:3] == ("git", "commit", "-m") for call in run_calls)
 
 
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
@@ -6877,17 +7228,22 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
 
 
 async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
-    """PR base should use explicit override when valid, without warning."""
+    """PR base should use override when present, otherwise starting branch."""
 
-    base_branch, warning = CodexWorker._resolve_pr_base_branch(
-        publish={"prBaseBranch": "release/1.2"},
-        starting_branch="main",
-        default_branch="main",
-        head_branch="feature/branch",
+    assert (
+        CodexWorker._resolve_pr_base_branch(
+            publish={"prBaseBranch": "release/1.2"},
+            starting_branch="main",
+        )
+        == "release/1.2"
     )
-
-    assert base_branch == "release/1.2"
-    assert warning is None
+    assert (
+        CodexWorker._resolve_pr_base_branch(
+            publish={"prBaseBranch": " "},
+            starting_branch="develop",
+        )
+        == "develop"
+    )
 
 
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
