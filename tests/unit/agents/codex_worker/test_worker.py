@@ -6,7 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
-import shutil
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
@@ -221,57 +221,6 @@ async def test_parse_positive_int_field_rejects_invalid_values() -> None:
             field_name="maxAttempts",
             default=3,
         )
-
-
-class _RecordingRequestClient:
-    """Minimal async HTTP client stub capturing JSON request calls."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str, dict[str, object]]] = []
-
-    async def request(
-        self, method: str, path: str, *, json: dict[str, object]
-    ) -> object:
-        self.calls.append((method, path, dict(json)))
-        return _QueueApiResponseStub()
-
-
-class _QueueApiResponseStub:
-    """Minimal response shim implementing QueueApiClient JSON access contract."""
-
-    content = b"{}"
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> dict[str, object]:
-        return {}
-
-
-async def test_replace_worker_runtime_capabilities_uses_put(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Runtime capability sync should use the queue endpoint's PUT contract."""
-
-    client = QueueApiClient(
-        base_url="http://moonmind.test",
-        worker_token="token",
-    )
-    recorder = _RecordingRequestClient()
-    monkeypatch.setattr(client, "_client", recorder)
-    runtime_caps = {"gemini": {"models": ["gemini-3-pro"], "efforts": []}}
-
-    await client.replace_worker_runtime_capabilities(
-        runtime_capabilities=runtime_caps,
-    )
-
-    assert recorder.calls == [
-        (
-            "PUT",
-            "/api/queue/workers/tokens/capabilities",
-            {"runtimeCapabilities": runtime_caps},
-        )
-    ]
 
 
 class FailingUploadQueueClient(FakeQueueClient):
@@ -515,286 +464,6 @@ def _build_execute_stage_workspace(*, tmp_path: Path, job_id) -> PreparedTaskWor
         repo_command_env=None,
         publish_command_env=None,
     )
-
-
-def test_prepare_post_task_proposal_evidence_paths_rejects_symlink_sources(
-    tmp_path: Path,
-) -> None:
-    """Mirroring should not read symlinked task context/log sources."""
-
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-    )
-    worker = CodexWorker(
-        config=config,
-        queue_client=FakeQueueClient(),
-        codex_exec_handler=FakeHandler(
-            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-        ),
-    )
-    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
-
-    source_task_context = prepared.artifacts_dir / "task_context.json"
-    source_logs_dir = prepared.artifacts_dir / "logs"
-    secret_context = tmp_path / "secret-task-context.json"
-    secret_context.write_text('{"secret":"value"}\n', encoding="utf-8")
-    source_task_context.symlink_to(secret_context)
-    shutil.rmtree(source_logs_dir)
-    external_logs = tmp_path / "external-logs"
-    external_logs.mkdir(parents=True, exist_ok=True)
-    (external_logs / "sensitive.log").write_text("sensitive\n", encoding="utf-8")
-    source_logs_dir.symlink_to(external_logs, target_is_directory=True)
-
-    mirrored_task_context_path, mirrored_artifacts_path = (
-        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
-    )
-    mirrored_task_context = Path(mirrored_task_context_path)
-    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
-
-    assert mirrored_task_context.read_text(encoding="utf-8") == "{}\n"
-    assert mirrored_logs_dir.is_dir()
-    assert list(mirrored_logs_dir.iterdir()) == []
-
-
-def test_prepare_post_task_proposal_evidence_paths_skips_log_symlink_files(
-    tmp_path: Path,
-) -> None:
-    """Mirroring should skip symlinked log files to avoid evidence escapes."""
-
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-    )
-    worker = CodexWorker(
-        config=config,
-        queue_client=FakeQueueClient(),
-        codex_exec_handler=FakeHandler(
-            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-        ),
-    )
-    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
-
-    source_task_context = prepared.artifacts_dir / "task_context.json"
-    source_logs_dir = prepared.artifacts_dir / "logs"
-    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
-    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
-    external_log = tmp_path / "outside.log"
-    external_log.write_text("outside\n", encoding="utf-8")
-    (source_logs_dir / "external.log").symlink_to(external_log)
-
-    mirrored_task_context_path, mirrored_artifacts_path = (
-        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
-    )
-    mirrored_task_context = Path(mirrored_task_context_path)
-    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
-    mirrored_external = mirrored_logs_dir / "external.log"
-
-    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
-    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
-    assert not mirrored_external.is_symlink()
-    assert not mirrored_external.exists()
-
-
-def test_prepare_post_task_proposal_evidence_paths_skips_log_symlink_directories(
-    tmp_path: Path,
-) -> None:
-    """Mirroring should not descend into symlinked log directories."""
-
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-    )
-    worker = CodexWorker(
-        config=config,
-        queue_client=FakeQueueClient(),
-        codex_exec_handler=FakeHandler(
-            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-        ),
-    )
-    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
-
-    source_task_context = prepared.artifacts_dir / "task_context.json"
-    source_logs_dir = prepared.artifacts_dir / "logs"
-    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
-    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
-    outside_logs = tmp_path / "outside-logs"
-    outside_logs.mkdir(parents=True, exist_ok=True)
-    (outside_logs / "secrets.log").write_text("secrets\n", encoding="utf-8")
-    (source_logs_dir / "archive").symlink_to(outside_logs, target_is_directory=True)
-
-    mirrored_task_context_path, mirrored_artifacts_path = (
-        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
-    )
-    mirrored_task_context = Path(mirrored_task_context_path)
-    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
-
-    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
-    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
-    assert not (mirrored_logs_dir / "archive").exists()
-
-
-def test_prepare_post_task_proposal_evidence_paths_recreates_broken_mirrored_logs_symlink(
-    tmp_path: Path,
-) -> None:
-    """Broken mirrored symlink directories are replaced by mirrored log directories."""
-
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-    )
-    worker = CodexWorker(
-        config=config,
-        queue_client=FakeQueueClient(),
-        codex_exec_handler=FakeHandler(
-            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-        ),
-    )
-    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
-
-    source_task_context = prepared.artifacts_dir / "task_context.json"
-    source_logs_dir = prepared.artifacts_dir / "logs"
-    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
-    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
-
-    (prepared.repo_dir / ".artifacts" / "proposal_inputs").mkdir(
-        parents=True, exist_ok=True
-    )
-    mirrored_logs_dir = prepared.repo_dir / ".artifacts" / "proposal_inputs" / "logs"
-    mirrored_logs_dir.symlink_to(tmp_path / "missing-target")
-
-    mirrored_task_context_path, mirrored_artifacts_path = (
-        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
-    )
-
-    mirrored_task_context = Path(mirrored_task_context_path)
-    mirrored_logs = Path(mirrored_artifacts_path) / "logs"
-
-    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
-    assert mirrored_logs.is_dir()
-    assert not mirrored_logs.is_symlink()
-    assert (mirrored_logs / "worker.log").read_text(encoding="utf-8") == "worker\n"
-
-
-async def test_run_post_task_proposal_skills_sanitizes_recursive_logs_for_fix_proposal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Fix-proposal should receive bounded evidence without active codex_exec recursion."""
-
-    queue = FakeQueueClient(jobs=[])
-    handler = ProposalEvidenceAwareHandler()
-    worker = CodexWorker(
-        config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
-            worker_id="worker-1",
-            worker_token=None,
-            poll_interval_ms=1500,
-            lease_seconds=120,
-            workdir=tmp_path,
-        ),
-        queue_client=queue,
-        codex_exec_handler=handler,
-    )  # type: ignore[arg-type]
-    monkeypatch.setattr(
-        worker,
-        "_ensure_post_task_proposal_skills_materialized",
-        lambda **kwargs: True,
-    )
-    worker._active_cancel_event = asyncio.Event()
-    monkeypatch.setattr(
-        "moonmind.agents.codex_worker.worker",
-        "_POST_TASK_PROPOSAL_LOG_MAX_BYTES",
-        4096,
-    )
-    monkeypatch.setattr(
-        "moonmind.agents.codex_worker.worker",
-        "_POST_TASK_PROPOSAL_LOG_MAX_LINES",
-        20,
-    )
-    monkeypatch.setattr(
-        "moonmind.agents.codex_worker.worker",
-        "_POST_TASK_PROPOSAL_LOG_TRUNCATION_NOTICE",
-        "[moonmind] proposal evidence truncated: test cap hit.\n",
-    )
-
-    job = ClaimedJob(
-        id=uuid4(),
-        type="task",
-        payload={"repository": "MoonLadderStudios/MoonMind"},
-    )
-    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job.id)
-    (prepared.artifacts_dir / "task_context.json").write_text(
-        '{"task":"context"}\n', encoding="utf-8"
-    )
-    source_logs_dir = prepared.artifacts_dir / "logs"
-    (source_logs_dir / "steps").mkdir(parents=True, exist_ok=True)
-    duplicated_block = (
-        "[command] $ codex exec --json\n"
-        "assistant output\n"
-        "[command] complete: rc=0; cmd=codex exec --json; stdoutChars=17; stderrChars=0\n"
-    )
-    (source_logs_dir / "steps" / "step-0000.log").write_text(
-        duplicated_block
-        + duplicated_block
-        + "".join(f"line-{index:04d}\n" for index in range(80)),
-        encoding="utf-8",
-    )
-    (source_logs_dir / "codex_exec.log").write_text(
-        "[command] $ codex exec --json\nactive run log\n", encoding="utf-8"
-    )
-
-    artifacts = await worker._run_post_task_proposal_skills(
-        job=job,
-        canonical_payload={
-            "repository": "MoonLadderStudios/MoonMind",
-            "task": {
-                "instructions": "Investigate retries",
-                "runtime": {"mode": "codex"},
-                "publish": {"mode": "none"},
-            },
-        },
-        source_payload=job.payload,
-        runtime_mode="codex",
-        prepared=prepared,
-        task_result=WorkerExecutionResult(
-            succeeded=False,
-            summary="failed",
-            error_message="step failed",
-            run_quality_reason={
-                "category": "run_quality",
-                "code": "step_transcript_invalid_marker_balance",
-                "tags": ["duplicate_output"],
-            },
-        ),
-        selected_skills=("auto",),
-    )
-
-    proposals_path = prepared.artifacts_dir / "task_proposals.json"
-    proposals_payload = json.loads(proposals_path.read_text(encoding="utf-8"))
-
-    assert len(proposals_payload) == 1
-    proposal = proposals_payload[0]
-    assert proposal["category"] == "run_quality"
-    assert "duplicate_output" in proposal["tags"]
-    assert isinstance(proposal.get("taskCreateRequest"), dict)
-    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
 
 
 def _build_resolved_step(
@@ -5440,7 +5109,6 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", "false")
     monkeypatch.setenv("MOONMIND_STEP_LOG_MAX_BYTES", "2097152")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
-    monkeypatch.setenv("MOONMIND_GEMINI_APPROVAL_MODE", "auto_edit")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
 
@@ -5462,7 +5130,6 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.stage_command_timeout_seconds == 2400
     assert config.artifact_upload_incremental is False
     assert config.step_log_max_bytes == 2097152
-    assert config.gemini_approval_mode == "auto_edit"
     assert config.git_user_name == "Nate Sticco"
     assert config.git_user_email == "nsticco@gmail.com"
 
@@ -5570,6 +5237,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_MODEL_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("MODEL_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_CAPABILITIES", raising=False)
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
     monkeypatch.delenv("MOONMIND_DOCKER_BINARY", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_WORKSPACE_VOLUME", raising=False)
     monkeypatch.delenv("MOONMIND_CONTAINER_TIMEOUT_SECONDS", raising=False)
@@ -5601,22 +5269,6 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.stage_command_timeout_seconds == 3600
     assert config.artifact_upload_incremental is True
     assert config.step_log_max_bytes == 1024 * 1024
-    assert config.gemini_approval_mode == "yolo"
-
-
-async def test_config_from_env_rejects_invalid_gemini_approval_mode(
-    monkeypatch,
-) -> None:
-    """Gemini approval mode should fail fast on unsupported values."""
-
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
-    monkeypatch.setenv("MOONMIND_GEMINI_APPROVAL_MODE", "unsafe")
-
-    with pytest.raises(
-        ValueError,
-        match="MOONMIND_GEMINI_APPROVAL_MODE must be one of",
-    ):
-        CodexWorkerConfig.from_env()
 
 
 async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
@@ -5785,48 +5437,6 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     )
     assert model_override == "gemini-2.5-pro"
     assert effort_override == "high"
-
-
-async def test_build_non_codex_runtime_command_uses_gemini_approval_mode(
-    tmp_path: Path,
-) -> None:
-    """Gemini runtime command should include explicit non-interactive approval mode."""
-
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-        worker_runtime="gemini",
-        gemini_binary="gemini",
-        gemini_approval_mode="yolo",
-    )
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
-
-    command = worker._build_non_codex_runtime_command(
-        runtime_mode="gemini",
-        instruction="Apply patch and run tests.",
-        model="gemini-2.5-pro",
-        effort="high",
-    )
-
-    assert command == [
-        "gemini",
-        "--approval-mode",
-        "yolo",
-        "--prompt",
-        "Apply patch and run tests.",
-        "--model",
-        "gemini-2.5-pro",
-        "--effort",
-        "high",
-    ]
 
 
 @pytest.fixture
@@ -6879,12 +6489,8 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     )
 
 
-async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_matches_head(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """PR publish should use default branch when no override is set and base=head."""
-
+@pytest.fixture
+def publish_stage_test_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     queue = FakeQueueClient(jobs=[])
     handler = FakeHandler(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
@@ -6918,17 +6524,26 @@ async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_mat
         command_tuple = tuple(str(part) for part in command)
         run_calls.append(command_tuple)
         if command_tuple[:2] == ("git", "status"):
-            return CommandResult(command_tuple, 0, " M docs/README.md\n", "")
+            return CommandResult(command_tuple, 0, " M worker.py\n", "")
         if command_tuple[:3] == ("gh", "pr", "create"):
             return CommandResult(
                 command_tuple,
                 0,
-                "https://github.com/MoonLadderStudios/MoonMind/pull/778\n",
+                "https://github.com/MoonLadderStudios/MoonMind/pull/111\n",
                 "",
             )
         return CommandResult(command_tuple, 0, "", "")
 
     monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+    return worker, queue, run_calls
+
+
+async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_warning(
+    tmp_path: Path,
+    publish_stage_test_setup,
+) -> None:
+    """Missing publish.prBaseBranch should resolve deterministically and emit warning."""
+    worker, queue, run_calls = publish_stage_test_setup
 
     job_id = uuid4()
     prepared = PreparedTaskWorkspace(
@@ -6941,92 +6556,49 @@ async def test_run_publish_stage_falls_back_to_default_pr_base_when_starting_mat
         task_context_path=tmp_path / "context",
         publish_result_path=tmp_path / "publish-result.json",
         default_branch="main",
-        starting_branch="task/feature-123",
-        new_branch=None,
-        working_branch="task/feature-123",
+        starting_branch="feature/branch",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
         workdir_mode="checkout",
         repo_command_env=None,
         publish_command_env=None,
     )
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
 
-    staged_artifacts: list[ArtifactUpload] = []
-    publish_note = await worker._run_publish_stage(
+    await worker._run_publish_stage(
         job_id=job_id,
-        canonical_payload={
-            "task": {
-                "runtime": {"mode": "codex"},
-                "publish": {"mode": "pr", "prBaseBranch": None},
-            }
-        },
+        canonical_payload={"task": {"publish": {"mode": "pr"}}},
         prepared=prepared,
         skill_meta={},
         job_type="task",
-        staged_artifacts=staged_artifacts,
+        staged_artifacts=[],
     )
 
-    assert (
-        publish_note
-        == "published PR https://github.com/MoonLadderStudios/MoonMind/pull/778"
-    )
     pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
     assert pr_call[pr_call.index("--base") + 1] == "main"
-    assert pr_call[pr_call.index("--head") + 1] == "task/feature-123"
-    assert any(
-        event["message"] == "moonmind.task.publish"
-        and event["payload"].get("warning") == "pr_base_fallback"
+
+    warning_event = next(
+        event
         for event in queue.events
+        if event["message"] == "moonmind.task.publish.pr_base_branch_resolution"
     )
-    publish_payload = json.loads(
-        prepared.publish_result_path.read_text(encoding="utf-8")
-    )
-    assert publish_payload["baseBranch"] == "main"
+    payload = warning_event["payload"]
+    assert payload["reason"] == "missing_pr_base_branch"
+    assert payload["resolvedBaseBranch"] == "main"
+    assert payload["headBranch"] == "feature/branch"
 
 
-async def test_run_publish_stage_fails_when_explicit_pr_base_matches_head(
+async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    publish_stage_test_setup,
 ) -> None:
-    """Explicit PR base override matching head should fail before PR creation."""
-
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    worker = CodexWorker(
-        config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
-            worker_id="worker-1",
-            worker_token=None,
-            poll_interval_ms=1500,
-            lease_seconds=120,
-            workdir=tmp_path,
-        ),
-        queue_client=queue,
-        codex_exec_handler=handler,
-    )  # type: ignore[arg-type]
-
-    run_calls: list[tuple[str, ...]] = []
-
-    async def _capture_stage_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-    ):
-        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
-        command_tuple = tuple(str(part) for part in command)
-        run_calls.append(command_tuple)
-        if command_tuple[:2] == ("git", "status"):
-            return CommandResult(command_tuple, 0, " M docs/README.md\n", "")
-        return CommandResult(command_tuple, 0, "", "")
-
-    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+    """Explicit base=head should fail before invoking gh pr create."""
+    worker, queue, run_calls = publish_stage_test_setup
 
     job_id = uuid4()
     prepared = PreparedTaskWorkspace(
@@ -7039,17 +6611,20 @@ async def test_run_publish_stage_fails_when_explicit_pr_base_matches_head(
         task_context_path=tmp_path / "context",
         publish_result_path=tmp_path / "publish-result.json",
         default_branch="main",
-        starting_branch="main",
-        new_branch=None,
-        working_branch="task/feature-456",
+        starting_branch="develop",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
         workdir_mode="checkout",
         repo_command_env=None,
         publish_command_env=None,
     )
     prepared.repo_dir.mkdir(parents=True, exist_ok=True)
     prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
 
-    staged_artifacts: list[ArtifactUpload] = []
     with pytest.raises(
         RuntimeError,
         match="task.publish.prBaseBranch resolves to the working branch",
@@ -7058,17 +6633,68 @@ async def test_run_publish_stage_fails_when_explicit_pr_base_matches_head(
             job_id=job_id,
             canonical_payload={
                 "task": {
-                    "publish": {"mode": "pr", "prBaseBranch": "task/feature-456"},
+                    "publish": {"mode": "pr", "prBaseBranch": "feature/branch"},
                 }
             },
             prepared=prepared,
             skill_meta={},
             job_type="task",
-            staged_artifacts=staged_artifacts,
+            staged_artifacts=[],
         )
 
-    assert not any(call[:3] == ("gh", "pr", "create") for call in run_calls)
-    assert not any(call[:3] == ("git", "commit", "-m") for call in run_calls)
+    assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
+
+
+async def test_run_publish_stage_pr_mode_fails_fast_when_no_valid_base_branch(
+    tmp_path: Path,
+    publish_stage_test_setup,
+) -> None:
+    """PR publish should fail before gh call when every base candidate equals head."""
+    worker, queue, run_calls = publish_stage_test_setup
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="feature/branch",
+        starting_branch="feature/branch",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="no valid base branch distinct from head",
+    ):
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={
+                "task": {
+                    "publish": {"mode": "pr"},
+                }
+            },
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=[],
+        )
+
+    assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
 
 
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
@@ -7228,22 +6854,17 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
 
 
 async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
-    """PR base should use override when present, otherwise starting branch."""
+    """PR base should use explicit override when valid, without warning."""
 
-    assert (
-        CodexWorker._resolve_pr_base_branch(
-            publish={"prBaseBranch": "release/1.2"},
-            starting_branch="main",
-        )
-        == "release/1.2"
+    base_branch, warning = CodexWorker._resolve_pr_base_branch(
+        publish={"prBaseBranch": "release/1.2"},
+        starting_branch="main",
+        default_branch="main",
+        head_branch="feature/branch",
     )
-    assert (
-        CodexWorker._resolve_pr_base_branch(
-            publish={"prBaseBranch": " "},
-            starting_branch="develop",
-        )
-        == "develop"
-    )
+
+    assert base_branch == "release/1.2"
+    assert warning is None
 
 
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
@@ -7322,6 +6943,157 @@ async def test_build_command_env_uses_minimal_inherited_environment(
     assert command_env["GIT_AUTHOR_NAME"] == "Nate Sticco"
     assert command_env["GIT_AUTHOR_EMAIL"] == "nsticco@gmail.com"
     assert "SECRET_TOKEN" not in command_env
+
+
+async def test_prepare_git_identity_preflight_sets_local_identity_for_commit_capable_skill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prepare preflight should set local git identity for self-managed commit skills."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        timeout_seconds=None,
+    ):
+        _ = (
+            cwd,
+            log_path,
+            check,
+            env,
+            redaction_values,
+            cancel_event,
+            timeout_seconds,
+        )
+        calls.append(tuple(command))
+        if tuple(command[:5]) == ("git", "config", "--local", "--get", "user.name"):
+            return CommandResult(tuple(command), 1, "", "")
+        if tuple(command[:5]) == ("git", "config", "--local", "--get", "user.email"):
+            return CommandResult(tuple(command), 1, "", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    await worker._run_prepare_git_identity_preflight(
+        repo_dir=tmp_path,
+        log_path=tmp_path / "prepare.log",
+        selected_skills=("pr-resolver",),
+        env=None,
+    )
+
+    assert ("git", "config", "--local", "user.name", "MoonMind Worker") in calls
+    assert (
+        "git",
+        "config",
+        "--local",
+        "user.email",
+        "moonmind-worker@users.noreply.github.com",
+    ) in calls
+
+
+async def test_prepare_git_identity_preflight_allows_commit_without_global_identity(
+    tmp_path: Path,
+) -> None:
+    """Local identity preflight should make commits succeed with no global git identity."""
+
+    queue = FakeQueueClient(jobs=[])
+    real_handler = CodexExecHandler(workdir_root=tmp_path)
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=real_handler,
+    )  # type: ignore[arg-type]
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    log_path = tmp_path / "prepare.log"
+    home_dir = tmp_path / "no-global-home"
+    home_dir.mkdir(parents=True, exist_ok=True)
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(home_dir),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": str(home_dir / ".gitconfig"),
+    }
+
+    await worker._run_stage_command(
+        ["git", "init"],
+        cwd=repo_dir,
+        log_path=log_path,
+        env=env,
+    )
+    file_path = repo_dir / "README.md"
+    file_path.write_text("hello\n", encoding="utf-8")
+    await worker._run_stage_command(
+        ["git", "add", "README.md"],
+        cwd=repo_dir,
+        log_path=log_path,
+        env=env,
+    )
+
+    await worker._run_prepare_git_identity_preflight(
+        repo_dir=repo_dir,
+        log_path=log_path,
+        selected_skills=("pr-resolver",),
+        env=env,
+    )
+
+    await worker._run_stage_command(
+        ["git", "commit", "-m", "preflight identity test"],
+        cwd=repo_dir,
+        log_path=log_path,
+        env=env,
+    )
+
+    configured_name = await worker._run_stage_command(
+        ["git", "config", "--local", "--get", "user.name"],
+        cwd=repo_dir,
+        log_path=log_path,
+        env=env,
+    )
+    configured_email = await worker._run_stage_command(
+        ["git", "config", "--local", "--get", "user.email"],
+        cwd=repo_dir,
+        log_path=log_path,
+        env=env,
+    )
+    assert configured_name.stdout.strip() == "MoonMind Worker"
+    assert (
+        configured_email.stdout.strip()
+        == "moonmind-worker@users.noreply.github.com"
+    )
 
 
 async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> None:
