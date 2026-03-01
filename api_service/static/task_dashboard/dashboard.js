@@ -2540,6 +2540,15 @@
     return { provided: true, jobId, rawValue: editJobValue };
   };
 
+  const parseResubmittedFromSearchParam = (searchParams) => {
+    const sourceJobValue = searchParams?.get("resubmittedFrom");
+    if (sourceJobValue === null) {
+      return { provided: false, jobId: "", rawValue: "" };
+    }
+    const jobId = normalizeDashboardDetailSegment(sourceJobValue);
+    return { provided: true, jobId, rawValue: sourceJobValue };
+  };
+
   const isEditableQueuedTaskJob = (job) => {
     if (!job || typeof job !== "object" || Array.isArray(job)) {
       return false;
@@ -2551,6 +2560,71 @@
     const startedAt = pick(job, "startedAt");
     const hasStarted = startedAt !== null && startedAt !== undefined && String(startedAt).trim() !== "";
     return jobType === "task" && normalizedStatus === "queued" && !hasStarted;
+  };
+
+  const isResubmittableTaskJob = (job) => {
+    if (!job || typeof job !== "object" || Array.isArray(job)) {
+      return false;
+    }
+    const jobType = String(pick(job, "type") || "")
+      .trim()
+      .toLowerCase();
+    const status = String(pick(job, "status") || "")
+      .trim()
+      .toLowerCase();
+    return jobType === "task" && ["failed", "cancelled"].includes(status);
+  };
+
+  const resolveQueuePrefillModeFromJob = (job) => {
+    if (isEditableQueuedTaskJob(job)) {
+      return "edit";
+    }
+    if (isResubmittableTaskJob(job)) {
+      return "resubmit";
+    }
+    return "";
+  };
+
+  const resolveQueueDetailPrefillAction = (job) => {
+    const jobId = normalizeDashboardDetailSegment(pick(job, "id"));
+    if (!jobId) {
+      return { mode: "", label: "", route: "", jobId: "" };
+    }
+    if (isEditableQueuedTaskJob(job)) {
+      return {
+        mode: "edit",
+        label: "Edit",
+        route: `/tasks/queue/new?editJobId=${encodeURIComponent(jobId)}`,
+        jobId,
+      };
+    }
+    if (isResubmittableTaskJob(job)) {
+      return {
+        mode: "resubmit",
+        label: "Resubmit",
+        route: `/tasks/queue/new?editJobId=${encodeURIComponent(jobId)}`,
+        jobId,
+      };
+    }
+    return { mode: "", label: "", route: "", jobId };
+  };
+
+  const resolveQueuePrefillSubmitTarget = (mode, queueSourceConfig = {}) => {
+    const normalizedMode = String(mode || "").trim().toLowerCase();
+    if (normalizedMode === "edit") {
+      return {
+        method: "PUT",
+        endpointTemplate: queueSourceConfig.update || "/api/queue/jobs/{id}",
+      };
+    }
+    if (normalizedMode === "resubmit") {
+      return {
+        method: "POST",
+        endpointTemplate:
+          queueSourceConfig.resubmit || "/api/queue/jobs/{id}/resubmit",
+      };
+    }
+    return null;
   };
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
@@ -2604,7 +2678,12 @@
       resolveSubmitRuntime,
       isWorkerSubmitRuntime,
       parseEditJobSearchParam,
+      parseResubmittedFromSearchParam,
       isEditableQueuedTaskJob,
+      isResubmittableTaskJob,
+      resolveQueuePrefillModeFromJob,
+      resolveQueueDetailPrefillAction,
+      resolveQueuePrefillSubmitTarget,
       normalizeOrchestratorPriority,
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
@@ -3882,24 +3961,29 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage(presetRuntime, editContext = null) {
-    const isEditMode =
-      Boolean(editContext) &&
-      typeof editContext === "object" &&
-      !Array.isArray(editContext);
-    const editJobId = isEditMode
-      ? normalizeDashboardDetailSegment(editContext.jobId || "")
+  function renderQueueSubmitPage(presetRuntime, prefillContext = null) {
+    const hasPrefillContext =
+      Boolean(prefillContext) &&
+      typeof prefillContext === "object" &&
+      !Array.isArray(prefillContext);
+    const submitMode = hasPrefillContext
+      ? String(prefillContext.mode || "edit").trim().toLowerCase()
+      : "create";
+    const isEditMode = submitMode === "edit";
+    const isResubmitMode = submitMode === "resubmit";
+    const sourceJobId = hasPrefillContext
+      ? normalizeDashboardDetailSegment(prefillContext.jobId || "")
       : "";
     const editExpectedUpdatedAt = isEditMode
-      ? String(editContext.expectedUpdatedAt || "").trim()
+      ? String(prefillContext.expectedUpdatedAt || "").trim()
       : "";
-    const editDetailRoute = isEditMode && editJobId
-      ? buildUnifiedTaskDetailRoute(editJobId, "queue")
+    const sourceDetailRoute = hasPrefillContext && sourceJobId
+      ? buildUnifiedTaskDetailRoute(sourceJobId, "queue")
       : "/tasks/list?source=queue";
-    const sanitizedWorkerDraft = isEditMode
-      ? normalizeSubmissionDraftForTest(editContext.prefillDraft || {})
+    const sanitizedWorkerDraft = hasPrefillContext
+      ? normalizeSubmissionDraftForTest(prefillContext.prefillDraft || {})
       : submitDraftController.loadWorker();
-    const selectedWorkerRuntime = isEditMode
+    const selectedWorkerRuntime = hasPrefillContext
       ? normalizeTaskRuntimeInput(presetRuntime ?? sanitizedWorkerDraft.runtime) ||
         defaultTaskRuntime
       : resolveSubmitRuntime(
@@ -3959,8 +4043,8 @@
       sanitizedWorkerDraft.approvalToken || "",
     ).trim();
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
-    const primarySubmitLabel = isEditMode ? "Update" : "Create";
-    const runtimeSubmitOptions = isEditMode ? supportedTaskRuntimes : submitRuntimeOptions;
+    const primarySubmitLabel = isEditMode ? "Update" : isResubmitMode ? "Resubmit" : "Create";
+    const runtimeSubmitOptions = hasPrefillContext ? supportedTaskRuntimes : submitRuntimeOptions;
 
     const runtimeOptions = renderRuntimeOptions(
       runtimeSubmitOptions,
@@ -3999,14 +4083,33 @@
         `
       : "";
 
+    const submitTitle = isEditMode
+      ? "Edit Queue Task"
+      : isResubmitMode
+        ? "Resubmit Queue Task"
+        : "Submit Queue Task";
+    const submitSubtitle = isEditMode
+      ? `Editing queued task ${sourceJobId}.`
+      : isResubmitMode
+        ? `Resubmitting terminal task ${sourceJobId}.`
+        : "";
+    const resubmitAttachmentNotice = isResubmitMode
+      ? `
+        <div class="notice">
+          Attachments are not copied when resubmitting. Download any needed files from the source run and re-upload manually.
+        </div>
+      `
+      : "";
+
     setView(
-      isEditMode ? "Edit Queue Task" : "Submit Queue Task",
-      isEditMode ? `Editing queued task ${editJobId}.` : "",
+      submitTitle,
+      submitSubtitle,
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
           <div id="queue-steps-list" class="stack"></div>
         </section>
+        ${resubmitAttachmentNotice}
         ${templateControlsHtml}
         <label>Runtime
           <select name="runtime">
@@ -4096,8 +4199,8 @@
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
           ${
-            isEditMode
-              ? `<a href="${escapeHtml(editDetailRoute)}"><button type="button" class="secondary">Cancel</button></a>`
+            hasPrefillContext
+              ? `<a href="${escapeHtml(sourceDetailRoute)}"><button type="button" class="secondary">Cancel</button></a>`
               : ""
           }
           <button type="submit" class="queue-submit-primary">
@@ -4136,10 +4239,15 @@
         runtime: runtime || activeWorkerRuntime,
         ...(isEditMode
           ? {
-              editJobId,
+              editJobId: sourceJobId,
               expectedUpdatedAt: editExpectedUpdatedAt,
               affinityKey: queueDraftAffinityKey,
             }
+          : isResubmitMode
+            ? {
+                resubmitJobId: sourceJobId,
+                affinityKey: queueDraftAffinityKey,
+              }
           : {}),
         instruction: String(stepState[0]?.instructions || "").trim(),
         repository: String(formData.get("repository") || "").trim(),
@@ -4163,7 +4271,7 @@
       };
     };
     const persistWorkerDraft = () => {
-      if (isEditMode) {
+      if (hasPrefillContext) {
         return;
       }
       submitDraftController.saveWorker(collectWorkerDraftFromForm());
@@ -5552,16 +5660,36 @@
 
       try {
         if (isEditMode) {
-          const updateEndpointTemplate = queueSourceConfig.update || "/api/queue/jobs/{id}";
-          const updated = await fetchJson(endpoint(updateEndpointTemplate, { id: editJobId }), {
-            method: "PUT",
+          const submitTarget = resolveQueuePrefillSubmitTarget("edit", queueSourceConfig);
+          const updated = await fetchJson(endpoint(submitTarget.endpointTemplate, { id: sourceJobId }), {
+            method: submitTarget.method,
             body: JSON.stringify({
               ...requestBody,
               ...(editExpectedUpdatedAt ? { expectedUpdatedAt: editExpectedUpdatedAt } : {}),
             }),
           });
-          const updatedId = normalizeDashboardDetailSegment(pick(updated, "id")) || editJobId;
+          const updatedId = normalizeDashboardDetailSegment(pick(updated, "id")) || sourceJobId;
           window.location.href = buildUnifiedTaskDetailRoute(updatedId, "queue");
+          return;
+        }
+
+        if (isResubmitMode) {
+          const submitTarget = resolveQueuePrefillSubmitTarget("resubmit", queueSourceConfig);
+          const created = await fetchJson(
+            endpoint(submitTarget.endpointTemplate, { id: sourceJobId }),
+            {
+              method: submitTarget.method,
+              body: JSON.stringify(requestBody),
+            },
+          );
+          const createdId = normalizeDashboardDetailSegment(pick(created, "id"));
+          if (!createdId) {
+            throw new Error("queue resubmit response missing job id");
+          }
+          const detailRoute = buildUnifiedTaskDetailRoute(createdId, "queue");
+          window.location.href = `${detailRoute}&resubmittedFrom=${encodeURIComponent(
+            sourceJobId,
+          )}`;
           return;
         }
 
@@ -5601,9 +5729,24 @@
             "Queue task update is invalid: " + String(error?.message || "validation failed");
           return;
         }
+        if (isResubmitMode && status === 409) {
+          message.textContent = "This task can no longer be resubmitted. Refresh and try again.";
+          return;
+        }
+        if (isResubmitMode && status === 403) {
+          message.textContent = "You are not authorized to resubmit this queue task.";
+          return;
+        }
+        if (isResubmitMode && status === 422) {
+          message.textContent =
+            "Queue task resubmit is invalid: " + String(error?.message || "validation failed");
+          return;
+        }
         message.textContent = isEditMode
           ? "Failed to update queue task: " + String(error?.message || "request failed")
-          : "Failed to create queue task: " + String(error?.message || "request failed");
+          : isResubmitMode
+            ? "Failed to resubmit queue task: " + String(error?.message || "request failed")
+            : "Failed to create queue task: " + String(error?.message || "request failed");
       }
     });
   }
@@ -5621,47 +5764,49 @@
         );
         return;
       }
-      const editJobId = editParam.jobId;
+      const sourceJobId = editParam.jobId;
       setView(
-        "Edit Queue Task",
-        `Loading queued task ${editJobId}...`,
+        "Queue Task Prefill",
+        `Loading queue task ${sourceJobId}...`,
         "<p class='loading'>Loading queue task draft...</p>",
         { showAutoRefreshControls: false },
       );
       try {
         const detail = await fetchJson(
           endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
-            id: editJobId,
+            id: sourceJobId,
           }),
         );
-        if (!isEditableQueuedTaskJob(detail)) {
+        const prefillMode = resolveQueuePrefillModeFromJob(detail);
+        if (!prefillMode) {
           setView(
-            "Queue Task Not Editable",
-            `Job ${editJobId} can no longer be edited.`,
-            `<div class="notice error">Only queued, never-started task jobs can be edited.</div><div class="actions"><a href="${escapeHtml(
-              buildUnifiedTaskDetailRoute(editJobId, "queue"),
+            "Queue Task Not Eligible",
+            `Job ${sourceJobId} is not eligible for edit or resubmit.`,
+            `<div class="notice error">Only queued, never-started task jobs can be edited. Only failed or cancelled task jobs can be resubmitted.</div><div class="actions"><a href="${escapeHtml(
+              buildUnifiedTaskDetailRoute(sourceJobId, "queue"),
             )}"><button type="button" class="secondary">View Details</button></a></div>`,
             { showAutoRefreshControls: false },
           );
           return;
         }
         const prefillDraft = buildQueueSubmissionDraftFromJob(detail);
-        const resolvedEditJobId =
-          normalizeDashboardDetailSegment(pick(detail, "id")) || editJobId;
+        const resolvedJobId =
+          normalizeDashboardDetailSegment(pick(detail, "id")) || sourceJobId;
         renderQueueSubmitPage(prefillDraft.runtime, {
-          jobId: resolvedEditJobId,
+          mode: prefillMode,
+          jobId: resolvedJobId,
           expectedUpdatedAt: String(pick(detail, "updatedAt") || "").trim(),
           prefillDraft,
         });
       } catch (error) {
-        console.error("queue edit preload failed", error);
+        console.error("queue prefill load failed", error);
         setView(
-          "Edit Queue Task",
-          `Unable to load job ${editJobId}.`,
-          `<div class="notice error">Failed to load queue task for editing: ${escapeHtml(
+          "Queue Task Prefill",
+          `Unable to load job ${sourceJobId}.`,
+          `<div class="notice error">Failed to load queue task for edit/resubmit: ${escapeHtml(
             String(error?.message || "request failed"),
           )}</div><div class="actions"><a href="${escapeHtml(
-            buildUnifiedTaskDetailRoute(editJobId, "queue"),
+            buildUnifiedTaskDetailRoute(sourceJobId, "queue"),
           )}"><button type="button" class="secondary">Back to Details</button></a></div>`,
           { showAutoRefreshControls: false },
         );
@@ -5855,7 +6000,13 @@
     });
   }
 
-  async function renderQueueDetailPage(jobId) {
+  async function renderQueueDetailPage(jobId, options = {}) {
+    const resubmittedFromJobId = normalizeDashboardDetailSegment(
+      options && typeof options === "object" ? options.resubmittedFromJobId : "",
+    );
+    const resubmittedNotice = resubmittedFromJobId
+      ? `Resubmitted from ${resubmittedFromJobId}.`
+      : "";
     setView(
       "Queue Job Detail",
       `Job ${jobId}`,
@@ -6146,14 +6297,10 @@
       const canCancel = normalizedStatus === "queued" || normalizedStatus === "running";
       const cancelButtonDisabled = !canCancel || cancelPending;
       const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
-      const editJobId = normalizeDashboardDetailSegment(pick(job, "id"));
-      const canEdit = isEditableQueuedTaskJob(job) && Boolean(editJobId);
-      const editRoute = canEdit
-        ? `/tasks/queue/new?editJobId=${encodeURIComponent(editJobId)}`
-        : "";
+      const prefillAction = resolveQueueDetailPrefillAction(job);
       cancelActionsNode.innerHTML = `<div class="actions">${
-        canEdit
-          ? `<a href="${escapeHtml(editRoute)}"><button type="button" class="secondary">Edit</button></a>`
+        prefillAction.route
+          ? `<a href="${escapeHtml(prefillAction.route)}"><button type="button" class="secondary">${escapeHtml(prefillAction.label)}</button></a>`
           : ""
       }<button type="button" id="queue-cancel-button" ${
         cancelButtonDisabled ? "disabled" : ""
@@ -6605,7 +6752,7 @@
         state.liveSession = liveSession;
         state.liveSessionError = liveSessionError;
         state.liveSessionRouteMissing = liveSessionRouteMissing;
-        setDetailNotice("");
+        setDetailNotice(resubmittedNotice, false);
         renderJobSummary();
         renderLiveSession();
         renderArtifacts();
@@ -8083,6 +8230,8 @@
     const unifiedDetailMatch = normalizedRoute.match(/^\/tasks\/([^/]+)$/);
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
     const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
+    const resubmittedFromParam = parseResubmittedFromSearchParam(searchParams);
+    const resubmittedFromJobId = resubmittedFromParam.jobId;
 
     if (normalizedRoute === "/tasks") {
       await renderActivePage();
@@ -8164,7 +8313,7 @@
         .trim()
         .toLowerCase();
       if (explicitSource === "queue") {
-        await renderQueueDetailPage(candidateTaskId);
+        await renderQueueDetailPage(candidateTaskId, { resubmittedFromJobId });
         return;
       }
       if (explicitSource === "orchestrator") {
@@ -8177,7 +8326,7 @@
             id: candidateTaskId,
           }),
         );
-        await renderQueueDetailPage(candidateTaskId);
+        await renderQueueDetailPage(candidateTaskId, { resubmittedFromJobId });
         return;
       } catch (_error) {
         // fall through and probe orchestrator

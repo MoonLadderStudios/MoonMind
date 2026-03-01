@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-26
+Last Updated: 2026-03-01
 
 ## 1. Purpose
 
@@ -49,6 +49,7 @@ Queue status model:
 - `GET /api/queue/jobs`
 - `GET /api/queue/jobs/{jobId}`
 - `PUT /api/queue/jobs/{jobId}`
+- `POST /api/queue/jobs/{jobId}/resubmit`
 - `POST /api/queue/jobs/claim`
 - `POST /api/queue/jobs/{jobId}/heartbeat`
 - `POST /api/queue/jobs/{jobId}/complete`
@@ -71,6 +72,16 @@ Queued task update endpoint notes:
 - Eligibility is restricted to queued jobs that have not started.
 - The update request mirrors create fields and may include `expectedUpdatedAt` for optimistic concurrency.
 - Successful updates append a `Job updated` queue event.
+
+Queued task resubmit endpoint notes:
+
+- `POST /api/queue/jobs/{jobId}/resubmit` creates a new queued `type="task"` job from an eligible source job.
+- Eligibility is restricted to source jobs with `status in {failed, cancelled}`.
+- Source job history is preserved; no terminal job mutation occurs.
+- Successful resubmits append:
+  - `Job resubmitted` on the source job with linkage metadata.
+  - `Job resubmitted from` on the new job with `sourceJobId`.
+- Resubmit v1 does not clone attachments from the source job.
 
 ### 3.2 Task Preset Catalog REST
 
