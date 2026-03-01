@@ -967,30 +967,46 @@
     return task;
   }
 
-  function extractRuntimeModelFromPayload(payload) {
+  function extractRuntimeValueFromPayload(payload, fieldName) {
     const task = extractTaskNode(payload);
-    if (!task) {
-      return null;
+    const taskRuntimeNode =
+      task && typeof pick(task, "runtime") === "object" && !Array.isArray(pick(task, "runtime"))
+        ? pick(task, "runtime")
+        : null;
+    const taskCodexNode =
+      task && typeof pick(task, "codex") === "object" && !Array.isArray(pick(task, "codex"))
+        ? pick(task, "codex")
+        : null;
+    const payloadCodexNode =
+      payload && typeof pick(payload, "codex") === "object" && !Array.isArray(pick(payload, "codex"))
+        ? pick(payload, "codex")
+        : null;
+
+    const candidates = [
+      taskRuntimeNode ? pick(taskRuntimeNode, fieldName) : null,
+      taskCodexNode ? pick(taskCodexNode, fieldName) : null,
+      payloadCodexNode ? pick(payloadCodexNode, fieldName) : null,
+      payload ? pick(payload, fieldName) : null,
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate == null) {
+        continue;
+      }
+      const normalized = String(candidate).trim();
+      if (normalized) {
+        return normalized;
+      }
     }
-    const runtimeNode = pick(task, "runtime");
-    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
-      return null;
-    }
-    const model = pick(runtimeNode, "model");
-    return model ? String(model) : null;
+    return null;
+  }
+
+  function extractRuntimeModelFromPayload(payload) {
+    return extractRuntimeValueFromPayload(payload, "model");
   }
 
   function extractRuntimeEffortFromPayload(payload) {
-    const task = extractTaskNode(payload);
-    if (!task) {
-      return null;
-    }
-    const runtimeNode = pick(task, "runtime");
-    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
-      return null;
-    }
-    const effort = pick(runtimeNode, "effort");
-    return effort ? String(effort) : null;
+    return extractRuntimeValueFromPayload(payload, "effort");
   }
 
   function extractSkillFromPayload(payload) {
@@ -2591,6 +2607,8 @@
       validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
       hasExplicitSkillSelection,
+      extractRuntimeModelFromPayload,
+      extractRuntimeEffortFromPayload,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
       readSubmitDraftStorage,

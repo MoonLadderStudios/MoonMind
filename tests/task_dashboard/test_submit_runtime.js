@@ -290,6 +290,33 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(orchestratorState.showWorkerPriorityFields, false);
 })();
 
+(function testExtractRuntimeModelAndEffortFromCanonicalTaskRuntime() {
+  assert.strictEqual(typeof helpers.extractRuntimeModelFromPayload, "function");
+  assert.strictEqual(typeof helpers.extractRuntimeEffortFromPayload, "function");
+  const payload = {
+    task: {
+      runtime: {
+        mode: "codex",
+        model: "gpt-5.3-codex",
+        effort: "high",
+      },
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "gpt-5.3-codex");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "high");
+})();
+
+(function testExtractRuntimeModelAndEffortFromLegacyCodexShape() {
+  const payload = {
+    codex: {
+      model: "gpt-5.1-codex",
+      effort: "medium",
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "gpt-5.1-codex");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "medium");
+})();
+
 (function testApplyElementVisibilityTogglesHiddenAttributeAndClass() {
   assert.strictEqual(typeof helpers.applyElementVisibility, "function");
   const classNames = new Set(["grid-2"]);
