@@ -3472,12 +3472,25 @@ class CodexWorker:
         """Resolve PR base branch with a safety fallback when base/head collide."""
 
         requested_base = str(publish.get("prBaseBranch") or "").strip()
-        resolved_base = cls._resolve_pr_base_branch(
+        resolved_base, base_resolution_warning = cls._resolve_pr_base_branch(
             publish=publish,
             starting_branch=starting_branch,
+            default_branch=default_branch,
+            head_branch=working_branch,
         )
         if resolved_base != working_branch:
             return resolved_base, None
+
+        if base_resolution_warning is not None and not requested_base:
+            fallback_base = str(base_resolution_warning.get("resolvedBaseBranch") or "").strip()
+            if fallback_base:
+                return (
+                    fallback_base,
+                    (
+                        "task.publish.prBaseBranch not set and starting branch matches head; "
+                        f"using default branch '{fallback_base}' as PR base"
+                    ),
+                )
 
         fallback_base = str(default_branch or "").strip()
         if not requested_base and fallback_base and fallback_base != working_branch:
