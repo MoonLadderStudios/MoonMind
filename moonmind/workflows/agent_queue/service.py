@@ -611,10 +611,10 @@ class AgentQueueService:
             raise AgentQueueValidationError("maxAttempts must be >= 1")
 
         job = await self._repository.require_job_for_update(job_id)
-        if (
-            not actor_is_superuser
-            and actor_user_id not in {job.created_by_user_id, job.requested_by_user_id}
-        ):
+        if not actor_is_superuser and actor_user_id not in {
+            job.created_by_user_id,
+            job.requested_by_user_id,
+        }:
             raise AgentQueueJobAuthorizationError(
                 f"user '{actor_user_id}' is not authorized for task run {job_id}"
             )
