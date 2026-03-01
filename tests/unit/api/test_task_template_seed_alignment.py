@@ -11,7 +11,11 @@ import yaml
 def _load_speckit_orchestrate_seed() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[3]
     seed_path = (
-        repo_root / "api_service" / "data" / "task_step_templates" / "speckit-orchestrate.yaml"
+        repo_root
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+        / "speckit-orchestrate.yaml"
     )
     document = yaml.safe_load(seed_path.read_text(encoding="utf-8")) or {}
     assert isinstance(document, dict)
@@ -37,9 +41,7 @@ def test_seed_shape_fields_required_for_alignment_migration() -> None:
     assert isinstance(steps, list) and steps
 
     all_instructions = "\n".join(
-        str(step.get("instructions") or "")
-        for step in steps
-        if isinstance(step, dict)
+        str(step.get("instructions") or "") for step in steps if isinstance(step, dict)
     )
     assert "--mode {{ inputs.orchestration_mode }}" in all_instructions
 
@@ -56,7 +58,10 @@ def test_seed_final_step_defers_publish_actions_to_wrapper_stage() -> None:
     assert "Do NOT create commits, push branches, or open pull requests" in instructions
     assert "publish stage can handle commit/PR behavior" in instructions
     assert "Create a commit for completed changes" not in instructions
-    assert "Create a pull request with concise scope/remediation/test summary" not in instructions
+    assert (
+        "Create a pull request with concise scope/remediation/test summary"
+        not in instructions
+    )
 
 
 def test_seed_final_step_does_not_require_github_capability() -> None:
