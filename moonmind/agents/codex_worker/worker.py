@@ -52,6 +52,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     build_canonical_task_view,
     build_effective_proposal_policy,
     build_task_stage_plan,
+    is_self_managed_publish_skill,
 )
 from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
@@ -102,6 +103,8 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
+_DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
+_DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
@@ -3199,6 +3202,12 @@ class CodexWorker:
                     log_path=prepare_log_path,
                     env=auth_context.repo_command_env,
                 )
+            await self._run_prepare_git_identity_preflight(
+                repo_dir=repo_dir,
+                log_path=prepare_log_path,
+                selected_skills=deduped_selected_skills,
+                env=auth_context.repo_command_env,
+            )
 
             context_payload = {
                 "repository": repository,
@@ -3313,6 +3322,82 @@ class CodexWorker:
                 },
             )
             raise
+
+    async def _run_prepare_git_identity_preflight(
+        self,
+        *,
+        repo_dir: Path,
+        log_path: Path,
+        selected_skills: Sequence[str],
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        """Ensure repo-local git identity exists before commit-capable skill runs."""
+
+        commit_capable_skills = tuple(
+            dict.fromkeys(
+                [
+                    skill.strip()
+                    for skill in selected_skills
+                    if skill.strip() and is_self_managed_publish_skill(skill)
+                ]
+            )
+        )
+        if not commit_capable_skills:
+            return
+
+        git_name = (
+            str(self._config.git_user_name or "").strip()
+            or str((env or {}).get("GIT_AUTHOR_NAME") or "").strip()
+            or str((env or {}).get("GIT_COMMITTER_NAME") or "").strip()
+            or _DEFAULT_PREPARE_GIT_USER_NAME
+        )
+        git_email = (
+            str(self._config.git_user_email or "").strip()
+            or str((env or {}).get("GIT_AUTHOR_EMAIL") or "").strip()
+            or str((env or {}).get("GIT_COMMITTER_EMAIL") or "").strip()
+            or _DEFAULT_PREPARE_GIT_USER_EMAIL
+        )
+
+        name_result = await self._run_stage_command(
+            ["git", "config", "--local", "--get", "user.name"],
+            cwd=repo_dir,
+            log_path=log_path,
+            check=False,
+            env=env,
+        )
+        email_result = await self._run_stage_command(
+            ["git", "config", "--local", "--get", "user.email"],
+            cwd=repo_dir,
+            log_path=log_path,
+            check=False,
+            env=env,
+        )
+
+        set_name = not name_result.stdout.strip()
+        set_email = not email_result.stdout.strip()
+        if set_name:
+            await self._run_stage_command(
+                ["git", "config", "--local", "user.name", git_name],
+                cwd=repo_dir,
+                log_path=log_path,
+                env=env,
+            )
+        if set_email:
+            await self._run_stage_command(
+                ["git", "config", "--local", "user.email", git_email],
+                cwd=repo_dir,
+                log_path=log_path,
+                env=env,
+            )
+        self._append_stage_log(
+            log_path,
+            (
+                "prepare git identity preflight for commit-capable skills "
+                f"({', '.join(commit_capable_skills)}): "
+                f"user.name={'set' if set_name else 'present'}, "
+                f"user.email={'set' if set_email else 'present'}"
+            ),
+        )
 
     @staticmethod
     def _normalize_publish_text_line(value: str | None) -> str | None:
