@@ -1,63 +1,79 @@
 # Quickstart: Canonical Workflow Surface Naming
 
-## 1. Confirm scope and mode alignment
+## 1. Confirm selected orchestration mode and scope
 
-- Read `docs/SpecRemovalPlan.md` and this feature's `spec.md`.
-- Validate the selected orchestration mode requirement:
-  - In runtime mode, confirm this feature intentionally excludes runtime behavior changes in this pass.
-  - Record required runtime follow-up implementation and validation in `specs/040-spec-removal/tasks.md` (`T040`/`T041`).
+- Selected mode for this feature: **runtime implementation mode**.
+- Docs mode remains aligned by using the same canonical token map and verification gates.
+- Review:
+  - `docs/SpecRemovalPlan.md`
+  - `specs/040-spec-removal/spec.md`
+  - `specs/040-spec-removal/plan.md`
 
-## 2. Run baseline discovery before edits
+## 2. Baseline discovery (docs/spec surfaces)
 
 ```bash
-rg -l "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" \
+rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec[-_]automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
   docs specs \
   --glob '*.md' --glob '*.yaml' --glob '*.yml'
 ```
 
-If `rg` is not available in your local environment, run:
+## 3. Baseline discovery (runtime surfaces)
 
 ```bash
-grep -R -nE "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" \
-  docs specs
+rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec[-_]automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
+  api_service services tests celery_worker \
+  --glob '*.py' --glob '*.md' --glob '*.yaml' --glob '*.yml' --glob '*.sh'
 ```
 
-## 3. Apply canonical naming updates
+## 4. Implement canonical naming updates
 
-- Replace legacy tokens only in files listed in `docs/SpecRemovalPlan.md`.
-- Preserve `docs/SpecRemovalPlan.md` historical sections for approved legacy references only.
-- Keep file structure and meaning stable; do not change unrelated technical content.
+- Apply canonical replacements to planned docs/spec/runtime surfaces.
+- Preserve legacy wording only in explicit historical traceability sections.
+- Do not introduce compatibility transforms that alter execution semantics.
 
-## 4. Generate required planning artifacts
+## 5. Validate docs/runtime alignment
 
-- Fill `research.md` with migration decisions and trade-offs.
-- Fill `data-model.md` with planning entities for verification and traceability.
-- Generate `contracts/requirements-traceability.md` covering all `DOC-REQ-*`.
-
-## 5. Verify completion
+Run docs/spec verification:
 
 ```bash
-rg -l "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" \
-  docs specs \
-  --glob '*.md' --glob '*.yaml' --glob '*.yml' \
-| sed -e 's#^#match: #'  # includes expected historical appendix reference
+./tools/verify_workflow_naming.sh \
+  --mode docs-spec \
+  --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex
 ```
 
-- Expected non-appendix result: zero matches outside approved `docs/SpecRemovalPlan.md` sections.
-- Record any residual matches in a migration follow-up note.
-
-For runtime follow-up validation (`T040`/`T041`), run:
+Run runtime verification:
 
 ```bash
-grep -R -nE "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" \
-  api_service services tests \
-  --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml'
+./tools/verify_workflow_naming.sh \
+  --mode runtime \
+  --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex
 ```
 
-- Runtime validation should pass with no matches outside intentionally retained historical references.
+Run unit tests (required command):
 
-## 6. Final handoff
+```bash
+./tools/test_unit.sh
+```
 
-- Ensure `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/requirements-traceability.md` are all present and coherent.
-- Confirm `DOC-REQ-*` count in spec equals rows in `contracts/requirements-traceability.md`.
-- Keep all legacy-code surface changes for the explicit runtime follow-up tasks tracked in this feature (`T040`/`T041`).
+Expected criteria:
+- `docs-spec` mode passes with only approved historical exceptions.
+- `runtime` mode passes after runtime migration tasks (`T004-T006`, `T017-T021`) complete.
+- `./tools/test_unit.sh` exits successfully.
+
+## 6. Handoff checklist
+
+- `plan.md`, `research.md`, `data-model.md`, `contracts/`, and `quickstart.md` are synchronized.
+- `contracts/requirements-traceability.md` contains one row for each `DOC-REQ-001` through `DOC-REQ-011`.
+- Verification evidence records:
+  - docs/spec scan result
+  - runtime scan result
+  - unit test result via `./tools/test_unit.sh`
+
+## 7. Validation evidence (2026-03-01)
+
+- Command: `./tools/verify_workflow_naming.sh --mode docs-spec --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
+  - Result: `PASS` (`[docs-spec] PASS: No unapproved legacy naming matches found.`)
+- Command: `./tools/verify_workflow_naming.sh --mode runtime --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
+  - Result: `FAIL` (legacy tokens still present across runtime surfaces, including `moonmind/config/settings.py`, `api_service/api/routers/spec_automation.py`, and `api_service/main.py`)
+- Command: `./tools/test_unit.sh`
+  - Result: `PASS` (`895 passed, 8 subtests passed`)

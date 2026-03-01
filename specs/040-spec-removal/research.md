@@ -1,58 +1,63 @@
 # Research: Canonical Workflow Surface Naming
 
-## Decision 1: Migration scope is documentation/specs only
+## Decision 1: Runtime orchestration mode is authoritative for this feature
 
-- **Decision**: Restrict implementation planning and execution to `docs/` and `specs/` artifacts listed in `docs/SpecRemovalPlan.md`; do not edit runtime code, deployment manifests, or test/runtime fixture files.
-- **Rationale**: The request is explicitly a planning-only pass focused on canonical naming alignment and includes explicit scope restrictions in the plan source.
+- **Decision**: Treat runtime implementation intent (`DOC-REQ-011`) as the governing mode for planning and acceptance.
+- **Rationale**: The task objective requires production runtime code changes and validation tests, not docs/spec-only delivery.
 - **Alternatives considered**:
-  - Full-system migration including runtime files now: rejected because it broadens blast radius and violates the stated scope constraints.
-  - Partial runtime migration with docs-only artifacts: rejected because it creates inconsistent naming across docs and runtime, undermining the migration intent.
+  - Docs/spec-only execution: rejected because it conflicts with runtime delivery objective.
+  - Split into two independent features now: rejected to avoid traceability drift and duplicate migration logic.
 
-## Decision 2: Canonical token map comes from a single source
+## Decision 2: Keep docs mode aligned to runtime mode via shared canonical map and gates
 
-- **Decision**: Treat the mapping in `docs/SpecRemovalPlan.md` as the source of truth for token replacements.
-- **Rationale**: A single canonical map reduces drift and prevents conflicting migration strategies across participating features.
+- **Decision**: Use one canonical token map and one traceability matrix for both runtime and docs surfaces.
+- **Rationale**: Prevents behavioral/documentation divergence and keeps validation deterministic.
 - **Alternatives considered**:
-  - Per-file or per-author mapping: rejected due to risk of inconsistent naming and incomplete migration.
-  - Auto-generated semantic mapping tools only: rejected without a hardcoded baseline because legacy naming may carry historical intent that must be preserved selectively.
+  - Separate maps per mode: rejected due to inconsistency risk.
+  - Informal alignment by reviewer judgment only: rejected due to weak repeatability.
 
-## Decision 3: Legacy naming retention is appendix-only
+## Decision 3: Canonical naming migration must be semantics-preserving
 
-- **Decision**: Keep intentional legacy terms only in explicit historical/context sections with traceability, primarily within `docs/SpecRemovalPlan.md`.
-- **Rationale**: The feature requires operational guidance to be canonical while preserving auditability for migration rationale.
+- **Decision**: Rename configuration/routes/schemas/metrics/artifact references without changing queue semantics, billing-relevant values, model identifiers, or effort pass-through.
+- **Rationale**: Compatibility policy forbids transforms that alter execution semantics.
 - **Alternatives considered**:
-  - Keep aliases in active docs for transition convenience: rejected because it introduces naming ambiguity.
-  - Remove all legacy terms including historical notes: rejected because it loses migration context needed for later follow-up planning.
+  - Opportunistic behavior refactor during rename: rejected as out of scope and high risk.
+  - Silent compatibility aliases for legacy runtime inputs: rejected; fail-fast behavior is preferred.
 
-## Decision 4: Validation uses grep-based token discovery with allow-list exception
+## Decision 4: Validate with dual-surface checks and required unit test command
 
-- **Decision**: Use explicit token scanning to verify the migration scope and allow only approved legacy references outside active operational guidance.
-- **Rationale**: Legacy-token verification provides deterministic pass/fail criteria and supports a verifiable handoff artifact.
+- **Decision**: Require both token-scan checks and `./tools/test_unit.sh` for acceptance.
+- **Rationale**: Scans enforce naming outcomes; unit tests protect runtime behavior.
 - **Alternatives considered**:
-  - Manual review only: rejected due to weak repeatability and hidden misses.
-  - Full static analysis AST parsing: rejected as overkill for markdown-first artifacts and higher maintenance cost.
+  - Scan-only validation: rejected because runtime regressions could pass undetected.
+  - Direct `pytest` invocation: rejected per repository test policy.
 
-## Decision 5: No aliasing language in active operational docs
+## Decision 5: Runtime migration contract is explicit
 
-- **Decision**: Avoid phrases like “old name/new alias” in guides, runbooks, and plan/spec bodies, replacing them with canonical names only.
-- **Rationale**: The objective is canonical terminology adoption and migration clarity.
+- **Decision**: Define canonical runtime expectations in `contracts/workflow-naming-contract.md` for env keys, API routes, schema identifiers, metrics namespace, and artifact roots.
+- **Rationale**: Explicit contract boundaries reduce ambiguity for implementation and review.
 - **Alternatives considered**:
-  - Continue dual naming prose during transition: rejected because it preserves confusion and invites mixed usage.
-  - Rename without historical context anywhere: rejected because it may erase the rationale for controlled exceptions.
+  - Keep contract implicit in prose only: rejected due to review ambiguity.
+  - Defer contract until implementation: rejected due to reduced planning quality.
 
-## Decision 6: Requirements traceability is mandatory for all DOC-REQ entries
+## Decision 6: Traceability must cover every source requirement including DOC-REQ-011
 
-- **Decision**: Generate one `requirements-traceability.md` row per `DOC-REQ-*` with concrete validation strategy.
-- **Rationale**: The pipeline requires traceability gates, and the current feature explicitly introduces ten `DOC-REQ-*` entries.
+- **Decision**: Maintain one row per `DOC-REQ-*` with mapped FRs, implementation surfaces, and concrete validation strategy.
+- **Rationale**: Skill requirements mandate complete mapping and validation planning.
 - **Alternatives considered**:
-  - Skip traceability because plan scope is docs: rejected as this contradicts repository orchestration requirements.
-  - Single aggregate mapping row: rejected for insufficient audit granularity.
+  - Aggregate rows by theme: rejected for insufficient audit granularity.
+  - Exclude runtime-intent requirement from contract table: rejected as non-compliant.
 
-## Decision 7: Runtime-mode and docs-mode behavior remain aligned by explicit non-production scope
+## Decision 7: Migration rollout order prioritizes safety
 
-- **Decision**: Document the behavior alignment by explicitly stating that runtime assets are excluded and runtime behavior remains unchanged in this step.
-- **Rationale**: This avoids false assumptions when users later run this feature under runtime orchestration mode.
+- **Decision**: Execute in order: planning controls -> docs/spec rename -> runtime rename -> verification/report.
+- **Rationale**: Early guardrails and traceability reduce risk before runtime-touching edits.
 - **Alternatives considered**:
-  - Force runtime-mode checks despite no runtime edits: rejected because it would introduce false failures.
-  - Omit mode alignment language: rejected because it diverges from current orchestration instructions.
+  - Runtime-first migration: rejected due to higher breakage and review complexity.
+  - Parallel full-surface edits from start: rejected due to difficult rollback and auditability.
 
+## Verification Snapshot (2026-03-01)
+
+- Docs/spec verification helper run passed with approved exceptions scoped to migration-context files.
+- Runtime verification helper run failed due to remaining legacy runtime naming; runtime parity work remains required.
+- Unit validation run via `./tools/test_unit.sh` passed (`895 passed, 8 subtests passed`).

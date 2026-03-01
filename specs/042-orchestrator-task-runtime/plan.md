@@ -11,7 +11,7 @@ Implement the Orchestrator Task Runtime upgrade as production runtime changes ac
 
 **Language/Version**: Python 3.11 service code + vanilla JavaScript dashboard runtime (Node-driven JS tests)  
 **Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy/Alembic, Agent Queue service contracts, orchestrator worker runtime, dashboard route/view-model infrastructure  
-**Storage**: PostgreSQL orchestrator/queue tables and filesystem artifacts under `var/artifacts/spec_workflows/<run_id>`  
+**Storage**: PostgreSQL orchestrator/queue tables and filesystem artifacts under `var/artifacts/workflow_runs/<run_id>`  
 **Testing**: `./tools/test_unit.sh` (required), orchestrator integration flow via `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` (required for outage/resilience acceptance), and runtime scope validation via `validate-implementation-scope.sh` runtime checks  
 **Target Platform**: Docker Compose MoonMind stack (`api`, `orchestrator`, `celery-worker`, `api-db`, `rabbitmq`)  
 **Project Type**: Multi-service backend with static dashboard frontend  

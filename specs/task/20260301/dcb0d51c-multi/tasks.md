@@ -24,9 +24,9 @@
 
 **Purpose**: Lock migration scope, token map, and execution baseline before edits.
 
-- [X] T001 [P] Finalize the canonical token map and exception policy in `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/contracts/workflow-naming-contract.md` (DOC-REQ-001, DOC-REQ-007).
-- [X] T002 [P] Add deterministic baseline scan commands and output locations to `specs/040-spec-removal/quickstart.md` and `specs/040-spec-removal/plan.md` (DOC-REQ-008).
-- [X] T003 [P] Create a reusable verification helper at `tools/verify_workflow_naming.sh` for docs/spec/runtime token scans and approved exception filtering (DOC-REQ-008, DOC-REQ-010).
+- [ ] T001 [P] Finalize the canonical token map and exception policy in `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/contracts/workflow-naming-contract.md` (DOC-REQ-001, DOC-REQ-007).
+- [ ] T002 [P] Add deterministic baseline scan commands and output locations to `specs/040-spec-removal/quickstart.md` and `specs/040-spec-removal/plan.md` (DOC-REQ-008).
+- [ ] T003 [P] Create a reusable verification helper at `tools/verify_workflow_naming.sh` for docs/spec/runtime token scans and approved exception filtering (DOC-REQ-008, DOC-REQ-010).
 
 ---
 
@@ -37,7 +37,7 @@
 - [ ] T004 Update canonical workflow env/settings keys in `moonmind/config/settings.py`, `api_service/config.template.toml`, and `services/orchestrator/entrypoint.sh` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-011).
 - [ ] T005 [P] Normalize schema/type naming from `SpecWorkflow*` to `Workflow*` in `moonmind/schemas/workflow_models.py` and `moonmind/workflows/speckit_celery/models.py` (DOC-REQ-004, DOC-REQ-011).
 - [ ] T006 [P] Canonicalize artifact root handling in `moonmind/workflows/speckit_celery/storage.py` and `moonmind/workflows/speckit_celery/tasks.py` with workflow path naming invariants (DOC-REQ-006, DOC-REQ-011).
-- [X] T007 Update `specs/040-spec-removal/contracts/requirements-traceability.md` with one-to-one mapping for `DOC-REQ-001` through `DOC-REQ-011`, including planned runtime and validation surfaces.
+- [ ] T007 Update `specs/040-spec-removal/contracts/requirements-traceability.md` with one-to-one mapping for `DOC-REQ-001` through `DOC-REQ-011`, including planned runtime and validation surfaces.
 
 **Checkpoint**: Foundational runtime/config contract is ready for story implementation.
 
@@ -51,7 +51,7 @@
 
 ### Tests for User Story 1
 
-- [X] T008 [US1] Add docs/spec verification command usage examples to `specs/040-spec-removal/quickstart.md` and `docs/SpecRemovalPlan.md`, including expected pass/fail criteria (DOC-REQ-008, DOC-REQ-010).
+- [ ] T008 [US1] Add docs/spec verification command usage examples to `specs/040-spec-removal/quickstart.md` and `docs/SpecRemovalPlan.md`, including expected pass/fail criteria (DOC-REQ-008, DOC-REQ-010).
 - [ ] T009 [US1] Add docs/spec naming regression coverage in `tests/unit/workflows/test_spec_automation_env.py` and `tests/unit/api/test_spec_automation.py` for canonical token assertions in exposed guidance surfaces (DOC-REQ-001, DOC-REQ-007).
 
 ### Implementation for User Story 1
@@ -98,13 +98,13 @@
 ### Tests for User Story 3
 
 - [ ] T022 [US3] Add verification test coverage for the scan helper in `tests/unit/workflows/test_tasks.py` and `tests/unit/workflows/orchestrator/test_tasks.py`, including approved-exception handling (DOC-REQ-008, DOC-REQ-010).
-- [X] T023 [US3] Run full validation via `./tools/test_unit.sh` and `./tools/verify_workflow_naming.sh`, including explicit check that docs-only baseline context remains historical while runtime intent stays authoritative, then record outputs in `specs/040-spec-removal/quickstart.md` (DOC-REQ-008, DOC-REQ-009, DOC-REQ-011).
+- [ ] T023 [US3] Run full validation via `./tools/test_unit.sh` and `./tools/verify_workflow_naming.sh`, including explicit check that docs-only baseline context remains historical while runtime intent stays authoritative, then record outputs in `specs/040-spec-removal/quickstart.md` (DOC-REQ-008, DOC-REQ-009, DOC-REQ-011).
 
 ### Implementation for User Story 3
 
-- [X] T024 [US3] Add a historical-reference appendix with explicit residual rationale in `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/spec.md` (DOC-REQ-007, DOC-REQ-009, DOC-REQ-010).
-- [X] T025 [US3] Update `specs/040-spec-removal/contracts/requirements-traceability.md` so each `DOC-REQ-*` has at least one implementation task reference and one validation task reference.
-- [X] T026 [US3] Record migration verification report details (changed files, residual matches, follow-ups, sign-off owner) in `specs/040-spec-removal/plan.md` and `specs/040-spec-removal/research.md` (DOC-REQ-008, DOC-REQ-010).
+- [ ] T024 [US3] Add a historical-reference appendix with explicit residual rationale in `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/spec.md` (DOC-REQ-007, DOC-REQ-009, DOC-REQ-010).
+- [ ] T025 [US3] Update `specs/040-spec-removal/contracts/requirements-traceability.md` so each `DOC-REQ-*` has at least one implementation task reference and one validation task reference.
+- [ ] T026 [US3] Record migration verification report details (changed files, residual matches, follow-ups, sign-off owner) in `specs/040-spec-removal/plan.md` and `specs/040-spec-removal/research.md` (DOC-REQ-008, DOC-REQ-010).
 
 **Checkpoint**: User Story 3 is independently complete with audit-ready verification artifacts.
 
