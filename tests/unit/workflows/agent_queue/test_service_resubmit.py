@@ -137,7 +137,9 @@ async def test_resubmit_job_success_creates_new_job_and_audit_events(
     assert source_job.affinity_key == source_affinity_before
     assert source_job.max_attempts == source_max_attempts_before
 
-    resubmit_events = [event for event in source_events if event.message == "Job resubmitted"]
+    resubmit_events = [
+        event for event in source_events if event.message == "Job resubmitted"
+    ]
     assert resubmit_events
     source_event_payload = resubmit_events[-1].payload or {}
     assert source_event_payload["newJobId"] == str(created.id)
@@ -146,7 +148,9 @@ async def test_resubmit_job_success_creates_new_job_and_audit_events(
     assert source_event_payload["note"] == "retry with edits"
 
     assert any(event.message == "Job queued" for event in created_events)
-    from_events = [event for event in created_events if event.message == "Job resubmitted from"]
+    from_events = [
+        event for event in created_events if event.message == "Job resubmitted from"
+    ]
     assert from_events
     created_event_payload = from_events[-1].payload or {}
     assert created_event_payload["sourceJobId"] == str(source_job.id)
