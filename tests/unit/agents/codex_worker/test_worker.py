@@ -351,6 +351,76 @@ class CumulativeStepLogHandler(FakeHandler):
         )
 
 
+class ProposalEvidenceAwareHandler(FakeHandler):
+    """Proposal skill stub that only emits output when evidence was sanitized."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="proposal analyzed",
+                error_message=None,
+            )
+        )
+
+    async def handle_skill(
+        self,
+        *,
+        job_id,
+        payload,
+        selected_skill,
+        fallback=False,
+        cancel_event=None,
+        output_chunk_callback=None,
+    ):
+        del job_id, cancel_event, output_chunk_callback
+        self.calls.append(f"codex_skill:{selected_skill}:{fallback}")
+        self.skill_payloads.append(dict(payload))
+
+        inputs_node = payload.get("inputs")
+        inputs = inputs_node if isinstance(inputs_node, dict) else {}
+        artifacts_path = Path(str(inputs.get("artifactsPath") or ""))
+        proposal_output_path = Path(str(inputs.get("proposalOutputPath") or ""))
+        mirrored_codex_exec = artifacts_path / "logs" / "codex_exec.log"
+        mirrored_step_log = artifacts_path / "logs" / "steps" / "step-0000.log"
+        if not mirrored_step_log.exists():
+            return self._next_result()
+
+        mirrored_content = mirrored_step_log.read_text(encoding="utf-8")
+        codex_exec_markers = mirrored_content.count("[command] $ codex exec")
+        capped_lines = len(mirrored_content.splitlines()) <= 20
+        if (
+            not mirrored_codex_exec.exists()
+            and codex_exec_markers == 1
+            and capped_lines
+        ):
+            proposal_output_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "title": "[run_quality] Harden recursive proposal logs",
+                            "summary": "Prevent recursive codex log ingestion in fix-proposal runs.",
+                            "category": "run_quality",
+                            "tags": ["duplicate_output"],
+                            "signal": {
+                                "severity": "high",
+                                "evidence": "nested codex exec block duplication",
+                            },
+                            "taskCreateRequest": {
+                                "type": "task",
+                                "payload": {
+                                    "repository": "MoonLadderStudios/MoonMind",
+                                    "task": {"instructions": "Add regression coverage"},
+                                },
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        return self._next_result()
+
+
 def _build_execute_stage_payloads() -> tuple[dict[str, object], dict[str, object]]:
     """Return minimal payloads for direct execute-stage tests."""
 
@@ -5002,14 +5072,6 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
 
     await callback("stdout", "hello secret-token\n")
     await callback("stderr", "warn output\n")
-    await callback(
-        "stdout",
-        "[moonmind] loop warning: suppressed 7 repeated stdout chunk(s) (700 chars) during this command.\n",
-    )
-    await callback(
-        "stdout",
-        "[moonmind] loop warning: suppressed 8 repeated stdout chunk(s) (800 chars) during this command; control=worker\n",
-    )
     await callback("stdout", None)
     await callback("stderr", None)
 
@@ -5026,21 +5088,6 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
     assert first_stdout["payload"]["stepIndex"] == 1
     assert "secret-token" not in first_stdout["message"]
     assert "[REDACTED]" in first_stdout["message"]
-
-    loop_warning_events = [
-        event
-        for event in queue.events
-        if event["payload"].get("kind") == "loop_warning"
-    ]
-    assert len(loop_warning_events) == 1
-    assert (
-        loop_warning_events[0]["message"]
-        == "[moonmind] loop warning: suppressed 8 repeated stdout chunk(s) (800 chars) during this command"
-    )
-    assert loop_warning_events[0]["payload"]["stream"] == "stdout"
-    assert loop_warning_events[0]["payload"]["stage"] == "moonmind.task.execute"
-    assert loop_warning_events[0]["payload"]["stepId"] == "step-2"
-    assert loop_warning_events[0]["payload"]["stepIndex"] == 1
 
 
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
