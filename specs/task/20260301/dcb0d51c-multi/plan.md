@@ -130,15 +130,3 @@ tools/
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |---|---|---|
 | None | N/A | N/A |
-
-## Verification Report (2026-03-01)
-
-- `./tools/verify_workflow_naming.sh --mode docs-spec --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
-  - Status: PASS
-  - Notes: Approved historical exceptions were limited to `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/*`.
-- `./tools/verify_workflow_naming.sh --mode runtime --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
-  - Status: FAIL
-  - Notes: Legacy naming remains in runtime surfaces (for example `moonmind/config/settings.py`, `api_service/api/routers/spec_automation.py`, and `api_service/main.py`), so runtime parity tasks remain open.
-- `./tools/test_unit.sh`
-  - Status: PASS
-  - Notes: `895 passed, 8 subtests passed`.

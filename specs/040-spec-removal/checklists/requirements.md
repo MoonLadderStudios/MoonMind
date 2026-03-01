@@ -31,4 +31,6 @@
 
 ## Notes
 
-- Checked at spec-authoring time on 2026-02-24 using the canonical feature request and runtime scope guard.
+- Revalidated on 2026-03-01 using canonical request `Implement docs/SpecRemovalPlan.md`.
+- Runtime scope guard enforced: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+- Source constraint preservation recorded in spec under `Source Requirement Reconciliation` (docs-only plan baseline retained; runtime intent applied for this implementation feature).

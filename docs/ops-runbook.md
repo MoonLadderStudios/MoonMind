@@ -20,7 +20,7 @@ Use `./tools/auth-gemini-volume.sh` once per environment to bootstrap OAuth cred
 - **Metrics**: The worker emits StatsD-compatible counters and timers (prefix `moonmind.workflow`). Point `STATSD_HOST`/`STATSD_PORT` or `WORKFLOW_METRICS_HOST`/`WORKFLOW_METRICS_PORT` at your collector before triggering runs to capture observability data.
 - **Log review**: Look for `Workflow task …` entries in the worker logs to confirm each stage transitions through `running`, `success`, or `failure` with summarized payloads.
 - **Credential validation**: Failed runs often stem from missing Codex or GitHub credentials. The first task attempt records audit notes; resolve secrets and retry via `/api/workflows/runs/{id}/retry`.
-- **Artifact locations**: Patches, JSONL logs, and GitHub API responses are stored under `var/artifacts/spec_workflows/<run_id>/`. Mount this directory when running the worker locally to inspect failures. The retry endpoint reuses these artifacts when resuming failed publish tasks.
+- **Artifact locations**: Patches, JSONL logs, and GitHub API responses are stored under `var/artifacts/workflow_runs/<run_id>/`. Mount this directory when running the worker locally to inspect failures. The retry endpoint reuses these artifacts when resuming failed publish tasks.
 
 ### Codex routing observability
 
