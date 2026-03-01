@@ -5602,6 +5602,8 @@ class CodexWorker:
             comments_summary = (
                 comments_node if isinstance(comments_node, Mapping) else {}
             )
+            ci_node = snapshot_payload.get("ci")
+            ci_summary = ci_node if isinstance(ci_node, Mapping) else {}
 
             merge_state = str(pr.get("mergeStateStatus") or "").strip().upper()
             mergeable_raw = pr.get("mergeable")
@@ -5631,6 +5633,16 @@ class CodexWorker:
                 actionable_count = 1
             if actionable_count > 0:
                 unresolved_signals.append(f"actionableCommentCount={actionable_count}")
+
+            if bool(ci_summary.get("isRunning")):
+                unresolved_signals.append("ci.isRunning=true")
+            if bool(ci_summary.get("hasFailures")):
+                unresolved_signals.append("ci.hasFailures=true")
+            signal_quality = str(ci_summary.get("signalQuality") or "").strip().lower()
+            if signal_quality and signal_quality != "ok":
+                unresolved_signals.append(
+                    f"ci.signalQuality={str(ci_summary.get('signalQuality') or '').strip()}"
+                )
 
             if unresolved_signals:
                 failure_reason = "pr-resolution final state unresolved: " + "; ".join(

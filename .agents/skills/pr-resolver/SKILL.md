@@ -29,11 +29,12 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
     Actionability is intentionally broad: bot and human comments are both included by default. Only empty comments and explicitly resolved/outdated review threads are treated as non-actionable.
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
    - **CI Signal Integrity:** If `ci.signalQuality` is not `"ok"` (for example missing required checks or missing non-security checks on head commit), treat this as blocking CI and do not merge until fixed.
-   - **Enable Auto-Merge While CI Runs:** If `ci.isRunning` is true, there are NO CI failures, mergeability is not conflicting, and `commentsSummary.hasActionableComments` is false, execute `gh pr merge --auto --<mergeMethod>`.
+   - **CI Still Running:** If `ci.isRunning` is true, do not merge yet. Exit blocked and wait for CI completion.
    - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `"CLEAN"`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
    - **Blocked:** If CI is running but comments are still actionable or mergeability is conflicting, exit and state why it is blocked.
 4. After applying ANY fix (conflict, review comments, CI), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`.
-5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
+5. For the final merge decision, you MUST run `python3 .agents/skills/pr-resolver/bin/pr_resolve_finalize.py --merge-method <merge|squash|rebase>` and follow its decision. Do NOT call `gh pr merge` directly.
+6. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
 
 ## Lightweight Finalize Pass
 
@@ -46,7 +47,7 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_finalize.py --merge-method <me
 This performs only:
 - snapshot refresh
 - comment/mergeability/CI gate evaluation
-- either `gh pr merge --auto --<mergeMethod>`, direct merge, or blocked exit
+- either direct merge (`gh pr merge --<mergeMethod>`) or blocked exit
 
 Use this command for check-back runs to avoid rerunning the full fix workflow.
 

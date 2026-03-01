@@ -4210,6 +4210,118 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
     assert handler.calls == ["codex_skill:pr-resolver:True"]
 
 
+async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
+    tmp_path: Path,
+) -> None:
+    """resolve-PR runs must fail when snapshot CI signals are unresolved."""
+
+    step_log = tmp_path / "resolve-pr-ci.log"
+    step_log.write_text("step", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Resolve PR #777",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "feature/resolve-pr", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "instructions": "Follow pr-resolver workflow",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "777"}},
+                    }
+                ],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+
+    class _UnresolvedPrCiHandler(FakeHandler):
+        async def handle_skill(
+            self,
+            *,
+            job_id,
+            payload,
+            selected_skill,
+            fallback=False,
+            cancel_event=None,
+            output_chunk_callback=None,
+        ):
+            snapshot_path = (
+                tmp_path
+                / str(job_id)
+                / "repo"
+                / "artifacts"
+                / "pr_resolver_snapshot.json"
+            )
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "pr": {
+                            "number": 777,
+                            "mergeable": "MERGEABLE",
+                            "mergeStateStatus": "CLEAN",
+                        },
+                        "ci": {
+                            "isRunning": True,
+                            "hasFailures": True,
+                            "signalQuality": "degraded",
+                        },
+                        "commentsSummary": {
+                            "hasActionableComments": False,
+                            "actionableCommentCount": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return await super().handle_skill(
+                job_id=job_id,
+                payload=payload,
+                selected_skill=selected_skill,
+                fallback=fallback,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+    handler = _UnresolvedPrCiHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="resolver completed",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert "pr-resolution final state unresolved" in queue.failed[0]
+    assert "ci.isRunning=true" in queue.failed[0]
+    assert "ci.hasFailures=true" in queue.failed[0]
+    assert "ci.signalQuality=degraded" in queue.failed[0]
+    assert "reports/pr_resolution_validation.json" in queue.uploaded
+    assert handler.calls == ["codex_skill:pr-resolver:True"]
+
+
 async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) -> None:
     """Universal worker mode should execute non-codex runtime tasks."""
 

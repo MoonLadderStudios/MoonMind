@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lightweight PR finalize helper for pr-resolver.
 
-This script re-checks snapshot state and only performs merge/auto-merge decisions.
+This script re-checks snapshot state and only performs merge/block decisions.
 It is intended for low-cost follow-up runs after conflicts/comments/CI issues were fixed.
 """
 
@@ -60,7 +60,7 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     if bool(ci.get("hasFailures")):
         return {"action": "blocked", "reason": "ci_failures"}
     if bool(ci.get("isRunning")):
-        return {"action": "enable_auto_merge", "reason": "ci_running"}
+        return {"action": "blocked", "reason": "ci_running"}
 
     merge_state = _normalize_text(pr.get("mergeStateStatus")).upper()
     if merge_state in DIRECT_MERGE_STATE:
@@ -88,10 +88,8 @@ def _read_snapshot(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _merge_pr(pr_selector: str, merge_method: str, auto: bool) -> None:
+def _merge_pr(pr_selector: str, merge_method: str) -> None:
     cmd = ["gh", "pr", "merge", pr_selector, f"--{merge_method}"]
-    if auto:
-        cmd.append("--auto")
     subprocess.run(cmd, check=True)
 
 
@@ -162,20 +160,8 @@ def main() -> None:
         action = decision["action"]
         reason = decision["reason"]
 
-        if action == "enable_auto_merge":
-            _merge_pr(pr_selector, args.merge_method, auto=True)
-            _write_result(
-                result_path,
-                snapshot=snapshot,
-                decision="enabled auto-merge while CI is running",
-                merge_outcome="auto_merge_enabled",
-                reason=reason,
-            )
-            print("Auto-merge enabled.")
-            return
-
         if action == "merge_now":
-            _merge_pr(pr_selector, args.merge_method, auto=False)
+            _merge_pr(pr_selector, args.merge_method)
             _write_result(
                 result_path,
                 snapshot=snapshot,

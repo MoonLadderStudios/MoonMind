@@ -185,7 +185,7 @@ def test_finalize_blocks_when_actionable_comments_exist(
     assert decision == {"action": "blocked", "reason": "actionable_comments"}
 
 
-def test_finalize_enables_auto_merge_when_ci_running_and_comments_addressed(
+def test_finalize_blocks_when_ci_running_and_comments_addressed(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:
     evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
@@ -202,7 +202,7 @@ def test_finalize_enables_auto_merge_when_ci_running_and_comments_addressed(
         }
     )
 
-    assert decision == {"action": "enable_auto_merge", "reason": "ci_running"}
+    assert decision == {"action": "blocked", "reason": "ci_running"}
 
 
 def test_finalize_merges_when_ci_complete_and_clean(
