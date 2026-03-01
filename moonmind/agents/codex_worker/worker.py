@@ -6877,6 +6877,7 @@ class CodexWorker:
             )
 
         return artifacts
+
     async def _run_post_task_proposal_skills(
         self,
         *,
