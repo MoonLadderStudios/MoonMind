@@ -360,20 +360,14 @@ const helpers = loadSubmitRuntimeHelpers();
       model: "payload-codex-model",
       effort: "payload-codex-effort",
     },
-    inputs: {
-      codex: {
-        model: "inputs-codex-model",
-        effort: "inputs-codex-effort",
-      },
-    },
     task: {
-      codex: {
-        model: "task-codex-model",
-        effort: "task-codex-effort",
-      },
       runtime: {
         model: "task-runtime-model",
         effort: "task-runtime-effort",
+      },
+      codex: {
+        model: "task-codex-model",
+        effort: "task-codex-effort",
       },
     },
   };
@@ -381,40 +375,17 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-runtime-model");
   assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "task-runtime-effort");
 
-  const taskCodexOnlyPayload = {
-    model: "root-model",
-    effort: "root-effort",
-    codex: {
-      model: "payload-codex-model",
-      effort: "payload-codex-effort",
-    },
-    task: {
-      codex: {
-        model: "task-codex-model",
-        effort: "task-codex-effort",
-      },
-    },
-  };
-  assert.strictEqual(helpers.extractRuntimeModelFromPayload(taskCodexOnlyPayload), "task-codex-model");
-  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(taskCodexOnlyPayload), "task-codex-effort");
+  delete payload.task.runtime;
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-codex-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "task-codex-effort");
 
-  const payloadRootFallback = {
-    model: "root-model",
-    effort: "root-effort",
-    codex: {
-      model: "payload-codex-model",
-      effort: "payload-codex-effort",
-    },
-  };
-  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payloadRootFallback), "payload-codex-model");
-  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payloadRootFallback), "payload-codex-effort");
+  delete payload.task;
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "payload-codex-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "payload-codex-effort");
 
-  const payloadRootOnly = {
-    model: "root-model",
-    effort: "root-effort",
-  };
-  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payloadRootOnly), "root-model");
-  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payloadRootOnly), "root-effort");
+  delete payload.codex;
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "root-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "root-effort");
 })();
 
 (function testApplyElementVisibilityTogglesHiddenAttributeAndClass() {
