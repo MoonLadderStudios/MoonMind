@@ -234,13 +234,10 @@ class AgentQueueRepository:
                 )
             )
 
-        stmt = (
-            stmt.order_by(
-                models.AgentJob.created_at.desc(),
-                models.AgentJob.id.desc(),
-            )
-            .limit(limit + 1)
-        )
+        stmt = stmt.order_by(
+            models.AgentJob.created_at.desc(),
+            models.AgentJob.id.desc(),
+        ).limit(limit + 1)
         result = await self._session.execute(stmt)
         rows = list(result.scalars().all())
         has_more = len(rows) > limit
