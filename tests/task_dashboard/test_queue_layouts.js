@@ -111,6 +111,7 @@ const {
   renderProposalTable,
   renderProposalCards,
   renderProposalLayouts,
+  renderProposalActionFeedback,
   filterProposalsByTag,
 } = helpers;
 
@@ -264,6 +265,16 @@ function createProposalRow(overrides = {}) {
   assert(html.includes('data-layout="card"'));
   assert(html.includes('queue-table-wrapper'));
   assert(html.includes('queue-card-list'));
+})();
+
+(function testRenderProposalActionFeedbackTargetsStatusRegion() {
+  const html = renderProposalActionFeedback({
+    message: "Proposal fa862809 dismissed.",
+    statusFilter: "dismissed",
+  });
+  assert(html.includes("proposal-action-feedback"));
+  assert(html.includes("Proposal fa862809 dismissed."));
+  assert(html.includes("/tasks/proposals?status=dismissed"));
 })();
 
 (function testProposalCardsExposeStableFieldsAndActions() {

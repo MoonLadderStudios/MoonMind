@@ -2103,6 +2103,24 @@
     `;
   }
 
+  function renderProposalActionFeedback(feedback = null) {
+    const node =
+      feedback && typeof feedback === "object" && !Array.isArray(feedback) ? feedback : null;
+    const message = node ? String(node.message || "").trim() : "";
+    const statusFilter = node ? String(node.statusFilter || "").trim().toLowerCase() : "";
+    const shouldLinkToStatus =
+      statusFilter === "dismissed" || statusFilter === "promoted" || statusFilter === "open";
+    const jumpLink = shouldLinkToStatus
+      ? `<a href="/tasks/proposals?status=${encodeURIComponent(
+          statusFilter,
+        )}" class="small">View ${escapeHtml(statusFilter)} proposals</a>`
+      : "";
+    const content = message
+      ? `<div class="notice ok">${escapeHtml(message)}${jumpLink ? `<br/>${jumpLink}` : ""}</div>`
+      : "";
+    return `<div class="proposal-action-feedback">${content}</div>`;
+  }
+
   // Queue metadata for table columns and card field rows is centralized here.
   // Card status remains a fixed leading row in renderQueueCards so mobile keeps
   // status first regardless of future queueFieldDefinitions ordering. When
@@ -2604,6 +2622,7 @@
       renderProposalTable,
       renderProposalCards,
       renderProposalLayouts,
+      renderProposalActionFeedback,
       toQueueRows,
     };
   }
@@ -7196,6 +7215,7 @@
       rows: [],
       notice: "",
       noticeLevel: "",
+      actionFeedback: null,
     };
     const proposalConsumedFlashMs = 320;
 
@@ -7224,8 +7244,10 @@
         (row) => String(pick(row, "id") || "") !== normalizedProposalId,
       );
       const shortId = normalizedProposalId.slice(0, 8) || normalizedProposalId;
-      state.notice = `Proposal ${shortId} ${actionLabel} and removed from this queue view.`;
-      state.noticeLevel = "ok";
+      state.actionFeedback = {
+        message: `Proposal ${shortId} ${actionLabel}.`,
+        statusFilter: actionLabel === "dismissed" ? "dismissed" : "promoted",
+      };
       renderView();
     };
 
@@ -7375,7 +7397,9 @@
       setView(
         "Task Proposals",
         "Worker follow-up queue (promote to Task jobs).",
-        `${noticeHtml}${renderFilters()}${renderTable()}`,
+        `${noticeHtml}${renderFilters()}${renderTable()}${renderProposalActionFeedback(
+          state.actionFeedback,
+        )}`,
         { showAutoRefreshControls: true },
       );
       attachHandlers();
@@ -7405,6 +7429,15 @@
         state.rows = payload?.items || [];
         state.notice = "";
         state.noticeLevel = "";
+        if (state.actionFeedback && state.status) {
+          const currentStatus = String(state.status).trim().toLowerCase();
+          const feedbackStatus = String(state.actionFeedback.statusFilter || "")
+            .trim()
+            .toLowerCase();
+          if (currentStatus === feedbackStatus) {
+            state.actionFeedback = null;
+          }
+        }
       } catch (error) {
         console.error("proposals list load failed", error);
         state.rows = [];

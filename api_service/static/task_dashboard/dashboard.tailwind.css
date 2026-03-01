@@ -505,6 +505,10 @@ tr[data-proposal-id].proposal-consuming td {
   color: rgb(var(--mm-ok));
 }
 
+.proposal-action-feedback {
+  min-height: 3.2rem;
+}
+
 .small {
   font-size: 0.85rem;
   color: rgb(var(--mm-muted));
