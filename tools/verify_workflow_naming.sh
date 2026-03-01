@@ -59,7 +59,7 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 2
 fi
 
-PATTERN='SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\.spec_workflow|var/artifacts/spec_workflows'
+PATTERN='SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec[-_]automation|moonmind\.spec_workflow|var/artifacts/spec_workflows'
 DOCS_SPEC_GLOBS=(--glob '*.md' --glob '*.yaml' --glob '*.yml' --glob '!specs/task/**')
 RUNTIME_GLOBS=(--glob '*.py' --glob '*.sh' --glob '*.md' --glob '*.yaml' --glob '*.yml')
 
