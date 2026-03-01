@@ -2,7 +2,7 @@
 
 const baseQueueRow = Object.freeze({
   source: "queue",
-  sourceLabel: "Queue",
+  sourceLabel: "Task",
   id: "job-123",
   queueName: "moonmind.jobs",
   runtimeMode: "codex",

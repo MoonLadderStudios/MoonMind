@@ -967,30 +967,41 @@
     return task;
   }
 
-  function extractRuntimeModelFromPayload(payload) {
+  function extractObject(payload, key) {
+    const node = payload && typeof payload === "object" && !Array.isArray(payload) ? pick(payload, key) : null;
+    return node && typeof node === "object" && !Array.isArray(node) ? node : null;
+  }
+
+  function extractRuntimeValueFromPayload(payload, fieldName) {
     const task = extractTaskNode(payload);
-    if (!task) {
-      return null;
+    const taskRuntimeNode = extractObject(task, "runtime");
+    const taskCodexNode = extractObject(task, "codex");
+    const payloadCodexNode = extractObject(payload, "codex");
+    const payloadInputsCodexNode = extractObject(extractObject(payload, "inputs"), "codex");
+
+    const candidateNodes = [
+      taskRuntimeNode,
+      taskCodexNode,
+      payloadCodexNode,
+      payloadInputsCodexNode,
+      payload,
+    ];
+
+    for (const node of candidateNodes) {
+      const normalized = String(pick(node, fieldName) ?? "").trim();
+      if (normalized) {
+        return normalized;
+      }
     }
-    const runtimeNode = pick(task, "runtime");
-    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
-      return null;
-    }
-    const model = pick(runtimeNode, "model");
-    return model ? String(model) : null;
+    return null;
+  }
+
+  function extractRuntimeModelFromPayload(payload) {
+    return extractRuntimeValueFromPayload(payload, "model");
   }
 
   function extractRuntimeEffortFromPayload(payload) {
-    const task = extractTaskNode(payload);
-    if (!task) {
-      return null;
-    }
-    const runtimeNode = pick(task, "runtime");
-    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
-      return null;
-    }
-    const effort = pick(runtimeNode, "effort");
-    return effort ? String(effort) : null;
+    return extractRuntimeValueFromPayload(payload, "effort");
   }
 
   function extractSkillFromPayload(payload) {
@@ -1693,7 +1704,7 @@
       <table>
         <thead>
           <tr>
-            <th>Source</th>
+            <th>Type</th>
             <th>ID</th>
             ${primaryHeaders}
             <th>Status</th>
@@ -1729,10 +1740,10 @@
             `,
           )
           .join("");
-        const queueLabel = row.queueName || defaultQueueName;
         const skillLabel = row.skillId || "";
-        const metaParts = [queueLabel, skillLabel].filter(Boolean);
-        const metaText = metaParts.join(" · ") || queueLabel;
+        const runtimeLabel = row.runtimeMode || "";
+        const metaParts = [runtimeLabel, skillLabel].filter(Boolean);
+        const metaText = metaParts.join(" · ") || "Task";
         const linkTarget = row.link ? escapeHtml(row.link) : "#";
         const titleBase = row.title ? row.title : "Queue Job";
         const titleWithId = row.id ? `${titleBase} · ${row.id}` : titleBase;
@@ -1847,7 +1858,7 @@
       const summarizedTitle = summarizeInstructionPreview(rawInstructions);
       return {
         source: "queue",
-        sourceLabel: "Queue",
+        sourceLabel: "Task",
         id: pick(item, "id") || "",
         payload,
         queueName: defaultQueueName,
@@ -2103,18 +2114,30 @@
     `;
   }
 
+  function renderProposalActionFeedback(feedback = null) {
+    const node =
+      feedback && typeof feedback === "object" && !Array.isArray(feedback) ? feedback : null;
+    const message = node ? String(node.message || "").trim() : "";
+    const statusFilter = node ? String(node.statusFilter || "").trim().toLowerCase() : "";
+    const shouldLinkToStatus =
+      statusFilter === "dismissed" || statusFilter === "promoted" || statusFilter === "open";
+    const jumpLink = shouldLinkToStatus
+      ? `<a href="/tasks/proposals?status=${encodeURIComponent(
+          statusFilter,
+        )}" class="small">View ${escapeHtml(statusFilter)} proposals</a>`
+      : "";
+    const content = message
+      ? `<div class="notice ok">${escapeHtml(message)}${jumpLink ? `<br/>${jumpLink}` : ""}</div>`
+      : "";
+    return `<div class="proposal-action-feedback">${content}</div>`;
+  }
+
   // Queue metadata for table columns and card field rows is centralized here.
   // Card status remains a fixed leading row in renderQueueCards so mobile keeps
   // status first regardless of future queueFieldDefinitions ordering. When
   // expanding queue metadata, update docs/TaskUiQueue.md ("Extending queue
   // fields") and add tests that exercise the new label/value pairs.
   const queueFieldDefinitions = [
-    {
-      key: "queueName",
-      label: "Queue",
-      render: (row) => escapeHtml(row.queueName || defaultQueueName),
-      tableSection: "primary",
-    },
     {
       key: "finishOutcome",
       label: "Outcome",
@@ -2432,6 +2455,36 @@
     };
   };
 
+  const applyElementVisibility = (node, isVisible) => {
+    if (!node) {
+      return;
+    }
+    const style =
+      node.style &&
+      typeof node.style === "object" &&
+      typeof node.style.setProperty === "function" &&
+      typeof node.style.removeProperty === "function"
+        ? node.style
+        : null;
+    if (isVisible) {
+      node.hidden = false;
+      if (style) {
+        style.removeProperty("display");
+      }
+      if (node.classList && typeof node.classList.remove === "function") {
+        node.classList.remove("hidden");
+      }
+      return;
+    }
+    node.hidden = true;
+    if (style) {
+      style.setProperty("display", "none", "important");
+    }
+    if (node.classList && typeof node.classList.add === "function") {
+      node.classList.add("hidden");
+    }
+  };
+
   const resolveQueueSubmitPriorityForRuntime = (runtimeMode, priorityValues = {}) => {
     const uiState = resolveQueueSubmitRuntimeUiState(runtimeMode);
     if (uiState.isOrchestratorRuntime) {
@@ -2543,6 +2596,8 @@
       validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
       hasExplicitSkillSelection,
+      extractRuntimeModelFromPayload,
+      extractRuntimeEffortFromPayload,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
       readSubmitDraftStorage,
@@ -2553,6 +2608,7 @@
       normalizeOrchestratorPriority,
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
+      applyElementVisibility,
       persistSubmitDraftsToStorage,
       submitDraftController,
       normalizeDashboardDetailSegment,
@@ -2573,6 +2629,7 @@
       renderProposalTable,
       renderProposalCards,
       renderProposalLayouts,
+      renderProposalActionFeedback,
       toQueueRows,
     };
   }
@@ -3206,7 +3263,7 @@
         toQueueRows(payload?.items || []).map((row) => ({
           ...row,
           source: "manifests",
-          sourceLabel: "Manifests",
+          sourceLabel: "Manifest",
         })),
       );
       setView(
@@ -4165,11 +4222,7 @@
       const updateVisibility = (mode, isVisible) => {
         const nodes = form.querySelectorAll(`[data-runtime-visibility="${mode}"]`);
         nodes.forEach((node) => {
-          if (isVisible) {
-            node.classList.remove("hidden");
-          } else {
-            node.classList.add("hidden");
-          }
+          applyElementVisibility(node, isVisible);
         });
       };
       updateVisibility("orchestrator", uiState.showOrchestratorFields);
@@ -5633,11 +5686,9 @@
       );
       return;
     }
-    if (isWorkerSubmitRuntime(normalizedRuntime)) {
-      renderQueueSubmitPage(normalizedRuntime);
-      return;
-    }
-    renderOrchestratorSubmitPage();
+    // Use the unified queue submit form for every supported runtime so runtime
+    // visibility toggles are consistently applied from one code path.
+    renderQueueSubmitPage(normalizedRuntime);
   }
 
   function renderOrchestratorSubmitPage() {
@@ -7171,6 +7222,7 @@
       rows: [],
       notice: "",
       noticeLevel: "",
+      actionFeedback: null,
     };
     const proposalConsumedFlashMs = 320;
 
@@ -7199,8 +7251,10 @@
         (row) => String(pick(row, "id") || "") !== normalizedProposalId,
       );
       const shortId = normalizedProposalId.slice(0, 8) || normalizedProposalId;
-      state.notice = `Proposal ${shortId} ${actionLabel} and removed from this queue view.`;
-      state.noticeLevel = "ok";
+      state.actionFeedback = {
+        message: `Proposal ${shortId} ${actionLabel}.`,
+        statusFilter: actionLabel === "dismissed" ? "dismissed" : "promoted",
+      };
       renderView();
     };
 
@@ -7350,7 +7404,9 @@
       setView(
         "Task Proposals",
         "Worker follow-up queue (promote to Task jobs).",
-        `${noticeHtml}${renderFilters()}${renderTable()}`,
+        `${noticeHtml}${renderFilters()}${renderTable()}${renderProposalActionFeedback(
+          state.actionFeedback,
+        )}`,
         { showAutoRefreshControls: true },
       );
       attachHandlers();
@@ -7380,6 +7436,15 @@
         state.rows = payload?.items || [];
         state.notice = "";
         state.noticeLevel = "";
+        if (state.actionFeedback && state.status) {
+          const currentStatus = String(state.status).trim().toLowerCase();
+          const feedbackStatus = String(state.actionFeedback.statusFilter || "")
+            .trim()
+            .toLowerCase();
+          if (currentStatus === feedbackStatus) {
+            state.actionFeedback = null;
+          }
+        }
       } catch (error) {
         console.error("proposals list load failed", error);
         state.rows = [];

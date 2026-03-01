@@ -290,6 +290,151 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(orchestratorState.showWorkerPriorityFields, false);
 })();
 
+(function testExtractRuntimeModelAndEffortFromCanonicalTaskRuntime() {
+  assert.strictEqual(typeof helpers.extractRuntimeModelFromPayload, "function");
+  assert.strictEqual(typeof helpers.extractRuntimeEffortFromPayload, "function");
+  const payload = {
+    task: {
+      runtime: {
+        mode: "codex",
+        model: "gpt-5.3-codex",
+        effort: "high",
+      },
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "gpt-5.3-codex");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "high");
+})();
+
+(function testExtractRuntimeModelAndEffortFromLegacyCodexShape() {
+  const payload = {
+    codex: {
+      model: "gpt-5.1-codex",
+      effort: "medium",
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "gpt-5.1-codex");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "medium");
+})();
+
+(function testExtractRuntimeModelAndEffortFromTaskCodexShape() {
+  const payload = {
+    task: {
+      codex: {
+        model: "task-codex-model",
+        effort: "low",
+      },
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-codex-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "low");
+})();
+
+(function testExtractRuntimeModelAndEffortFromPayloadInputsCodexShape() {
+  const payload = {
+    inputs: {
+      codex: {
+        model: "legacy-inputs-model",
+        effort: "medium",
+      },
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "legacy-inputs-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "medium");
+})();
+
+(function testExtractRuntimeModelAndEffortFromPayloadRootShape() {
+  const payload = {
+    model: "root-model",
+    effort: "high",
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "root-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "high");
+})();
+
+(function testExtractRuntimeModelAndEffortPrecedence() {
+  const payload = {
+    model: "root-model",
+    effort: "root-effort",
+    codex: {
+      model: "payload-codex-model",
+      effort: "payload-codex-effort",
+    },
+    task: {
+      runtime: {
+        model: "task-runtime-model",
+        effort: "task-runtime-effort",
+      },
+      codex: {
+        model: "task-codex-model",
+        effort: "task-codex-effort",
+      },
+    },
+  };
+
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-runtime-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "task-runtime-effort");
+
+  delete payload.task.runtime;
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-codex-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "task-codex-effort");
+
+  delete payload.task;
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "payload-codex-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "payload-codex-effort");
+
+  delete payload.codex;
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "root-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "root-effort");
+})();
+
+(function testApplyElementVisibilityTogglesHiddenAttributeAndClass() {
+  assert.strictEqual(typeof helpers.applyElementVisibility, "function");
+  const classNames = new Set(["grid-2"]);
+  let displayValue = "";
+  let displayPriority = "";
+  const node = {
+    hidden: false,
+    style: {
+      setProperty(name, value, priority) {
+        if (name === "display") {
+          displayValue = value;
+          displayPriority = priority || "";
+        }
+      },
+      removeProperty(name) {
+        if (name === "display") {
+          displayValue = "";
+          displayPriority = "";
+        }
+      },
+    },
+    classList: {
+      add(name) {
+        classNames.add(name);
+      },
+      remove(name) {
+        classNames.delete(name);
+      },
+      contains(name) {
+        return classNames.has(name);
+      },
+    },
+  };
+
+  helpers.applyElementVisibility(node, false);
+  assert.strictEqual(node.hidden, true);
+  assert.strictEqual(node.classList.contains("hidden"), true);
+  assert.strictEqual(displayValue, "none");
+  assert.strictEqual(displayPriority, "important");
+
+  helpers.applyElementVisibility(node, true);
+  assert.strictEqual(node.hidden, false);
+  assert.strictEqual(node.classList.contains("hidden"), false);
+  assert.strictEqual(displayValue, "");
+  assert.strictEqual(displayPriority, "");
+})();
+
 (function testResolveQueueSubmitPriorityForRuntime() {
   assert.strictEqual(typeof helpers.resolveQueueSubmitPriorityForRuntime, "function");
   const workerPriority = helpers.resolveQueueSubmitPriorityForRuntime("codex", {
