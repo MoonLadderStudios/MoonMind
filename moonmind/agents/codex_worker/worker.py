@@ -3482,7 +3482,9 @@ class CodexWorker:
             return resolved_base, None
 
         if base_resolution_warning is not None and not requested_base:
-            fallback_base = str(base_resolution_warning.get("resolvedBaseBranch") or "").strip()
+            fallback_base = str(
+                base_resolution_warning.get("resolvedBaseBranch") or ""
+            ).strip()
             if fallback_base:
                 return (
                     fallback_base,
@@ -6820,7 +6822,9 @@ class CodexWorker:
         if source_logs_dir.is_dir() and not source_logs_dir.is_symlink():
             mirrored_logs_dir.mkdir(parents=True, exist_ok=True)
 
-            for root, dirnames, filenames in os.walk(source_logs_dir, followlinks=False):
+            for root, dirnames, filenames in os.walk(
+                source_logs_dir, followlinks=False
+            ):
                 source_dir = Path(root)
                 relative_root = source_dir.relative_to(source_logs_dir)
                 destination_root = mirrored_logs_dir / relative_root
