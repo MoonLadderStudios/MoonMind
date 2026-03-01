@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import pytest
 
-import moonmind.agents.codex_worker.worker as worker_module
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
@@ -562,10 +561,10 @@ def test_prepare_post_task_proposal_evidence_paths_rejects_symlink_sources(
     assert list(mirrored_logs_dir.iterdir()) == []
 
 
-def test_prepare_post_task_proposal_evidence_paths_preserves_log_symlinks(
+def test_prepare_post_task_proposal_evidence_paths_skips_log_symlink_files(
     tmp_path: Path,
 ) -> None:
-    """Mirroring should keep symlink entries as symlinks instead of dereferencing."""
+    """Mirroring should skip symlinked log files to avoid evidence escapes."""
 
     config = CodexWorkerConfig(
         moonmind_url="http://localhost:5000",
@@ -601,8 +600,96 @@ def test_prepare_post_task_proposal_evidence_paths_preserves_log_symlinks(
 
     assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
     assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
-    assert mirrored_external.is_symlink()
-    assert mirrored_external.resolve() == external_log.resolve()
+    assert not mirrored_external.is_symlink()
+    assert not mirrored_external.exists()
+
+
+def test_prepare_post_task_proposal_evidence_paths_skips_log_symlink_directories(
+    tmp_path: Path,
+) -> None:
+    """Mirroring should not descend into symlinked log directories."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+    outside_logs = tmp_path / "outside-logs"
+    outside_logs.mkdir(parents=True, exist_ok=True)
+    (outside_logs / "secrets.log").write_text("secrets\n", encoding="utf-8")
+    (source_logs_dir / "archive").symlink_to(outside_logs, target_is_directory=True)
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs_dir = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert (mirrored_logs_dir / "worker.log").read_text(encoding="utf-8") == "worker\n"
+    assert not (mirrored_logs_dir / "archive").exists()
+
+
+def test_prepare_post_task_proposal_evidence_paths_recreates_broken_mirrored_logs_symlink(
+    tmp_path: Path,
+) -> None:
+    """Broken mirrored symlink directories are replaced by mirrored log directories."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
+
+    source_task_context = prepared.artifacts_dir / "task_context.json"
+    source_logs_dir = prepared.artifacts_dir / "logs"
+    source_task_context.write_text('{"task":"ok"}\n', encoding="utf-8")
+    (source_logs_dir / "worker.log").write_text("worker\n", encoding="utf-8")
+
+    (prepared.repo_dir / ".artifacts" / "proposal_inputs").mkdir(
+        parents=True, exist_ok=True
+    )
+    mirrored_logs_dir = prepared.repo_dir / ".artifacts" / "proposal_inputs" / "logs"
+    mirrored_logs_dir.symlink_to(tmp_path / "missing-target")
+
+    mirrored_task_context_path, mirrored_artifacts_path = (
+        worker._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+    )
+
+    mirrored_task_context = Path(mirrored_task_context_path)
+    mirrored_logs = Path(mirrored_artifacts_path) / "logs"
+
+    assert mirrored_task_context.read_text(encoding="utf-8") == '{"task":"ok"}\n'
+    assert mirrored_logs.is_dir()
+    assert not mirrored_logs.is_symlink()
+    assert (mirrored_logs / "worker.log").read_text(encoding="utf-8") == "worker\n"
 
 
 async def test_run_post_task_proposal_skills_sanitizes_recursive_logs_for_fix_proposal(
@@ -631,10 +718,18 @@ async def test_run_post_task_proposal_skills_sanitizes_recursive_logs_for_fix_pr
         lambda **kwargs: True,
     )
     worker._active_cancel_event = asyncio.Event()
-    monkeypatch.setattr(worker_module, "_POST_TASK_PROPOSAL_LOG_MAX_BYTES", 4096)
-    monkeypatch.setattr(worker_module, "_POST_TASK_PROPOSAL_LOG_MAX_LINES", 20)
     monkeypatch.setattr(
-        worker_module,
+        "moonmind.agents.codex_worker.worker",
+        "_POST_TASK_PROPOSAL_LOG_MAX_BYTES",
+        4096,
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker",
+        "_POST_TASK_PROPOSAL_LOG_MAX_LINES",
+        20,
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker",
         "_POST_TASK_PROPOSAL_LOG_TRUNCATION_NOTICE",
         "[moonmind] proposal evidence truncated: test cap hit.\n",
     )

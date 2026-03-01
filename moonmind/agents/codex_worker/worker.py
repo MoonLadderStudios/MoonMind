@@ -6797,26 +6797,38 @@ class CodexWorker:
 
         source_logs_dir = prepared.artifacts_dir / "logs"
         mirrored_logs_dir = evidence_root / "logs"
-        if mirrored_logs_dir.exists():
-            if mirrored_logs_dir.is_symlink() or mirrored_logs_dir.is_file():
-                mirrored_logs_dir.unlink()
-            else:
-                shutil.rmtree(mirrored_logs_dir)
+        if mirrored_logs_dir.is_symlink():
+            mirrored_logs_dir.unlink()
+        elif mirrored_logs_dir.is_file():
+            mirrored_logs_dir.unlink()
+        elif mirrored_logs_dir.is_dir():
+            shutil.rmtree(mirrored_logs_dir)
+
         if source_logs_dir.is_dir() and not source_logs_dir.is_symlink():
             mirrored_logs_dir.mkdir(parents=True, exist_ok=True)
-            for source_path in source_logs_dir.rglob("*"):
-                relative_path = source_path.relative_to(source_logs_dir)
-                destination_path = mirrored_logs_dir / relative_path
-                if source_path.is_dir():
-                    destination_path.mkdir(parents=True, exist_ok=True)
-                    continue
-                if self._is_excluded_post_task_proposal_log(relative_path):
-                    continue
-                destination_path.parent.mkdir(parents=True, exist_ok=True)
-                if source_path.is_symlink():
-                    destination_path.symlink_to(os.readlink(source_path))
-                    continue
-                if source_path.is_file():
+
+            for root, dirnames, filenames in os.walk(source_logs_dir, followlinks=False):
+                source_dir = Path(root)
+                relative_root = source_dir.relative_to(source_logs_dir)
+                destination_root = mirrored_logs_dir / relative_root
+                destination_root.mkdir(parents=True, exist_ok=True)
+
+                dirnames[:] = [
+                    dirname
+                    for dirname in dirnames
+                    if not (source_dir / dirname).is_symlink()
+                ]
+
+                for file_name in filenames:
+                    source_path = source_dir / file_name
+                    relative_path = source_path.relative_to(source_logs_dir)
+                    destination_path = mirrored_logs_dir / relative_path
+                    if self._is_excluded_post_task_proposal_log(relative_path):
+                        continue
+                    if source_path.is_symlink() or not source_path.is_file():
+                        continue
+
+                    destination_path.parent.mkdir(parents=True, exist_ok=True)
                     bounded_content = self._read_bounded_post_task_proposal_log_text(
                         source_path
                     )
@@ -6884,14 +6896,14 @@ class CodexWorker:
 
     @staticmethod
     def _collapse_nested_codex_exec_blocks(content: str) -> str:
-        """Drop repeated nested `codex exec` command blocks from mirrored evidence."""
+        """Drop adjacent repeated `codex exec` command blocks from mirrored evidence."""
 
         lines = content.splitlines(keepends=True)
         if not lines:
             return content
 
         deduped: list[str] = []
-        seen_blocks: set[str] = set()
+        last_block_hash: str | None = None
         index = 0
         while index < len(lines):
             line = lines[index]
@@ -6904,9 +6916,9 @@ class CodexWorker:
                     block_end += 1
                 block_text = "".join(lines[index:block_end])
                 block_hash = hashlib.sha256(block_text.encode("utf-8")).hexdigest()
-                if block_hash not in seen_blocks:
-                    seen_blocks.add(block_hash)
+                if block_hash != last_block_hash:
                     deduped.extend(lines[index:block_end])
+                    last_block_hash = block_hash
                 index = block_end
                 continue
 
@@ -6976,8 +6988,8 @@ class CodexWorker:
         )
         proposal_output_path_str = str(proposal_output_path_for_skill)
         try:
-            task_context_path, artifacts_path = (
-                self._prepare_post_task_proposal_evidence_paths(prepared=prepared)
+            task_context_path, artifacts_path = await asyncio.to_thread(
+                self._prepare_post_task_proposal_evidence_paths, prepared=prepared
             )
         except (OSError, shutil.Error):
             logger.warning(
