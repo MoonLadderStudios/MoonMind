@@ -967,30 +967,41 @@
     return task;
   }
 
-  function extractRuntimeModelFromPayload(payload) {
+  function extractObject(payload, key) {
+    const node = payload && typeof payload === "object" && !Array.isArray(payload) ? pick(payload, key) : null;
+    return node && typeof node === "object" && !Array.isArray(node) ? node : null;
+  }
+
+  function extractRuntimeValueFromPayload(payload, fieldName) {
     const task = extractTaskNode(payload);
-    if (!task) {
-      return null;
+    const taskRuntimeNode = extractObject(task, "runtime");
+    const taskCodexNode = extractObject(task, "codex");
+    const payloadCodexNode = extractObject(payload, "codex");
+    const payloadInputsCodexNode = extractObject(extractObject(payload, "inputs"), "codex");
+
+    const candidateNodes = [
+      taskRuntimeNode,
+      taskCodexNode,
+      payloadCodexNode,
+      payloadInputsCodexNode,
+      payload,
+    ];
+
+    for (const node of candidateNodes) {
+      const normalized = String(pick(node, fieldName) ?? "").trim();
+      if (normalized) {
+        return normalized;
+      }
     }
-    const runtimeNode = pick(task, "runtime");
-    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
-      return null;
-    }
-    const model = pick(runtimeNode, "model");
-    return model ? String(model) : null;
+    return null;
+  }
+
+  function extractRuntimeModelFromPayload(payload) {
+    return extractRuntimeValueFromPayload(payload, "model");
   }
 
   function extractRuntimeEffortFromPayload(payload) {
-    const task = extractTaskNode(payload);
-    if (!task) {
-      return null;
-    }
-    const runtimeNode = pick(task, "runtime");
-    if (!runtimeNode || typeof runtimeNode !== "object" || Array.isArray(runtimeNode)) {
-      return null;
-    }
-    const effort = pick(runtimeNode, "effort");
-    return effort ? String(effort) : null;
+    return extractRuntimeValueFromPayload(payload, "effort");
   }
 
   function extractSkillFromPayload(payload) {
@@ -2585,6 +2596,8 @@
       validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
       hasExplicitSkillSelection,
+      extractRuntimeModelFromPayload,
+      extractRuntimeEffortFromPayload,
       cloneStepStateEntries,
       resetWorkerSubmissionFields,
       readSubmitDraftStorage,
