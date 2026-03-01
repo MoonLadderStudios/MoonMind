@@ -10,7 +10,6 @@ tags:
   - docs
 requiredCapabilities:
   - git
-  - gh
 annotations:
   sourceSkill: speckit-orchestrate
   profile: runtime-first
@@ -188,13 +187,11 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Commit, open PR, and return final report
+  - title: Return final report and defer publish actions
     instructions: |-
       If all gates pass (no NO DETERMINATION and no unresolved CRITICAL/HIGH blockers):
-      1. Create a commit for completed changes.
-      2. Create a pull request with concise scope/remediation/test summary.
-
-      If commit or PR creation fails (auth, remote, or permissions), stop and report exact blocker plus minimum manual commands.
+      1. Do NOT create commits, push branches, or open pull requests from runtime execution.
+      2. Return a final report so MoonMind publish stage can handle commit/PR behavior when enabled.
       Return final report including:
       - Feature path and branch
       - Files edited
@@ -203,10 +200,7 @@ steps:
       - Checklist gate outcome
       - Scope validation outcomes (tasks + diff)
       - DOC-REQ coverage status
-      - Commit hash and PR link/status
+      - Publish handoff status (commit/PR handled by wrapper publish stage)
     skill:
       id: auto
       args: {}
-      requiredCapabilities:
-        - git
-        - gh
