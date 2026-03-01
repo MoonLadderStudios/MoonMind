@@ -638,6 +638,7 @@ async def update_queued_job(
         job = await service.update_queued_job(
             job_id=job_id,
             actor_user_id=user_id,
+            actor_is_superuser=bool(getattr(user, "is_superuser", False)),
             job_type=payload.type,
             payload=payload.payload,
             priority=payload.priority,

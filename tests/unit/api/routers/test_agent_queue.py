@@ -250,6 +250,46 @@ def client() -> Iterator[tuple[TestClient, AsyncMock]]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def superuser_client() -> Iterator[tuple[TestClient, AsyncMock]]:
+    """Provide a TestClient with superuser identity."""
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[_require_worker_auth] = lambda: _WorkerRequestAuth(
+        auth_source="worker_token",
+        worker_id="worker-1",
+        allowed_repositories=(),
+        allowed_job_types=(),
+        capabilities=("codex",),
+    )
+
+    mock_user = SimpleNamespace(
+        id=uuid4(),
+        email="queue-superuser@example.com",
+        is_active=True,
+        is_superuser=True,
+    )
+
+    user_dependencies = {
+        dep.call
+        for route in router.routes
+        if route.dependant is not None
+        for dep in route.dependant.dependencies
+        if dep.call.__name__ == "_current_user_fallback"
+    }
+    if not user_dependencies:
+        user_dependencies = {get_current_user()}
+    for dependency in user_dependencies:
+        app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
+
+    with TestClient(app) as test_client:
+        yield test_client, mock_service
+    app.dependency_overrides.clear()
+
+
 def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     """POST /jobs should return created job payload."""
 
@@ -301,6 +341,30 @@ def test_update_queued_job_success(client: tuple[TestClient, AsyncMock]) -> None
     assert body["status"] == models.AgentJobStatus.QUEUED.value
     assert body["type"] == "task"
     service.update_queued_job.assert_awaited_once()
+    assert service.update_queued_job.await_args.kwargs["actor_is_superuser"] is False
+
+
+def test_update_queued_job_superuser_passes_authorization_flag(
+    superuser_client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Superuser requests should set actor_is_superuser on service updates."""
+
+    test_client, service = superuser_client
+    job = _build_job()
+    job.type = "task"
+    service.update_queued_job.return_value = job
+
+    response = test_client.put(
+        f"/api/queue/jobs/{job.id}",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Update"}},
+        },
+    )
+
+    assert response.status_code == 200
+    service.update_queued_job.assert_awaited_once()
+    assert service.update_queued_job.await_args.kwargs["actor_is_superuser"] is True
 
 
 def test_update_queued_job_state_conflict_maps_409(

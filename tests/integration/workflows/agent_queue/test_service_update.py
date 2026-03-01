@@ -268,6 +268,36 @@ async def test_update_queued_job_rejects_non_owner(tmp_path: Path) -> None:
                 )
 
 
+async def test_update_queued_job_allows_superuser_non_owner(tmp_path: Path) -> None:
+    """Superusers should be able to edit queued jobs they do not own."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            owner_id = uuid4()
+            job = await _create_task_job(service, owner_id=owner_id)
+            superuser_id = uuid4()
+
+            updated = await service.update_queued_job(
+                job_id=job.id,
+                actor_user_id=superuser_id,
+                actor_is_superuser=True,
+                job_type="task",
+                payload={
+                    "repository": "Moon/Test",
+                    "task": {"instructions": "Updated by operator"},
+                },
+            )
+            events = await service.list_events(job_id=job.id, limit=50)
+
+    assert updated.payload["task"]["instructions"] == "Updated by operator"
+    update_events = [event for event in events if event.message == "Job updated"]
+    assert update_events
+    payload = update_events[-1].payload or {}
+    assert payload["actorUserId"] == str(superuser_id)
+
+
 async def test_update_queued_job_rejects_attachment_mutation_payload(
     tmp_path: Path,
 ) -> None:
