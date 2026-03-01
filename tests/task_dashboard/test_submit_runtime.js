@@ -317,6 +317,71 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "medium");
 })();
 
+(function testExtractRuntimeModelAndEffortFromTaskCodexShape() {
+  const payload = {
+    task: {
+      codex: {
+        model: "task-codex-model",
+        effort: "low",
+      },
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-codex-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "low");
+})();
+
+(function testExtractRuntimeModelAndEffortFromPayloadInputsCodexShape() {
+  const payload = {
+    inputs: {
+      codex: {
+        model: "legacy-inputs-model",
+        effort: "medium",
+      },
+    },
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "legacy-inputs-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "medium");
+})();
+
+(function testExtractRuntimeModelAndEffortFromPayloadRootShape() {
+  const payload = {
+    model: "root-model",
+    effort: "high",
+  };
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "root-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "high");
+})();
+
+(function testExtractRuntimeModelAndEffortPrecedence() {
+  const payload = {
+    model: "root-model",
+    effort: "root-effort",
+    codex: {
+      model: "payload-codex-model",
+      effort: "payload-codex-effort",
+    },
+    inputs: {
+      codex: {
+        model: "inputs-codex-model",
+        effort: "inputs-codex-effort",
+      },
+    },
+    task: {
+      codex: {
+        model: "task-codex-model",
+        effort: "task-codex-effort",
+      },
+      runtime: {
+        model: "task-runtime-model",
+        effort: "task-runtime-effort",
+      },
+    },
+  };
+
+  assert.strictEqual(helpers.extractRuntimeModelFromPayload(payload), "task-runtime-model");
+  assert.strictEqual(helpers.extractRuntimeEffortFromPayload(payload), "task-runtime-effort");
+})();
+
 (function testApplyElementVisibilityTogglesHiddenAttributeAndClass() {
   assert.strictEqual(typeof helpers.applyElementVisibility, "function");
   const classNames = new Set(["grid-2"]);

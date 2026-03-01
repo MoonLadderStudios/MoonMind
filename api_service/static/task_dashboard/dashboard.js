@@ -967,33 +967,28 @@
     return task;
   }
 
+  function extractObject(payload, key) {
+    const node = payload && typeof payload === "object" && !Array.isArray(payload) ? pick(payload, key) : null;
+    return node && typeof node === "object" && !Array.isArray(node) ? node : null;
+  }
+
   function extractRuntimeValueFromPayload(payload, fieldName) {
     const task = extractTaskNode(payload);
-    const taskRuntimeNode =
-      task && typeof pick(task, "runtime") === "object" && !Array.isArray(pick(task, "runtime"))
-        ? pick(task, "runtime")
-        : null;
-    const taskCodexNode =
-      task && typeof pick(task, "codex") === "object" && !Array.isArray(pick(task, "codex"))
-        ? pick(task, "codex")
-        : null;
-    const payloadCodexNode =
-      payload && typeof pick(payload, "codex") === "object" && !Array.isArray(pick(payload, "codex"))
-        ? pick(payload, "codex")
-        : null;
+    const taskRuntimeNode = extractObject(task, "runtime");
+    const taskCodexNode = extractObject(task, "codex");
+    const payloadCodexNode = extractObject(payload, "codex");
+    const payloadInputsCodexNode = extractObject(extractObject(payload, "inputs"), "codex");
 
     const candidates = [
-      taskRuntimeNode ? pick(taskRuntimeNode, fieldName) : null,
-      taskCodexNode ? pick(taskCodexNode, fieldName) : null,
-      payloadCodexNode ? pick(payloadCodexNode, fieldName) : null,
-      payload ? pick(payload, fieldName) : null,
+      pick(taskRuntimeNode, fieldName),
+      pick(taskCodexNode, fieldName),
+      pick(payloadCodexNode, fieldName),
+      pick(payloadInputsCodexNode, fieldName),
+      pick(payload, fieldName),
     ];
 
     for (const candidate of candidates) {
-      if (candidate == null) {
-        continue;
-      }
-      const normalized = String(candidate).trim();
+      const normalized = String(candidate ?? "").trim();
       if (normalized) {
         return normalized;
       }
