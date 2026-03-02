@@ -27,6 +27,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManifestJobModel'
+        '422':
+          description: Manifest validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidManifestJob:
+                  summary: Manifest queue validation failure
+                  value:
+                    detail:
+                      code: invalid_manifest_job
+                      message: Manifest metadata.name must match envelope name.
     get:
       summary: List queue jobs (manifest only)
       description: >
@@ -121,6 +134,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManifestRegistryRecord'
+        '422':
+          description: Manifest validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidManifest:
+                  summary: Registry manifest validation failure
+                  value:
+                    detail:
+                      code: invalid_manifest
+                      message: Manifest metadata.name must match resource name.
   /manifests/{name}/runs:
     post:
       summary: Submit a registry-backed manifest run
@@ -427,3 +453,16 @@ components:
         manifestHash:
           type: string
       required: [type, requiredCapabilities]
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required: [code, message]
+      required: [detail]

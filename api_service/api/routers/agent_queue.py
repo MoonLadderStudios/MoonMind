@@ -619,6 +619,16 @@ async def create_job(
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
         )
+    except AgentQueueValidationError as exc:
+        if str(payload.type or "").strip().lower() == "manifest":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_manifest_job",
+                    "message": str(exc),
+                },
+            ) from exc
+        raise _to_http_exception(exc) from exc
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)

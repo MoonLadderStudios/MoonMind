@@ -52,6 +52,7 @@ async def test_list_manifests_serializes_records() -> None:
 
     assert response.items[0].name == "demo"
     assert response.items[0].content_hash == "sha256:abc"
+    assert response.items[0].last_run_status == "queued"
     service.list_manifests.assert_awaited_once_with(limit=10, search=None)
 
 
@@ -70,6 +71,29 @@ async def test_get_manifest_not_found_raises_404() -> None:
             _user=user,
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_manifest_returns_detail() -> None:
+    """get_manifest should preserve manifest detail payload shape."""
+
+    record = _record()
+    service = AsyncMock()
+    service.get_manifest.return_value = record
+    user = SimpleNamespace(id=uuid4())
+
+    response = await manifests_router.get_manifest(
+        name="demo",
+        service=service,
+        _user=user,
+    )
+
+    assert response.name == "demo"
+    assert response.content_hash == "sha256:abc"
+    assert response.last_run is not None
+    assert response.last_run.status == "queued"
+    assert response.state.state_json == {"foo": "bar"}
+    service.get_manifest.assert_awaited_once_with("demo")
 
 
 @pytest.mark.asyncio
@@ -109,6 +133,7 @@ async def test_upsert_manifest_validation_error() -> None:
             _user=user,
         )
     assert exc.value.status_code == 422
+    assert exc.value.detail == {"code": "invalid_manifest", "message": "invalid"}
 
 
 @pytest.mark.asyncio
@@ -132,8 +157,13 @@ async def test_create_manifest_run_returns_queue_metadata() -> None:
     )
 
     assert response.job_id == job.id
+    assert response.queue.type == "manifest"
     assert response.queue.required_capabilities == ["manifest"]
+    assert response.queue.manifest_hash == "sha256:def"
     service.submit_manifest_run.assert_awaited_once()
+    assert service.submit_manifest_run.await_args.kwargs["name"] == "demo"
+    assert service.submit_manifest_run.await_args.kwargs["action"] == "run"
+    assert service.submit_manifest_run.await_args.kwargs["options"] is None
 
 
 @pytest.mark.asyncio
@@ -170,3 +200,4 @@ async def test_create_manifest_run_validation_error() -> None:
             user=user,
         )
     assert exc.value.status_code == 422
+    assert exc.value.detail == {"code": "invalid_manifest_job", "message": "bad job"}
