@@ -138,5 +138,36 @@ class ManifestsService:
         await self._session.commit()
         return job
 
+    async def update_manifest_state(
+        self,
+        *,
+        name: str,
+        state_json: dict[str, Any],
+        last_run_job_id: UUID | None = None,
+        last_run_status: str | None = None,
+        last_run_started_at: datetime | None = None,
+        last_run_finished_at: datetime | None = None,
+    ) -> ManifestRecord:
+        """Persist checkpoint state and optional run metadata for one manifest."""
+
+        record = await self.require_manifest(name)
+        now = datetime.now(UTC)
+        record.state_json = dict(state_json or {})
+        record.state_updated_at = now
+        if last_run_job_id is not None:
+            record.last_run_job_id = last_run_job_id
+        if last_run_status is not None:
+            normalized_status = str(last_run_status).strip()
+            record.last_run_status = normalized_status or None
+        if last_run_started_at is not None:
+            record.last_run_started_at = last_run_started_at
+        if last_run_finished_at is not None:
+            record.last_run_finished_at = last_run_finished_at
+        record.updated_at = now
+        await self._session.flush()
+        await self._session.refresh(record)
+        await self._session.commit()
+        return record
+
 
 __all__ = ["ManifestRegistryNotFoundError", "ManifestsService"]

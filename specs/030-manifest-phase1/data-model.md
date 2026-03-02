@@ -1,141 +1,75 @@
-# Data Model: Manifest Task System Phase 1
+# Data Model: Manifest Task System Phase 1 (Worker Readiness)
 
-**Feature**: Manifest Task System Phase 1  
-**Branch**: `030-manifest-phase1`
+**Feature**: Manifest Task System Phase 1 (Worker Readiness)  
+**Date**: March 1, 2026  
+**Spec**: `specs/030-manifest-phase1/spec.md`
 
-## Entity: ManifestV0
+## Entities
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `version` | Enum (`"v0"`) | Yes | Only v0 manifests accepted in Phase 1 (DOC-REQ-001, DOC-REQ-013) |
-| `metadata` | Object | Yes | Includes `name`, optional `description`, `owners`; `metadata.name` must match queue payload `manifest.name` |
-| `dataSources` | List[`DataSourceSpec`] | Yes | Each entry describes adapter type, id, params, allowlisted metadata, and optional incremental cursor hints |
-| `embeddings` | `EmbeddingsSpec` | Yes | Provider/model/dimensions plus batching controls; drives embeddings factory (DOC-REQ-005) |
-| `vectorStore` | `VectorStoreSpec` | Yes | Qdrant configuration (host, port/API key ref, `indexName`, `allowCreateCollection`, metric/dim); DOC-REQ-006 |
-| `transforms` | `TransformPipeline` | Optional | Specifies `htmlToText`, `splitter`, `enrichMetadata` selections (DOC-REQ-004/007) |
-| `run` | `RunConfig` | Optional | Default concurrency/batchSize parameters merged with queue overrides |
-| `security` | Object | Optional | Metadata allowlist + secret resolution strategy (env/profile/vault) |
+### 1. ManifestSecretResolutionRequest
 
-### Sub-entity: DataSourceSpec
+Worker-request payload accepted by `POST /api/queue/jobs/{jobId}/manifest/secrets`.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | String | Yes | Stable identifier used in point IDs + checkpoint keys |
-| `type` | Enum (`GithubRepositoryReader`, `GoogleDriveReader`, `ConfluenceReader`, `SimpleDirectoryReader`) | Yes | Determines adapter + capability token (DOC-REQ-003) |
-| `params` | Object | Yes | Adapter-specific settings (repo path, Drive folder ID, Confluence space/page filters, root directory) |
-| `allowlistMetadata` | List[String] | Optional | Additional metadata fields to persist for this source |
-| `state` | Object | Optional | Adapter-defined cursor hints saved within checkpoints |
+- `includeProfile` (bool, default `true`): whether to resolve profile/env-backed refs.
+- `includeVault` (bool, default `true`): whether to return vault ref metadata.
 
-### Sub-entity: EmbeddingsSpec
+### 2. ManifestSecretProfileValue
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `provider` | Enum (`openai`, `google`, `ollama`) | Yes | Selects embedding backend + capability token |
-| `model` | String | Yes | Provider-specific embedding model |
-| `dimensions` | Integer | Optional | Overrides autodetected dimension; validated against Qdrant collection |
-| `batchSize` | Integer | Optional | Controls embedding throughput per request |
-| `maxConcurrentRequests` | Integer | Optional | Caps concurrency for rate limiting |
+One resolved profile/env-backed secret returned to the worker.
 
-### Sub-entity: VectorStoreSpec
+- `provider` (optional string)
+- `field` (optional string)
+- `envKey` (string)
+- `normalized` (optional string)
+- `value` (string, resolved secret)
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | Enum (`qdrant`) | Yes | Phase 1 scope |
-| `indexName` | String | Yes | Qdrant collection name |
-| `allowCreateCollection` | Boolean | Optional | Enables dynamic collection creation when absent |
-| `connection` | Object | Yes | Env/profile/vault references for Qdrant host/port/API key |
-| `distance` | Enum (`cosine`, `dot`, `euclidean`) | Optional | Validated to match manifest embeddings |
+### 3. ManifestSecretVaultValue
 
-### Sub-entity: TransformPipeline
+One vault reference returned unchanged for worker-side Vault resolution.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `htmlToText` | Boolean | Optional | Enables BeautifulSoup stripping before chunking |
-| `splitter` | Object | Optional | `TokenTextSplitter` config (`chunkSize`, `chunkOverlap`) |
-| `enrichMetadata` | List[String] | Optional | Deterministic enrichments (PathToTags, InferDocType) |
+- `mount` (optional string)
+- `path` (optional string)
+- `field` (optional string)
+- `ref` (string)
 
-## Value Object: SourceDocument
+### 4. ManifestSecretResolutionResponse
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `source_doc_id` | String | Stable, adapter-defined identifier (e.g., `repo/path@sha`) |
-| `content` | String | Raw or normalized content (pre-transform) |
-| `metadata` | Dict | Adapter-provided safe metadata subject to allowlists |
-| `content_hash` | String | Hash used to skip unchanged documents |
+Envelope returned by manifest secret resolution endpoint.
 
-## Value Object: SourceChange
+- `profile` (list of `ManifestSecretProfileValue`)
+- `vault` (list of `ManifestSecretVaultValue`)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `kind` | Enum (`upsert`, `delete`) | Determines downstream action |
-| `doc` | `SourceDocument` | Present when `kind="upsert"` |
-| `source_doc_id` | String | Provided when `kind="delete"` for targeted deletions |
+### 5. ManifestStateUpdateRequest
 
-## Entity: ChunkRecord
+Callback payload accepted by `POST /api/manifests/{name}/state`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `manifest_name` | String | Provided for namespacing (DOC-REQ-007) |
-| `data_source_id` | String | Source identifier |
-| `source_doc_id` | String | Stable doc id |
-| `chunk_index` | Integer | Sequential chunk number |
-| `chunk_text` | String | Post-transform text passed to embeddings |
-| `chunk_hash` | String | Hash of chunk_text |
-| `doc_hash` | String | Copy of SourceDocument hash for quick filtering |
-| `metadata` | Dict | Allowlisted metadata entries only |
-| `point_id` | String | Deterministic SHA-256 of manifest/source/doc/chunk/provider/model (DOC-REQ-008) |
+- `stateJson` (object, required)
+- `lastRunJobId` (optional UUID)
+- `lastRunStatus` (optional string)
+- `lastRunStartedAt` (optional datetime)
+- `lastRunFinishedAt` (optional datetime)
 
-## Entity: CheckpointState
+### 6. ManifestRecord (existing table, updated fields)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `manifest_name` | String | Registry key |
-| `data_source_states` | Dict[String, DataSourceState] | Per adapter snapshot |
-| `updated_at` | Timestamp | UTC timestamp recorded in `state_updated_at` |
+Existing `manifest` table row updated by this phase.
 
-### Sub-entity: DataSourceState
+- `state_json` (jsonb / mutable dict)
+- `state_updated_at` (timestamp)
+- `last_run_job_id` (UUID, optional)
+- `last_run_status` (string, optional)
+- `last_run_started_at` (timestamp, optional)
+- `last_run_finished_at` (timestamp, optional)
+- `updated_at` (timestamp)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `cursor` | Dict | Adapter-defined cursor (e.g., Drive page token, Confluence timestamp) |
-| `doc_hashes` | Dict[String, String] | Map of `source_doc_id` → `doc_hash` for last successful run |
-| `last_run_started_at` | Timestamp | Mirror of registry metadata |
-| `last_run_finished_at` | Timestamp | Mirror of registry metadata |
+## State Transitions
 
-## Entity: StageEventPayload (SSE + queue events)
+### Secret Resolution Guard
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `event` | Enum (`moonmind.manifest.validate`, `moonmind.manifest.plan`, `moonmind.manifest.fetch`, `moonmind.manifest.transform`, `moonmind.manifest.embed`, `moonmind.manifest.upsert`, `moonmind.manifest.finalize`) | Yes | Stage identifier (DOC-REQ-011) |
-| `manifestName` | String | Yes | Manifest identifier |
-| `dataSourceId` | String | Optional | Provided for stage-specific metrics |
-| `documentsFetched` | Integer | Optional | Stage counters |
-| `documentsChanged` | Integer | Optional | Stage counters |
-| `documentsDeleted` | Integer | Optional | Stage counters |
-| `chunksGenerated` | Integer | Optional | Stage counters |
-| `chunksEmbedded` | Integer | Optional | Stage counters |
-| `pointsUpserted` | Integer | Optional | Stage counters |
-| `pointsDeleted` | Integer | Optional | Stage counters |
-| `durationMs` | Integer | Optional | Stage wall clock durations |
-| `status` | Enum (`running`, `succeeded`, `failed`, `cancelled`) | Yes | Stage status |
-| `artifactPaths` | List[String] | Optional | S3/object-store keys referenced by queue API |
+`queued` or `failed` jobs -> rejected for secret resolution.  
+`running` + claimed by calling worker -> eligible for secret resolution.
 
-## Artifact Contract
+### Manifest State Callback
 
-| Artifact Path | Description |
-|---------------|-------------|
-| `logs/manifest.log` | Streaming worker log (redacted) for the run |
-| `manifest/input.yaml` | Submitted manifest YAML (redacted) |
-| `manifest/resolved.yaml` | Resolved manifest after interpolation (references only) |
-| `reports/plan.json` | Output of `engine.plan` (estimated docs/bytes) |
-| `reports/run_summary.json` | Final counts for fetch/transform/embed/upsert/delete |
-| `reports/checkpoint.json` | Updated checkpoint state applied to registry |
-| `reports/errors.json` | Failure details when run aborts/cancels |
-
-## Validation Rules
-
-1. `ManifestV0` must include at least one `dataSource` and one embeddings/vectorStore block; provider/model + vector dimensions must align before a run can start.
-2. `SourceDocument.content_hash` and `ChunkRecord.point_id` must both use SHA-256 to ensure deterministic upsert/delete semantics (DOC-REQ-008).
-3. Metadata persisted in Qdrant must pass the allowlist defined either globally (`security.allowlistMetadata`) or per data source; unknown keys are dropped before embedding (DOC-REQ-007).
-4. Checkpoint writes only occur after `moonmind.manifest.finalize` reports success; cancellations or failures keep the previous checkpoint intact.
-5. Event payloads must redact secrets, emit stage counts in ascending order, and include artifact references only after uploads succeed (DOC-REQ-011/012).
+- On valid callback, `state_json` and `state_updated_at` are overwritten with latest values.
+- Optional last-run metadata fields are updated only when supplied.
+- `updated_at` is always refreshed on successful callback.

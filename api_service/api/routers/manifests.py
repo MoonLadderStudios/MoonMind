@@ -15,6 +15,7 @@ from api_service.api.schemas import (
     ManifestRunQueueMetadata,
     ManifestRunRequest,
     ManifestRunResponse,
+    ManifestStateUpdateRequest,
     ManifestStateModel,
     ManifestSummaryModel,
     ManifestUpsertRequest,
@@ -170,3 +171,32 @@ async def create_manifest_run(
         manifest_hash=queue_payload.get("manifestHash"),
     )
     return ManifestRunResponse(job_id=job.id, queue=queue_metadata)
+
+
+@router.post("/{name}/state", response_model=ManifestDetailModel)
+async def update_manifest_state(
+    name: str,
+    payload: ManifestStateUpdateRequest,
+    service: ManifestsService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> ManifestDetailModel:
+    """Persist worker checkpoint state and optional run metadata."""
+
+    try:
+        record = await service.update_manifest_state(
+            name=name,
+            state_json=payload.state_json,
+            last_run_job_id=payload.last_run_job_id,
+            last_run_status=payload.last_run_status,
+            last_run_started_at=payload.last_run_started_at,
+            last_run_finished_at=payload.last_run_finished_at,
+        )
+    except ManifestRegistryNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "manifest_not_found",
+                "message": f"Manifest '{name}' not found",
+            },
+        ) from exc
+    return _serialize_detail(record)

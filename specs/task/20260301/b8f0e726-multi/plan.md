@@ -119,24 +119,6 @@ tests/
 - Tasks must retain runtime code + tests; docs/spec-only task sets are non-compliant.
 - Validation scope checks should stay in runtime mode behavior for this feature.
 
-## Prompt B Remediation Application (Step 12/16)
-
-### Completed CRITICAL/HIGH remediations
-
-- Runtime mode scope gate is explicitly satisfied by production runtime code tasks (`T001-T004`, `T006-T007`, `T010`) and validation tasks (`T005`, `T008-T009`, `T011-T013`) in `tasks.md`.
-- `DOC-REQ-*` traceability includes deterministic implementation-task and validation-task mappings for `DOC-REQ-001` through `DOC-REQ-004` in `contracts/requirements-traceability.md`.
-- Cross-artifact determinism is preserved: spec runtime intent, plan constraints, and task execution coverage align without contradictory docs-only scope language.
-
-### Completed MEDIUM/LOW remediations
-
-- Added explicit Prompt B scope controls section in `tasks.md` so runtime and validation expectations stay auditable.
-- Normalized schema ownership references in tasks/traceability to match the current codebase (`moonmind/schemas/agent_queue_models.py` and `api_service/api/schemas.py`).
-
-### Residual risks
-
-- Deferred `manifest_v0` runtime execution remains an integration dependency for future phases.
-- Runtime secret availability still depends on profile provider data quality; unresolved refs intentionally fail fast to protect execution correctness.
-
 ## Risks & Mitigations
 
 - **Secret leakage risk**: mitigate with capability + ownership guards and denied-path tests.

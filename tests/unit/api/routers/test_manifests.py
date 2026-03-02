@@ -170,3 +170,46 @@ async def test_create_manifest_run_validation_error() -> None:
             user=user,
         )
     assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_manifest_state_returns_detail() -> None:
+    """update_manifest_state should serialize persisted checkpoint data."""
+
+    record = _record(state_json={"docs": {"cursor": "abc"}})
+    service = AsyncMock()
+    service.update_manifest_state.return_value = record
+    user = SimpleNamespace(id=uuid4())
+
+    payload = manifests_router.ManifestStateUpdateRequest(
+        state_json={"docs": {"cursor": "abc"}},
+        last_run_status="succeeded",
+    )
+    response = await manifests_router.update_manifest_state(
+        name="demo",
+        payload=payload,
+        service=service,
+        _user=user,
+    )
+
+    assert response.name == "demo"
+    assert response.state.state_json == {"docs": {"cursor": "abc"}}
+    service.update_manifest_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_manifest_state_not_found() -> None:
+    """Missing manifests should return 404 from state update endpoint."""
+
+    service = AsyncMock()
+    service.update_manifest_state.side_effect = ManifestRegistryNotFoundError("missing")
+    user = SimpleNamespace(id=uuid4())
+
+    with pytest.raises(HTTPException) as exc:
+        await manifests_router.update_manifest_state(
+            name="missing",
+            payload=manifests_router.ManifestStateUpdateRequest(state_json={}),
+            service=service,
+            _user=user,
+        )
+    assert exc.value.status_code == 404

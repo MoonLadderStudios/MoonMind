@@ -21,7 +21,7 @@ from api_service.api.routers.agent_queue import (
     router,
     stream_job_events,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_auth_manager, get_current_user
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.repositories import (
@@ -692,6 +692,225 @@ def test_create_manifest_job_validation_error(
                 }
             },
         },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+
+
+def test_resolve_manifest_job_secrets_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Running claimed manifest jobs should return resolved profile + vault refs."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    job.status = models.AgentJobStatus.RUNNING
+    job.claimed_by = "worker-1"
+    job.requested_by_user_id = uuid4()
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    mock_auth_manager.get_secret.return_value = "resolved-secret"
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("manifest", "qdrant"),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["profile"] == [
+        {
+            "provider": "openai",
+            "field": "api_key",
+            "envKey": "OPENAI_API_KEY",
+            "normalized": "profile://openai#api_key",
+            "value": "resolved-secret",
+        }
+    ]
+    assert body["vault"] == [
+        {
+            "mount": "kv",
+            "path": "manifests/demo-manifest",
+            "field": "token",
+            "ref": "vault://kv/manifests/demo-manifest#token",
+        }
+    ]
+    assert mock_auth_manager.get_secret.await_count == 1
+
+
+def test_resolve_manifest_job_secrets_requires_manifest_capability(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Workers missing manifest capability should be rejected."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    job.status = models.AgentJobStatus.RUNNING
+    job.claimed_by = "worker-1"
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("codex",),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    mock_auth_manager.get_secret.assert_not_awaited()
+
+
+def test_resolve_manifest_job_secrets_requires_job_ownership(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Workers must own the running manifest job before any secret resolution."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    job.status = models.AgentJobStatus.RUNNING
+    job.claimed_by = "worker-2"
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("manifest",),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    mock_auth_manager.get_secret.assert_not_awaited()
+
+
+def test_resolve_manifest_job_secrets_rejects_non_manifest_jobs(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Non-manifest jobs should fail fast without resolving any secret refs."""
+
+    test_client, service = client
+    job = _build_job(status=models.AgentJobStatus.RUNNING)
+    job.claimed_by = "worker-1"
+    job.payload = {"manifestSecretRefs": {"profile": [], "vault": []}}
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("manifest",),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+    mock_auth_manager.get_secret.assert_not_awaited()
+
+
+def test_resolve_manifest_job_secrets_tolerates_malformed_manifest_secret_refs(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Malformed manifestSecretRefs sections should not crash and should return empty lists."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    job.status = models.AgentJobStatus.RUNNING
+    job.claimed_by = "worker-1"
+    job.payload["manifestSecretRefs"] = {"profile": "bad-shape", "vault": {"ref": "bad"}}
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("manifest",),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"profile": [], "vault": []}
+    mock_auth_manager.get_secret.assert_not_awaited()
+
+
+def test_resolve_manifest_job_secrets_fails_when_profile_ref_unresolved(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Unresolved profile refs should fail fast with HTTP 422."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    job.status = models.AgentJobStatus.RUNNING
+    job.claimed_by = "worker-1"
+    job.requested_by_user_id = uuid4()
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    mock_auth_manager.get_secret.return_value = None
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("manifest",),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
