@@ -858,7 +858,10 @@ def test_resolve_manifest_job_secrets_tolerates_malformed_manifest_secret_refs(
     job = _build_manifest_job()
     job.status = models.AgentJobStatus.RUNNING
     job.claimed_by = "worker-1"
-    job.payload["manifestSecretRefs"] = {"profile": "bad-shape", "vault": {"ref": "bad"}}
+    job.payload["manifestSecretRefs"] = {
+        "profile": "bad-shape",
+        "vault": {"ref": "bad"},
+    }
     service.get_job.return_value = job
 
     mock_auth_manager = AsyncMock()

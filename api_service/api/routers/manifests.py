@@ -15,8 +15,8 @@ from api_service.api.schemas import (
     ManifestRunQueueMetadata,
     ManifestRunRequest,
     ManifestRunResponse,
-    ManifestStateUpdateRequest,
     ManifestStateModel,
+    ManifestStateUpdateRequest,
     ManifestSummaryModel,
     ManifestUpsertRequest,
 )
