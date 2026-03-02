@@ -7090,10 +7090,7 @@ async def test_prepare_git_identity_preflight_allows_commit_without_global_ident
         env=env,
     )
     assert configured_name.stdout.strip() == "MoonMind Worker"
-    assert (
-        configured_email.stdout.strip()
-        == "moonmind-worker@users.noreply.github.com"
-    )
+    assert configured_email.stdout.strip() == "moonmind-worker@users.noreply.github.com"
 
 
 async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> None:
