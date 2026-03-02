@@ -1,102 +1,110 @@
-# Data Model: Manifest Task System Phase 0
+# Data Model: Manifest Phase 0 Rebaseline
 
-**Feature**: Manifest Task System Phase 0  
+**Feature**: `031-manifest-phase0`  
 **Branch**: `031-manifest-phase0`
 
-## Entity: ManifestQueueJobPayload (Agent Queue `payload`)
+## Entity: Persisted Manifest Queue Payload (`agent_queue.payload`)
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `manifest` | `ManifestEnvelope` | ✅ | Canonical manifest metadata persisted with the job |
-| `manifestHash` | `sha256:<digest>` string | ✅ | Hash of the YAML captured at submission time |
-| `manifestVersion` | Enum (`v0`, `legacy`) | ✅ | Version parsed from YAML (`v0` only for Phase 0) |
-| `requiredCapabilities` | List\<string> | ✅ | Server-derived capability tokens used for worker gating |
-| `effectiveRunConfig` | Object | ✅ | Manifest `run` block merged with queue overrides (`dryRun`, `forceFull`, `maxDocs`) |
-
-### Sub-entity: ManifestEnvelope
-
-| Field | Type | Required | Rules |
-|-------|------|----------|-------|
-| `name` | String | ✅ | Must equal `metadata.name` from YAML |
-| `action` | Enum (`plan`, `run`) | ✅ | Phase 0 supports `plan` & `run`; `evaluate` rejected |
-| `source` | `ManifestSource` | ✅ | How workers obtain YAML (inline or registry) |
-| `options` | Object | ❌ | Optional overrides limited to the allowlist |
-
-### Sub-entity: ManifestSource
+This is the normalized payload persisted by `normalize_manifest_job_payload()`.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `kind` | Enum (`inline`, `registry`) | ✅ | Supported source kinds for Phase 0 |
-| `content` | String | Inline only | Raw YAML stored only when `kind="inline"` (never exposed via API responses) |
-| `name` | String | Registry only | Registry entry key (defaults to `manifest.name`) |
-| `contentHash` | String | ✅ | Mirrors `manifestHash` for worker-side cache validation |
-| `version` | String | ✅ | Mirrors `manifestVersion` for worker-safety checks |
+| `manifest` | object | Yes | Canonical envelope for name/action/source/options. |
+| `manifestHash` | string (`sha256:<digest>`) | Yes | Hash of source YAML used at submission time. |
+| `manifestVersion` | string | Yes | Currently `v0` only for Phase 0 acceptance. |
+| `requiredCapabilities` | array<string> | Yes | Server-derived routing labels; must be non-empty for claim eligibility. |
+| `effectiveRunConfig` | object | Yes | Manifest `run` block merged with allowed queue option overrides. |
+| `manifestSecretRefs` | object | No | Optional deduplicated `profile`/`vault` secret-reference metadata. |
 
-## Entity: ManifestRecord (PostgreSQL `manifest` table)
+### Sub-entity: `manifest`
+
+| Field | Type | Required | Validation |
+|-------|------|----------|------------|
+| `name` | string | Yes | Must be non-empty and equal YAML `metadata.name`. |
+| `action` | enum | Yes | `plan` or `run` only. |
+| `source` | object | Yes | See source-kind model below. |
+| `options` | object | Yes (can be empty) | Only `dryRun`, `forceFull`, `maxDocs` allowed. |
+
+### Sub-entity: `manifest.source` (persisted form)
+
+| Kind | Required fields | Persisted fields |
+|------|------------------|------------------|
+| `inline` | `content` | `kind`, `content`, `contentHash`, `version` |
+| `registry` | `name`, `content` (for normalization input) | `kind`, `name`, `contentHash`, `version` (`content` removed before persistence) |
+| `path` (guarded) | `path`, `content` | `kind`, `path`, `content`, `contentHash`, `version` |
+
+`path` support is gated by `spec_workflow.allow_manifest_path_source` and defaults to disabled.
+
+## Entity: Sanitized Queue API Payload (`JobModel.payload` for `type="manifest"`)
+
+Queue APIs return `sanitize_manifest_payload(payload)` output rather than the raw persisted payload.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `manifest` | object | Usually | Includes `name`, `action`, `source.kind`, optional `source.name`, optional `source.path`, optional `options`. |
+| `manifestHash` | string | No | Present when normalized payload had hash metadata. |
+| `manifestVersion` | string | No | Present when normalized payload had version metadata. |
+| `requiredCapabilities` | array<string> | No | Lowercased and de-duplicated in serializer. |
+| `effectiveRunConfig` | object | No | Copied from normalized payload when present. |
+| `manifestSecretRefs` | object | No | Sanitized/deduped profile and vault refs only. |
+
+Notably absent from API responses: `manifest.source.content` and source-level hash/version fields.
+
+## Entity: Manifest Registry Record (`manifest` table)
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| `id` | Serial PK | ✅ | Internal identifier |
-| `name` | String(255), unique | ✅ | Registry key referenced by API routes |
-| `content` | Text | ✅ | Latest validated YAML |
-| `content_hash` | String(80) | ✅ | `sha256:` hash captured via normalization |
-| `version` | String(32) | ✅ | `"v0"` default (FR-011) |
-| `created_at` / `updated_at` | timestamptz | ✅ | Audit timestamps added in migration `202602190003` |
-| `last_indexed_at` | timestamptz | ❌ | Legacy compatibility |
-| `last_run_job_id` | UUID | ❌ | Last queue job generated from this manifest |
-| `last_run_status` | String(32) | ❌ | Mirrors queue job status |
-| `last_run_started_at` / `last_run_finished_at` | timestamptz | ❌ | Run telemetry for dashboards |
-| `state_json` | JSONB | ❌ | Placeholder for checkpoint payloads (Phase 1+) |
-| `state_updated_at` | timestamptz | ❌ | Timestamp for the last checkpoint mutation |
+| `id` | integer PK | Yes | Internal identifier. |
+| `name` | string(255), unique | Yes | Registry key and route parameter. |
+| `content` | text | Yes | Latest validated manifest YAML. |
+| `content_hash` | string(80) | Yes | `sha256:` hash from normalization. |
+| `version` | string(32) | Yes | Default and expected current value: `v0`. |
+| `created_at` | timestamptz | Yes | Creation timestamp. |
+| `updated_at` | timestamptz | Yes | Last update timestamp. |
+| `last_run_job_id` | uuid | No | Last queue job submitted from this record. |
+| `last_run_status` | string(32) | No | Last known queue status snapshot. |
+| `last_run_started_at` | timestamptz | No | Last run start timestamp. |
+| `last_run_finished_at` | timestamptz | No | Last run finish timestamp. |
+| `state_json` | JSON/JSONB | No | Checkpoint/state payload placeholder for later phases. |
+| `state_updated_at` | timestamptz | No | State metadata update timestamp. |
+| `last_indexed_at` | timestamptz | No | Legacy compatibility field retained. |
 
-## Value Objects
+## Value Objects: Manifest Run API
 
-### ManifestRunOptions (API request body)
+### `ManifestRunOptions`
 
-| Field | Type | Constraints |
-|-------|------|-------------|
-| `dryRun` | Boolean | Optional |
-| `forceFull` | Boolean | Optional |
-| `maxDocs` | Integer | Optional, must be ≥ 1 when provided |
+| Field | Type | Required | Rule |
+|-------|------|----------|------|
+| `dryRun` | boolean | No | Optional override. |
+| `forceFull` | boolean | No | Optional override. |
+| `maxDocs` | integer | No | Must be `>= 1` when provided. |
 
-### ManifestRunQueueMetadata (API response fragment)
+### `ManifestRunResponse.queue`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | String | Always `"manifest"` |
-| `requiredCapabilities` | List\<string> | Derived capability labels returned to clients |
-| `manifestHash` | String | Copy of normalized hash for audit comparisons |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Always `manifest`. |
+| `requiredCapabilities` | array<string> | Yes | Derived capabilities copied from queued payload. |
+| `manifestHash` | string | No | Normalized hash from queued payload. |
 
 ## Capability Mapping Rules
 
-| Manifest Field | Mapping Logic | Example Output |
-|----------------|--------------|----------------|
-| `embeddings.provider` | Always emit `embeddings` plus provider token (`openai`, `google`, `ollama`) | `openai` → `["manifest","embeddings","openai", …]` |
-| `vectorStore.type` | Use `VECTOR_STORE_CAPABILITIES` map | `qdrant` → `qdrant` |
-| `dataSources[].type` | Case-insensitive map | `GithubRepositoryReader` → `github`, `GoogleDriveReader` → `gdrive`, `ConfluenceReader` → `confluence`, `SimpleDirectoryReader` → `local_fs` |
+| Manifest input | Mapping |
+|----------------|---------|
+| Base capability config | `settings.spec_workflow.manifest_required_capabilities` (default `manifest`) |
+| `embeddings.provider` | Adds `embeddings` and provider token (`openai`, `google`, `ollama`) |
+| `vectorStore.type` | Adds mapped token (`qdrant`, `pgvector`, `milvus`) |
+| `dataSources[].type` | Adds mapped token (`github`, `gdrive`, `confluence`, `local_fs`) |
 
-Unknown adapters/stores cause `ManifestContractError` so unsupported manifests never enter the queue.
-
-## Secret-Safety Contract (FR-007)
-
-- Allowed references:  
-  - `${ENV_VAR}` placeholders resolved by worker environments.  
-  - `profile://provider#field` profile references.  
-  - `vault://<mount>/<path>#<field>` Vault references (same syntax as existing task secret refs).  
-- Detection heuristics (non-exhaustive) applied recursively across manifest YAML and queue overrides:  
-  - Prefixes: `sk-`, `sk_live_`, `ghp_`, `gho_`, `AIza`, `AKIA`, `ASIA`, `EAAC`, `xoxp-`, `xoxb-`.  
-  - Substrings such as `token=`, `secret=`, `password=`, `api_key=` (case-insensitive).  
-  - JWT-looking strings (`xxxxx.yyyyy.zzzzz`) and ≥40-character base64-ish blobs without allowable wrappers.  
-  - Raw values under known sensitive keys (`auth`, `connection`, `credentials`) unless they are valid vault/profile/env references.  
-- Violations raise `ManifestContractError("manifest contains raw secret material")` before the job or registry record is persisted.
+Unknown provider/store/source types fail normalization with `ManifestContractError`.
 
 ## Validation Rules Summary
 
-1. `manifest.name` MUST match `metadata.name` (DOC-REQ-002).  
-2. Only version `"v0"` manifests are accepted for Phase 0 (legacy manifests rejected).  
-3. `manifest.source.kind` limited to `inline` or `registry`; inline content cannot be blank.  
-4. `manifest.options` keys limited to `dryRun`, `forceFull`, `maxDocs`; `maxDocs` ≥ 1 if provided.  
-5. Queue payloads MUST include `requiredCapabilities`; worker claims succeed only when their capability set is a superset.  
-6. Inline YAML never leaves the server—API serializers always call `sanitize_manifest_payload()` so dashboards see only hashes + metadata.  
-7. Secret detection MUST pass for both inline submissions and registry upserts (FR-007).  
-8. Registry mutation timestamps + checkpoint columns must be populated via the Alembic migration to unblock future manifest worker phases (FR-011).
+1. Payload must include `manifest` object with non-empty `manifest.name`.
+2. `manifest.action` supports only `plan` and `run`.
+3. YAML must parse to an object and declare `version: "v0"`.
+4. `manifest.name` must match YAML `metadata.name`.
+5. Source kind must be supported (`inline`, `registry`, and guarded `path`).
+6. `manifest.options` only supports `dryRun`, `forceFull`, `maxDocs`; invalid keys fail fast.
+7. Raw secret-like values are rejected before persistence; env/profile/vault references are allowed.
+8. Claim eligibility requires `requiredCapabilities` to be present and to be a subset of worker capabilities.

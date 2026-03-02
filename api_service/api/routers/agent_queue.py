@@ -548,6 +548,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
+        raw_message = str(exc).strip()
         lowered = str(exc).lower()
         if "targetruntime=claude requires anthropic_api_key" in lowered:
             return HTTPException(
@@ -579,6 +580,9 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
+        elif "manifest" in lowered and raw_message:
+            # Surface actionable manifest contract failures to API clients.
+            message = raw_message
         return HTTPException(
             status_code=status_code,
             detail={

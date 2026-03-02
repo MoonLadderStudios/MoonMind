@@ -695,7 +695,9 @@ def test_create_manifest_job_validation_error(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_queue_payload"
+    assert detail["message"] == "invalid manifest"
 
 
 def test_claim_job_empty_queue_returns_null(

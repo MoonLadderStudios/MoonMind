@@ -109,6 +109,7 @@ async def test_upsert_manifest_validation_error() -> None:
             _user=user,
         )
     assert exc.value.status_code == 422
+    assert exc.value.detail["message"] == "invalid"
 
 
 @pytest.mark.asyncio

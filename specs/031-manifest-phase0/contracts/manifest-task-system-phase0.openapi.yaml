@@ -1,19 +1,22 @@
 openapi: 3.0.3
 info:
   title: MoonMind Manifest Task System Phase 0
-  version: 0.1.0
+  version: 0.2.0
   description: >
-    Control-plane APIs required to submit manifest queue jobs, manage the
-    manifest registry, and retrieve sanitized queue metadata per
-    `docs/ManifestTaskSystem.md` (§6–§7, §11).
+    Phase 0 control-plane APIs for manifest queue submission, manifest registry
+    CRUD, and registry-backed run creation. Contract reflects current runtime
+    behavior in MoonMind queue/registry modules.
 servers:
   - url: /api
 paths:
   /queue/jobs:
     post:
-      summary: Submit an Agent Queue job
-      description: Create a `manifest` job using inline YAML. Payload is validated, normalized, capability-tagged, and sanitized before persistence.
-      operationId: createManifestJob
+      summary: Submit a manifest queue job
+      operationId: createManifestQueueJob
+      description: >
+        Creates a queue job with `type=manifest`. Payload is normalized by the
+        server contract, capability metadata is derived server-side, and invalid
+        manifests fail with 422.
       requestBody:
         required: true
         content:
@@ -28,11 +31,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ManifestJobModel'
         '422':
-          description: Invalid manifest payload (name mismatch, secret detected, unsupported adapter, etc.)
+          description: Invalid queue payload
     get:
-      summary: List manifest jobs
-      description: Filter queue jobs by `type=manifest` to observe sanitized payload metadata (hash, version, capabilities) without revealing YAML content.
-      operationId: listManifestJobs
+      summary: List queue jobs filtered to manifests
+      operationId: listManifestQueueJobs
       parameters:
         - in: query
           name: type
@@ -60,6 +62,7 @@ paths:
                     items:
                       $ref: '#/components/schemas/ManifestJobModel'
                 required: [items]
+
   /manifests:
     get:
       summary: List manifest registry entries
@@ -76,17 +79,17 @@ paths:
           name: search
           schema:
             type: string
-            description: Optional prefix search
       responses:
         '200':
-          description: Registry entries
+          description: Registry list
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManifestListResponse'
+
   /manifests/{name}:
     get:
-      summary: Fetch a manifest
+      summary: Fetch a manifest registry record
       operationId: getManifest
       parameters:
         - $ref: '#/components/parameters/ManifestName'
@@ -101,7 +104,7 @@ paths:
           description: Manifest not found
     put:
       summary: Upsert manifest YAML
-      operationId: putManifest
+      operationId: upsertManifest
       parameters:
         - $ref: '#/components/parameters/ManifestName'
       requestBody:
@@ -113,32 +116,33 @@ paths:
               properties:
                 content:
                   type: string
-                  description: Raw YAML (validated server-side; rejects name mismatches and raw secrets)
+                  minLength: 1
               required: [content]
       responses:
         '200':
-          description: Manifest stored
+          description: Manifest upserted
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManifestRegistryRecord'
         '422':
           description: Invalid manifest payload
+
   /manifests/{name}/runs:
     post:
-      summary: Trigger a registry-backed manifest run
+      summary: Submit a registry-backed manifest run
       operationId: createManifestRun
       parameters:
         - $ref: '#/components/parameters/ManifestName'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ManifestRunRequest'
       responses:
         '201':
-          description: Queue job created
+          description: Manifest run queued
           content:
             application/json:
               schema:
@@ -146,7 +150,7 @@ paths:
         '404':
           description: Manifest not found
         '422':
-          description: Validation error (invalid manifest/options/secret leak)
+          description: Validation error
 
 components:
   parameters:
@@ -156,7 +160,7 @@ components:
       required: true
       schema:
         type: string
-      description: Registry key (must match manifest `metadata.name`)
+      description: Registry key and manifest name.
 
   schemas:
     ManifestJobCreateRequest:
@@ -195,11 +199,13 @@ components:
       oneOf:
         - $ref: '#/components/schemas/ManifestSourceInline'
         - $ref: '#/components/schemas/ManifestSourceRegistry'
+        - $ref: '#/components/schemas/ManifestSourcePath'
       discriminator:
         propertyName: kind
         mapping:
           inline: '#/components/schemas/ManifestSourceInline'
           registry: '#/components/schemas/ManifestSourceRegistry'
+          path: '#/components/schemas/ManifestSourcePath'
 
     ManifestSourceInline:
       type: object
@@ -209,10 +215,7 @@ components:
           enum: [inline]
         content:
           type: string
-          description: Raw YAML (server-side validation strips token-like strings)
-        name:
-          type: string
-          description: Optional alias; defaults to manifest name
+          description: Raw YAML manifest body.
       required: [kind, content]
 
     ManifestSourceRegistry:
@@ -223,8 +226,26 @@ components:
           enum: [registry]
         name:
           type: string
-          description: Registry entry to load
-      required: [kind, name]
+        content:
+          type: string
+          description: >
+            YAML content snapshot used for normalization. The
+            /manifests/{name}/runs endpoint populates this automatically.
+      required: [kind, name, content]
+
+    ManifestSourcePath:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [path]
+        path:
+          type: string
+        content:
+          type: string
+          description: YAML content used for normalization.
+      required: [kind, path, content]
+      description: Supported only when server path-source flag is enabled.
 
     ManifestOptions:
       type: object
@@ -279,7 +300,8 @@ components:
         effectiveRunConfig:
           type: object
           additionalProperties: true
-      required: [manifest, manifestHash, manifestVersion, requiredCapabilities]
+        manifestSecretRefs:
+          $ref: '#/components/schemas/ManifestSecretRefs'
 
     SanitizedManifestEnvelope:
       type: object
@@ -293,24 +315,52 @@ components:
           $ref: '#/components/schemas/SanitizedManifestSource'
         options:
           $ref: '#/components/schemas/ManifestOptions'
-      required: [name, source]
 
     SanitizedManifestSource:
       type: object
       properties:
         kind:
           type: string
-          enum: [inline, registry]
+          enum: [inline, registry, path]
         name:
           type: string
-          description: Present when `kind=registry`
-        contentHash:
+          description: Registry name when `kind=registry`.
+        path:
           type: string
-        version:
-          type: string
-          enum: [v0]
-      required: [kind, contentHash, version]
-      description: Inline submissions never expose YAML content; registry submissions include only the entry name plus audit metadata.
+          description: Path value when `kind=path`.
+      required: [kind]
+
+    ManifestSecretRefs:
+      type: object
+      properties:
+        profile:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+              field:
+                type: string
+              envKey:
+                type: string
+              normalized:
+                type: string
+            required: [provider, field, envKey, normalized]
+        vault:
+          type: array
+          items:
+            type: object
+            properties:
+              mount:
+                type: string
+              path:
+                type: string
+              field:
+                type: string
+              ref:
+                type: string
+            required: [mount, path, field, ref]
 
     ManifestRegistryRecord:
       type: object
@@ -326,6 +376,7 @@ components:
         updatedAt:
           type: string
           format: date-time
+          nullable: true
         lastRun:
           type: object
           nullable: true
@@ -333,14 +384,18 @@ components:
             jobId:
               type: string
               format: uuid
+              nullable: true
             status:
               type: string
+              nullable: true
             startedAt:
               type: string
               format: date-time
+              nullable: true
             finishedAt:
               type: string
               format: date-time
+              nullable: true
         state:
           type: object
           properties:
@@ -351,7 +406,7 @@ components:
               type: string
               format: date-time
               nullable: true
-      required: [name, version, content, contentHash]
+      required: [name, content, contentHash, state]
 
     ManifestListResponse:
       type: object
@@ -365,11 +420,13 @@ components:
                 type: string
               version:
                 type: string
+                nullable: true
               contentHash:
                 type: string
               updatedAt:
                 type: string
                 format: date-time
+                nullable: true
               lastRunJobId:
                 type: string
                 format: uuid
@@ -416,4 +473,5 @@ components:
             type: string
         manifestHash:
           type: string
+          nullable: true
       required: [type, requiredCapabilities]
