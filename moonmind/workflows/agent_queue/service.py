@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -210,6 +212,15 @@ class QueueSystemResponse:
 
     job: models.AgentJob | None
     system: QueueSystemMetadata
+
+
+@dataclass(frozen=True, slots=True)
+class QueueJobPage:
+    """One keyset-paginated queue jobs page."""
+
+    items: tuple[models.AgentJob, ...]
+    page_size: int
+    next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -679,6 +690,111 @@ class AgentQueueService:
         await self._repository.commit()
         return job
 
+    async def resubmit_job(
+        self,
+        *,
+        job_id: UUID,
+        actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
+        job_type: str,
+        payload: dict[str, Any],
+        priority: int = 0,
+        affinity_key: str | None = None,
+        max_attempts: int = 3,
+        note: str | None = None,
+    ) -> models.AgentJob:
+        """Create a new queued job from one failed/cancelled task job."""
+
+        candidate_type = str(job_type or "").strip()
+        if not candidate_type:
+            raise AgentQueueValidationError("type must be a non-empty string")
+        if max_attempts < 1:
+            raise AgentQueueValidationError("maxAttempts must be >= 1")
+
+        source_job = await self._repository.require_job_for_update(job_id)
+        if not actor_is_superuser and actor_user_id not in {
+            source_job.created_by_user_id,
+            source_job.requested_by_user_id,
+        }:
+            raise AgentQueueJobAuthorizationError(
+                f"user '{actor_user_id}' is not authorized for task run {job_id}"
+            )
+        if source_job.status not in {
+            models.AgentJobStatus.FAILED,
+            models.AgentJobStatus.CANCELLED,
+        }:
+            raise AgentJobStateError(
+                f"Job {job_id} is {source_job.status.value} and cannot be resubmitted"
+            )
+        if candidate_type != source_job.type:
+            raise AgentJobStateError(
+                f"Job {job_id} type mismatch ({source_job.type} != {candidate_type})"
+            )
+        if candidate_type != CANONICAL_TASK_JOB_TYPE:
+            raise AgentJobStateError(
+                f"Job {job_id} type '{source_job.type}' does not support resubmit"
+            )
+        if has_attachment_mutation_fields(payload):
+            raise AgentQueueValidationError(
+                "attachment edits are not supported for resubmits"
+            )
+        clean_note = self._clean_optional_str_max(note, max_length=256)
+
+        effective_created_by = (
+            actor_user_id
+            if actor_user_id is not None
+            else source_job.created_by_user_id
+        )
+        effective_requested_by = (
+            actor_user_id
+            if actor_user_id is not None
+            else source_job.requested_by_user_id
+        )
+        new_job = await self._create_job_record(
+            job_type=candidate_type,
+            payload=copy.deepcopy(dict(payload or {})),
+            priority=priority,
+            created_by_user_id=effective_created_by,
+            requested_by_user_id=effective_requested_by,
+            affinity_key=affinity_key.strip() if affinity_key else None,
+            max_attempts=max_attempts,
+        )
+        changed_fields: list[str] = []
+        if source_job.priority != new_job.priority:
+            changed_fields.append("priority")
+        if source_job.payload != new_job.payload:
+            changed_fields.append("payload")
+        if source_job.affinity_key != new_job.affinity_key:
+            changed_fields.append("affinityKey")
+        if source_job.max_attempts != new_job.max_attempts:
+            changed_fields.append("maxAttempts")
+        source_event_payload: dict[str, Any] = {
+            "newJobId": str(new_job.id),
+            "actorUserId": (str(actor_user_id) if actor_user_id is not None else None),
+            "changedFields": changed_fields,
+        }
+        if clean_note is not None:
+            source_event_payload["note"] = clean_note
+        await self._repository.append_event(
+            job_id=source_job.id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Job resubmitted",
+            payload=source_event_payload,
+        )
+        await self._repository.append_event(
+            job_id=new_job.id,
+            level=models.AgentJobEventLevel.INFO,
+            message="Job resubmitted from",
+            payload={
+                "sourceJobId": str(source_job.id),
+                "actorUserId": (
+                    str(actor_user_id) if actor_user_id is not None else None
+                ),
+            },
+        )
+        await self._repository.commit()
+        return new_job
+
     def _normalize_attachment_upload(
         self,
         upload: AttachmentUpload,
@@ -832,6 +948,67 @@ class AgentQueueService:
             job_type=normalized_type if normalized_type else None,
             limit=limit,
             offset=offset,
+        )
+
+    @staticmethod
+    def _encode_job_cursor(*, created_at: datetime, job_id: UUID) -> str:
+        payload = json.dumps(
+            {
+                "created_at": created_at.astimezone(UTC).isoformat(),
+                "id": str(job_id),
+            }
+        ).encode()
+        return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_job_cursor(cursor: str) -> tuple[datetime, UUID]:
+        token = str(cursor or "").strip()
+        if not token:
+            raise AgentQueueValidationError("cursor is invalid")
+        if len(token) > 1024:
+            raise AgentQueueValidationError("cursor is invalid")
+        padding = "=" * (-len(token) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode(token + padding).decode()
+            payload = json.loads(decoded)
+            created_at = datetime.fromisoformat(str(payload["created_at"]))
+            job_id = UUID(str(payload["id"]))
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise AgentQueueValidationError("cursor is invalid") from exc
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        return created_at.astimezone(UTC), job_id
+
+    async def list_jobs_page(
+        self,
+        *,
+        status: Optional[models.AgentJobStatus] = None,
+        job_type: Optional[str] = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> QueueJobPage:
+        """Return one keyset-paginated queue jobs page with opaque cursor token."""
+
+        page_size = max(1, min(int(limit), 200))
+        normalized_type = job_type.strip() if job_type else None
+        cursor_tuple = self._decode_job_cursor(cursor) if cursor else None
+        jobs, has_more = await self._repository.list_jobs_page(
+            status=status,
+            job_type=normalized_type if normalized_type else None,
+            cursor=cursor_tuple,
+            limit=page_size,
+        )
+        next_cursor: str | None = None
+        if has_more and jobs:
+            tail = jobs[-1]
+            next_cursor = self._encode_job_cursor(
+                created_at=tail.created_at,
+                job_id=tail.id,
+            )
+        return QueueJobPage(
+            items=tuple(jobs),
+            page_size=page_size,
+            next_cursor=next_cursor,
         )
 
     async def claim_job(

@@ -36,18 +36,24 @@ from moonmind.agents.codex_worker.handlers import (
     OutputChunkCallback,
     WorkerExecutionResult,
 )
+from moonmind.agents.codex_worker.metrics import WorkerMetrics
 from moonmind.agents.codex_worker.secret_refs import (
     SecretReferenceError,
     VaultSecretResolver,
     load_vault_token,
 )
+from moonmind.agents.codex_worker.self_heal import (
+    FailureClass,
+    IdleTimeoutWatcher,
+    SelfHealConfig,
+    SelfHealController,
+    SelfHealStrategy,
+    StepIdleTimeoutExceeded,
+    StepTimeoutExceeded,
+    is_failure_retryable,
+)
 from moonmind.config.settings import settings
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.vision.service import (
-    AttachmentContextInput,
-    VisionContextStatus,
-    VisionService,
-)
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
@@ -111,10 +117,6 @@ _PR_RESOLVER_SKILL_ID = "pr-resolver"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
-_ATTACHMENTS_MANIFEST_RELATIVE_PATH = Path(".moonmind/attachments_manifest.json")
-_ATTACHMENTS_INPUT_DIR_RELATIVE_PATH = Path(".moonmind/inputs")
-_ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH = Path(".moonmind/vision/image_context.md")
-_ATTACHMENTS_PROMPT_MAX_BYTES = 8 * 1024
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
@@ -152,6 +154,9 @@ _STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
         "step_transcript_invalid_marker_balance",
         "step_transcript_invalid_completion_marker_count",
     }
+)
+_NON_SECRET_REDACTION_SENTINELS = frozenset(
+    {"true", "false", "none", "null", "yes", "no", "on", "off"}
 )
 _NON_SOURCE_CHANGE_PREFIXES = (
     ".github/",
@@ -1487,65 +1492,6 @@ class QueueApiClient:
                     f"artifact upload failed for job {job_id}: {exc}"
                 ) from exc
 
-    async def list_attachments_worker(
-        self,
-        *,
-        job_id: UUID,
-        limit: int = 500,
-    ) -> list[dict[str, Any]]:
-        """Return attachment metadata scoped to the claiming worker."""
-
-        payload = await self._get_json(
-            f"/api/queue/jobs/{job_id}/attachments/worker?limit={int(limit)}"
-        )
-        items_node = payload.get("items")
-        if not isinstance(items_node, list):
-            return []
-        normalized: list[dict[str, Any]] = []
-        for item in items_node:
-            if isinstance(item, Mapping):
-                normalized.append(dict(item))
-        return normalized
-
-    async def download_attachment_worker(
-        self,
-        *,
-        job_id: UUID,
-        attachment_id: UUID,
-        destination_path: Path,
-    ) -> None:
-        """Stream one attachment to ``destination_path`` for worker prepare stage."""
-
-        path = f"/api/queue/jobs/{job_id}/attachments/{attachment_id}/download/worker"
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = destination_path.with_suffix(f"{destination_path.suffix}.part")
-        try:
-            async with self._client.stream("GET", path) as response:
-                response.raise_for_status()
-                with temporary_path.open("wb") as handle:
-                    async for chunk in response.aiter_bytes():
-                        if chunk:
-                            handle.write(chunk)
-            temporary_path.replace(destination_path)
-        except httpx.HTTPError as exc:
-            temporary_path.unlink(missing_ok=True)
-            raise QueueClientError(
-                f"attachment download failed for job {job_id} attachment {attachment_id}: {exc}"
-            ) from exc
-        except OSError as exc:
-            temporary_path.unlink(missing_ok=True)
-            raise QueueClientError(
-                f"attachment download write failed for {destination_path}: {exc}"
-            ) from exc
-
-    async def _get_json(self, path: str) -> dict[str, Any]:
-        try:
-            response = await self._client.get(path)
-            response.raise_for_status()
-            return dict(response.json()) if response.content else {}
-        except httpx.HTTPError as exc:
-            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
-
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         try:
             response = await self._client.post(path, json=json)
@@ -1593,6 +1539,7 @@ class CodexWorker:
         self._config = config
         self._queue_client = queue_client
         self._codex_exec_handler = codex_exec_handler
+        self._metrics = WorkerMetrics()
         self._pause_poll_interval_seconds = max(
             1.0, self._config.pause_poll_interval_ms / 1000.0
         )
@@ -2062,13 +2009,12 @@ class CodexWorker:
                 job=job,
                 result=result,
             )
-            terminal_error = self._redact_text(
-                (
-                    (result.error_message if result is not None else None)
-                    or resolved_failure_reason
-                    or "codex_exec failed"
-                )
+            raw_terminal_error = (
+                (result.error_message if result is not None else None)
+                or resolved_failure_reason
+                or "codex_exec failed"
             )
+            terminal_error = self._redact_text(str(raw_terminal_error))
             await self._queue_client.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
@@ -3282,11 +3228,6 @@ class CodexWorker:
                 selected_skills=deduped_selected_skills,
                 env=auth_context.repo_command_env,
             )
-            attachment_context = await self._prepare_attachments_for_task(
-                job_id=job_id,
-                repo_dir=repo_dir,
-                log_path=prepare_log_path,
-            )
 
             context_payload = {
                 "repository": repository,
@@ -3336,7 +3277,6 @@ class CodexWorker:
                     "skillsActive": str(skills_active_path),
                     "artifacts": str(artifacts_dir),
                 },
-                "attachments": attachment_context,
                 "rag": self._rag_capability_metadata(),
                 "timestamp": datetime.now(UTC).isoformat(),
             }
@@ -3402,175 +3342,6 @@ class CodexWorker:
                 },
             )
             raise
-
-    async def _prepare_attachments_for_task(
-        self,
-        *,
-        job_id: UUID,
-        repo_dir: Path,
-        log_path: Path,
-    ) -> dict[str, Any]:
-        """Download worker-visible attachments and write manifest/context files."""
-
-        manifest_path = repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
-        inputs_dir = repo_dir / _ATTACHMENTS_INPUT_DIR_RELATIVE_PATH
-        vision_context_path = repo_dir / _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH
-
-        attachments = await self._queue_client.list_attachments_worker(
-            job_id=job_id,
-            limit=500,
-        )
-        if not attachments:
-            self._append_stage_log(log_path, "prepare attachments: none")
-            return {
-                "enabled": False,
-                "count": 0,
-                "totalBytes": 0,
-                "manifestPath": None,
-                "visionContextPath": None,
-                "visionContextStatus": VisionContextStatus.NO_ATTACHMENTS.value,
-            }
-
-        await self._emit_event(
-            job_id=job_id,
-            level="info",
-            message="task.attachments.download.started",
-            payload={"count": len(attachments)},
-        )
-        self._append_stage_log(
-            log_path,
-            f"prepare attachments: downloading {len(attachments)} item(s)",
-        )
-
-        self._ensure_moonmind_git_exclude(repo_dir=repo_dir)
-        inputs_dir.mkdir(parents=True, exist_ok=True)
-        vision_context_path.parent.mkdir(parents=True, exist_ok=True)
-
-        manifest_entries: list[dict[str, Any]] = []
-        context_entries: list[AttachmentContextInput] = []
-        total_bytes = 0
-        for attachment in attachments:
-            attachment_id = UUID(str(attachment.get("id")))
-            artifact_name = str(attachment.get("name") or "").strip()
-            filename = artifact_name.split("/")[-1] if artifact_name else "attachment"
-            local_filename = self._build_input_attachment_filename(
-                attachment_id=attachment_id,
-                filename=filename,
-            )
-            destination = inputs_dir / local_filename
-            await self._queue_client.download_attachment_worker(
-                job_id=job_id,
-                attachment_id=attachment_id,
-                destination_path=destination,
-            )
-
-            size_bytes = int(attachment.get("sizeBytes") or destination.stat().st_size)
-            if destination.stat().st_size != size_bytes:
-                raise RuntimeError(
-                    f"attachment size mismatch for {attachment_id}: "
-                    f"expected {size_bytes}, got {destination.stat().st_size}"
-                )
-            digest = str(attachment.get("digest") or "").strip() or None
-            if digest:
-                actual_digest = QueueApiClient._sha256_file(destination)
-                if actual_digest != digest:
-                    raise RuntimeError(
-                        f"attachment digest mismatch for {attachment_id}: "
-                        f"expected {digest}, got {actual_digest}"
-                    )
-            total_bytes += size_bytes
-            local_path = (
-                _ATTACHMENTS_INPUT_DIR_RELATIVE_PATH / local_filename
-            ).as_posix()
-            manifest_entry = {
-                "id": str(attachment_id),
-                "filename": filename,
-                "contentType": str(attachment.get("contentType") or "").strip() or None,
-                "sizeBytes": size_bytes,
-                "digest": digest,
-                "localPath": local_path,
-            }
-            manifest_entries.append(manifest_entry)
-            context_entries.append(
-                AttachmentContextInput(
-                    id=str(attachment_id),
-                    filename=filename,
-                    content_type=manifest_entry["contentType"],
-                    size_bytes=size_bytes,
-                    digest=digest,
-                    local_path=local_path,
-                    user_caption_hint=None,
-                )
-            )
-
-        manifest_payload = {
-            "jobId": str(job_id),
-            "downloadedAt": datetime.now(UTC).isoformat(),
-            "attachments": manifest_entries,
-            "count": len(manifest_entries),
-            "totalBytes": total_bytes,
-        }
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(
-            json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        await self._emit_event(
-            job_id=job_id,
-            level="info",
-            message="task.attachments.download.finished",
-            payload={"count": len(manifest_entries), "totalBytes": total_bytes},
-        )
-
-        vision_context = VisionService().render_context(context_entries)
-        vision_context_path.write_text(vision_context.markdown + "\n", encoding="utf-8")
-        await self._emit_event(
-            job_id=job_id,
-            level="info",
-            message="task.attachments.context.generated",
-            payload={
-                "count": len(manifest_entries),
-                "provider": settings.spec_workflow.vision_provider,
-                "status": vision_context.status.value,
-            },
-        )
-        self._append_stage_log(
-            log_path,
-            (
-                "prepare attachments: "
-                f"count={len(manifest_entries)} totalBytes={total_bytes} "
-                f"visionStatus={vision_context.status.value}"
-            ),
-        )
-        return {
-            "enabled": bool(vision_context.enabled),
-            "count": len(manifest_entries),
-            "totalBytes": total_bytes,
-            "manifestPath": _ATTACHMENTS_MANIFEST_RELATIVE_PATH.as_posix(),
-            "visionContextPath": _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH.as_posix(),
-            "visionContextStatus": vision_context.status.value,
-        }
-
-    @staticmethod
-    def _build_input_attachment_filename(*, attachment_id: UUID, filename: str) -> str:
-        clean = Path(str(filename or "").strip()).name or "attachment"
-        return f"{attachment_id}-{clean}"
-
-    def _ensure_moonmind_git_exclude(self, *, repo_dir: Path) -> None:
-        """Keep worker-downloaded attachment files out of git status/publish output."""
-
-        exclude_path = repo_dir / ".git" / "info" / "exclude"
-        exclude_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = (
-            exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
-        )
-        entries = {line.strip() for line in existing.splitlines() if line.strip()}
-        if ".moonmind/" in entries:
-            return
-        with exclude_path.open("a", encoding="utf-8") as handle:
-            if existing and not existing.endswith("\n"):
-                handle.write("\n")
-            handle.write(".moonmind/\n")
 
     async def _run_prepare_git_identity_preflight(
         self,
@@ -4766,7 +4537,8 @@ class CodexWorker:
         self, prepared: PreparedTaskWorkspace
     ) -> list[ArtifactUpload]:
         """Return standard prepare-stage artifacts."""
-        artifacts = [
+
+        return [
             ArtifactUpload(
                 path=prepared.prepare_log_path,
                 name="logs/prepare.log",
@@ -4778,27 +4550,6 @@ class CodexWorker:
                 content_type="application/json",
             ),
         ]
-        manifest_path = prepared.repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
-        if manifest_path.exists():
-            artifacts.append(
-                ArtifactUpload(
-                    path=manifest_path,
-                    name=_ATTACHMENTS_MANIFEST_RELATIVE_PATH.as_posix(),
-                    content_type="application/json",
-                    required=False,
-                )
-            )
-        vision_path = prepared.repo_dir / _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH
-        if vision_path.exists():
-            artifacts.append(
-                ArtifactUpload(
-                    path=vision_path,
-                    name=_ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH.as_posix(),
-                    content_type="text/markdown",
-                    required=False,
-                )
-            )
-        return artifacts
 
     def _normalize_execute_artifacts(
         self,
@@ -5790,11 +5541,20 @@ class CodexWorker:
         job: ClaimedJob,
         result: WorkerExecutionResult | None,
     ) -> bool:
-        """Allow at most one queued retry for retry-classified run-quality failures."""
+        """Allow queued retries for eligible run-quality and self-heal failures."""
 
         if result is None or result.succeeded:
             return False
-        if not self._is_retryable_run_quality_reason(result.run_quality_reason):
+        reason = result.run_quality_reason
+        if not isinstance(reason, Mapping):
+            return False
+        category = str(reason.get("category") or "").strip().lower()
+        if category == "self_heal":
+            return (
+                str(reason.get("code") or "").strip() == "step_retryable_exhausted"
+                and job.attempt < job.max_attempts
+            )
+        if not self._is_retryable_run_quality_reason(reason):
             return False
         if job.max_attempts <= 1:
             return False
@@ -7397,6 +7157,854 @@ class CodexWorker:
             deduped.append(artifact)
         return deduped
 
+    def _classify_step_failure(
+        self,
+        *,
+        error_message: str,
+        timed_out: bool,
+        idle_timed_out: bool,
+    ) -> FailureClass:
+        """Classify step failures into self-heal buckets."""
+
+        if idle_timed_out:
+            return FailureClass.STUCK_NO_PROGRESS
+        if timed_out:
+            return FailureClass.TRANSIENT_RUNTIME
+
+        normalized = str(error_message or "").strip().lower()
+        if not normalized:
+            return FailureClass.DETERMINISTIC_CONTRACT
+
+        deterministic_contract_markers = (
+            "schema",
+            "validation",
+            "invalid",
+            "required",
+            "must be",
+            "unsupported task runtime",
+            "payload",
+        )
+        deterministic_policy_markers = (
+            "not authorized",
+            "not allowlisted",
+            "policy",
+            "permission",
+            "forbidden",
+        )
+        deterministic_repo_markers = (
+            "repository",
+            "merge conflict",
+            "checkout",
+            "branch",
+            "rebase",
+            "cannot apply",
+        )
+        deterministic_policy_word_markers = (
+            "auth",
+            "token",
+            "credential",
+            "authorization",
+        )
+        transient_runtime_markers = (
+            "temporary",
+            "temporarily",
+            "timeout",
+            "timed out",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "service unavailable",
+            "upstream",
+            "transport",
+            "rate limit",
+            "429",
+            "502",
+            "503",
+            "504",
+            "runtime was cancelled before completion",
+        )
+
+        if any(marker in normalized for marker in deterministic_contract_markers):
+            return FailureClass.DETERMINISTIC_CONTRACT
+        if any(marker in normalized for marker in deterministic_policy_markers):
+            return FailureClass.DETERMINISTIC_POLICY
+        if any(
+            re.search(rf"\b{re.escape(marker)}\b", normalized)
+            for marker in deterministic_policy_word_markers
+        ):
+            return FailureClass.DETERMINISTIC_POLICY
+        if any(marker in normalized for marker in transient_runtime_markers):
+            return FailureClass.TRANSIENT_RUNTIME
+        if any(marker in normalized for marker in deterministic_repo_markers):
+            return FailureClass.DETERMINISTIC_REPO
+        return FailureClass.DETERMINISTIC_CONTRACT
+
+    async def _await_task_no_raise(
+        self,
+        task: asyncio.Task[object] | None,
+    ) -> None:
+        if task is None:
+            return
+        with suppress(asyncio.CancelledError):
+            _ = await task
+
+    @staticmethod
+    def _hash_text(value: str) -> str | None:
+        text = str(value or "")
+        if not text:
+            return None
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
+
+    @staticmethod
+    def _extract_changed_files_from_patch(patch_text: str) -> tuple[str, ...]:
+        changed_files: list[str] = []
+        for line in str(patch_text or "").splitlines():
+            if not line.startswith("+++ "):
+                continue
+            if line.startswith("+++ /dev/null"):
+                continue
+            value = line.removeprefix("+++ ").strip()
+            if value.startswith("b/"):
+                value = value[2:]
+            if value:
+                changed_files.append(value)
+        return tuple(dict.fromkeys(changed_files))
+
+    async def _collect_repo_diff_metadata(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+    ) -> tuple[str | None, tuple[str, ...]]:
+        """Capture current diff hash + changed files for no-progress detection."""
+
+        name_result = await self._run_stage_command(
+            ["git", "diff", "--name-only"],
+            cwd=prepared.repo_dir,
+            log_path=prepared.execute_log_path,
+            check=False,
+            env=prepared.repo_command_env,
+        )
+        changed_files = tuple(
+            dict.fromkeys(
+                path
+                for path in (
+                    line.strip() for line in str(name_result.stdout or "").splitlines()
+                )
+                if path
+            )
+        )
+        patch_result = await self._run_stage_command(
+            ["git", "diff"],
+            cwd=prepared.repo_dir,
+            log_path=prepared.execute_log_path,
+            check=False,
+            env=prepared.repo_command_env,
+        )
+        diff_hash = self._hash_text(str(patch_result.stdout or ""))
+        return diff_hash, changed_files
+
+    def _build_self_heal_attempt_artifact(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        step: ResolvedTaskStep,
+        attempt: int,
+        failure_class: FailureClass,
+        strategy: SelfHealStrategy,
+        failure_message: str,
+        failure_signature: str | None,
+        failure_signature_hash: str | None,
+        diff_hash: str | None,
+        changed_files: Sequence[str],
+        wall_clock_seconds: float,
+        idle_timeout_triggered: bool,
+    ) -> ArtifactUpload:
+        """Persist one per-attempt self-heal artifact."""
+
+        attempt_path = (
+            prepared.artifacts_dir
+            / "state"
+            / "self_heal"
+            / f"attempt-{step.step_index:04d}-{attempt:04d}.json"
+        )
+        attempt_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schemaVersion": "v1",
+            "stepId": step.step_id,
+            "stepIndex": step.step_index,
+            "attempt": attempt,
+            "failureClass": failure_class.value,
+            "failureSummary": failure_message,
+            "failureSignature": failure_signature,
+            "failureSignatureHash": failure_signature_hash,
+            "strategy": strategy.value,
+            "wallClockSeconds": round(float(wall_clock_seconds), 6),
+            "idleTimeoutTriggered": bool(idle_timeout_triggered),
+            "diffHash": diff_hash,
+            "changedFiles": list(changed_files),
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        redacted = self._redact_payload(payload)
+        serialized = redacted if isinstance(redacted, dict) else payload
+        attempt_path.write_text(
+            json.dumps(serialized, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return ArtifactUpload(
+            path=attempt_path,
+            name=f"state/self_heal/attempt-{step.step_index:04d}-{attempt:04d}.json",
+            content_type="application/json",
+            required=False,
+        )
+
+    def _build_step_state_artifact(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        step: ResolvedTaskStep,
+        attempt: int,
+        summary: str | None,
+        diff_hash: str | None,
+        changed_files: Sequence[str],
+    ) -> ArtifactUpload:
+        """Persist one deterministic per-step checkpoint metadata artifact."""
+
+        state_path = (
+            prepared.artifacts_dir
+            / "state"
+            / "steps"
+            / f"step-{step.step_index:04d}.json"
+        )
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schemaVersion": "v1",
+            "stepId": step.step_id,
+            "stepIndex": step.step_index,
+            "attempt": attempt,
+            "summary": summary,
+            "diffHash": diff_hash,
+            "changedFiles": list(changed_files),
+            "finishedAt": datetime.now(UTC).isoformat(),
+        }
+        redacted = self._redact_payload(payload)
+        serialized = redacted if isinstance(redacted, dict) else payload
+        state_path.write_text(
+            json.dumps(serialized, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return ArtifactUpload(
+            path=state_path,
+            name=f"state/steps/step-{step.step_index:04d}.json",
+            content_type="application/json",
+            required=False,
+        )
+
+    def _remove_step_state_artifact(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        step: ResolvedTaskStep,
+        artifacts: list[ArtifactUpload],
+    ) -> None:
+        """Remove persisted step checkpoint metadata for failed step validation."""
+
+        state_name = f"state/steps/step-{step.step_index:04d}.json"
+        state_path = prepared.artifacts_dir / state_name
+        artifacts[:] = [
+            artifact for artifact in artifacts if artifact.name != state_name
+        ]
+        with suppress(FileNotFoundError):
+            state_path.unlink()
+
+    def _build_self_heal_retry_reason(
+        self,
+        *,
+        step: ResolvedTaskStep,
+        failure_class: FailureClass,
+        strategy: SelfHealStrategy,
+    ) -> dict[str, Any]:
+        """Build structured retry metadata for retryable self-heal exhaustion."""
+
+        return {
+            "category": "self_heal",
+            "code": "step_retryable_exhausted",
+            "summary": "self-heal retries exhausted for retryable failure",
+            "tags": ["retry", "self_heal"],
+            "stepId": step.step_id,
+            "stepIndex": step.step_index,
+            "details": {
+                "failureClass": failure_class.value,
+                "strategy": strategy.value,
+            },
+        }
+
+    async def _run_codex_step_once(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        source_payload: Mapping[str, Any],
+        runtime_model: str | None,
+        runtime_effort: str | None,
+        step: ResolvedTaskStep,
+        total_steps: int,
+        cancel_event: asyncio.Event | None,
+        output_chunk_callback: OutputChunkCallback | None,
+    ) -> WorkerExecutionResult:
+        """Execute one codex attempt for a single step."""
+
+        instruction = self._compose_step_instruction_for_runtime(
+            canonical_payload=canonical_payload,
+            runtime_mode="codex",
+            step=step,
+            total_steps=total_steps,
+        )
+        if step.effective_skill_id != "auto":
+            skill_payload = self._build_skill_payload(
+                canonical_payload=canonical_payload,
+                selected_skill=step.effective_skill_id,
+                source_payload=source_payload,
+                instruction_override=instruction,
+                skill_args_override=step.effective_skill_args,
+                ref_override=None,
+                publish_mode_override="none",
+                publish_base_override=None,
+                workdir_mode_override="reuse",
+                include_ref=False,
+            )
+            skill_payload["_moonmindCompletionScope"] = (
+                self._build_completion_scope_payload(
+                    job_id=job_id,
+                    phase="execute",
+                    step_id=step.step_id,
+                    step_index=step.step_index,
+                )
+            )
+            return await self._codex_exec_handler.handle_skill(
+                job_id=job_id,
+                payload=skill_payload,
+                selected_skill=step.effective_skill_id,
+                fallback=step.effective_skill_id != "speckit",
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
+        exec_payload = self._build_exec_payload(
+            canonical_payload=canonical_payload,
+            source_payload=source_payload,
+            instruction_override=instruction,
+            ref_override=None,
+            publish_mode_override="none",
+            publish_base_override=None,
+            workdir_mode_override="reuse",
+            include_ref=False,
+        )
+        codex_overrides: dict[str, str] = {}
+        if runtime_model:
+            codex_overrides["model"] = runtime_model
+        if runtime_effort:
+            codex_overrides["effort"] = runtime_effort
+        if codex_overrides:
+            exec_payload["codex"] = codex_overrides
+        exec_payload["_moonmindCompletionScope"] = self._build_completion_scope_payload(
+            job_id=job_id,
+            phase="execute",
+            step_id=step.step_id,
+            step_index=step.step_index,
+        )
+        return await self._codex_exec_handler.handle(
+            job_id=job_id,
+            payload=exec_payload,
+            cancel_event=cancel_event,
+            output_chunk_callback=output_chunk_callback,
+        )
+
+    async def _run_codex_step_attempt(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        source_payload: Mapping[str, Any],
+        runtime_model: str | None,
+        runtime_effort: str | None,
+        step: ResolvedTaskStep,
+        total_steps: int,
+        self_heal_config: SelfHealConfig,
+        cancel_event: asyncio.Event | None,
+        output_callback: OutputChunkCallback | None,
+        attempt_started_monotonic: float,
+    ) -> tuple[
+        WorkerExecutionResult,
+        StepTimeoutExceeded | StepIdleTimeoutExceeded | None,
+        str | None,
+        float,
+    ]:
+        """Execute one codex attempt and enforce wall/idle timeout boundaries."""
+
+        step_cancel_event = asyncio.Event()
+        idle_timeout_watcher = IdleTimeoutWatcher(
+            self_heal_config.step_idle_timeout_seconds
+        )
+        idle_timeout_watcher.start()
+
+        async def _attempt_output_callback(stream: str, text: str | None) -> None:
+            if text:
+                idle_timeout_watcher.pulse()
+            if output_callback is not None:
+                await output_callback(stream, text)
+
+        propagate_cancel_task: asyncio.Task[None] | None = None
+        if cancel_event is not None:
+
+            async def _propagate_cancel() -> None:
+                await cancel_event.wait()
+                step_cancel_event.set()
+
+            propagate_cancel_task = asyncio.create_task(_propagate_cancel())
+
+        runtime_task = asyncio.create_task(
+            self._run_codex_step_once(
+                job_id=job_id,
+                canonical_payload=canonical_payload,
+                source_payload=source_payload,
+                runtime_model=runtime_model,
+                runtime_effort=runtime_effort,
+                step=step,
+                total_steps=total_steps,
+                cancel_event=step_cancel_event,
+                output_chunk_callback=_attempt_output_callback,
+            )
+        )
+        idle_wait_task = asyncio.create_task(idle_timeout_watcher.wait())
+        wall_wait_task = asyncio.create_task(
+            asyncio.sleep(self_heal_config.step_timeout_seconds)
+        )
+
+        timeout_reason: str | None = None
+        step_result: WorkerExecutionResult | None = None
+        timeout_error: StepTimeoutExceeded | StepIdleTimeoutExceeded | None = None
+        try:
+            done, _pending = await asyncio.wait(
+                {runtime_task, idle_wait_task, wall_wait_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if runtime_task in done:
+                step_result = await runtime_task
+            elif idle_wait_task in done and idle_timeout_watcher.triggered:
+                timeout_reason = "idle"
+            else:
+                timeout_reason = "wall"
+
+            if timeout_reason is not None:
+                step_cancel_event.set()
+                with suppress(
+                    asyncio.TimeoutError,
+                    asyncio.CancelledError,
+                    CommandCancelledError,
+                ):
+                    await asyncio.wait_for(runtime_task, timeout=2.0)
+                if not runtime_task.done():
+                    runtime_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await runtime_task
+                if timeout_reason == "idle":
+                    raise StepIdleTimeoutExceeded(
+                        f"step idle timeout exceeded ({self_heal_config.step_idle_timeout_seconds}s)"
+                    )
+                raise StepTimeoutExceeded(
+                    f"step wall timeout exceeded ({self_heal_config.step_timeout_seconds}s)"
+                )
+        except CommandCancelledError:
+            if cancel_event is not None and cancel_event.is_set():
+                raise
+            timeout_error = StepTimeoutExceeded(
+                "step runtime was cancelled before completion"
+            )
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=str(timeout_error),
+                artifacts=(),
+            )
+        except (StepTimeoutExceeded, StepIdleTimeoutExceeded) as exc:
+            timeout_error = exc
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=str(exc),
+                artifacts=(),
+            )
+        except Exception as exc:
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=str(exc),
+                artifacts=(),
+            )
+        finally:
+            wall_wait_task.cancel()
+            idle_wait_task.cancel()
+            if propagate_cancel_task is not None:
+                propagate_cancel_task.cancel()
+            await self._await_task_no_raise(propagate_cancel_task)
+            await self._await_task_no_raise(wall_wait_task)
+            await self._await_task_no_raise(idle_wait_task)
+            idle_timeout_watcher.cancel()
+            await idle_timeout_watcher.wait()
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise JobCancellationRequested("cancellation requested by user")
+
+        if step_result is None:  # pragma: no cover - defensive
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message="step execution did not return a result",
+                artifacts=(),
+            )
+
+        attempt_duration_seconds = max(
+            0.0, time.monotonic() - attempt_started_monotonic
+        )
+        return step_result, timeout_error, timeout_reason, attempt_duration_seconds
+
+    async def _run_codex_step_with_self_heal(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        source_payload: Mapping[str, Any],
+        runtime_model: str | None,
+        runtime_effort: str | None,
+        step: ResolvedTaskStep,
+        total_steps: int,
+        prepared: PreparedTaskWorkspace,
+        cancel_event: asyncio.Event | None,
+        pause_event: asyncio.Event | None,
+        artifact_callback: (
+            Callable[[Sequence[ArtifactUpload]], Awaitable[None]] | None
+        ) = None,
+    ) -> WorkerExecutionResult:
+        """Execute one step with bounded self-heal attempts and retries."""
+
+        self_heal_config = SelfHealConfig.from_env()
+        controller = SelfHealController(
+            config=self_heal_config,
+            secret_redactor=self._secret_redactor,
+        )
+        metrics = self._metrics
+        controller.begin_step(step_id=step.step_id, step_index=step.step_index)
+        attempt_artifacts: list[ArtifactUpload] = []
+        last_failure_class: FailureClass | None = None
+
+        while True:
+            if cancel_event is not None:
+                await self._raise_if_cancel_requested(cancel_event=cancel_event)
+            if pause_event is not None and cancel_event is not None:
+                await self._wait_if_paused(
+                    job_id=job_id,
+                    pause_event=pause_event,
+                    cancel_event=cancel_event,
+                )
+            attempt_snapshot = controller.new_attempt()
+            attempt_number = attempt_snapshot.attempt
+            attempt_started_monotonic = time.monotonic()
+
+            base_callback = self._build_live_log_chunk_callback(
+                job_id=job_id,
+                stage="moonmind.task.execute",
+                step_id=step.step_id,
+                step_index=step.step_index,
+            )
+            await self._emit_event(
+                job_id=job_id,
+                level="info",
+                message="task.step.attempt.started",
+                payload={
+                    "stepId": step.step_id,
+                    "stepIndex": step.step_index,
+                    "attempt": attempt_number,
+                    "effectiveSkill": step.effective_skill_id,
+                },
+            )
+            step_result, timeout_error, timeout_reason, attempt_duration_seconds = (
+                await self._run_codex_step_attempt(
+                    job_id=job_id,
+                    canonical_payload=canonical_payload,
+                    source_payload=source_payload,
+                    runtime_model=runtime_model,
+                    runtime_effort=runtime_effort,
+                    step=step,
+                    total_steps=total_steps,
+                    self_heal_config=self_heal_config,
+                    cancel_event=cancel_event,
+                    output_callback=base_callback,
+                    attempt_started_monotonic=attempt_started_monotonic,
+                )
+            )
+            if step_result.succeeded:
+                metrics.record_step_duration(
+                    step_index=step.step_index,
+                    attempt=attempt_number,
+                    duration_seconds=attempt_duration_seconds,
+                )
+                if attempt_number > 1:
+                    metrics.record_self_heal_recovered(
+                        step_index=step.step_index,
+                        attempt=attempt_number,
+                        failure_class=(
+                            last_failure_class.value
+                            if last_failure_class is not None
+                            else None
+                        ),
+                        strategy=SelfHealStrategy.SOFT_RESET.value,
+                    )
+                await self._emit_event(
+                    job_id=job_id,
+                    level="info",
+                    message="task.step.attempt.finished",
+                    payload={
+                        "stepId": step.step_id,
+                        "stepIndex": step.step_index,
+                        "attempt": attempt_number,
+                        "durationSeconds": round(attempt_duration_seconds, 6),
+                        "strategy": (
+                            SelfHealStrategy.SOFT_RESET.value
+                            if attempt_number > 1
+                            else SelfHealStrategy.NONE.value
+                        ),
+                    },
+                )
+                patch_text = ""
+                for artifact in step_result.artifacts:
+                    if (
+                        artifact.name == "patches/changes.patch"
+                        and artifact.path.exists()
+                    ):
+                        patch_text = artifact.path.read_text(encoding="utf-8")
+                        break
+                if patch_text:
+                    diff_hash = self._hash_text(patch_text)
+                    changed_files = self._extract_changed_files_from_patch(patch_text)
+                else:
+                    diff_hash, changed_files = await self._collect_repo_diff_metadata(
+                        prepared=prepared
+                    )
+                step_state_artifact = self._build_step_state_artifact(
+                    prepared=prepared,
+                    step=step,
+                    attempt=attempt_number,
+                    summary=step_result.summary,
+                    diff_hash=diff_hash,
+                    changed_files=changed_files,
+                )
+                attempt_artifacts.append(step_state_artifact)
+                controller.reset_after_success()
+                return WorkerExecutionResult(
+                    succeeded=True,
+                    summary=step_result.summary,
+                    error_message=None,
+                    artifacts=tuple([*step_result.artifacts, *attempt_artifacts]),
+                    run_quality_reason=step_result.run_quality_reason,
+                )
+
+            raw_failure_message = step_result.error_message or "step execution failed"
+            failure_message = self._redact_text(raw_failure_message)
+            if step_result.run_quality_reason is not None:
+                await self._emit_event(
+                    job_id=job_id,
+                    level="error",
+                    message="task.step.attempt.failed",
+                    payload={
+                        "stepId": step.step_id,
+                        "stepIndex": step.step_index,
+                        "attempt": attempt_number,
+                        "summary": failure_message,
+                        "runQuality": dict(step_result.run_quality_reason),
+                    },
+                )
+                return WorkerExecutionResult(
+                    succeeded=False,
+                    summary=None,
+                    error_message=raw_failure_message,
+                    artifacts=tuple([*step_result.artifacts, *attempt_artifacts]),
+                    run_quality_reason=dict(step_result.run_quality_reason),
+                )
+            timed_out = isinstance(timeout_error, StepTimeoutExceeded)
+            idle_timed_out = isinstance(timeout_error, StepIdleTimeoutExceeded)
+            if timed_out:
+                metrics.record_wall_timeout(
+                    step_index=step.step_index,
+                    attempt=attempt_number,
+                )
+            if idle_timed_out:
+                metrics.record_idle_timeout(
+                    step_index=step.step_index,
+                    attempt=attempt_number,
+                )
+
+            failure_class = self._classify_step_failure(
+                error_message=raw_failure_message,
+                timed_out=timed_out,
+                idle_timed_out=idle_timed_out,
+            )
+            diff_hash, changed_files = await self._collect_repo_diff_metadata(
+                prepared=prepared
+            )
+            failure_signature = controller.build_failure_signature(
+                message=raw_failure_message,
+                step_id=step.step_id,
+                skill_id=step.effective_skill_id,
+                failure_hint=timeout_reason,
+            )
+            active_step = controller.active_step
+            no_progress_exhausted = False
+            if active_step is not None:
+                active_step.record_failure(
+                    signature=failure_signature,
+                    diff_hash=diff_hash,
+                )
+                no_progress_exhausted = (
+                    active_step.consecutive_no_progress
+                    >= self_heal_config.step_no_progress_limit
+                )
+            if no_progress_exhausted:
+                failure_class = FailureClass.STUCK_NO_PROGRESS
+                metrics.record_no_progress_trip(
+                    step_index=step.step_index,
+                    attempt=attempt_number,
+                )
+
+            retryable_failure = is_failure_retryable(failure_class)
+            attempts_remaining = attempt_number < self_heal_config.step_max_attempts
+            strategy = (
+                SelfHealStrategy.SOFT_RESET
+                if retryable_failure
+                and attempts_remaining
+                and not no_progress_exhausted
+                else SelfHealStrategy.QUEUE_RETRY
+            )
+            last_failure_class = failure_class
+            outcome = (
+                "retrying" if strategy is SelfHealStrategy.SOFT_RESET else "failed"
+            )
+            metrics.record_self_heal_attempt(
+                step_index=step.step_index,
+                attempt=attempt_number,
+                failure_class=failure_class.value,
+                strategy=strategy.value,
+                outcome=outcome,
+            )
+
+            attempt_artifact = self._build_self_heal_attempt_artifact(
+                prepared=prepared,
+                step=step,
+                attempt=attempt_number,
+                failure_class=failure_class,
+                strategy=strategy,
+                failure_message=failure_message,
+                failure_signature=(
+                    failure_signature.value if failure_signature is not None else None
+                ),
+                failure_signature_hash=(
+                    failure_signature.fingerprint
+                    if failure_signature is not None
+                    else None
+                ),
+                diff_hash=diff_hash,
+                changed_files=changed_files,
+                wall_clock_seconds=attempt_duration_seconds,
+                idle_timeout_triggered=idle_timed_out,
+            )
+            attempt_artifacts.append(attempt_artifact)
+            if artifact_callback is not None:
+                await artifact_callback((attempt_artifact,))
+
+            await self._emit_event(
+                job_id=job_id,
+                level="warn",
+                message="task.step.attempt.failed",
+                payload={
+                    "stepId": step.step_id,
+                    "stepIndex": step.step_index,
+                    "attempt": attempt_number,
+                    "failureClass": failure_class.value,
+                    "strategy": strategy.value,
+                    "failureSignatureHash": (
+                        failure_signature.fingerprint
+                        if failure_signature is not None
+                        else None
+                    ),
+                    "diffHash": diff_hash,
+                    "durationSeconds": round(attempt_duration_seconds, 6),
+                },
+            )
+
+            if strategy is SelfHealStrategy.SOFT_RESET:
+                await self._emit_event(
+                    job_id=job_id,
+                    level="warn",
+                    message="task.self_heal.triggered",
+                    payload={
+                        "stepId": step.step_id,
+                        "stepIndex": step.step_index,
+                        "attempt": attempt_number,
+                        "failureClass": failure_class.value,
+                        "strategy": strategy.value,
+                    },
+                )
+                continue
+
+            if no_progress_exhausted:
+                await self._emit_event(
+                    job_id=job_id,
+                    level="warn",
+                    message="task.self_heal.escalated",
+                    payload={
+                        "stepId": step.step_id,
+                        "stepIndex": step.step_index,
+                        "attempt": attempt_number,
+                        "failureClass": failure_class.value,
+                        "reason": "no_progress_limit_reached",
+                    },
+                )
+
+            metrics.record_self_heal_exhausted(
+                step_index=step.step_index,
+                attempt=attempt_number,
+                failure_class=failure_class.value,
+                strategy=strategy.value,
+            )
+            await self._emit_event(
+                job_id=job_id,
+                level="error",
+                message="task.self_heal.exhausted",
+                payload={
+                    "stepId": step.step_id,
+                    "stepIndex": step.step_index,
+                    "attempt": attempt_number,
+                    "failureClass": failure_class.value,
+                    "strategy": strategy.value,
+                    "retryable": retryable_failure,
+                },
+            )
+            return WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=raw_failure_message,
+                artifacts=tuple([*step_result.artifacts, *attempt_artifacts]),
+                run_quality_reason=(
+                    self._build_self_heal_retry_reason(
+                        step=step,
+                        failure_class=failure_class,
+                        strategy=strategy,
+                    )
+                    if retryable_failure
+                    else None
+                ),
+            )
+
     async def _run_execute_stage(
         self,
         *,
@@ -7449,14 +8057,6 @@ class CodexWorker:
         step_log_offsets = self._load_step_log_offsets_checkpoint(
             artifacts_dir=prepared.artifacts_dir
         )
-        attachments_prompt_block = ""
-        attachments_manifest_path = (
-            prepared.repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
-        )
-        if attachments_manifest_path.exists():
-            attachments_prompt_block = self._build_input_attachments_block(
-                prepared=prepared
-            )
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -7500,90 +8100,28 @@ class CodexWorker:
                 message="task.step.started",
                 payload=event_payload,
             )
-            instruction = self._compose_step_instruction_for_runtime(
-                canonical_payload=canonical_payload,
-                runtime_mode=runtime_mode,
-                step=step,
-                total_steps=len(resolved_steps),
-                attachments_prompt_block=attachments_prompt_block,
-            )
-
             try:
                 if runtime_mode == "codex":
-                    if step.effective_skill_id != "auto":
-                        skill_payload = self._build_skill_payload(
-                            canonical_payload=canonical_payload,
-                            selected_skill=step.effective_skill_id,
-                            source_payload=source_payload,
-                            instruction_override=instruction,
-                            skill_args_override=step.effective_skill_args,
-                            ref_override=None,
-                            publish_mode_override="none",
-                            publish_base_override=None,
-                            workdir_mode_override="reuse",
-                            include_ref=False,
-                        )
-                        skill_payload["_moonmindCompletionScope"] = (
-                            self._build_completion_scope_payload(
-                                job_id=job_id,
-                                phase="execute",
-                                step_id=step.step_id,
-                                step_index=step.step_index,
-                            )
-                        )
-                        step_log_callback = self._build_live_log_chunk_callback(
-                            job_id=job_id,
-                            stage="moonmind.task.execute",
-                            step_id=step.step_id,
-                            step_index=step.step_index,
-                        )
-                        step_result = await self._codex_exec_handler.handle_skill(
-                            job_id=job_id,
-                            payload=skill_payload,
-                            selected_skill=step.effective_skill_id,
-                            fallback=step.effective_skill_id != "speckit",
-                            cancel_event=cancel_event,
-                            output_chunk_callback=step_log_callback,
-                        )
-                    else:
-                        exec_payload = self._build_exec_payload(
-                            canonical_payload=canonical_payload,
-                            source_payload=source_payload,
-                            instruction_override=instruction,
-                            ref_override=None,
-                            publish_mode_override="none",
-                            publish_base_override=None,
-                            workdir_mode_override="reuse",
-                            include_ref=False,
-                        )
-                        codex_overrides: dict[str, str] = {}
-                        if runtime_model:
-                            codex_overrides["model"] = runtime_model
-                        if runtime_effort:
-                            codex_overrides["effort"] = runtime_effort
-                        if codex_overrides:
-                            exec_payload["codex"] = codex_overrides
-                        exec_payload["_moonmindCompletionScope"] = (
-                            self._build_completion_scope_payload(
-                                job_id=job_id,
-                                phase="execute",
-                                step_id=step.step_id,
-                                step_index=step.step_index,
-                            )
-                        )
-                        step_log_callback = self._build_live_log_chunk_callback(
-                            job_id=job_id,
-                            stage="moonmind.task.execute",
-                            step_id=step.step_id,
-                            step_index=step.step_index,
-                        )
-                        step_result = await self._codex_exec_handler.handle(
-                            job_id=job_id,
-                            payload=exec_payload,
-                            cancel_event=cancel_event,
-                            output_chunk_callback=step_log_callback,
-                        )
+                    step_result = await self._run_codex_step_with_self_heal(
+                        job_id=job_id,
+                        canonical_payload=canonical_payload,
+                        source_payload=source_payload,
+                        runtime_model=runtime_model,
+                        runtime_effort=runtime_effort,
+                        step=step,
+                        total_steps=len(resolved_steps),
+                        prepared=prepared,
+                        cancel_event=cancel_event,
+                        pause_event=pause_event,
+                        artifact_callback=artifact_callback,
+                    )
                 else:
+                    instruction = self._compose_step_instruction_for_runtime(
+                        canonical_payload=canonical_payload,
+                        runtime_mode=runtime_mode,
+                        step=step,
+                        total_steps=len(resolved_steps),
+                    )
                     command = self._build_non_codex_runtime_command(
                         runtime_mode=runtime_mode,
                         instruction=instruction,
@@ -7653,13 +8191,21 @@ class CodexWorker:
                 step_patch_path=step_patch_path,
                 step_log_offsets=step_log_offsets,
             )
+            step_checkpoint_name = f"state/steps/step-{step.step_index:04d}.json"
+            non_checkpoint_artifacts: list[ArtifactUpload] = []
+            checkpoint_artifacts: list[ArtifactUpload] = []
+            for artifact in normalized_step_artifacts:
+                if artifact.name == step_checkpoint_name:
+                    checkpoint_artifacts.append(artifact)
+                else:
+                    non_checkpoint_artifacts.append(artifact)
             self._persist_step_log_offsets_checkpoint(
                 artifacts_dir=prepared.artifacts_dir,
                 step_log_offsets=step_log_offsets,
             )
             step_artifacts.extend(normalized_step_artifacts)
-            if artifact_callback is not None and normalized_step_artifacts:
-                await artifact_callback(normalized_step_artifacts)
+            if artifact_callback is not None and non_checkpoint_artifacts:
+                await artifact_callback(non_checkpoint_artifacts)
 
             if step_result.succeeded and runtime_mode == "codex":
                 transcript_integrity = self._evaluate_step_transcript_integrity(
@@ -7670,6 +8216,11 @@ class CodexWorker:
                     integrity_message = (
                         transcript_integrity.message
                         or "step transcript integrity check failed"
+                    )
+                    self._remove_step_state_artifact(
+                        prepared=prepared,
+                        step=step,
+                        artifacts=step_artifacts,
                     )
                     event_payload["summary"] = integrity_message
                     if transcript_integrity.run_quality_reason is not None:
@@ -7709,6 +8260,11 @@ class CodexWorker:
                         await artifact_callback(gate_artifacts)
                 if not gate_result.passed:
                     gate_message = gate_result.message or "step gate failed"
+                    self._remove_step_state_artifact(
+                        prepared=prepared,
+                        step=step,
+                        artifacts=step_artifacts,
+                    )
                     event_payload["summary"] = gate_message
                     await self._emit_event(
                         job_id=job_id,
@@ -7740,6 +8296,8 @@ class CodexWorker:
                     message="task.step.finished",
                     payload=event_payload,
                 )
+                if artifact_callback is not None and checkpoint_artifacts:
+                    await artifact_callback(checkpoint_artifacts)
                 self._append_stage_log(
                     prepared.execute_log_path,
                     (
@@ -8229,55 +8787,6 @@ class CodexWorker:
             ),
         )
 
-    def _build_input_attachments_block(
-        self,
-        *,
-        prepared: PreparedTaskWorkspace,
-    ) -> str:
-        """Render the attachment prompt block inserted before workspace instructions."""
-
-        manifest_path = prepared.repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
-        context_path = prepared.repo_dir / _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH
-        if not manifest_path.exists():
-            return ""
-        lines = [
-            "INPUT ATTACHMENTS:",
-            "- See repo/.moonmind/attachments_manifest.json",
-            "- Images are stored under repo/.moonmind/inputs/",
-        ]
-
-        attachment_count: int | None = None
-        if manifest_path.exists():
-            try:
-                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if isinstance(payload, Mapping):
-                    attachment_count = int(payload.get("count") or 0)
-            except Exception:
-                attachment_count = None
-        if attachment_count is not None and attachment_count <= 0:
-            return ""
-        if attachment_count is not None:
-            lines.append(f"- Attachment count: {attachment_count}")
-        else:
-            lines.append("- Attachment count: unavailable")
-
-        if context_path.exists():
-            raw_context = context_path.read_text(encoding="utf-8")
-            context_text = raw_context
-            context_bytes = context_text.encode("utf-8")
-            if len(context_bytes) > _ATTACHMENTS_PROMPT_MAX_BYTES:
-                context_text = context_bytes[:_ATTACHMENTS_PROMPT_MAX_BYTES].decode(
-                    "utf-8", errors="ignore"
-                )
-                context_text = f"{context_text}\n[context truncated; see repo/.moonmind/vision/image_context.md]"
-        else:
-            context_text = "No attachment context was generated for this task."
-
-        lines.append("- Image-derived context:")
-        for line in context_text.splitlines() or ["(empty)"]:
-            lines.append(f"  {line}")
-        return "\n".join(lines)
-
     def _compose_step_instruction_for_runtime(
         self,
         *,
@@ -8285,7 +8794,6 @@ class CodexWorker:
         runtime_mode: str,
         step: ResolvedTaskStep,
         total_steps: int,
-        attachments_prompt_block: str = "",
     ) -> str:
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
@@ -8323,11 +8831,6 @@ class CodexWorker:
                 "Publish stage is disabled for this task."
             )
 
-        attachments_section = ""
-        normalized_attachments_block = str(attachments_prompt_block or "").strip()
-        if normalized_attachments_block:
-            attachments_section = f"{normalized_attachments_block}\n\n"
-
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"
             f"{objective}\n\n"
@@ -8335,7 +8838,6 @@ class CodexWorker:
             f"{step_instruction}\n\n"
             "EFFECTIVE SKILL:\n"
             f"{step.effective_skill_id}\n\n"
-            f"{attachments_section}"
             "WORKSPACE:\n"
             "- Repo is already checked out on the working branch.\n"
             f"{workspace_publish_line}\n"
@@ -8605,9 +9107,10 @@ class CodexWorker:
         candidate = str(value or "").strip()
         if not candidate:
             return
-        # Avoid over-redacting common boolean/null literals that can appear in
-        # non-sensitive diagnostics (for example `ci.isRunning=true`).
-        if moonmind_logging._is_low_entropy_literal(candidate):
+        if candidate.casefold() in _NON_SECRET_REDACTION_SENTINELS:
+            return
+        # Ignore tiny values that can trigger broad, unintended redaction.
+        if len(candidate) < 8:
             return
         self._dynamic_redaction_values.add(candidate)
 

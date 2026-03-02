@@ -1,31 +1,50 @@
-# Research: Worker Self-Heal System
+# Research: Worker Self-Heal System (Phase 1)
 
-## Decision 1: Self-heal controller boundaries
-- **Decision**: Introduce a dedicated controller (new `moonmind/agents/codex_worker/self_heal.py`) that wraps each resolved step in an attempt loop, tracks budgets (`step_max_attempts`, `step_no_progress_limit`, `job_self_heal_max_resets`), records per-attempt metadata (timestamps, diff hash, changed files, failure classification, retry context), and decides whether to continue, soft reset (restart runtime in same workspace), escalate to hard reset (rebuild workspace + replay checkpoints), or fail the job with `retryable=True`. The controller owns the minimal retry prompt payload so `_compose_step_instruction_for_runtime` remains focused on formatting strings.
-- **Rationale**: Keeping attempt bookkeeping alongside worker execution avoids spreading timers/classification logic across `_run_execute_stage`, `_build_live_log_chunk_callback`, and publish/resume plumbing. A module with explicit dataclasses (`SelfHealConfig`, `StepAttemptState`, `FailureSignature`) makes it straightforward to serialize state into `state/self_heal/attempt-XXXX.json` and to decide when to escalate, while letting the existing worker loop focus on prepare/execute/publish boundaries.
-- **Alternatives Considered**: (1) Embed counters and timers directly inside `_run_execute_stage`. Rejected because the function is already complex and mixing artifact uploads with retry state would be hard to test. (2) Push budgets to the API/queue service so attempts are handled via re-queuing. Rejected because the spec requires in-step recovery with minimal context and deterministic checkpoint replay before queue-level retries.
+## Decision 1: Phase-focused delivery contract
 
-## Decision 2: Timeout and no-progress detection
-- **Decision**: Use layered timers: wrap each runtime invocation (`handle` / `handle_skill`) in `asyncio.wait_for` for wall-clock enforcement, and add an idle watchdog tied to the existing `OutputChunkCallback`. The watchdog stores the last chunk timestamp, and a background task cancels the step if no chunk arrives within `step_idle_timeout_seconds`. No-progress detection compares a normalized failure signature (error text + skill id + exit code) with the previous attempt *and* hashes of workspace diffs (sha256 of `git diff --name-only && git diff --patch` after the attempt). Only when both signature and diff hash match `step_no_progress_limit` times do we escalate to hard reset/queue retry.
-- **Rationale**: Leveraging the live log callback gives us per-stream timestamps without changing Codex CLI contracts. Pairing signature + diff hash matches the spec’s definition of “identical failure” and prevents spurious hard resets when the runtime makes partial progress. `asyncio.wait_for` keeps wall-clock enforcement near the runtime call site and produces actionable timeout messages for events/metrics.
-- **Alternatives Considered**: (1) Instrument Codex CLI to report heartbeats. Rejected because it would require upstream CLI changes and break multi-runtime support (Gemini/Claude/containers). (2) Poll `git status` periodically to infer idle states. Rejected because it cannot detect pure runtime hangs (no file changes) and would generate extra subprocess noise.
+- **Decision**: Align this feature to a phased strategy and treat worker-side in-step recovery as the only implementation scope for now.
+- **Rationale**: Runtime reliability issues are concentrated in step retry behavior; Phase 1 delivers immediate value without waiting for API/dashboard/schema expansion.
+- **Alternatives Considered**:
+  - Ship all hard-reset/operator controls together. Rejected due scope and risk.
+  - Delay all work until operator APIs are ready. Rejected because current worker retry gaps are active production risk.
 
-## Decision 3: Checkpoint + hard reset strategy
-- **Decision**: Treat `artifacts/patches/steps/step-XXXX.patch` as the canonical per-step diff and augment it with `state/steps/step-XXXX.json` that stores `{stepId, stepIndex, attempt, diffHash, changedFiles, finishedAt}`. After each successful step we write this JSON alongside the patch and copy both to artifacts. On hard reset or operator `resume_from_step`, we (a) re-clone/reset the repo to the original `startingBranch`, (b) replay every recorded patch `git apply --allow-empty -p1` in order, verifying file checksums against `changedFiles`, and (c) resume execution from the requested step index. Failed replays emit `task.self_heal.exhausted` and preserve the original attempt artifacts for debugging.
-- **Rationale**: We already persist patches per step; adding deterministic metadata gives us an indexable replay plan without inventing new storage backends. Using plain `git apply` keeps the process transparent, honors existing secret scrubbers, and aligns with existing `var/artifacts/agent_jobs/<run_id>` layout. Recording files + hashes lets us detect corrupted/missing patches before we stomp the workspace.
-- **Alternatives Considered**: (1) Persist entire workspace snapshots per step. Rejected due to size/performance costs and the spec’s explicit direction to reuse patch checkpoints. (2) Store checkpoints in Postgres tables. Rejected for v1 because events/artifacts already satisfy observability requirements and DB writes would slow down per-step success paths.
+## Decision 2: Attempt loop integration lives in worker execution path
 
-## Decision 4: Operator recovery commands + API contract
-- **Decision**: Extend `agent_jobs.payload.liveControl` with an optional `recovery` object containing `{action, stepId, strategy, updatedAt, requestedBy}`. Update `AgentQueueService.apply_control_action` and `api_service/api/routers/task_runs.py` to accept actions `retry_step`, `hard_reset_step`, and `resume_from_step` (with validation that `resume_from_step` supplies a known `stepId` or index). Workers read the `recovery` payload on heartbeat, acknowledge the request by embedding it into the self-heal controller (which resets counters or triggers a hard reset immediately), and emit `task.control.recovery.*` events once honored.
-- **Rationale**: Reusing the existing `liveControl` blob keeps backwards compatibility for pause/takeover consumers and lets the dashboard display the operator request without schema churn. Restricting writes to the API service ensures audit trails via `task_run_control_events`. The worker-local controller already reasons about step indices, so injecting a vetted request there is safer than trying to drive state from the API side.
-- **Alternatives Considered**: (1) New REST endpoints that mutate worker state over websockets. Rejected because we already have an authenticated live-control channel via heartbeat payloads. (2) Piggyback on queue-level retries only. Rejected because the spec requires in-run operator commands that don’t drop artifacts or require re-claiming jobs.
+- **Decision**: Integrate self-heal into codex step execution via `_run_codex_step_with_self_heal` and keep non-codex runtimes unchanged.
+- **Rationale**: Codex steps already run through a centralized execution path where cancel/pause/events/artifacts are managed.
+- **Alternatives Considered**:
+  - Global queue-level retry-only approach. Rejected because it cannot classify/repair failures in-step.
 
-## Decision 5: Telemetry and secret scrubbing
-- **Decision**: Reuse the StatsD emitter from `moonmind.workflows.speckit_celery.tasks` (exposed via a tiny adapter in the worker) with a `moonmind.workflow.self_heal` prefix. Emit counters `task.self_heal.attempts_total`, `task.self_heal.recovered_total`, `task.self_heal.exhausted_total` with tags `{class, strategy}`, plus timers for `task.step.duration_seconds`, `task.step.wall_timeout_total`, `task.step.idle_timeout_total`, and `task.step.no_progress_total`. New queue events include `task.step.attempt.started/finished/failed`, `task.self_heal.triggered/escalated/exhausted`, and `task.resume.from_step`. All event payloads pass through the existing secret scrubber before upload, and failure signatures are truncated/hash-canonicalized to avoid leaking tokens.
-- **Rationale**: Building on the existing emitter avoids a new dependency and gives ops teams uniform metric sources (StatsD + queue events). Keeping secret scrubbing centralized prevents regressions when we log failure signatures or diff hashes.
-- **Alternatives Considered**: (1) Introduce a Prometheus client exclusively for self-heal metrics. Rejected because StatsD is already the standard across Workflow and the requirement only calls for counters/timers. (2) Emit raw Codex error text as the failure signature. Rejected because it risks leaking credentials or long logs; hashing + truncating plus scrubber coverage is safer.
+## Decision 3: Detection model = wall timeout + idle timeout + no-progress signatures
 
-## Open Questions
-- How granular should failure classification rules be for deterministic vs transient errors? We plan to start with heuristic mapping (timeouts → `transient_runtime`, repeated git conflicts → `deterministic_repo`) but may need a configuration hook if new patterns emerge.
-- Should operator-triggered `resume_from_step` requests allow skipping backwards (e.g., resume from an already completed step)? The spec implies “resume from last known good”, but we need confirmation on whether rewinding is acceptable.
-- Hard reset replay currently clones from the original `startingBranch`. Some repos might require tracking rebases/force-pushes; we need product guidance on whether to support custom ref overrides in the future.
+- **Decision**: Use `IdleTimeoutWatcher` pulses from output callbacks, wall timeout task race, and signature+diff repeat detection.
+- **Rationale**: This is deterministic, low-overhead, and testable without upstream CLI changes.
+- **Alternatives Considered**:
+  - Process-level heartbeats from CLI. Rejected due cross-runtime contract churn.
+
+## Decision 4: Queue retry escalation via structured self-heal run-quality reason
+
+- **Decision**: On retryable exhaustion, return `run_quality_reason={category:self_heal, code:step_retryable_exhausted}` and mark failure retryable while queue attempts remain.
+- **Rationale**: Reuses existing queue failure semantics and avoids new DB/API contracts.
+- **Alternatives Considered**:
+  - Directly enqueue a cloned job from worker. Rejected to keep ownership/lifecycle in queue service.
+
+## Decision 5: Artifacts first, replay later
+
+- **Decision**: Persist per-step and per-attempt state artifacts in Phase 1, but defer hard-reset replay activation.
+- **Rationale**: Artifacts are immediately useful for observability and establish deterministic inputs for a later replay phase.
+- **Alternatives Considered**:
+  - Skip artifacts until hard reset is implemented. Rejected because telemetry/debugging would remain weak.
+
+## Decision 6: Preserve and harden redaction behavior
+
+- **Decision**: Route signatures/payloads through redaction and avoid over-redacting tiny dynamic values.
+- **Rationale**: Prevents secret leakage while preserving useful operator diagnostics.
+- **Alternatives Considered**:
+  - Redact all dynamic values regardless of length. Rejected due false-positive masking in error messages.
+
+## Deferred Questions (Phase 2/3)
+
+- When hard reset is activated, should rebuild source use `startingBranch` only or allow a policy-defined override?
+- Should operator `resume_from_step` require takeover mode?
+- Which API payload shape should carry recovery commands with backward compatibility guarantees?

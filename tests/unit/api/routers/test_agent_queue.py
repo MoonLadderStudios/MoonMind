@@ -33,6 +33,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueJobAuthorizationError,
     AgentQueueValidationError,
+    QueueJobPage,
     QueueSafeguardJob,
     QueueSafeguardSnapshot,
     QueueSystemMetadata,
@@ -472,6 +473,185 @@ def test_update_queued_job_claude_runtime_gate_maps_400(
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["detail"]["code"] == "claude_runtime_disabled"
+
+
+def test_resubmit_job_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """POST /jobs/{id}/resubmit should return newly created job payload."""
+
+    test_client, service = client
+    source_job_id = uuid4()
+    created_job = _build_job()
+    created_job.type = "task"
+    service.resubmit_job.return_value = created_job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "priority": 3,
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {"instructions": "Retry with edits"},
+            },
+            "maxAttempts": 4,
+            "note": "updated inputs",
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    body = response.json()
+    assert body["id"] == str(created_job.id)
+    assert body["type"] == "task"
+    service.resubmit_job.assert_awaited_once()
+    assert service.resubmit_job.await_args.kwargs["actor_is_superuser"] is False
+
+
+def test_resubmit_job_superuser_passes_authorization_flag(
+    superuser_client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Superuser requests should set actor_is_superuser on resubmit calls."""
+
+    test_client, service = superuser_client
+    source_job_id = uuid4()
+    created_job = _build_job()
+    created_job.type = "task"
+    service.resubmit_job.return_value = created_job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {"instructions": "Retry with edits"},
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    service.resubmit_job.assert_awaited_once()
+    assert service.resubmit_job.await_args.kwargs["actor_is_superuser"] is True
+
+
+def test_resubmit_job_state_conflict_maps_409(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Terminal-state eligibility conflicts should return HTTP 409."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentJobStateError("cannot resubmit")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "job_state_conflict"
+
+
+def test_resubmit_job_validation_error_maps_422(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit payload validation errors should return HTTP 422."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentQueueValidationError("invalid payload")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+
+
+def test_resubmit_job_requires_payload(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Missing resubmit payload should fail fast during request validation."""
+
+    test_client, _ = client
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={"type": "task"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_resubmit_job_claude_runtime_gate_maps_400(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit runtime gate errors should return HTTP 400."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentQueueValidationError(
+        "targetRuntime=claude requires ANTHROPIC_API_KEY"
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Test",
+                "targetRuntime": "claude",
+                "task": {"instructions": "Retry"},
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "claude_runtime_disabled"
+
+
+def test_resubmit_job_authorization_error_maps_403(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit ownership errors should return HTTP 403."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentQueueJobAuthorizationError("not owner")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "job_not_authorized"
+
+
+def test_resubmit_job_not_found_maps_404(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit missing source job should return HTTP 404."""
+
+    test_client, service = client
+    source_job_id = uuid4()
+    service.resubmit_job.side_effect = AgentJobNotFoundError(source_job_id)
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"]["code"] == "job_not_found"
 
 
 def test_create_job_rejects_claude_runtime_without_api_key(
@@ -1176,6 +1356,7 @@ def test_list_jobs_rejects_invalid_status_filter(
 
     assert response.status_code == 422
     service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
 
 
 def test_list_jobs_with_summary_returns_compact_payload(
@@ -1196,7 +1377,11 @@ def test_list_jobs_with_summary_returns_compact_payload(
         },
         "unrelated": {"data": "should_not_be_returned"},
     }
-    service.list_jobs.return_value = [job]
+    service.list_jobs_page.return_value = QueueJobPage(
+        items=(job,),
+        page_size=50,
+        next_cursor=None,
+    )
 
     response = test_client.get("/api/queue/jobs?summary=true&limit=50")
 
@@ -1216,11 +1401,13 @@ def test_list_jobs_with_summary_returns_compact_payload(
     assert body["offset"] == 0
     assert body["limit"] == 50
     assert body["hasMore"] is False
-    service.list_jobs.assert_awaited_once_with(
+    assert body["page_size"] == 50
+    assert body["next_cursor"] is None
+    service.list_jobs_page.assert_awaited_once_with(
         status=None,
         job_type=None,
-        limit=51,
-        offset=0,
+        limit=50,
+        cursor=None,
     )
 
 
@@ -1238,7 +1425,11 @@ def test_list_jobs_omits_finish_summary_by_default(
         "schemaVersion": "v1",
         "finishOutcome": {"code": "NO_CHANGES"},
     }
-    service.list_jobs.return_value = [job]
+    service.list_jobs_page.return_value = QueueJobPage(
+        items=(job,),
+        page_size=50,
+        next_cursor=None,
+    )
 
     response = test_client.get("/api/queue/jobs?limit=50")
 
@@ -1266,12 +1457,121 @@ def test_list_jobs_includes_has_more_and_offset_metadata(
     assert body["offset"] == 100
     assert body["limit"] == 50
     assert body["hasMore"] is True
+    assert body["page_size"] == 50
+    assert body["next_cursor"] is None
     service.list_jobs.assert_awaited_once_with(
         status=None,
         job_type=None,
         limit=51,
         offset=100,
     )
+
+
+def test_list_jobs_includes_cursor_metadata_for_default_path(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Cursor-based list path should surface page_size and next_cursor metadata."""
+
+    test_client, service = client
+    jobs = (_build_job(), _build_job())
+    service.list_jobs_page.return_value = QueueJobPage(
+        items=jobs,
+        page_size=50,
+        next_cursor="opaque-cursor",
+    )
+
+    response = test_client.get("/api/queue/jobs?limit=50")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert body["offset"] == 0
+    assert body["limit"] == 50
+    assert body["hasMore"] is True
+    assert body["page_size"] == 50
+    assert body["next_cursor"] == "opaque-cursor"
+    service.list_jobs_page.assert_awaited_once_with(
+        status=None,
+        job_type=None,
+        limit=50,
+        cursor=None,
+    )
+
+
+def test_list_jobs_rejects_limit_above_max(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Requesting cursor list limits above the upper bound should fail validation."""
+
+    test_client, service = client
+    response = test_client.get("/api/queue/jobs?limit=999")
+
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
+
+
+def test_list_jobs_forwards_cursor_token(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Cursor query value should be forwarded to cursor pagination service path."""
+
+    test_client, service = client
+    service.list_jobs_page.return_value = QueueJobPage(
+        items=tuple(),
+        page_size=50,
+        next_cursor=None,
+    )
+
+    response = test_client.get("/api/queue/jobs?limit=50&cursor=abc123")
+
+    assert response.status_code == 200
+    service.list_jobs_page.assert_awaited_once_with(
+        status=None,
+        job_type=None,
+        limit=50,
+        cursor="abc123",
+    )
+
+
+def test_list_jobs_rejects_cursor_with_offset(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Offset compatibility path should not accept simultaneous cursor query args."""
+
+    test_client, service = client
+    response = test_client.get("/api/queue/jobs?cursor=abc&offset=50")
+
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
+
+
+def test_list_jobs_rejects_cursor_with_zero_offset(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Explicitly provided zero-offset is still incompatible with cursor mode."""
+
+    test_client, service = client
+    response = test_client.get("/api/queue/jobs?cursor=abc&offset=0")
+
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
+
+
+def test_list_jobs_invalid_cursor_maps_422(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Invalid cursor tokens should map to validation HTTP responses."""
+
+    test_client, service = client
+    service.list_jobs_page.side_effect = AgentQueueValidationError("cursor is invalid")
+
+    response = test_client.get("/api/queue/jobs?cursor=not-valid")
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
 
 
 def test_get_job_finish_summary_returns_json_payload(
@@ -1304,7 +1604,11 @@ def test_list_jobs_with_summary_preserves_legacy_publish_mode(
         "publish": {"mode": "pr"},
         "instruction": "legacy payload",
     }
-    service.list_jobs.return_value = [job]
+    service.list_jobs_page.return_value = QueueJobPage(
+        items=(job,),
+        page_size=50,
+        next_cursor=None,
+    )
 
     response = test_client.get("/api/queue/jobs?summary=true&limit=50")
 
@@ -1320,7 +1624,11 @@ def test_list_jobs_returns_manifest_metadata(
 
     test_client, service = client
     job = _build_manifest_job()
-    service.list_jobs.return_value = [job]
+    service.list_jobs_page.return_value = QueueJobPage(
+        items=(job,),
+        page_size=50,
+        next_cursor=None,
+    )
 
     response = test_client.get("/api/queue/jobs", params={"type": "manifest"})
 

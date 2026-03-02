@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
+
 usage() {
   cat <<USAGE
 Usage: $0 --check <tasks|diff> --mode <runtime|docs> [--base-ref <ref>]
@@ -60,11 +64,15 @@ if [[ "$MODE" == "docs" ]]; then
   exit 0
 fi
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+repo_root="$(get_repo_root)"
 cd "$repo_root"
 
-feature_branch="$(git rev-parse --abbrev-ref HEAD)"
-feature_dir="specs/${feature_branch}"
+feature_branch="$(get_current_branch)"
+if [[ -d "specs/${feature_branch}" ]]; then
+  feature_dir="specs/${feature_branch}"
+else
+  feature_dir="$(find_feature_dir_by_prefix "$repo_root" "$feature_branch")"
+fi
 tasks_file="${feature_dir}/tasks.md"
 
 matches_runtime_path() {

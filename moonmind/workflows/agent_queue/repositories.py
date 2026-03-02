@@ -203,6 +203,46 @@ class AgentQueueRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_jobs_page(
+        self,
+        *,
+        status: Optional[models.AgentJobStatus] = None,
+        job_type: Optional[str] = None,
+        cursor: tuple[datetime, UUID] | None = None,
+        limit: int = 50,
+    ) -> tuple[list[models.AgentJob], bool]:
+        """Return one keyset-paginated job page filtered by optional status and type."""
+
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        stmt: Select[tuple[models.AgentJob]] = select(models.AgentJob)
+        if status is not None:
+            stmt = stmt.where(models.AgentJob.status == status)
+        if job_type is not None:
+            stmt = stmt.where(models.AgentJob.type == job_type)
+
+        if cursor is not None:
+            cursor_created_at, cursor_id = cursor
+            stmt = stmt.where(
+                or_(
+                    models.AgentJob.created_at < cursor_created_at,
+                    and_(
+                        models.AgentJob.created_at == cursor_created_at,
+                        models.AgentJob.id < cursor_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.order_by(
+            models.AgentJob.created_at.desc(),
+            models.AgentJob.id.desc(),
+        ).limit(limit + 1)
+        result = await self._session.execute(stmt)
+        rows = list(result.scalars().all())
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
+
     async def list_running_jobs(
         self,
         *,

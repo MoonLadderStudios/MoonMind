@@ -2572,6 +2572,47 @@
     return null;
   };
 
+  const parseQueuePaginationFromSearch = (searchText) => {
+    const query = new URLSearchParams(searchText || "");
+    const requestedLimit = Number(query.get("limit") || DEFAULT_QUEUE_PAGE_SIZE);
+    const resolvedLimit = QUEUE_PAGE_SIZE_OPTIONS.includes(requestedLimit)
+      ? requestedLimit
+      : DEFAULT_QUEUE_PAGE_SIZE;
+    const requestedCursor = String(query.get("cursor") || "").trim();
+    return {
+      limit: resolvedLimit,
+      cursor: requestedCursor || null,
+    };
+  };
+
+  const applyQueuePaginationToSearch = (searchText, limit, cursor) => {
+    const query = new URLSearchParams(searchText || "");
+    const requestedLimit = Number(limit || DEFAULT_QUEUE_PAGE_SIZE);
+    const resolvedLimit = QUEUE_PAGE_SIZE_OPTIONS.includes(requestedLimit)
+      ? requestedLimit
+      : DEFAULT_QUEUE_PAGE_SIZE;
+    query.set("limit", String(resolvedLimit));
+    const cursorToken = String(cursor || "").trim();
+    if (cursorToken) {
+      query.set("cursor", cursorToken);
+    } else {
+      query.delete("cursor");
+    }
+    return query.toString();
+  };
+
+  const resetQueuePaginationState = (paginationState) => {
+    if (!paginationState || typeof paginationState !== "object") {
+      return;
+    }
+    paginationState.cursor = null;
+    paginationState.cursorStack = [];
+    paginationState.nextCursor = null;
+    paginationState.hasMore = false;
+    paginationState.pageStart = 0;
+    paginationState.pageEnd = 0;
+  };
+
   const parseRuntimeSearchParam = (searchParams) => {
     const runtimeValue = searchParams?.get("runtime");
     if (runtimeValue === null) {
@@ -2590,6 +2631,15 @@
     return { provided: true, jobId, rawValue: editJobValue };
   };
 
+  const parseResubmittedFromSearchParam = (searchParams) => {
+    const resubmittedFromValue = searchParams?.get("resubmittedFrom");
+    if (resubmittedFromValue === null) {
+      return { provided: false, jobId: "", rawValue: "" };
+    }
+    const jobId = normalizeDashboardDetailSegment(resubmittedFromValue);
+    return { provided: true, jobId, rawValue: resubmittedFromValue };
+  };
+
   const isEditableQueuedTaskJob = (job) => {
     if (!job || typeof job !== "object" || Array.isArray(job)) {
       return false;
@@ -2601,6 +2651,64 @@
     const startedAt = pick(job, "startedAt");
     const hasStarted = startedAt !== null && startedAt !== undefined && String(startedAt).trim() !== "";
     return jobType === "task" && normalizedStatus === "queued" && !hasStarted;
+  };
+
+  const isResubmittableTaskJob = (job) => {
+    if (!job || typeof job !== "object" || Array.isArray(job)) {
+      return false;
+    }
+    const jobType = String(pick(job, "type") || "")
+      .trim()
+      .toLowerCase();
+    const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
+    return (
+      jobType === "task" &&
+      (normalizedStatus === "failed" || normalizedStatus === "cancelled")
+    );
+  };
+
+  const resolveQueuePrefillModeFromJob = (job) => {
+    if (isEditableQueuedTaskJob(job)) {
+      return "edit";
+    }
+    if (isResubmittableTaskJob(job)) {
+      return "resubmit";
+    }
+    return "";
+  };
+
+  const resolveQueueDetailPrefillAction = (job) => {
+    const mode = resolveQueuePrefillModeFromJob(job);
+    const jobId = normalizeDashboardDetailSegment(pick(job, "id") || "");
+    if (!mode || !jobId) {
+      return { mode: "", label: "", route: "" };
+    }
+    const route = `/tasks/queue/new?editJobId=${encodeURIComponent(jobId)}`;
+    return {
+      mode,
+      label: mode === "resubmit" ? "Resubmit" : "Edit",
+      route,
+    };
+  };
+
+  const resolveQueuePrefillSubmitTarget = (mode, endpoints = {}) => {
+    const normalizedMode = String(mode || "").trim().toLowerCase();
+    if (normalizedMode === "edit") {
+      return {
+        method: "PUT",
+        endpointTemplate: String(endpoints.update || "/api/queue/jobs/{id}").trim(),
+      };
+    }
+    if (normalizedMode === "resubmit") {
+      return {
+        method: "POST",
+        endpointTemplate: String(endpoints.resubmit || "/api/queue/jobs/{id}/resubmit").trim(),
+      };
+    }
+    return {
+      method: "POST",
+      endpointTemplate: String(endpoints.create || "/api/queue/jobs").trim(),
+    };
   };
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
@@ -2667,11 +2775,11 @@
       stringifySkillArgs,
       buildQueueSubmissionDraftFromJob,
     };
-    window.__queueLayoutTest = {
-      queueFieldDefinitions,
-      renderQueueFieldValue,
-      renderQueueTable,
-      renderQueueCards,
+      window.__queueLayoutTest = {
+        queueFieldDefinitions,
+        renderQueueFieldValue,
+        renderQueueTable,
+        renderQueueCards,
       renderQueueLayouts,
       renderActivePageContent,
       renderRowsTable,
@@ -2679,10 +2787,13 @@
       renderProposalTable,
       renderProposalCards,
       renderProposalLayouts,
-      renderProposalActionFeedback,
-      toQueueRows,
-    };
-  }
+        renderProposalActionFeedback,
+        toQueueRows,
+        parseQueuePaginationFromSearch,
+        applyQueuePaginationToSearch,
+        resetQueuePaginationState,
+      };
+    }
 
   async function apiPromoteProposal(proposalId, overrides = {}) {
     const endpointTemplate =
@@ -2925,6 +3036,9 @@
     const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "")
       .trim()
       .toLowerCase();
+    const initialPagination = parseQueuePaginationFromSearch(
+      window.location.search || "",
+    );
     setView(
       "Tasks List",
       `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
@@ -2956,14 +3070,35 @@
     let telemetryLastRequestedAt = 0;
     let currentRows = [];
     const paginationState = {
-      limit: DEFAULT_QUEUE_PAGE_SIZE,
-      offset: 0,
+      limit: initialPagination.limit,
+      cursor: initialPagination.cursor,
+      cursorStack: [],
+      nextCursor: null,
       hasMore: false,
+      pageStart: 0,
+      pageEnd: 0,
     };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
     });
+
+    function syncPaginationQueryParams() {
+      const queryText = applyQueuePaginationToSearch(
+        window.location.search || "",
+        paginationState.limit,
+        paginationState.cursor,
+      );
+      const nextUrl = queryText
+        ? `${window.location.pathname}?${queryText}`
+        : window.location.pathname;
+      window.history.replaceState({}, "", nextUrl);
+    }
+
+    function resetPaginationToFirstPage() {
+      resetQueuePaginationState(paginationState);
+      syncPaginationQueryParams();
+    }
 
     function applyQueueFilters(rows) {
       return rows.filter((row) => {
@@ -3082,18 +3217,21 @@
     }
 
     function renderQueuePaginationSummary(rows, filteredRows) {
-      const page = Math.floor(paginationState.offset / paginationState.limit) + 1;
+      const page = paginationState.cursorStack.length + 1;
       const hasRows = rows.length > 0;
+      const showingRange = paginationState.pageEnd > 0
+        ? `${paginationState.pageStart}-${paginationState.pageEnd}`
+        : "0";
       return `
         <div class="actions">
           <div class="small">
-            Page ${escapeHtml(page)} · showing ${escapeHtml(filteredRows.length)} of ${escapeHtml(
-              rows.length,
-            )} tasks in this page.
+            Page ${escapeHtml(page)} · Showing ${escapeHtml(
+              showingRange,
+            )} · ${escapeHtml(filteredRows.length)} of ${escapeHtml(rows.length)} tasks in this page.
           </div>
           <div>
             <button type="button" class="secondary" data-queue-page-prev ${
-              paginationState.offset <= 0 || !hasRows ? "disabled" : ""
+              paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
             }>Previous</button>
             <button type="button" class="secondary" data-queue-page-next ${
               paginationState.hasMore ? "" : "disabled"
@@ -3157,32 +3295,40 @@
       const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
       const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
-      const rerender = () => {
-        renderQueueList(rows);
-      };
-
       if (runtimeField) {
         runtimeField.addEventListener("change", () => {
           filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
-          rerender();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue runtime filter update failed", error);
+          });
         });
       }
       if (skillField) {
         skillField.addEventListener("input", () => {
           filterState.skill = String(skillField.value || "").trim().toLowerCase();
-          rerender();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue skill filter update failed", error);
+          });
         });
       }
       if (stageField) {
         stageField.addEventListener("change", () => {
           filterState.stageStatus = String(stageField.value || "").trim().toLowerCase();
-          rerender();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue status filter update failed", error);
+          });
         });
       }
       if (publishField) {
         publishField.addEventListener("change", () => {
           filterState.publishMode = String(publishField.value || "").trim().toLowerCase();
-          rerender();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue publish filter update failed", error);
+          });
         });
       }
       if (pageSizeField) {
@@ -3192,7 +3338,7 @@
             return;
           }
           paginationState.limit = parsed;
-          paginationState.offset = 0;
+          resetPaginationToFirstPage();
           load().catch((error) => {
             console.error("queue page size update failed", error);
           });
@@ -3201,10 +3347,12 @@
 
       prevButtons.forEach((button) => {
         button.addEventListener("click", () => {
-          if (paginationState.offset <= 0) {
+          if (paginationState.cursorStack.length === 0) {
             return;
           }
-          paginationState.offset = Math.max(0, paginationState.offset - paginationState.limit);
+          const previousCursor = paginationState.cursorStack.pop() || null;
+          paginationState.cursor = previousCursor || null;
+          syncPaginationQueryParams();
           load().catch((error) => {
             console.error("queue previous page load failed", error);
           });
@@ -3213,10 +3361,12 @@
 
       nextButtons.forEach((button) => {
         button.addEventListener("click", () => {
-          if (!paginationState.hasMore) {
+          if (!paginationState.hasMore || !paginationState.nextCursor) {
             return;
           }
-          paginationState.offset += paginationState.limit;
+          paginationState.cursorStack.push(paginationState.cursor || "");
+          paginationState.cursor = paginationState.nextCursor;
+          syncPaginationQueryParams();
           load().catch((error) => {
             console.error("queue next page load failed", error);
           });
@@ -3257,32 +3407,41 @@
     const load = async () => {
       const params = new URLSearchParams();
       params.set("limit", String(paginationState.limit));
-      params.set("offset", String(paginationState.offset));
+      if (paginationState.cursor) {
+        params.set("cursor", paginationState.cursor);
+      }
+      syncPaginationQueryParams();
+      const queueListEndpoint = queueSourceConfig.list || "/api/tasks";
       const [payload, orchestratorPayload] = await Promise.all([
-        fetchJson(withQueueSummaryFlag(`/api/queue/jobs?${params.toString()}`)),
+        fetchJson(withQueueSummaryFlag(`${queueListEndpoint}?${params.toString()}`)),
         fetchJson(
-          `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=200`,
+          `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=${paginationState.limit}`,
         ).catch(() => ({ runs: [], tasks: [] })),
       ]);
       if (!pageActive) {
         return;
       }
       const items = Array.isArray(payload?.items) ? payload.items : [];
+      const payloadNextCursor = payload && typeof payload === "object"
+        ? String(payload.next_cursor || payload.nextCursor || "").trim() || null
+        : null;
       const orchestratorItems = Array.isArray(orchestratorPayload?.tasks)
         ? orchestratorPayload.tasks
         : Array.isArray(orchestratorPayload?.runs)
           ? orchestratorPayload.runs
           : [];
-      const payloadHasMore = payload && typeof payload === "object"
-        && Object.prototype.hasOwnProperty.call(payload, "hasMore")
-          ? Boolean(payload.hasMore)
-          : items.length >= paginationState.limit;
-      paginationState.hasMore = payloadHasMore;
-      if (paginationState.offset > 0 && items.length === 0) {
-        paginationState.offset = Math.max(0, paginationState.offset - paginationState.limit);
+      paginationState.nextCursor = payloadNextCursor;
+      paginationState.hasMore = Boolean(payloadNextCursor);
+      if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
+        const previousCursor = paginationState.cursorStack.pop() || null;
+        paginationState.cursor = previousCursor || null;
+        syncPaginationQueryParams();
         await load();
         return;
       }
+      const pageIndex = paginationState.cursorStack.length;
+      paginationState.pageStart = items.length > 0 ? pageIndex * paginationState.limit + 1 : 0;
+      paginationState.pageEnd = pageIndex * paginationState.limit + items.length;
       currentRows = sortRows([
         ...toQueueRows(items),
         ...toOrchestratorRows(orchestratorItems),
@@ -3295,7 +3454,6 @@
 
     startPolling(load, pollIntervals.list);
   }
-
   async function renderManifestListPage() {
     setView(
       "Manifest Runs",
