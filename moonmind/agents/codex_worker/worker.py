@@ -7187,9 +7187,6 @@ class CodexWorker:
             "policy",
             "permission",
             "forbidden",
-            "auth",
-            "token",
-            "credential",
         )
         deterministic_repo_markers = (
             "repository",
@@ -7198,6 +7195,12 @@ class CodexWorker:
             "branch",
             "rebase",
             "cannot apply",
+        )
+        deterministic_policy_word_markers = (
+            "auth",
+            "token",
+            "credential",
+            "authorization",
         )
         transient_runtime_markers = (
             "temporary",
@@ -7221,6 +7224,11 @@ class CodexWorker:
         if any(marker in normalized for marker in deterministic_contract_markers):
             return FailureClass.DETERMINISTIC_CONTRACT
         if any(marker in normalized for marker in deterministic_policy_markers):
+            return FailureClass.DETERMINISTIC_POLICY
+        if any(
+            re.search(rf"\b{re.escape(marker)}\b", normalized)
+            for marker in deterministic_policy_word_markers
+        ):
             return FailureClass.DETERMINISTIC_POLICY
         if any(marker in normalized for marker in transient_runtime_markers):
             return FailureClass.TRANSIENT_RUNTIME
@@ -7509,6 +7517,155 @@ class CodexWorker:
             output_chunk_callback=output_chunk_callback,
         )
 
+    async def _run_codex_step_attempt(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        source_payload: Mapping[str, Any],
+        runtime_model: str | None,
+        runtime_effort: str | None,
+        step: ResolvedTaskStep,
+        total_steps: int,
+        self_heal_config: SelfHealConfig,
+        cancel_event: asyncio.Event | None,
+        output_callback: OutputChunkCallback | None,
+        attempt_started_monotonic: float,
+    ) -> tuple[
+        WorkerExecutionResult,
+        StepTimeoutExceeded | StepIdleTimeoutExceeded | None,
+        str | None,
+        float,
+    ]:
+        """Execute one codex attempt and enforce wall/idle timeout boundaries."""
+
+        step_cancel_event = asyncio.Event()
+        idle_timeout_watcher = IdleTimeoutWatcher(
+            self_heal_config.step_idle_timeout_seconds
+        )
+        idle_timeout_watcher.start()
+
+        async def _attempt_output_callback(stream: str, text: str | None) -> None:
+            if text:
+                idle_timeout_watcher.pulse()
+            if output_callback is not None:
+                await output_callback(stream, text)
+
+        propagate_cancel_task: asyncio.Task[None] | None = None
+        if cancel_event is not None:
+
+            async def _propagate_cancel() -> None:
+                await cancel_event.wait()
+                step_cancel_event.set()
+
+            propagate_cancel_task = asyncio.create_task(_propagate_cancel())
+
+        runtime_task = asyncio.create_task(
+            self._run_codex_step_once(
+                job_id=job_id,
+                canonical_payload=canonical_payload,
+                source_payload=source_payload,
+                runtime_model=runtime_model,
+                runtime_effort=runtime_effort,
+                step=step,
+                total_steps=total_steps,
+                cancel_event=step_cancel_event,
+                output_chunk_callback=_attempt_output_callback,
+            )
+        )
+        idle_wait_task = asyncio.create_task(idle_timeout_watcher.wait())
+        wall_wait_task = asyncio.create_task(
+            asyncio.sleep(self_heal_config.step_timeout_seconds)
+        )
+
+        timeout_reason: str | None = None
+        step_result: WorkerExecutionResult | None = None
+        timeout_error: StepTimeoutExceeded | StepIdleTimeoutExceeded | None = None
+        try:
+            done, _pending = await asyncio.wait(
+                {runtime_task, idle_wait_task, wall_wait_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if runtime_task in done:
+                step_result = await runtime_task
+            elif idle_wait_task in done and idle_timeout_watcher.triggered:
+                timeout_reason = "idle"
+            else:
+                timeout_reason = "wall"
+
+            if timeout_reason is not None:
+                step_cancel_event.set()
+                with suppress(
+                    asyncio.TimeoutError,
+                    asyncio.CancelledError,
+                    CommandCancelledError,
+                ):
+                    await asyncio.wait_for(runtime_task, timeout=2.0)
+                if not runtime_task.done():
+                    runtime_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await runtime_task
+                if timeout_reason == "idle":
+                    raise StepIdleTimeoutExceeded(
+                        f"step idle timeout exceeded ({self_heal_config.step_idle_timeout_seconds}s)"
+                    )
+                raise StepTimeoutExceeded(
+                    f"step wall timeout exceeded ({self_heal_config.step_timeout_seconds}s)"
+                )
+        except CommandCancelledError:
+            if cancel_event is not None and cancel_event.is_set():
+                raise
+            timeout_error = StepTimeoutExceeded(
+                "step runtime was cancelled before completion"
+            )
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=str(timeout_error),
+                artifacts=(),
+            )
+        except (StepTimeoutExceeded, StepIdleTimeoutExceeded) as exc:
+            timeout_error = exc
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=str(exc),
+                artifacts=(),
+            )
+        except Exception as exc:
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message=str(exc),
+                artifacts=(),
+            )
+        finally:
+            wall_wait_task.cancel()
+            idle_wait_task.cancel()
+            if propagate_cancel_task is not None:
+                propagate_cancel_task.cancel()
+            await self._await_task_no_raise(propagate_cancel_task)
+            await self._await_task_no_raise(wall_wait_task)
+            await self._await_task_no_raise(idle_wait_task)
+            idle_timeout_watcher.cancel()
+            await idle_timeout_watcher.wait()
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise JobCancellationRequested("cancellation requested by user")
+
+        if step_result is None:  # pragma: no cover - defensive
+            step_result = WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message="step execution did not return a result",
+                artifacts=(),
+            )
+
+        attempt_duration_seconds = max(
+            0.0, time.monotonic() - attempt_started_monotonic
+        )
+        return step_result, timeout_error, timeout_reason, attempt_duration_seconds
+
     async def _run_codex_step_with_self_heal(
         self,
         *,
@@ -7550,11 +7707,6 @@ class CodexWorker:
             attempt_snapshot = controller.new_attempt()
             attempt_number = attempt_snapshot.attempt
             attempt_started_monotonic = time.monotonic()
-            step_cancel_event = asyncio.Event()
-            idle_timeout_watcher = IdleTimeoutWatcher(
-                self_heal_config.step_idle_timeout_seconds
-            )
-            idle_timeout_watcher.start()
 
             base_callback = self._build_live_log_chunk_callback(
                 job_id=job_id,
@@ -7573,24 +7725,8 @@ class CodexWorker:
                     "effectiveSkill": step.effective_skill_id,
                 },
             )
-
-            async def _attempt_output_callback(stream: str, text: str | None) -> None:
-                if text:
-                    idle_timeout_watcher.pulse()
-                if base_callback is not None:
-                    await base_callback(stream, text)
-
-            propagate_cancel_task: asyncio.Task[None] | None = None
-            if cancel_event is not None:
-
-                async def _propagate_cancel() -> None:
-                    await cancel_event.wait()
-                    step_cancel_event.set()
-
-                propagate_cancel_task = asyncio.create_task(_propagate_cancel())
-
-            runtime_task = asyncio.create_task(
-                self._run_codex_step_once(
+            step_result, timeout_error, timeout_reason, attempt_duration_seconds = (
+                await self._run_codex_step_attempt(
                     job_id=job_id,
                     canonical_payload=canonical_payload,
                     source_payload=source_payload,
@@ -7598,99 +7734,11 @@ class CodexWorker:
                     runtime_effort=runtime_effort,
                     step=step,
                     total_steps=total_steps,
-                    cancel_event=step_cancel_event,
-                    output_chunk_callback=_attempt_output_callback,
+                    self_heal_config=self_heal_config,
+                    cancel_event=cancel_event,
+                    output_callback=base_callback,
+                    attempt_started_monotonic=attempt_started_monotonic,
                 )
-            )
-            idle_wait_task = asyncio.create_task(idle_timeout_watcher.wait())
-            wall_wait_task = asyncio.create_task(
-                asyncio.sleep(self_heal_config.step_timeout_seconds)
-            )
-
-            timeout_reason: str | None = None
-            step_result: WorkerExecutionResult | None = None
-            timeout_error: StepTimeoutExceeded | StepIdleTimeoutExceeded | None = None
-            try:
-                done, _pending = await asyncio.wait(
-                    {runtime_task, idle_wait_task, wall_wait_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if runtime_task in done:
-                    step_result = await runtime_task
-                elif idle_wait_task in done and idle_timeout_watcher.triggered:
-                    timeout_reason = "idle"
-                else:
-                    timeout_reason = "wall"
-
-                if timeout_reason is not None:
-                    step_cancel_event.set()
-                    with suppress(
-                        asyncio.TimeoutError,
-                        asyncio.CancelledError,
-                        CommandCancelledError,
-                    ):
-                        await asyncio.wait_for(runtime_task, timeout=2.0)
-                    if not runtime_task.done():
-                        runtime_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await runtime_task
-                    if timeout_reason == "idle":
-                        raise StepIdleTimeoutExceeded(
-                            f"step idle timeout exceeded ({self_heal_config.step_idle_timeout_seconds}s)"
-                        )
-                    raise StepTimeoutExceeded(
-                        f"step wall timeout exceeded ({self_heal_config.step_timeout_seconds}s)"
-                    )
-            except CommandCancelledError:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise
-                timeout_error = StepTimeoutExceeded(
-                    "step runtime was cancelled before completion"
-                )
-                step_result = WorkerExecutionResult(
-                    succeeded=False,
-                    summary=None,
-                    error_message=str(timeout_error),
-                    artifacts=(),
-                )
-            except (StepTimeoutExceeded, StepIdleTimeoutExceeded) as exc:
-                timeout_error = exc
-                step_result = WorkerExecutionResult(
-                    succeeded=False,
-                    summary=None,
-                    error_message=str(exc),
-                    artifacts=(),
-                )
-            except Exception as exc:
-                step_result = WorkerExecutionResult(
-                    succeeded=False,
-                    summary=None,
-                    error_message=str(exc),
-                    artifacts=(),
-                )
-            finally:
-                wall_wait_task.cancel()
-                idle_wait_task.cancel()
-                if propagate_cancel_task is not None:
-                    propagate_cancel_task.cancel()
-                await self._await_task_no_raise(propagate_cancel_task)
-                await self._await_task_no_raise(wall_wait_task)
-                await self._await_task_no_raise(idle_wait_task)
-                idle_timeout_watcher.cancel()
-                await idle_timeout_watcher.wait()
-
-            if cancel_event is not None and cancel_event.is_set():
-                raise JobCancellationRequested("cancellation requested by user")
-            if step_result is None:  # pragma: no cover - defensive
-                step_result = WorkerExecutionResult(
-                    succeeded=False,
-                    summary=None,
-                    error_message="step execution did not return a result",
-                    artifacts=(),
-                )
-
-            attempt_duration_seconds = max(
-                0.0, time.monotonic() - attempt_started_monotonic
             )
             if step_result.succeeded:
                 metrics.record_step_duration(
