@@ -43,6 +43,11 @@ from moonmind.agents.codex_worker.secret_refs import (
 )
 from moonmind.config.settings import settings
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.vision.service import (
+    AttachmentContextInput,
+    VisionContextStatus,
+    VisionService,
+)
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
@@ -106,6 +111,10 @@ _PR_RESOLVER_SKILL_ID = "pr-resolver"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
+_ATTACHMENTS_MANIFEST_RELATIVE_PATH = Path(".moonmind/attachments_manifest.json")
+_ATTACHMENTS_INPUT_DIR_RELATIVE_PATH = Path(".moonmind/inputs")
+_ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH = Path(".moonmind/vision/image_context.md")
+_ATTACHMENTS_PROMPT_MAX_BYTES = 8 * 1024
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
 _MAX_STEP_LOG_MAX_BYTES = 64 * 1024 * 1024
@@ -1477,6 +1486,65 @@ class QueueApiClient:
                 raise QueueClientError(
                     f"artifact upload failed for job {job_id}: {exc}"
                 ) from exc
+
+    async def list_attachments_worker(
+        self,
+        *,
+        job_id: UUID,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Return attachment metadata scoped to the claiming worker."""
+
+        payload = await self._get_json(
+            f"/api/queue/jobs/{job_id}/attachments/worker?limit={int(limit)}"
+        )
+        items_node = payload.get("items")
+        if not isinstance(items_node, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in items_node:
+            if isinstance(item, Mapping):
+                normalized.append(dict(item))
+        return normalized
+
+    async def download_attachment_worker(
+        self,
+        *,
+        job_id: UUID,
+        attachment_id: UUID,
+        destination_path: Path,
+    ) -> None:
+        """Stream one attachment to ``destination_path`` for worker prepare stage."""
+
+        path = f"/api/queue/jobs/{job_id}/attachments/{attachment_id}/download/worker"
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = destination_path.with_suffix(f"{destination_path.suffix}.part")
+        try:
+            async with self._client.stream("GET", path) as response:
+                response.raise_for_status()
+                with temporary_path.open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        if chunk:
+                            handle.write(chunk)
+            temporary_path.replace(destination_path)
+        except httpx.HTTPError as exc:
+            temporary_path.unlink(missing_ok=True)
+            raise QueueClientError(
+                f"attachment download failed for job {job_id} attachment {attachment_id}: {exc}"
+            ) from exc
+        except OSError as exc:
+            temporary_path.unlink(missing_ok=True)
+            raise QueueClientError(
+                f"attachment download write failed for {destination_path}: {exc}"
+            ) from exc
+
+    async def _get_json(self, path: str) -> dict[str, Any]:
+        try:
+            response = await self._client.get(path)
+            response.raise_for_status()
+            return dict(response.json()) if response.content else {}
+        except httpx.HTTPError as exc:
+            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -3214,6 +3282,11 @@ class CodexWorker:
                 selected_skills=deduped_selected_skills,
                 env=auth_context.repo_command_env,
             )
+            attachment_context = await self._prepare_attachments_for_task(
+                job_id=job_id,
+                repo_dir=repo_dir,
+                log_path=prepare_log_path,
+            )
 
             context_payload = {
                 "repository": repository,
@@ -3263,6 +3336,7 @@ class CodexWorker:
                     "skillsActive": str(skills_active_path),
                     "artifacts": str(artifacts_dir),
                 },
+                "attachments": attachment_context,
                 "rag": self._rag_capability_metadata(),
                 "timestamp": datetime.now(UTC).isoformat(),
             }
@@ -3328,6 +3402,175 @@ class CodexWorker:
                 },
             )
             raise
+
+    async def _prepare_attachments_for_task(
+        self,
+        *,
+        job_id: UUID,
+        repo_dir: Path,
+        log_path: Path,
+    ) -> dict[str, Any]:
+        """Download worker-visible attachments and write manifest/context files."""
+
+        manifest_path = repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
+        inputs_dir = repo_dir / _ATTACHMENTS_INPUT_DIR_RELATIVE_PATH
+        vision_context_path = repo_dir / _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH
+
+        attachments = await self._queue_client.list_attachments_worker(
+            job_id=job_id,
+            limit=500,
+        )
+        if not attachments:
+            self._append_stage_log(log_path, "prepare attachments: none")
+            return {
+                "enabled": False,
+                "count": 0,
+                "totalBytes": 0,
+                "manifestPath": None,
+                "visionContextPath": None,
+                "visionContextStatus": VisionContextStatus.NO_ATTACHMENTS.value,
+            }
+
+        await self._emit_event(
+            job_id=job_id,
+            level="info",
+            message="task.attachments.download.started",
+            payload={"count": len(attachments)},
+        )
+        self._append_stage_log(
+            log_path,
+            f"prepare attachments: downloading {len(attachments)} item(s)",
+        )
+
+        self._ensure_moonmind_git_exclude(repo_dir=repo_dir)
+        inputs_dir.mkdir(parents=True, exist_ok=True)
+        vision_context_path.parent.mkdir(parents=True, exist_ok=True)
+
+        manifest_entries: list[dict[str, Any]] = []
+        context_entries: list[AttachmentContextInput] = []
+        total_bytes = 0
+        for attachment in attachments:
+            attachment_id = UUID(str(attachment.get("id")))
+            artifact_name = str(attachment.get("name") or "").strip()
+            filename = artifact_name.split("/")[-1] if artifact_name else "attachment"
+            local_filename = self._build_input_attachment_filename(
+                attachment_id=attachment_id,
+                filename=filename,
+            )
+            destination = inputs_dir / local_filename
+            await self._queue_client.download_attachment_worker(
+                job_id=job_id,
+                attachment_id=attachment_id,
+                destination_path=destination,
+            )
+
+            size_bytes = int(attachment.get("sizeBytes") or destination.stat().st_size)
+            if destination.stat().st_size != size_bytes:
+                raise RuntimeError(
+                    f"attachment size mismatch for {attachment_id}: "
+                    f"expected {size_bytes}, got {destination.stat().st_size}"
+                )
+            digest = str(attachment.get("digest") or "").strip() or None
+            if digest:
+                actual_digest = QueueApiClient._sha256_file(destination)
+                if actual_digest != digest:
+                    raise RuntimeError(
+                        f"attachment digest mismatch for {attachment_id}: "
+                        f"expected {digest}, got {actual_digest}"
+                    )
+            total_bytes += size_bytes
+            local_path = (
+                _ATTACHMENTS_INPUT_DIR_RELATIVE_PATH / local_filename
+            ).as_posix()
+            manifest_entry = {
+                "id": str(attachment_id),
+                "filename": filename,
+                "contentType": str(attachment.get("contentType") or "").strip() or None,
+                "sizeBytes": size_bytes,
+                "digest": digest,
+                "localPath": local_path,
+            }
+            manifest_entries.append(manifest_entry)
+            context_entries.append(
+                AttachmentContextInput(
+                    id=str(attachment_id),
+                    filename=filename,
+                    content_type=manifest_entry["contentType"],
+                    size_bytes=size_bytes,
+                    digest=digest,
+                    local_path=local_path,
+                    user_caption_hint=None,
+                )
+            )
+
+        manifest_payload = {
+            "jobId": str(job_id),
+            "downloadedAt": datetime.now(UTC).isoformat(),
+            "attachments": manifest_entries,
+            "count": len(manifest_entries),
+            "totalBytes": total_bytes,
+        }
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        await self._emit_event(
+            job_id=job_id,
+            level="info",
+            message="task.attachments.download.finished",
+            payload={"count": len(manifest_entries), "totalBytes": total_bytes},
+        )
+
+        vision_context = VisionService().render_context(context_entries)
+        vision_context_path.write_text(vision_context.markdown + "\n", encoding="utf-8")
+        await self._emit_event(
+            job_id=job_id,
+            level="info",
+            message="task.attachments.context.generated",
+            payload={
+                "count": len(manifest_entries),
+                "provider": settings.spec_workflow.vision_provider,
+                "status": vision_context.status.value,
+            },
+        )
+        self._append_stage_log(
+            log_path,
+            (
+                "prepare attachments: "
+                f"count={len(manifest_entries)} totalBytes={total_bytes} "
+                f"visionStatus={vision_context.status.value}"
+            ),
+        )
+        return {
+            "enabled": bool(vision_context.enabled),
+            "count": len(manifest_entries),
+            "totalBytes": total_bytes,
+            "manifestPath": _ATTACHMENTS_MANIFEST_RELATIVE_PATH.as_posix(),
+            "visionContextPath": _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH.as_posix(),
+            "visionContextStatus": vision_context.status.value,
+        }
+
+    @staticmethod
+    def _build_input_attachment_filename(*, attachment_id: UUID, filename: str) -> str:
+        clean = Path(str(filename or "").strip()).name or "attachment"
+        return f"{attachment_id}-{clean}"
+
+    def _ensure_moonmind_git_exclude(self, *, repo_dir: Path) -> None:
+        """Keep worker-downloaded attachment files out of git status/publish output."""
+
+        exclude_path = repo_dir / ".git" / "info" / "exclude"
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = (
+            exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+        )
+        entries = {line.strip() for line in existing.splitlines() if line.strip()}
+        if ".moonmind/" in entries:
+            return
+        with exclude_path.open("a", encoding="utf-8") as handle:
+            if existing and not existing.endswith("\n"):
+                handle.write("\n")
+            handle.write(".moonmind/\n")
 
     async def _run_prepare_git_identity_preflight(
         self,
@@ -4523,8 +4766,7 @@ class CodexWorker:
         self, prepared: PreparedTaskWorkspace
     ) -> list[ArtifactUpload]:
         """Return standard prepare-stage artifacts."""
-
-        return [
+        artifacts = [
             ArtifactUpload(
                 path=prepared.prepare_log_path,
                 name="logs/prepare.log",
@@ -4536,6 +4778,27 @@ class CodexWorker:
                 content_type="application/json",
             ),
         ]
+        manifest_path = prepared.repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
+        if manifest_path.exists():
+            artifacts.append(
+                ArtifactUpload(
+                    path=manifest_path,
+                    name=_ATTACHMENTS_MANIFEST_RELATIVE_PATH.as_posix(),
+                    content_type="application/json",
+                    required=False,
+                )
+            )
+        vision_path = prepared.repo_dir / _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH
+        if vision_path.exists():
+            artifacts.append(
+                ArtifactUpload(
+                    path=vision_path,
+                    name=_ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH.as_posix(),
+                    content_type="text/markdown",
+                    required=False,
+                )
+            )
+        return artifacts
 
     def _normalize_execute_artifacts(
         self,
@@ -7186,6 +7449,14 @@ class CodexWorker:
         step_log_offsets = self._load_step_log_offsets_checkpoint(
             artifacts_dir=prepared.artifacts_dir
         )
+        attachments_prompt_block = ""
+        attachments_manifest_path = (
+            prepared.repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
+        )
+        if attachments_manifest_path.exists():
+            attachments_prompt_block = self._build_input_attachments_block(
+                prepared=prepared
+            )
         for step in resolved_steps:
             if cancel_event is not None:
                 await self._raise_if_cancel_requested(cancel_event=cancel_event)
@@ -7234,6 +7505,7 @@ class CodexWorker:
                 runtime_mode=runtime_mode,
                 step=step,
                 total_steps=len(resolved_steps),
+                attachments_prompt_block=attachments_prompt_block,
             )
 
             try:
@@ -7957,6 +8229,55 @@ class CodexWorker:
             ),
         )
 
+    def _build_input_attachments_block(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+    ) -> str:
+        """Render the attachment prompt block inserted before workspace instructions."""
+
+        manifest_path = prepared.repo_dir / _ATTACHMENTS_MANIFEST_RELATIVE_PATH
+        context_path = prepared.repo_dir / _ATTACHMENTS_VISION_CONTEXT_RELATIVE_PATH
+        if not manifest_path.exists():
+            return ""
+        lines = [
+            "INPUT ATTACHMENTS:",
+            "- See repo/.moonmind/attachments_manifest.json",
+            "- Images are stored under repo/.moonmind/inputs/",
+        ]
+
+        attachment_count: int | None = None
+        if manifest_path.exists():
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(payload, Mapping):
+                    attachment_count = int(payload.get("count") or 0)
+            except Exception:
+                attachment_count = None
+        if attachment_count is not None and attachment_count <= 0:
+            return ""
+        if attachment_count is not None:
+            lines.append(f"- Attachment count: {attachment_count}")
+        else:
+            lines.append("- Attachment count: unavailable")
+
+        if context_path.exists():
+            raw_context = context_path.read_text(encoding="utf-8")
+            context_text = raw_context
+            context_bytes = context_text.encode("utf-8")
+            if len(context_bytes) > _ATTACHMENTS_PROMPT_MAX_BYTES:
+                context_text = context_bytes[:_ATTACHMENTS_PROMPT_MAX_BYTES].decode(
+                    "utf-8", errors="ignore"
+                )
+                context_text = f"{context_text}\n[context truncated; see repo/.moonmind/vision/image_context.md]"
+        else:
+            context_text = "No attachment context was generated for this task."
+
+        lines.append("- Image-derived context:")
+        for line in context_text.splitlines() or ["(empty)"]:
+            lines.append(f"  {line}")
+        return "\n".join(lines)
+
     def _compose_step_instruction_for_runtime(
         self,
         *,
@@ -7964,6 +8285,7 @@ class CodexWorker:
         runtime_mode: str,
         step: ResolvedTaskStep,
         total_steps: int,
+        attachments_prompt_block: str = "",
     ) -> str:
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
@@ -8001,6 +8323,11 @@ class CodexWorker:
                 "Publish stage is disabled for this task."
             )
 
+        attachments_section = ""
+        normalized_attachments_block = str(attachments_prompt_block or "").strip()
+        if normalized_attachments_block:
+            attachments_section = f"{normalized_attachments_block}\n\n"
+
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"
             f"{objective}\n\n"
@@ -8008,6 +8335,7 @@ class CodexWorker:
             f"{step_instruction}\n\n"
             "EFFECTIVE SKILL:\n"
             f"{step.effective_skill_id}\n\n"
+            f"{attachments_section}"
             "WORKSPACE:\n"
             "- Repo is already checked out on the working branch.\n"
             f"{workspace_publish_line}\n"
@@ -8275,8 +8603,13 @@ class CodexWorker:
 
     def _register_redaction_value(self, value: str | None) -> None:
         candidate = str(value or "").strip()
-        if candidate:
-            self._dynamic_redaction_values.add(candidate)
+        if not candidate:
+            return
+        # Avoid over-redacting common boolean/null literals that can appear in
+        # non-sensitive diagnostics (for example `ci.isRunning=true`).
+        if moonmind_logging._is_low_entropy_literal(candidate):
+            return
+        self._dynamic_redaction_values.add(candidate)
 
     def _redact_text(self, text: str) -> str:
         redacted = self._secret_redactor.scrub(text)

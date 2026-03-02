@@ -78,3 +78,20 @@ def test_self_heal_attempt_path_scoped_to_job(tmp_path: Path) -> None:
     ).resolve()
     assert path == expected
     assert path.is_relative_to((tmp_path / str(job_id)).resolve())
+
+
+def test_write_attachment_namespace_path_stays_scoped_to_job(tmp_path: Path) -> None:
+    """Attachment namespace paths should remain under the owning job directory."""
+
+    storage = AgentQueueArtifactStorage(tmp_path)
+    job_id = uuid4()
+
+    destination, storage_path = storage.write_artifact(
+        job_id=job_id,
+        artifact_name="inputs/demo-attachment/wireframe.png",
+        data=b"attachment-bytes",
+    )
+
+    assert destination.exists()
+    assert destination.is_relative_to((tmp_path / str(job_id)).resolve())
+    assert storage_path == f"{job_id}/inputs/demo-attachment/wireframe.png"

@@ -393,6 +393,51 @@
   )
     ? Boolean(systemConfig.defaultProposeTasks)
     : true;
+  const attachmentPolicyConfig =
+    systemConfig.attachmentPolicy &&
+    typeof systemConfig.attachmentPolicy === "object" &&
+    !Array.isArray(systemConfig.attachmentPolicy)
+      ? systemConfig.attachmentPolicy
+      : {};
+  const parseAttachmentPolicyInt = (rawValue, fallback) => {
+    const parsed = Number(rawValue);
+    if (Number.isFinite(parsed)) {
+      return Math.max(1, Math.trunc(parsed));
+    }
+    return fallback;
+  };
+  const parseAllowedContentTypes = () => {
+    if (!Array.isArray(attachmentPolicyConfig.allowedContentTypes)) {
+      return ["image/png", "image/jpeg", "image/webp"];
+    }
+    const normalized = attachmentPolicyConfig.allowedContentTypes
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter((value) => Boolean(value));
+    return normalized.length > 0
+      ? normalized
+      : ["image/png", "image/jpeg", "image/webp"];
+  };
+  const attachmentPolicy = {
+    enabled: Object.prototype.hasOwnProperty.call(attachmentPolicyConfig, "enabled")
+      ? Boolean(attachmentPolicyConfig.enabled)
+      : false,
+    maxCount: parseAttachmentPolicyInt(
+      attachmentPolicyConfig.maxCount,
+      10,
+    ),
+    maxBytes: parseAttachmentPolicyInt(
+      attachmentPolicyConfig.maxBytes,
+      10 * 1024 * 1024,
+    ),
+    totalBytes: Math.max(
+      1,
+      parseAttachmentPolicyInt(
+        attachmentPolicyConfig.totalBytes,
+        25 * 1024 * 1024,
+      ),
+    ),
+    allowedContentTypes: parseAllowedContentTypes(),
+  };
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const taskTemplateCatalogConfig =
     systemConfig.taskTemplateCatalog &&
@@ -1577,12 +1622,17 @@
   }
 
   async function fetchJson(url, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    const body = options.body;
+    const isFormData =
+      typeof FormData === "function" && body instanceof FormData;
+    if (!isFormData && !Object.prototype.hasOwnProperty.call(headers, "Content-Type")) {
+      headers["Content-Type"] = "application/json";
+    }
+
     const response = await fetch(url, {
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers || {}),
-      },
+      headers,
       ...options,
     });
 
@@ -3959,6 +4009,30 @@
       sanitizedWorkerDraft.approvalToken || "",
     ).trim();
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
+    const attachmentAcceptedTypes = attachmentPolicy.allowedContentTypes.join(",");
+    const attachmentSectionHtml =
+      attachmentPolicy.enabled && !isEditMode
+        ? `
+        <section class="card" data-runtime-visibility="worker">
+          <label>Image Attachments (optional)
+            <input
+              type="file"
+              id="queue-attachments-input"
+              accept="${escapeHtml(attachmentAcceptedTypes)}"
+              multiple
+            />
+          </label>
+          <p class="small" id="queue-attachments-message">
+            Up to ${escapeHtml(String(attachmentPolicy.maxCount))} files, ${escapeHtml(
+              String(attachmentPolicy.maxBytes),
+            )} bytes each, ${escapeHtml(
+              String(attachmentPolicy.totalBytes),
+            )} bytes total.
+          </p>
+          <ul class="list" id="queue-attachments-list"></ul>
+        </section>
+        `
+        : "";
     const primarySubmitLabel = isEditMode ? "Update" : "Create";
     const runtimeSubmitOptions = isEditMode ? supportedTaskRuntimes : submitRuntimeOptions;
 
@@ -4072,13 +4146,14 @@
             )}" placeholder="auto-generated unless starting branch is non-default" />
           </label>
         </div>
-          <label>Publish Mode
+        <label>Publish Mode
           <select name="publishMode">
             <option value="pr" ${queueDraftPublishMode === "pr" ? "selected" : ""}>pr</option>
             <option value="branch" ${queueDraftPublishMode === "branch" ? "selected" : ""}>branch</option>
             <option value="none" ${queueDraftPublishMode === "none" ? "selected" : ""}>none</option>
           </select>
         </label>
+        ${attachmentSectionHtml}
         <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
             <input type="number" name="priority" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" />
@@ -4114,6 +4189,109 @@
     if (!form || !message) {
       return;
     }
+    const attachmentInput = form.querySelector("#queue-attachments-input");
+    const attachmentMessage = form.querySelector("#queue-attachments-message");
+    const attachmentList = form.querySelector("#queue-attachments-list");
+
+    const formatAttachmentBytes = (value) => {
+      const bytes = Math.max(0, Number(value) || 0);
+      if (bytes < 1024) {
+        return `${bytes} B`;
+      }
+      if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(1)} KB`;
+      }
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+    const selectedAttachmentFiles = () =>
+      attachmentInput instanceof HTMLInputElement
+        ? Array.from(attachmentInput.files || [])
+        : [];
+    const validateAttachmentFiles = (files) => {
+      const normalizedFiles = Array.isArray(files) ? files : [];
+      const errors = [];
+      if (normalizedFiles.length > attachmentPolicy.maxCount) {
+        errors.push(
+          `Too many attachments (${normalizedFiles.length}/${attachmentPolicy.maxCount}).`,
+        );
+      }
+      let totalBytes = 0;
+      normalizedFiles.forEach((file) => {
+        const type = String(file.type || "").trim().toLowerCase();
+        if (!attachmentPolicy.allowedContentTypes.includes(type)) {
+          errors.push(`Unsupported file type for ${file.name || "attachment"}.`);
+        }
+        const sizeBytes = Math.max(0, Number(file.size) || 0);
+        if (sizeBytes > attachmentPolicy.maxBytes) {
+          errors.push(
+            `${file.name || "attachment"} exceeds ${formatAttachmentBytes(
+              attachmentPolicy.maxBytes,
+            )}.`,
+          );
+        }
+        totalBytes += sizeBytes;
+      });
+      if (totalBytes > attachmentPolicy.totalBytes) {
+        errors.push(
+          `Total attachment size exceeds ${formatAttachmentBytes(
+            attachmentPolicy.totalBytes,
+          )}.`,
+        );
+      }
+      return {
+        files: normalizedFiles,
+        ok: errors.length === 0,
+        errors,
+        totalBytes,
+      };
+    };
+    const renderAttachmentSelection = () => {
+      if (!attachmentPolicy.enabled) {
+        return;
+      }
+      const files = selectedAttachmentFiles();
+      const validation = validateAttachmentFiles(files);
+      if (attachmentList) {
+        if (!files.length) {
+          attachmentList.innerHTML = "";
+        } else {
+          attachmentList.innerHTML = files
+            .map((file) => {
+              const type = String(file.type || "unknown").trim();
+              return `<li>${escapeHtml(file.name || "attachment")} (${escapeHtml(
+                type || "unknown",
+              )}, ${escapeHtml(formatAttachmentBytes(file.size))})</li>`;
+            })
+            .join("");
+        }
+      }
+      if (attachmentMessage) {
+        if (!files.length) {
+          attachmentMessage.textContent = `Up to ${attachmentPolicy.maxCount} files, ${formatAttachmentBytes(
+            attachmentPolicy.maxBytes,
+          )} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`;
+        } else if (!validation.ok) {
+          attachmentMessage.textContent = validation.errors.join(" ");
+        } else {
+          attachmentMessage.textContent = `${files.length} attachment(s) selected (${formatAttachmentBytes(
+            validation.totalBytes,
+          )}).`;
+        }
+      }
+      if (attachmentInput instanceof HTMLInputElement) {
+        attachmentInput.setCustomValidity(
+          validation.ok ? "" : validation.errors.join(" "),
+        );
+      }
+      return validation;
+    };
+    if (attachmentInput instanceof HTMLInputElement) {
+      attachmentInput.addEventListener("change", () => {
+        renderAttachmentSelection();
+      });
+    }
+    renderAttachmentSelection();
+
     const readQueueTemplateFeatureRequest = () => {
       const input = form.querySelector("#queue-template-feature-request");
       if (!(input instanceof HTMLTextAreaElement)) {
@@ -5545,6 +5723,20 @@
         maxAttempts,
         ...(affinityKey ? { affinityKey } : {}),
       };
+      const attachmentValidation =
+        attachmentPolicy.enabled && !isEditMode
+          ? renderAttachmentSelection() || validateAttachmentFiles(selectedAttachmentFiles())
+          : { ok: true, files: [], errors: [], totalBytes: 0 };
+      if (!attachmentValidation.ok) {
+        message.className = "notice error queue-submit-message";
+        message.textContent = attachmentValidation.errors.join(" ");
+        return;
+      }
+      const hasAttachments =
+        attachmentPolicy.enabled &&
+        !isEditMode &&
+        Array.isArray(attachmentValidation.files) &&
+        attachmentValidation.files.length > 0;
 
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
@@ -5565,11 +5757,33 @@
           return;
         }
 
-        const created = await fetchJson("/api/queue/jobs", {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
-        if (!created || typeof created.id !== "string" || !created.id.trim()) {
+        const created = hasAttachments
+          ? await fetchJson(
+              queueSourceConfig.createWithAttachments || "/api/queue/jobs/with-attachments",
+              (() => {
+                const requestForm = new FormData();
+                requestForm.append("request", JSON.stringify(requestBody));
+                attachmentValidation.files.forEach((file) => {
+                  requestForm.append("files", file, file.name || "attachment");
+                });
+                return {
+                  method: "POST",
+                  body: requestForm,
+                };
+              })(),
+            )
+          : await fetchJson(queueSourceConfig.create || "/api/queue/jobs", {
+              method: "POST",
+              body: JSON.stringify(requestBody),
+            });
+        const createdJobNode = pick(created, "job");
+        const createdJobId =
+          createdJobNode &&
+          typeof createdJobNode === "object" &&
+          !Array.isArray(createdJobNode)
+            ? String(pick(createdJobNode, "id") || "").trim()
+            : String(pick(created, "id") || "").trim();
+        if (!createdJobId) {
           throw new Error("queue creation response missing job id");
         }
         try {
@@ -5578,7 +5792,7 @@
           console.warn("worker draft cleanup failed after queue creation", cleanupError);
         }
         window.location.href = buildUnifiedTaskDetailRoute(
-          created.id,
+          createdJobId,
           "queue",
         );
       } catch (error) {
@@ -5909,6 +6123,13 @@
                 <tbody id="queue-artifacts-body"><tr><td colspan="5" class="small">Loading artifacts...</td></tr></tbody>
               </table>
             </section>
+            <section>
+              <h3>Input Attachments</h3>
+              <table>
+                <thead><tr><th>Preview</th><th>Name</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
+                <tbody id="queue-attachments-body"><tr><td colspan="5" class="small">Loading attachments...</td></tr></tbody>
+              </table>
+            </section>
           </div>
         </div>
       `,
@@ -5918,6 +6139,7 @@
     const state = {
       job: null,
       artifacts: [],
+      attachments: [],
       events: [],
       liveSession: null,
       liveSessionError: null,
@@ -6125,6 +6347,47 @@
       } else {
         fullLogNode.textContent = "Download full logs unavailable.";
       }
+    };
+
+    const renderAttachments = () => {
+      const bodyNode = document.getElementById("queue-attachments-body");
+      if (!bodyNode) {
+        return;
+      }
+      const attachments = Array.isArray(state.attachments) ? state.attachments : [];
+      if (!attachments.length) {
+        bodyNode.innerHTML = "<tr><td colspan='5' class='small'>No input attachments.</td></tr>";
+        return;
+      }
+      bodyNode.innerHTML = attachments
+        .map((attachment) => {
+          const attachmentId = pick(attachment, "id");
+          const downloadUrl = endpoint(
+            queueSourceConfig.attachmentDownload ||
+              "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
+            {
+              id: jobId,
+              attachmentId,
+            },
+          );
+          const contentType = String(pick(attachment, "contentType") || "").trim();
+          const isImage = contentType.startsWith("image/");
+          const previewHtml = isImage
+            ? `<img src="${escapeHtml(downloadUrl)}" alt="${escapeHtml(
+                pick(attachment, "name") || "attachment",
+              )}" style="max-width:96px;max-height:64px;border-radius:6px;" loading="lazy" />`
+            : "-";
+          return `
+            <tr>
+              <td>${previewHtml}</td>
+              <td>${escapeHtml(pick(attachment, "name") || "")}</td>
+              <td>${escapeHtml(String(pick(attachment, "sizeBytes") || "-"))}</td>
+              <td>${escapeHtml(contentType || "-")}</td>
+              <td><a href="${escapeHtml(downloadUrl)}">Download</a></td>
+            </tr>
+          `;
+        })
+        .join("");
     };
 
     const renderJobSummary = () => {
@@ -6574,9 +6837,15 @@
 
     const loadDetail = async () => {
       try {
-        const [job, artifactsPayload] = await Promise.all([
+        const [job, artifactsPayload, attachmentsPayload] = await Promise.all([
           fetchJson(endpoint("/api/queue/jobs/{id}", { id: jobId })),
           fetchJson(endpoint("/api/queue/jobs/{id}/artifacts", { id: jobId })),
+          fetchJson(
+            endpoint(
+              queueSourceConfig.attachments || "/api/queue/jobs/{id}/attachments",
+              { id: jobId },
+            ),
+          ),
         ]);
         let liveSession = null;
         let liveSessionError = null;
@@ -6602,6 +6871,7 @@
         }
         state.job = job;
         state.artifacts = artifactsPayload?.items || [];
+        state.attachments = attachmentsPayload?.items || [];
         state.liveSession = liveSession;
         state.liveSessionError = liveSessionError;
         state.liveSessionRouteMissing = liveSessionRouteMissing;
@@ -6609,10 +6879,12 @@
         renderJobSummary();
         renderLiveSession();
         renderArtifacts();
+        renderAttachments();
       } catch (error) {
         console.error("queue detail load failed", error);
         state.job = null;
         state.artifacts = [];
+        state.attachments = [];
         state.liveSession = null;
         state.liveSessionError = null;
         state.liveSessionRouteMissing = false;
@@ -6620,6 +6892,7 @@
         renderJobSummary();
         renderLiveSession();
         renderArtifacts();
+        renderAttachments();
       }
     };
 

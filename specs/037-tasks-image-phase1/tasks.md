@@ -1,135 +1,182 @@
-# Tasks: Tasks Image Attachments Phase 1
+# Tasks: Tasks Image Attachments Phase 1 (Runtime Alignment)
 
-**Input**: Design artifacts under `/specs/037-tasks-image-phase1/`
-**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/attachments.openapi.yaml, quickstart.md
-**Tests**: Required via `./tools/test_unit.sh` (per DOC-REQ-011) plus optional `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`
+**Input**: Design documents from `/specs/037-tasks-image-phase1/`  
+**Prerequisites**: `plan.md` (required), `spec.md` (required), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`  
+**Mode**: Runtime (`DOC-REQ-010`)  
+**Tests**: Validation tests are required and must run through `./tools/test_unit.sh` (`DOC-REQ-011`).
 
-**Format Reminder**: `- [ ] T### [P?] [US#] Description (DOC-REQ-###, ...)` — include `[US#]` only inside user-story phases and mark `[P]` when tasks do not block others.
+## Format: `[ID] [P?] [Story] Description`
+
+- [X] Tasks use sequential `T###` IDs in dependency order.
+- [X] `[P]` marks tasks that are parallelizable (different files, no unmet dependencies).
+- [X] `[US#]` labels are used only in user-story phases.
+- [X] Every task includes concrete file path(s).
+
+## Prompt B Scope Controls (Step 12/16)
+
+- Runtime production implementation tasks are explicitly present: `T004-T008`, `T011-T013`, `T017-T020`, `T023-T025`.
+- Runtime validation tasks are explicitly present: `T003`, `T009`, `T010`, `T014-T016`, `T021`, `T022`, `T028`.
+- `DOC-REQ-*` implementation + validation coverage is enforced through `T002` and `T026`, with per-requirement mappings persisted in `specs/037-tasks-image-phase1/contracts/requirements-traceability.md`.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Prepare configuration, module scaffolding, and fixtures that every story needs.
+**Purpose**: Lock runtime scope, traceability, and deterministic fixtures before implementation updates.
 
-- [X] T001 Update `moonmind/config/settings.py` and `config.toml` so `AGENT_JOB_ATTACHMENT_*` and `MOONMIND_VISION_*` defaults plus validation live in one place for downstream services (DOC-REQ-007, DOC-REQ-010).
-- [X] T002 [P] Scaffold `moonmind/vision/__init__.py`, `moonmind/vision/settings.py`, and a placeholder `service.py` to reserve the module namespace referenced by workers and prompts (DOC-REQ-007).
-- [X] T003 [P] Add PNG/JPEG/WebP fixtures under `tests/fixtures/attachments/` and reference them from `specs/037-tasks-image-phase1/quickstart.md` so automated suites can exercise uploads (DOC-REQ-011).
+- [X] T001 Reconcile runtime Phase 1 scope and implementation surfaces in `specs/037-tasks-image-phase1/plan.md` and `specs/037-tasks-image-phase1/spec.md` (`DOC-REQ-010`).
+- [X] T002 [P] Seed full `DOC-REQ-001` to `DOC-REQ-011` task mapping skeleton in `specs/037-tasks-image-phase1/contracts/requirements-traceability.md`.
+- [X] T003 [P] Refresh attachment fixtures for PNG/JPEG/WebP and invalid payload coverage in `tests/fixtures/attachments/` (`DOC-REQ-002`, `DOC-REQ-011`).
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Harden storage, service helpers, and clients before implementing user stories.
+**Purpose**: Complete blocking API/service/view-model prerequisites needed by all user stories.
 
-- [ ] T004 Refactor `moonmind/workflows/agent_queue/storage.py` to enforce sanitized `inputs/<uuid>/<filename>` paths, digest accounting, and reserved-namespace guards (DOC-REQ-002, DOC-REQ-004, DOC-REQ-009, DOC-REQ-010).
-- [ ] T005 [P] Extend `moonmind/workflows/agent_queue/service.py` with shared helpers (limit checks, `_list_input_artifacts`, `_assert_job_worker_ownership`) that gate both user and worker flows (DOC-REQ-001, DOC-REQ-003, DOC-REQ-004).
-- [ ] T006 [P] Update `moonmind/schemas/agent_queue_models.py` plus related DTO conversions so queue/job responses expose attachment metadata, counts, and totals (DOC-REQ-001, DOC-REQ-003).
-- [ ] T007 [P] Add attachment list/download stubs with worker-token headers to `moonmind/agents/codex_worker/queue_api_client.py` for future prepare-stage use (DOC-REQ-003, DOC-REQ-005).
+- [X] T004 Reconcile multipart create contract and explicit caption fail-fast handling in `api_service/api/routers/agent_queue.py` and `moonmind/workflows/agent_queue/task_contract.py` (`DOC-REQ-001`, `DOC-REQ-009`).
+- [X] T005 [P] Reconcile attachment type/signature/count/size validation and persistence gating in `moonmind/workflows/agent_queue/service.py` (`DOC-REQ-001`, `DOC-REQ-002`).
+- [X] T006 [P] Reconcile reserved `inputs/` namespace enforcement and worker-upload rejection in `moonmind/workflows/agent_queue/service.py` and `moonmind/workflows/agent_queue/storage.py` (`DOC-REQ-003`).
+- [X] T007 [P] Reconcile owner and active-claim authorization guards for attachment list/download endpoints in `api_service/api/routers/agent_queue.py` and `moonmind/workflows/agent_queue/service.py` (`DOC-REQ-004`).
+- [X] T008 Reconcile dashboard runtime attachment config exposure in `api_service/api/routers/task_dashboard_view_model.py` (`DOC-REQ-008`, `DOC-REQ-010`).
+
+**Checkpoint**: Foundational runtime prerequisites are complete; user-story work can proceed.
 
 ---
 
-## Phase 3: User Story 1 - Submit Tasks With Image Attachments (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 - Submit Task With Image Attachments (Priority: P1) 🎯 MVP
 
-**Goal**: Dashboard/API users can submit PNG/JPEG/WebP attachments alongside a task, and the job becomes claimable only after every file persists under `inputs/`.
-**Independent Test**: Use `POST /api/queue/jobs/with-attachments` with ≤10 files totaling ≤25 MB and confirm the response lists sanitized attachment metadata plus job status queued.
+**Goal**: Ensure attachment-enabled queue creation is validated, persisted, and only claimable after persistence.
 
-### Tests for User Story 1 (required by DOC-REQ-011)
+**Independent Test**: Submit valid and invalid attachment payloads and verify validation + claimability gating behavior in automated tests.
 
-- [ ] T008 [P] [US1] Add happy-path + limit failure coverage for `POST /api/queue/jobs/with-attachments` in `tests/unit/api/routers/test_agent_queue.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-010, DOC-REQ-011).
-- [ ] T009 [P] [US1] Expand `tests/unit/workflows/agent_queue/test_service_attachments.py` to assert sanitized filenames, namespace guards, and aggregate byte enforcement (DOC-REQ-002, DOC-REQ-004, DOC-REQ-009, DOC-REQ-011).
-- [ ] T010 [P] [US1] Add ACL tests for job-owner attachment listing/downloading (and unauthorized callers) in `tests/unit/api/routers/test_agent_queue.py` (DOC-REQ-003, DOC-REQ-004, DOC-REQ-010, DOC-REQ-011).
+### Tests for User Story 1
+
+- [X] T009 [P] [US1] Add router tests for create-with-attachments atomic visibility and validation failures in `tests/unit/api/routers/test_agent_queue.py` (`DOC-REQ-001`, `DOC-REQ-002`, `DOC-REQ-011`).
+- [X] T010 [P] [US1] Add artifact/service tests for reserved `inputs/` namespace rules and caption fail-fast behavior in `tests/unit/workflows/agent_queue/test_artifact_storage.py` and `tests/unit/api/routers/test_agent_queue_artifacts.py` (`DOC-REQ-003`, `DOC-REQ-009`, `DOC-REQ-011`).
 
 ### Implementation for User Story 1
 
-- [ ] T011 [P] [US1] Implement multipart `POST /api/queue/jobs/with-attachments` parsing plus request validation in `api_service/api/routers/agent_queue.py`, including the optional `captions` JSON map keyed by filename (DOC-REQ-001, DOC-REQ-002, DOC-REQ-010).
-- [ ] T012 [US1] Complete `AgentQueueService.create_job_with_attachments` to atomically persist jobs + attachments, store caption hints, enforce per-file/total limits, and emit `Attachment uploaded` queue events plus audit logs (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-010).
-- [ ] T013 [P] [US1] Update `moonmind/workflows/agent_queue/storage.py` and related artifact writers so attachments land in `var/artifacts/agent_jobs/<jobId>/inputs/<uuid>/<filename>` with digests (DOC-REQ-002, DOC-REQ-009).
-- [ ] T014 [P] [US1] Extend DTOs and response builders in `moonmind/schemas/agent_queue_models.py` plus `api_service/api/routers/agent_queue.py` to surface attachment counts/sizes in job payloads (DOC-REQ-001, DOC-REQ-003).
-- [ ] T015 [US1] Add job-owner `GET /api/queue/jobs/{jobId}/attachments` + `/download` endpoints with pagination + sanitized filenames in `api_service/api/routers/agent_queue.py` (DOC-REQ-003, DOC-REQ-004).
-- [ ] T016 [P] [US1] Emit StatsD counters and queue events for attachment upload/list/download inside `moonmind/workflows/agent_queue/service.py` and `moonmind/agents/codex_worker/metrics.py` (DOC-REQ-004, DOC-REQ-010).
+- [X] T011 [US1] Implement create-with-attachments persist-before-claim flow in `moonmind/workflows/agent_queue/service.py` (`DOC-REQ-001`, `DOC-REQ-010`).
+- [X] T012 [US1] Implement deterministic attachment metadata normalization and reserved-path persistence in `moonmind/workflows/agent_queue/service.py` (`DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-010`).
+- [X] T013 [US1] Implement user/worker attachment endpoint response shaping and authorization error handling in `api_service/api/routers/agent_queue.py` (`DOC-REQ-004`, `DOC-REQ-010`).
 
-**Checkpoint**: Job creation + owner APIs work end-to-end; attachments never leak outside `inputs/`.
+**Checkpoint**: User Story 1 supports validated attachment submission with persistence gating.
 
 ---
 
-## Phase 4: User Story 2 - Worker Prepares Vision Context (Priority: P2)
+## Phase 4: User Story 2 - Worker Consumes Attachments During Prepare (Priority: P1)
 
-**Goal**: Codex/Gemini/Claude workers download attachments during prepare, build manifests + vision context, and inject an `INPUT ATTACHMENTS` block before runtime instructions.
-**Independent Test**: Claim a job with attachments and verify `.moonmind/inputs`, `.moonmind/attachments_manifest.json`, `.moonmind/vision/image_context.md`, updated `artifacts/task_context.json`, and prompt logs containing the attachment block.
+**Goal**: Ensure prepare-stage runtime deterministically downloads attachments, generates artifacts, and injects prompt context in required order.
 
-### Tests for User Story 2 (required by DOC-REQ-011)
+**Independent Test**: Run worker prepare for attachment-enabled jobs and verify downloads, manifest/context outputs, lifecycle events, and prompt ordering.
 
-- [ ] T017 [P] [US2] Extend `tests/unit/agents/codex_worker/test_worker.py` to cover attachment downloads, digest verification, `.moonmind/inputs` paths, and StatsD events (DOC-REQ-005, DOC-REQ-009, DOC-REQ-010, DOC-REQ-011).
-- [ ] T018 [P] [US2] Add prompt-builder tests (Codex/Gemini/Claude) ensuring the `INPUT ATTACHMENTS` block precedes `WORKSPACE` text and handles disabled vision states in `tests/unit/agents/codex_worker/test_prompts.py` (DOC-REQ-006, DOC-REQ-005, DOC-REQ-011).
-- [ ] T019 [P] [US2] Create `tests/unit/vision/test_service.py` validating `moonmind/vision` enable flags, provider/model overrides, and OCR toggles (DOC-REQ-007, DOC-REQ-011).
-- [ ] T020 [P] [US2] Add worker-endpoint auth tests to `tests/unit/api/routers/test_agent_queue.py` covering token enforcement + claim checks (DOC-REQ-003, DOC-REQ-004, DOC-REQ-011).
+### Tests for User Story 2
+
+- [X] T014 [P] [US2] Add worker prepare tests for attachment download lifecycle events, manifest emission, and `task_context.json` attachment summary in `tests/unit/agents/codex_worker/test_worker.py` (`DOC-REQ-005`, `DOC-REQ-011`).
+- [X] T015 [P] [US2] Add worker tests for vision context enabled/disabled paths and deterministic `.moonmind/vision/image_context.md` generation in `tests/unit/agents/codex_worker/test_worker.py` (`DOC-REQ-007`, `DOC-REQ-011`).
+- [X] T016 [P] [US2] Add worker tests asserting `INPUT ATTACHMENTS` is injected before `WORKSPACE` in runtime instructions in `tests/unit/agents/codex_worker/test_worker.py` (`DOC-REQ-006`, `DOC-REQ-011`).
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Implement worker-scoped `GET /api/queue/jobs/{jobId}/attachments/worker` and `/download/worker` routes in `api_service/api/routers/agent_queue.py` using the new ACL helpers (DOC-REQ-003, DOC-REQ-004, DOC-REQ-005).
-- [ ] T022 [P] [US2] Extend `moonmind/agents/codex_worker/queue_api_client.py` with streaming list/download calls that send `X-MoonMind-Worker-Token` and handle limit pagination (DOC-REQ-003, DOC-REQ-005).
-- [ ] T023 [US2] Update `moonmind/agents/codex_worker/worker.py::_run_prepare_stage` to download attachments via the client, verify digests, and write binaries under `repo/.moonmind/inputs/<uuid>-<filename>` (DOC-REQ-005, DOC-REQ-009).
-- [ ] T024 [P] [US2] Write `.moonmind/attachments_manifest.json`, update `.git/info/exclude`, and guard directories via helpers in `moonmind/agents/codex_worker/utils.py` (DOC-REQ-005, DOC-REQ-009).
-- [ ] T025 [P] [US2] Implement `moonmind/vision/service.py` to render `vision/image_context.md` using Gemini defaults + OCR toggle, returning fallback text when disabled (DOC-REQ-007, DOC-REQ-005).
-- [ ] T026 [US2] Inject the `INPUT ATTACHMENTS` block ahead of workspace instructions for Codex/Gemini/Claude inside `moonmind/agents/codex_worker/worker.py` prompt builders (DOC-REQ-006, DOC-REQ-005).
-- [ ] T027 [P] [US2] Update `artifacts/task_context.json` writer and `moonmind/agents/codex_worker/metrics.py` to summarize attachment counts/bytes, context status, and emit `task.attachments.*` events (DOC-REQ-005, DOC-REQ-010).
-- [ ] T028 [P] [US2] Wire `MOONMIND_VISION_*` + attachment flags into `moonmind/agents/codex_worker/cli.py` and documentation so operators can toggle providers/OCR (DOC-REQ-007, DOC-REQ-010).
+- [X] T017 [US2] Implement worker attachment list/download client helpers and prepare-stage `.moonmind/inputs` download pipeline in `moonmind/agents/codex_worker/worker.py` (`DOC-REQ-005`, `DOC-REQ-010`).
+- [X] T018 [US2] Implement `.moonmind/attachments_manifest.json` generation and `artifacts/task_context.json` attachment summary wiring in `moonmind/agents/codex_worker/worker.py` (`DOC-REQ-005`, `DOC-REQ-011`, `DOC-REQ-010`).
+- [X] T019 [US2] Implement toggleable attachment vision context rendering in `moonmind/agents/codex_worker/worker.py` and `moonmind/vision/service.py` (`DOC-REQ-007`, `DOC-REQ-010`).
+- [X] T020 [US2] Implement runtime instruction composition that injects `INPUT ATTACHMENTS` before `WORKSPACE` in `moonmind/agents/codex_worker/worker.py` (`DOC-REQ-006`, `DOC-REQ-010`).
 
-**Checkpoint**: Workers always download attachments, emit manifests/context, and prepend prompts before executing runtimes.
+**Checkpoint**: User Story 2 deterministically prepares and injects attachment context for runtime execution.
 
 ---
 
-## Phase 5: User Story 3 - Review Attachments From Job Detail (Priority: P3)
+## Phase 5: User Story 3 - Review Attachments in Queue Detail (Priority: P2)
 
-**Goal**: Dashboard users can add attachments via drag/drop at creation time and review/preview downloads inside the job detail panel with ACL enforcement.
-**Independent Test**: Submit a job through the dashboard with ≤10 images, observe validation feedback for invalid files, and preview/download attachments in the job detail drawer while an unauthorized user receives HTTP 403.
+**Goal**: Ensure dashboard users can upload, preview, and download authorized attachments from queue create/detail flows.
 
-### Tests for User Story 3 (required by DOC-REQ-011)
+**Independent Test**: Validate dashboard view-model config and queue detail attachment behavior for authorized and unauthorized contexts.
 
-- [ ] T029 [P] [US3] Add dashboard JS unit tests (or DOM harness) covering drag/drop validation, size/type limits, and error messaging in `tests/unit/task_dashboard/test_dashboard_attachments.py` (DOC-REQ-008, DOC-REQ-001, DOC-REQ-011).
-- [ ] T030 [P] [US3] Write job-detail preview/download tests (Playwright or equivalent) verifying preview rendering and 403 responses for unauthorized downloads (DOC-REQ-008, DOC-REQ-003, DOC-REQ-011).
+### Tests for User Story 3
+
+- [X] T021 [P] [US3] Add view-model tests for attachment runtime config and endpoint exposure in `tests/unit/api/routers/test_task_dashboard_view_model.py` (`DOC-REQ-008`, `DOC-REQ-011`).
+- [X] T022 [P] [US3] Extend queue router tests for owner/unauthorized attachment list/download access in `tests/unit/api/routers/test_agent_queue.py` (`DOC-REQ-004`, `DOC-REQ-008`, `DOC-REQ-011`).
 
 ### Implementation for User Story 3
 
-- [ ] T031 [US3] Update `api_service/static/task_dashboard/dashboard.js` to add the attachments picker (drag/drop + file input), client-side validation, and multipart FormData submission (DOC-REQ-008, DOC-REQ-001).
-- [ ] T032 [P] [US3] Extend dashboard config plumbing (`api_service/api/routers/task_dashboard.py`, `templates/task_dashboard.html`) to expose attachment limits + allowed MIME types to the frontend (DOC-REQ-008, DOC-REQ-003).
-- [ ] T033 [P] [US3] Implement the job-detail attachments panel with previews, sanitized filenames, and download buttons wired to the new APIs inside `dashboard.js` (DOC-REQ-008, DOC-REQ-003).
-- [ ] T034 [P] [US3] Refresh Tailwind/CSS assets (`api_service/static/task_dashboard/dashboard.css`, `tailwind.config.cjs`) for dropzone + gallery states, then rebuild via `npm run dashboard:css:min` (DOC-REQ-008).
+- [X] T023 [US3] Implement queue create multipart attachment upload wiring and limit messaging in `api_service/static/task_dashboard/dashboard.js` (`DOC-REQ-008`, `DOC-REQ-010`).
+- [X] T024 [US3] Implement queue detail attachment preview and download actions in `api_service/static/task_dashboard/dashboard.js` (`DOC-REQ-008`, `DOC-REQ-010`).
+- [X] T025 [US3] Implement dashboard attachment config consumption and API endpoint mapping in `api_service/static/task_dashboard/dashboard.js` and `api_service/api/routers/task_dashboard_view_model.py` (`DOC-REQ-008`, `DOC-REQ-011`, `DOC-REQ-010`).
 
-**Checkpoint**: Dashboard users see realtime validation, previews, and secure downloads for every attachment.
+**Checkpoint**: User Story 3 provides attachment upload + preview/download UX with authorization guarantees.
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-**Purpose**: Documentation, instrumentation visibility, and final validation steps shared across stories.
+**Purpose**: Final traceability, validation evidence, and delivery hardening.
 
-- [ ] T035 Update `docs/TasksImageSystem.md` and `specs/037-tasks-image-phase1/quickstart.md` with the final API routes, worker prepare expectations, and dashboard UX cues (DOC-REQ-001, DOC-REQ-005, DOC-REQ-008).
-- [ ] T036 [P] Add attachment/vision metric references to `moonmind/agents/codex_worker/metrics.py` docs or `docs/observability.md`, ensuring operators know the new `task.attachments.*` counters (DOC-REQ-010).
-- [ ] T037 Run `./tools/test_unit.sh tests/unit/api/routers/test_agent_queue.py tests/unit/workflows/agent_queue/test_service_attachments.py tests/unit/agents/codex_worker/test_worker.py tests/unit/task_dashboard/test_dashboard_attachments.py` and capture results under `var/artifacts/workflow_runs/` (DOC-REQ-011).
-- [ ] T038 Run `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` to validate the end-to-end queue → worker → dashboard attachment flow (DOC-REQ-011).
+- [X] T026 [P] Update `DOC-REQ-001` to `DOC-REQ-011` implementation/validation task mappings in `specs/037-tasks-image-phase1/contracts/requirements-traceability.md`.
+- [X] T027 [P] Update runtime validation walkthrough and attachment scenarios in `specs/037-tasks-image-phase1/quickstart.md`, including `./tools/test_unit.sh` commands (`DOC-REQ-010`, `DOC-REQ-011`).
+- [X] T028 Execute `./tools/test_unit.sh tests/unit/api/routers/test_agent_queue.py tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/agents/codex_worker/test_worker.py` and record results in `specs/037-tasks-image-phase1/quickstart.md` (`DOC-REQ-010`, `DOC-REQ-011`).
 
 ---
 
 ## Dependencies & Execution Order
 
-- Setup (Phase 1) → Foundational (Phase 2): configuration + scaffolding must exist before service code compiles.
-- User Story 1 depends on Phases 1-2 completing so queue/service/storage helpers are stable.
-- User Story 2 depends on Phases 1-3; workers cannot download until APIs + storage exist.
-- User Story 3 depends on Phase 3 (API responses + metadata) but can run in parallel with Phase 4 once the POST/list/download endpoints are stable.
-- Polish tasks run last after all user stories pass their checkpoints.
+### Phase Dependencies
+
+- Phase 1 has no dependencies.
+- Phase 2 depends on Phase 1 and blocks all user-story work.
+- Phases 3, 4, and 5 depend on Phase 2.
+- Phase 6 depends on completion of targeted user stories.
+
+### User Story Dependencies
+
+- **US1 (P1)** starts after Phase 2 and is the MVP for attachment ingestion + gating.
+- **US2 (P1)** starts after Phase 2 and depends on persisted attachment behavior from US1.
+- **US3 (P2)** starts after Phase 2 and depends on attachment API/config stability from US1.
+
+### Within Each User Story
+
+- Tests are defined and completed before final sign-off.
+- Core runtime implementation tasks complete before cross-cutting polish.
+- Each story must satisfy its independent test criteria before moving on.
 
 ## Parallel Opportunities
 
-- Within Phase 2, tasks T004–T007 touch disjoint modules and can proceed concurrently.
-- After Phase 2, US1 API work (T011–T016) can run while US1 tests (T008–T010) execute on stubs.
-- Once US1 endpoints stabilize, US2 worker downloads (T021–T024) and vision/prompt work (T025–T028) can happen in parallel.
-- US3 frontend tasks (T031–T034) can start immediately after US1 exposes attachment metadata, independent from worker changes.
-- Test tasks marked [P] across all phases can execute concurrently on CI agents.
+- T002 and T003 can run in parallel during setup.
+- T005, T006, and T007 can run in parallel after T004 begins.
+- US1 tests T009 and T010 can run in parallel.
+- US2 tests T014, T015, and T016 can run in parallel.
+- US3 tests T021 and T022 can run in parallel.
+- T026 and T027 can run in parallel before T028.
+
+## Parallel Example: User Story 2
+
+```bash
+# Parallel worker validation tasks
+Task: T014 tests/unit/agents/codex_worker/test_worker.py (prepare lifecycle + manifest assertions)
+Task: T015 tests/unit/agents/codex_worker/test_worker.py (vision context enabled/disabled assertions)
+Task: T016 tests/unit/agents/codex_worker/test_worker.py (prompt block ordering assertions)
+```
 
 ## Implementation Strategy
 
-1. Deliver MVP by finishing Phases 1–3 and verifying `POST /api/queue/jobs/with-attachments` end-to-end (DOC-REQ-001/002/003/004/009/010).
-2. Layer in worker automation (Phase 4) so every runtime consumes manifests + vision context (DOC-REQ-005/006/007/009/010).
-3. Ship dashboard UX (Phase 5) to unlock customer-facing previews (DOC-REQ-008).
-4. Close with Phase 6 polish + validation to document flows and prove coverage (DOC-REQ-011).
-5. At each checkpoint, confirm attachments remain confined to `inputs/` artifacts and prompts always mention manifests before proceeding to the next phase.
+### MVP First (User Story 1)
+
+1. Complete Phase 1 and Phase 2.
+2. Complete Phase 3 (US1).
+3. Validate US1 independently before proceeding.
+
+### Incremental Delivery
+
+1. Deliver US1 (attachment ingestion + gating).
+2. Deliver US2 (worker prepare + prompt injection).
+3. Deliver US3 (dashboard create/detail UX).
+4. Run Phase 6 final traceability + wrapper test validation.
+
+## Task Summary & Validation
+
+- Total tasks: **28**
+- Task count by user story: **US1: 5**, **US2: 7**, **US3: 5**
+- Non-story tasks (Setup/Foundational/Polish): **11**
+- Parallel opportunities: **Yes** (Setup, Foundational, and per-story tests)
+- Independent test criteria: Defined in each story phase
+- Suggested MVP scope: **Phase 1 + Phase 2 + Phase 3 (US1)**
+- Format validation: All tasks follow `- [X] T### [P?] [US?] Description with file path`

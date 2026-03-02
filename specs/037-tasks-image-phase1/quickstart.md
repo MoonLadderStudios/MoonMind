@@ -24,6 +24,7 @@ http --form POST :8000/api/queue/jobs/with-attachments \
   files@./tests/fixtures/attachments/placeholder.jpg
 ```
 Expected: HTTP 201 with `attachments[*].name` values prefixed by `inputs/`. Use the PNG/JPEG/WebP fixtures under `tests/fixtures/attachments/` to keep examples deterministic.
+Use `tests/fixtures/attachments/invalid-signature.png` for negative validation scenarios.
 
 ## 4. Claim the job on a worker and verify prepare outputs
 ```bash
@@ -49,6 +50,11 @@ Inspect the worker logs (`artifacts/logs/execute.log` or CLI stdout) and find th
   ./tools/test_unit.sh tests/unit/workflows/agent_queue/test_service_attachments.py
   ./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py::test_prepare_stage_downloads_attachments
   ```
+- Runtime alignment validation (required task command):
+  ```bash
+  ./tools/test_unit.sh tests/unit/api/routers/test_agent_queue.py tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/agents/codex_worker/test_worker.py
+  ```
+  Result captured on 2026-03-01: `904 passed, 3714 warnings, 8 subtests passed`.
 - Integration/worker happy-path (optional, longer):
   ```bash
   docker compose -f docker-compose.test.yaml run --rm orchestrator-tests

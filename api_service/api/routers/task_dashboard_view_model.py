@@ -88,6 +88,31 @@ def _build_supported_task_runtimes() -> list[str]:
     return supported
 
 
+def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]:
+    """Normalize attachment policy values for dashboard consumption."""
+
+    max_count = max(1, int(config.get("agent_job_attachment_max_count", 1) or 1))
+    max_bytes = max(
+        1, int(config.get("agent_job_attachment_max_bytes", 10 * 1024 * 1024) or 1)
+    )
+    total_bytes = max(
+        1, int(config.get("agent_job_attachment_total_bytes", 25 * 1024 * 1024) or 1)
+    )
+    allowed_types = tuple(
+        config.get("agent_job_attachment_allowed_content_types") or ()
+    )
+    return {
+        "maxCount": max_count,
+        "maxBytes": max_bytes,
+        "totalBytes": max(total_bytes, max_bytes),
+        "allowedContentTypes": (
+            list(allowed_types)
+            if allowed_types
+            else ["image/png", "image/jpeg", "image/webp"]
+        ),
+    }
+
+
 def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
 
@@ -135,6 +160,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "queue": {
                 "list": "/api/queue/jobs",
                 "create": "/api/queue/jobs",
+                "createWithAttachments": "/api/queue/jobs/with-attachments",
                 "update": "/api/queue/jobs/{id}",
                 "detail": "/api/queue/jobs/{id}",
                 "cancel": "/api/queue/jobs/{id}/cancel",
@@ -142,6 +168,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "eventsStream": "/api/queue/jobs/{id}/events/stream",
                 "artifacts": "/api/queue/jobs/{id}/artifacts",
                 "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
+                "attachments": "/api/queue/jobs/{id}/attachments",
+                "attachmentDownload": "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
                 "migrationTelemetry": "/api/queue/telemetry/migration",
                 "skills": "/api/tasks/skills",
                 "runtimeCapabilities": "/api/queue/workers/runtime-capabilities",
@@ -210,6 +238,17 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "get": "/api/system/worker-pause",
                 "post": "/api/system/worker-pause",
                 "pollIntervalMs": 5000,
+            },
+            "attachmentPolicy": {
+                "enabled": bool(settings.spec_workflow.agent_job_attachment_enabled),
+                **_build_default_attachment_policy(
+                    {
+                        "agent_job_attachment_max_count": settings.spec_workflow.agent_job_attachment_max_count,
+                        "agent_job_attachment_max_bytes": settings.spec_workflow.agent_job_attachment_max_bytes,
+                        "agent_job_attachment_total_bytes": settings.spec_workflow.agent_job_attachment_total_bytes,
+                        "agent_job_attachment_allowed_content_types": settings.spec_workflow.agent_job_attachment_allowed_content_types,
+                    }
+                ),
             },
         },
     }

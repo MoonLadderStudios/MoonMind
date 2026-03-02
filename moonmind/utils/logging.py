@@ -15,10 +15,17 @@ _GITHUB_TOKEN_PATTERN = re.compile(
     r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
     re.IGNORECASE,
 )
+_NON_SECRET_LITERAL_VALUES = frozenset(
+    {"true", "false", "none", "null", "0", "1", "yes", "no", "on", "off"}
+)
 
 
 def _is_sensitive_key(key: str) -> bool:
     return bool(_SENSITIVE_KEY_PATTERN.search(key))
+
+
+def _is_low_entropy_literal(value: str) -> bool:
+    return value.strip().lower() in _NON_SECRET_LITERAL_VALUES
 
 
 def _secret_variants(secret: str) -> set[str]:
@@ -71,10 +78,14 @@ class SecretRedactor:
     ) -> "SecretRedactor":
         secrets = []
         for key, value in os.environ.items():
-            if _is_sensitive_key(key) and value:
+            if _is_sensitive_key(key) and value and not _is_low_entropy_literal(value):
                 secrets.append(value)
         if extra_secrets:
-            secrets.extend(secret for secret in extra_secrets if secret)
+            secrets.extend(
+                secret
+                for secret in extra_secrets
+                if secret and not _is_low_entropy_literal(secret)
+            )
         return cls(secrets=secrets, placeholder=placeholder)
 
     def scrub(self, text: str | None) -> str:

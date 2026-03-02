@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -204,6 +205,57 @@ def test_upload_artifact_limits_memory_before_service_dispatch(
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "artifact_too_large"
     service.upload_artifact.assert_not_awaited()
+
+
+def test_upload_artifact_rejects_reserved_inputs_namespace(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Worker artifact uploads must reject writes into reserved attachment paths."""
+
+    test_client, service = client
+    service.upload_artifact.side_effect = AgentQueueValidationError(
+        "artifact name may not use reserved 'inputs/' namespace"
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/artifacts/upload",
+        files={"file": ("image.png", b"1234", "image/png")},
+        data={"workerId": "worker-1", "name": "inputs/demo/wireframe.png"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+
+
+def test_create_job_with_attachments_rejects_caption_hints(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Caption hints should fail fast until caption persistence is implemented."""
+
+    test_client, service = client
+
+    payload = {
+        "request": json.dumps(
+            {"type": "task", "payload": {"repository": "MoonLadderStudios/MoonMind"}}
+        ),
+        "captions": json.dumps({"wireframe.png": "an image caption"}),
+    }
+    files = [
+        (
+            "files",
+            ("wireframe.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, "image/png"),
+        )
+    ]
+
+    response = test_client.post(
+        "/api/queue/jobs/with-attachments",
+        data=payload,
+        files=files,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "attachment_captions_not_supported"
+    service.create_job_with_attachments.assert_not_awaited()
 
 
 def test_download_artifact_job_mismatch_maps_409(

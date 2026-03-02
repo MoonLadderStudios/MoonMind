@@ -44,6 +44,10 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["queue"]["cancel"] == "/api/queue/jobs/{id}/cancel"
     assert config["sources"]["queue"]["update"] == "/api/queue/jobs/{id}"
     assert (
+        config["sources"]["queue"]["createWithAttachments"]
+        == "/api/queue/jobs/with-attachments"
+    )
+    assert (
         config["sources"]["queue"]["eventsStream"]
         == "/api/queue/jobs/{id}/events/stream"
     )
@@ -85,6 +89,13 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["queue"]["taskStepTemplateFavorite"]
         == "/api/task-step-templates/{slug}:favorite"
     )
+    assert (
+        config["sources"]["queue"]["attachments"] == "/api/queue/jobs/{id}/attachments"
+    )
+    assert (
+        config["sources"]["queue"]["attachmentDownload"]
+        == "/api/queue/jobs/{id}/attachments/{attachmentId}/download"
+    )
     assert config["sources"]["manifests"]["list"].startswith(
         "/api/queue/jobs?type=manifest"
     )
@@ -124,6 +135,38 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert worker_pause["get"] == "/api/system/worker-pause"
     assert worker_pause["post"] == "/api/system/worker-pause"
     assert worker_pause["pollIntervalMs"] == 5000
+    attachment_policy = config["system"]["attachmentPolicy"]
+    assert attachment_policy["enabled"] is True
+    assert attachment_policy["maxCount"] >= 1
+    assert attachment_policy["maxBytes"] >= 1
+    assert attachment_policy["totalBytes"] >= attachment_policy["maxBytes"]
+    assert "image/png" in attachment_policy["allowedContentTypes"]
+
+
+def test_build_runtime_config_normalizes_attachment_policy_settings(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_max_count", 0)
+    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_max_bytes", 0)
+    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_total_bytes", 0)
+    monkeypatch.setattr(
+        settings.spec_workflow,
+        "agent_job_attachment_allowed_content_types",
+        (),
+    )
+
+    config = build_runtime_config("/tasks")
+    attachment_policy = config["system"]["attachmentPolicy"]
+
+    assert attachment_policy["enabled"] is True
+    assert attachment_policy["maxCount"] == 1
+    assert attachment_policy["maxBytes"] == 1
+    assert attachment_policy["totalBytes"] == 1
+    assert attachment_policy["allowedContentTypes"] == [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+    ]
 
 
 def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
