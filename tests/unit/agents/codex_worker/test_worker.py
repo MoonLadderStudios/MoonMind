@@ -7323,3 +7323,6 @@ async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
     assert len(queue.failed) == 1
     assert "legacy job type disabled" in queue.failed[0]
     assert handler.calls == []
+
+
+# PR #533 CI retrigger.
