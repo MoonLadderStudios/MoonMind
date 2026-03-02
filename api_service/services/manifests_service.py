@@ -152,7 +152,7 @@ class ManifestsService:
 
         record = await self.require_manifest(name)
         now = datetime.now(UTC)
-        record.state_json = dict(state_json or {})
+        record.state_json = dict(state_json)
         record.state_updated_at = now
         if last_run_job_id is not None:
             record.last_run_job_id = last_run_job_id

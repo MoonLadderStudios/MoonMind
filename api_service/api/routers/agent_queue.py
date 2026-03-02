@@ -391,7 +391,10 @@ def _extract_manifest_secret_refs(
 
     profile_refs: list[dict[str, str]] = []
     seen_profile: set[str] = set()
-    for entry in refs_obj.get("profile", []):
+    profile_payload = refs_obj.get("profile")
+    if not isinstance(profile_payload, list):
+        profile_payload = []
+    for entry in profile_payload:
         if not isinstance(entry, dict):
             continue
         env_key = str(entry.get("envKey") or "").strip()
@@ -412,7 +415,10 @@ def _extract_manifest_secret_refs(
 
     vault_refs: list[dict[str, str]] = []
     seen_vault: set[str] = set()
-    for entry in refs_obj.get("vault", []):
+    vault_payload = refs_obj.get("vault")
+    if not isinstance(vault_payload, list):
+        vault_payload = []
+    for entry in vault_payload:
         if not isinstance(entry, dict):
             continue
         ref = str(entry.get("ref") or "").strip()

@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from api_service.api.routers import manifests as manifests_router
+from api_service.api.routers.agent_queue import _WorkerRequestAuth
 from api_service.services.manifests_service import ManifestRegistryNotFoundError
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.service import AgentQueueValidationError
@@ -33,6 +34,19 @@ def _record(**overrides):
     }
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def _worker_auth(**overrides: object) -> _WorkerRequestAuth:
+    base = {
+        "auth_source": "worker_token",
+        "worker_id": "worker-1",
+        "allowed_repositories": (),
+        "allowed_job_types": (),
+        "capabilities": (),
+        "token_id": None,
+    }
+    base.update(overrides)
+    return _WorkerRequestAuth(**base)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -179,7 +193,6 @@ async def test_update_manifest_state_returns_detail() -> None:
     record = _record(state_json={"docs": {"cursor": "abc"}})
     service = AsyncMock()
     service.update_manifest_state.return_value = record
-    user = SimpleNamespace(id=uuid4())
 
     payload = manifests_router.ManifestStateUpdateRequest(
         state_json={"docs": {"cursor": "abc"}},
@@ -189,7 +202,7 @@ async def test_update_manifest_state_returns_detail() -> None:
         name="demo",
         payload=payload,
         service=service,
-        _user=user,
+        worker_auth=_worker_auth(),
     )
 
     assert response.name == "demo"
@@ -203,13 +216,30 @@ async def test_update_manifest_state_not_found() -> None:
 
     service = AsyncMock()
     service.update_manifest_state.side_effect = ManifestRegistryNotFoundError("missing")
-    user = SimpleNamespace(id=uuid4())
 
     with pytest.raises(HTTPException) as exc:
         await manifests_router.update_manifest_state(
             name="missing",
             payload=manifests_router.ManifestStateUpdateRequest(state_json={}),
             service=service,
-            _user=user,
+            worker_auth=_worker_auth(),
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_manifest_state_requires_worker_token() -> None:
+    """Manifest state callbacks should reject non-worker auth."""
+
+    service = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await manifests_router.update_manifest_state(
+            name="demo",
+            payload=manifests_router.ManifestStateUpdateRequest(state_json={}),
+            service=service,
+            worker_auth=_worker_auth(auth_source="oidc", worker_id=None),
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "worker_not_authorized"

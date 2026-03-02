@@ -886,6 +886,40 @@ def test_resolve_manifest_job_secrets_tolerates_malformed_manifest_secret_refs(
     mock_auth_manager.get_secret.assert_not_awaited()
 
 
+def test_resolve_manifest_job_secrets_tolerates_null_manifest_secret_refs(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Null manifestSecretRefs sections should be treated as empty lists."""
+
+    test_client, service = client
+    job = _build_manifest_job()
+    job.status = models.AgentJobStatus.RUNNING
+    job.claimed_by = "worker-1"
+    job.payload["manifestSecretRefs"] = {"profile": None, "vault": None}
+    service.get_job.return_value = job
+
+    mock_auth_manager = AsyncMock()
+    test_client.app.dependency_overrides[get_auth_manager] = lambda: mock_auth_manager
+    test_client.app.dependency_overrides[_require_worker_auth] = (
+        lambda: _WorkerRequestAuth(
+            auth_source="worker_token",
+            worker_id="worker-1",
+            allowed_repositories=(),
+            allowed_job_types=(),
+            capabilities=("manifest",),
+        )
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/manifest/secrets",
+        json={"includeProfile": True, "includeVault": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"profile": [], "vault": []}
+    mock_auth_manager.get_secret.assert_not_awaited()
+
+
 def test_resolve_manifest_job_secrets_fails_when_profile_ref_unresolved(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

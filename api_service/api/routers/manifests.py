@@ -20,6 +20,10 @@ from api_service.api.schemas import (
     ManifestSummaryModel,
     ManifestUpsertRequest,
 )
+from api_service.api.routers.agent_queue import (
+    _WorkerRequestAuth,
+    _require_worker_auth,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
@@ -178,9 +182,19 @@ async def update_manifest_state(
     name: str,
     payload: ManifestStateUpdateRequest,
     service: ManifestsService = Depends(_get_service),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
     _user: User = Depends(get_current_user()),
 ) -> ManifestDetailModel:
     """Persist worker checkpoint state and optional run metadata."""
+
+    if worker_auth.auth_source != "worker_token":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_not_authorized",
+                "message": "manifest state callback requires worker-token authentication",
+            },
+        )
 
     try:
         record = await service.update_manifest_state(
