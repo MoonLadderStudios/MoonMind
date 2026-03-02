@@ -2661,9 +2661,15 @@
       .trim()
       .toLowerCase();
     const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
+    const rawStatus = String(pick(job, "status") || "")
+      .trim()
+      .toLowerCase();
     return (
       jobType === "task" &&
-      (normalizedStatus === "failed" || normalizedStatus === "cancelled")
+      (normalizedStatus === "failed" ||
+        normalizedStatus === "cancelled" ||
+        rawStatus === "failed" ||
+        rawStatus === "cancelled")
     );
   };
 
