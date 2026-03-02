@@ -8,6 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.routers.agent_queue import _require_worker_auth, _WorkerRequestAuth
 from api_service.api.schemas import (
     ManifestDetailModel,
     ManifestListResponse,
@@ -19,10 +20,6 @@ from api_service.api.schemas import (
     ManifestStateUpdateRequest,
     ManifestSummaryModel,
     ManifestUpsertRequest,
-)
-from api_service.api.routers.agent_queue import (
-    _WorkerRequestAuth,
-    _require_worker_auth,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session

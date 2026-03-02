@@ -281,7 +281,7 @@ async def test_update_manifest_state_requires_worker_token() -> None:
             payload=manifests_router.ManifestStateUpdateRequest(state_json={}),
             service=service,
             worker_auth=_worker_auth(auth_source="oidc", worker_id=None),
-    )
+        )
 
     assert exc.value.status_code == 403
     assert exc.value.detail["code"] == "worker_not_authorized"
