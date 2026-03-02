@@ -1536,6 +1536,7 @@ class CodexWorker:
         self._config = config
         self._queue_client = queue_client
         self._codex_exec_handler = codex_exec_handler
+        self._metrics = WorkerMetrics()
         self._pause_poll_interval_seconds = max(
             1.0, self._config.pause_poll_interval_ms / 1000.0
         )
@@ -2010,12 +2011,7 @@ class CodexWorker:
                 or resolved_failure_reason
                 or "codex_exec failed"
             )
-            if str(raw_terminal_error).startswith(
-                "pr-resolution final state unresolved:"
-            ):
-                terminal_error = str(raw_terminal_error)
-            else:
-                terminal_error = self._redact_text(str(raw_terminal_error))
+            terminal_error = self._redact_text(str(raw_terminal_error))
             await self._queue_client.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
@@ -7196,7 +7192,6 @@ class CodexWorker:
             "credential",
         )
         deterministic_repo_markers = (
-            "git",
             "repository",
             "merge conflict",
             "checkout",
@@ -7227,11 +7222,20 @@ class CodexWorker:
             return FailureClass.DETERMINISTIC_CONTRACT
         if any(marker in normalized for marker in deterministic_policy_markers):
             return FailureClass.DETERMINISTIC_POLICY
-        if any(marker in normalized for marker in deterministic_repo_markers):
-            return FailureClass.DETERMINISTIC_REPO
         if any(marker in normalized for marker in transient_runtime_markers):
             return FailureClass.TRANSIENT_RUNTIME
+        if any(marker in normalized for marker in deterministic_repo_markers):
+            return FailureClass.DETERMINISTIC_REPO
         return FailureClass.DETERMINISTIC_CONTRACT
+
+    async def _await_task_no_raise(
+        self,
+        task: asyncio.Task[object] | None,
+    ) -> None:
+        if task is None:
+            return
+        with suppress(asyncio.CancelledError):
+            await task
 
     @staticmethod
     def _hash_text(value: str) -> str | None:
@@ -7529,7 +7533,7 @@ class CodexWorker:
             config=self_heal_config,
             secret_redactor=self._secret_redactor,
         )
-        metrics = WorkerMetrics()
+        metrics = self._metrics
         controller.begin_step(step_id=step.step_id, step_index=step.step_index)
         attempt_artifacts: list[ArtifactUpload] = []
         last_failure_class: FailureClass | None = None
@@ -7669,12 +7673,9 @@ class CodexWorker:
                 idle_wait_task.cancel()
                 if propagate_cancel_task is not None:
                     propagate_cancel_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await propagate_cancel_task
-                with suppress(asyncio.CancelledError):
-                    await wall_wait_task
-                with suppress(asyncio.CancelledError):
-                    await idle_wait_task
+                await self._await_task_no_raise(propagate_cancel_task)
+                await self._await_task_no_raise(wall_wait_task)
+                await self._await_task_no_raise(idle_wait_task)
                 idle_timeout_watcher.cancel()
                 await idle_timeout_watcher.wait()
 
@@ -7748,8 +7749,6 @@ class CodexWorker:
                     changed_files=changed_files,
                 )
                 attempt_artifacts.append(step_state_artifact)
-                if artifact_callback is not None:
-                    await artifact_callback((step_state_artifact,))
                 controller.reset_after_success()
                 return WorkerExecutionResult(
                     succeeded=True,
@@ -7811,7 +7810,7 @@ class CodexWorker:
             active_step = controller.active_step
             no_progress_exhausted = False
             if active_step is not None:
-                _matched = active_step.record_failure(
+                active_step.record_failure(
                     signature=failure_signature,
                     diff_hash=diff_hash,
                 )
@@ -8141,13 +8140,21 @@ class CodexWorker:
                 step_patch_path=step_patch_path,
                 step_log_offsets=step_log_offsets,
             )
+            step_checkpoint_name = f"state/steps/step-{step.step_index:04d}.json"
+            non_checkpoint_artifacts: list[ArtifactUpload] = []
+            checkpoint_artifacts: list[ArtifactUpload] = []
+            for artifact in normalized_step_artifacts:
+                if artifact.name == step_checkpoint_name:
+                    checkpoint_artifacts.append(artifact)
+                else:
+                    non_checkpoint_artifacts.append(artifact)
             self._persist_step_log_offsets_checkpoint(
                 artifacts_dir=prepared.artifacts_dir,
                 step_log_offsets=step_log_offsets,
             )
             step_artifacts.extend(normalized_step_artifacts)
-            if artifact_callback is not None and normalized_step_artifacts:
-                await artifact_callback(normalized_step_artifacts)
+            if artifact_callback is not None and non_checkpoint_artifacts:
+                await artifact_callback(non_checkpoint_artifacts)
 
             if step_result.succeeded and runtime_mode == "codex":
                 transcript_integrity = self._evaluate_step_transcript_integrity(
@@ -8238,6 +8245,8 @@ class CodexWorker:
                     message="task.step.finished",
                     payload=event_payload,
                 )
+                if artifact_callback is not None and checkpoint_artifacts:
+                    await artifact_callback(checkpoint_artifacts)
                 self._append_stage_log(
                     prepared.execute_log_path,
                     (
