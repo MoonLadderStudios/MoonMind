@@ -183,7 +183,6 @@ async def update_manifest_state(
     payload: ManifestStateUpdateRequest,
     service: ManifestsService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
-    _user: User = Depends(get_current_user()),
 ) -> ManifestDetailModel:
     """Persist worker checkpoint state and optional run metadata."""
 
