@@ -1415,7 +1415,9 @@ async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
     success_log = tmp_path / "success.log"
     success_log.write_text("recovered output", encoding="utf-8")
     success_patch = tmp_path / "success.patch"
-    success_patch.write_text("diff --git a/a b/a\n+++ b/a\n@@ -0,0 +1 @@\n+ok\n", encoding="utf-8")
+    success_patch.write_text(
+        "diff --git a/a b/a\n+++ b/a\n@@ -0,0 +1 @@\n+ok\n", encoding="utf-8"
+    )
 
     job = ClaimedJob(
         id=uuid4(),
@@ -1440,7 +1442,9 @@ async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
                 succeeded=False,
                 summary=None,
                 error_message="temporary network outage while contacting runtime",
-                artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+                artifacts=(
+                    ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),
+                ),
             ),
             WorkerExecutionResult(
                 succeeded=True,
@@ -1471,13 +1475,16 @@ async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
     assert processed is True
     assert handler.calls == ["codex_exec", "codex_exec"]
     assert len(handler.exec_payloads) == 2
-    assert handler.exec_payloads[0]["instruction"] == handler.exec_payloads[1][
-        "instruction"
-    ]
+    assert (
+        handler.exec_payloads[0]["instruction"]
+        == handler.exec_payloads[1]["instruction"]
+    )
     assert len(queue.completed) == 1
     assert queue.failed == []
     assert any(event["message"] == "task.self_heal.triggered" for event in queue.events)
-    assert any(event["message"] == "task.step.attempt.started" for event in queue.events)
+    assert any(
+        event["message"] == "task.step.attempt.started" for event in queue.events
+    )
     assert "state/self_heal/attempt-0000-0001.json" in queue.uploaded
     assert "state/steps/step-0000.json" in queue.uploaded
 
@@ -1518,13 +1525,17 @@ async def test_run_once_self_heal_exhaustion_marks_retryable_failure(
                 succeeded=False,
                 summary=None,
                 error_message="temporary upstream runtime failure",
-                artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+                artifacts=(
+                    ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),
+                ),
             ),
             WorkerExecutionResult(
                 succeeded=False,
                 summary=None,
                 error_message="temporary upstream runtime failure",
-                artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+                artifacts=(
+                    ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),
+                ),
             ),
         ]
     )

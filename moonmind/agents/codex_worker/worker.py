@@ -37,6 +37,11 @@ from moonmind.agents.codex_worker.handlers import (
     WorkerExecutionResult,
 )
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
+from moonmind.agents.codex_worker.secret_refs import (
+    SecretReferenceError,
+    VaultSecretResolver,
+    load_vault_token,
+)
 from moonmind.agents.codex_worker.self_heal import (
     FailureClass,
     IdleTimeoutWatcher,
@@ -46,11 +51,6 @@ from moonmind.agents.codex_worker.self_heal import (
     StepIdleTimeoutExceeded,
     StepTimeoutExceeded,
     is_failure_retryable,
-)
-from moonmind.agents.codex_worker.secret_refs import (
-    SecretReferenceError,
-    VaultSecretResolver,
-    load_vault_token,
 )
 from moonmind.config.settings import settings
 from moonmind.rag.settings import RagRuntimeSettings
@@ -7356,7 +7356,10 @@ class CodexWorker:
         """Persist one deterministic per-step checkpoint metadata artifact."""
 
         state_path = (
-            prepared.artifacts_dir / "state" / "steps" / f"step-{step.step_index:04d}.json"
+            prepared.artifacts_dir
+            / "state"
+            / "steps"
+            / f"step-{step.step_index:04d}.json"
         )
         state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -7393,7 +7396,9 @@ class CodexWorker:
 
         state_name = f"state/steps/step-{step.step_index:04d}.json"
         state_path = prepared.artifacts_dir / state_name
-        artifacts[:] = [artifact for artifact in artifacts if artifact.name != state_name]
+        artifacts[:] = [
+            artifact for artifact in artifacts if artifact.name != state_name
+        ]
         with suppress(FileNotFoundError):
             state_path.unlink()
 
@@ -7565,9 +7570,7 @@ class CodexWorker:
                 },
             )
 
-            async def _attempt_output_callback(
-                stream: str, text: str | None
-            ) -> None:
+            async def _attempt_output_callback(stream: str, text: str | None) -> None:
                 if text:
                     idle_timeout_watcher.pulse()
                 if base_callback is not None:
@@ -7827,11 +7830,15 @@ class CodexWorker:
             attempts_remaining = attempt_number < self_heal_config.step_max_attempts
             strategy = (
                 SelfHealStrategy.SOFT_RESET
-                if retryable_failure and attempts_remaining and not no_progress_exhausted
+                if retryable_failure
+                and attempts_remaining
+                and not no_progress_exhausted
                 else SelfHealStrategy.QUEUE_RETRY
             )
             last_failure_class = failure_class
-            outcome = "retrying" if strategy is SelfHealStrategy.SOFT_RESET else "failed"
+            outcome = (
+                "retrying" if strategy is SelfHealStrategy.SOFT_RESET else "failed"
+            )
             metrics.record_self_heal_attempt(
                 step_index=step.step_index,
                 attempt=attempt_number,
