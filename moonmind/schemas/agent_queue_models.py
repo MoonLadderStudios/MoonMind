@@ -48,7 +48,7 @@ class ResubmitJobRequest(BaseModel):
 
     type: str = Field(..., alias="type")
     priority: int = Field(0, alias="priority")
-    payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
+    payload: dict[str, Any] = Field(..., alias="payload")
     affinity_key: Optional[str] = Field(None, alias="affinityKey")
     max_attempts: int = Field(3, alias="maxAttempts", ge=1)
     note: Optional[str] = Field(None, alias="note", max_length=256)

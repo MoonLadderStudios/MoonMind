@@ -727,20 +727,7 @@ class AgentQueueService:
             raise AgentQueueValidationError(
                 "attachment edits are not supported for resubmits"
             )
-
-        normalized_payload = self.normalize_task_job_payload(dict(payload or {}))
-        normalized_affinity = affinity_key.strip() if affinity_key else None
         clean_note = self._clean_optional_str_max(note, max_length=256)
-
-        changed_fields: list[str] = []
-        if source_job.priority != priority:
-            changed_fields.append("priority")
-        if source_job.payload != normalized_payload:
-            changed_fields.append("payload")
-        if source_job.affinity_key != normalized_affinity:
-            changed_fields.append("affinityKey")
-        if source_job.max_attempts != max_attempts:
-            changed_fields.append("maxAttempts")
 
         effective_created_by = (
             actor_user_id
@@ -754,13 +741,22 @@ class AgentQueueService:
         )
         new_job = await self._create_job_record(
             job_type=candidate_type,
-            payload=copy.deepcopy(normalized_payload),
+            payload=copy.deepcopy(dict(payload or {})),
             priority=priority,
             created_by_user_id=effective_created_by,
             requested_by_user_id=effective_requested_by,
-            affinity_key=normalized_affinity,
+            affinity_key=affinity_key.strip() if affinity_key else None,
             max_attempts=max_attempts,
         )
+        changed_fields: list[str] = []
+        if source_job.priority != new_job.priority:
+            changed_fields.append("priority")
+        if source_job.payload != new_job.payload:
+            changed_fields.append("payload")
+        if source_job.affinity_key != new_job.affinity_key:
+            changed_fields.append("affinityKey")
+        if source_job.max_attempts != new_job.max_attempts:
+            changed_fields.append("maxAttempts")
         source_event_payload: dict[str, Any] = {
             "newJobId": str(new_job.id),
             "actorUserId": (str(actor_user_id) if actor_user_id is not None else None),

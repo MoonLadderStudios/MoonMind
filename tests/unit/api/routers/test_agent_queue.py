@@ -572,6 +572,20 @@ def test_resubmit_job_validation_error_maps_422(
     assert response.json()["detail"]["code"] == "invalid_queue_payload"
 
 
+def test_resubmit_job_requires_payload(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Missing resubmit payload should fail fast during request validation."""
+
+    test_client, _ = client
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={"type": "task"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 def test_resubmit_job_claude_runtime_gate_maps_400(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

@@ -5742,11 +5742,15 @@
             "Queue task resubmit is invalid: " + String(error?.message || "validation failed");
           return;
         }
-        message.textContent = isEditMode
-          ? "Failed to update queue task: " + String(error?.message || "request failed")
-          : isResubmitMode
-            ? "Failed to resubmit queue task: " + String(error?.message || "request failed")
-            : "Failed to create queue task: " + String(error?.message || "request failed");
+        let action = "create";
+        if (isEditMode) {
+          action = "update";
+        } else if (isResubmitMode) {
+          action = "resubmit";
+        }
+        message.textContent = `Failed to ${action} queue task: ${String(
+          error?.message || "request failed",
+        )}`;
       }
     });
   }
