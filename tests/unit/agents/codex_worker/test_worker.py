@@ -1402,6 +1402,216 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert started[1]["payload"]["stepId"] == "step-2"
 
 
+async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retryable codex step failures should soft-reset and recover in-step."""
+
+    monkeypatch.setenv("STEP_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("STEP_NO_PROGRESS_LIMIT", "3")
+
+    failure_log = tmp_path / "failure.log"
+    failure_log.write_text("transient failure output", encoding="utf-8")
+    success_log = tmp_path / "success.log"
+    success_log.write_text("recovered output", encoding="utf-8")
+    success_patch = tmp_path / "success.patch"
+    success_patch.write_text("diff --git a/a b/a\n+++ b/a\n@@ -0,0 +1 @@\n+ok\n", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        [
+            WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message="temporary network outage while contacting runtime",
+                artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+            ),
+            WorkerExecutionResult(
+                succeeded=True,
+                summary="step recovered",
+                error_message=None,
+                artifacts=(
+                    ArtifactUpload(path=success_log, name="logs/codex_exec.log"),
+                    ArtifactUpload(path=success_patch, name="patches/changes.patch"),
+                ),
+            ),
+        ]
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,  # type: ignore[arg-type]
+    )
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert handler.calls == ["codex_exec", "codex_exec"]
+    assert len(handler.exec_payloads) == 2
+    assert handler.exec_payloads[0]["instruction"] == handler.exec_payloads[1][
+        "instruction"
+    ]
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert any(event["message"] == "task.self_heal.triggered" for event in queue.events)
+    assert any(event["message"] == "task.step.attempt.started" for event in queue.events)
+    assert "state/self_heal/attempt-0000-0001.json" in queue.uploaded
+    assert "state/steps/step-0000.json" in queue.uploaded
+
+
+async def test_run_once_self_heal_exhaustion_marks_retryable_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retryable step exhaustion should fail queue job with retryable=true."""
+
+    monkeypatch.setenv("STEP_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("STEP_NO_PROGRESS_LIMIT", "99")
+
+    failure_log = tmp_path / "failure.log"
+    failure_log.write_text("runtime error output", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        attempt=1,
+        max_attempts=3,
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        [
+            WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message="temporary upstream runtime failure",
+                artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+            ),
+            WorkerExecutionResult(
+                succeeded=False,
+                summary=None,
+                error_message="temporary upstream runtime failure",
+                artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+            ),
+        ]
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,  # type: ignore[arg-type]
+    )
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 0
+    assert len(queue.failed) == 1
+    assert queue.failed_retryable == [True]
+    assert any(event["message"] == "task.self_heal.exhausted" for event in queue.events)
+
+
+async def test_run_once_self_heal_deterministic_failure_does_not_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deterministic contract/policy failures should fail without in-step retry."""
+
+    monkeypatch.setenv("STEP_MAX_ATTEMPTS", "3")
+
+    failure_log = tmp_path / "failure.log"
+    failure_log.write_text("validation failed", encoding="utf-8")
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        attempt=1,
+        max_attempts=3,
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=False,
+            summary=None,
+            error_message="payload validation failed: required field missing",
+            artifacts=(ArtifactUpload(path=failure_log, name="logs/codex_exec.log"),),
+        )
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,  # type: ignore[arg-type]
+    )
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert handler.calls == ["codex_exec"]
+    assert len(queue.completed) == 0
+    assert len(queue.failed) == 1
+    assert queue.failed_retryable == [False]
+    assert not any(
+        event["message"] == "task.self_heal.triggered" for event in queue.events
+    )
+
+
 async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
     tmp_path: Path,
 ) -> None:

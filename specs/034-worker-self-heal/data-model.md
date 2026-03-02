@@ -1,63 +1,76 @@
-# Data Model: Worker Self-Heal System
+# Data Model: Worker Self-Heal System (Phase 1)
 
 ## StepCheckpointState (artifact)
-- **Location**: `state/steps/step-<index>.json` next to the existing `patches/steps/step-<index>.patch` artifact.
+
+- **Location**: `state/steps/step-<index>.json`
+- **Producer**: `moonmind/agents/codex_worker/worker.py` after successful step completion.
 - **Fields**:
-  - `stepId` (string) – canonical step identifier from `task.steps[*].id` or fallback `step-{n}`.
-  - `stepIndex` (integer) – zero-based index in `resolved_steps`.
-  - `attempt` (integer) – cumulative attempt count when the step succeeded.
-  - `diffHash` (string) – sha256 of the normalized patch content.
-  - `changedFiles` (array<string>) – ordered list of files touched by the patch (relative paths, unique).
-  - `summary` (string|null) – runtime-provided success summary, truncated/ scrubbed.
-  - `finishedAt` (ISO-8601 string) – UTC timestamp when checkpoint was written.
-- **Purpose**: Allows deterministic replay during hard resets or operator `resume_from_step` by pairing metadata with the existing patch artifact; also feeds requirements-traceability and dashboard views.
+  - `schemaVersion` (string)
+  - `stepId` (string)
+  - `stepIndex` (integer)
+  - `attempt` (integer)
+  - `summary` (string|null)
+  - `diffHash` (string|null)
+  - `changedFiles` (array<string>)
+  - `finishedAt` (ISO-8601 UTC)
+- **Purpose**: Stable step checkpoint metadata for auditability and future replay phases.
 
 ## SelfHealAttemptArtifact (artifact)
-- **Location**: `state/self_heal/attempt-<stepIndex>-<attempt>.json` (mirrors the controller’s attempt key).
+
+- **Location**: `state/self_heal/attempt-<stepIndex>-<attempt>.json`
+- **Producer**: `moonmind/agents/codex_worker/worker.py` on failed step attempts.
 - **Fields**:
-  - `stepId`, `stepIndex`, `attempt` – same semantics as above.
-  - `failureClass` (`transient_runtime`, `stuck_no_progress`, `deterministic_contract`, `deterministic_policy`, `deterministic_repo`).
-  - `failureSignature` (string) – scrubbed + truncated hashable signature used for no-progress detection.
-  - `strategy` (`soft_reset`, `hard_reset`, `queue_retry`, `operator_request`).
-  - `wallClockSeconds`, `idleSeconds` – measured durations.
-  - `retryContext` – minimal prompt payload (objective, step metadata, failure summary, diff hash, changed files) to prove DOC-REQ-006.
-  - `events` (array) – ordered list of event ids emitted for this attempt (`task.step.attempt.started`, etc.) for audit.
-- **Purpose**: Provides durable observability of how each attempt was classified, which strategy ran, and what payload was sent to the runtime.
+  - `schemaVersion` (string)
+  - `stepId` (string)
+  - `stepIndex` (integer)
+  - `attempt` (integer)
+  - `failureClass` (enum)
+  - `failureSummary` (redacted string)
+  - `failureSignature` (redacted string|null)
+  - `failureSignatureHash` (string|null)
+  - `strategy` (`soft_reset` or `queue_retry` in current phase)
+  - `wallClockSeconds` (number)
+  - `idleTimeoutTriggered` (boolean)
+  - `diffHash` (string|null)
+  - `changedFiles` (array<string>)
+  - `timestamp` (ISO-8601 UTC)
+- **Purpose**: Per-attempt forensic record for retry decisions and debugging.
 
-## LiveControlRecovery Payload (queue `agent_jobs.payload.liveControl`)
+## SelfHeal Retry Metadata (queue fail path)
+
+- **Surface**: `WorkerExecutionResult.run_quality_reason`
 - **Shape**:
-  ```json
-  {
-    "paused": false,
-    "takeover": false,
-    "updatedAt": "2026-02-20T17:04:32Z",
-    "recovery": {
-      "action": "resume_from_step",      // also accepts retry_step, hard_reset_step
-      "stepId": "tpl:speckit-orchestrate:1.0.0:05:b32d2f66",
-      "strategy": "hard_reset_step",     // optional explicit strategy override
-      "requestedBy": "user-uuid",
-      "reason": "operator recovery",
-      "updatedAt": "2026-02-20T17:04:32Z"
-    }
-  }
-  ```
-- **Behavior**: API service persists this blob inside `agent_jobs.payload`, repository methods validate actions, and workers clear the `recovery` object once the request has been honored (emitting `task.control.recovery.ack`).
+  - `category`: `self_heal`
+  - `code`: `step_retryable_exhausted`
+  - `tags`: includes `retry` and `self_heal`
+  - `stepId`, `stepIndex`
+  - `details.failureClass`, `details.strategy`
+- **Purpose**: Signal queue-level retry eligibility when in-step self-heal is exhausted for retryable classes.
 
-## TaskRunControlEvent Metadata
-- **New actions**: `retry_step`, `hard_reset_step`, `resume_from_step` (in addition to `pause`, `resume`, `takeover`, `send_message`).
-- **Metadata**: `{ "action": <string>, "stepId": <string|null>, "strategy": <string|null>, "reason": <string|null> }` so dashboards can render operator intent and audit logs remain structured.
+## Runtime Attempt State (in-memory)
 
-## Retry Prompt Context Envelope
-- **Fields embedded into the minimal retry instruction**:
-  - `objective` (string) – task instructions from canonical payload.
-  - `step` (object) – `{ id, index, title }` for the current step.
-  - `failureSummary` (string) – single-paragraph summary trimmed/scrubbed.
-  - `constraints` (array<string>) – documented constraints (do not re-run unchanged remediation, isolate flaky tests, etc.).
-  - `changedFiles` (array<string>) – subset of `StepCheckpointState.changedFiles` relevant to the attempt.
-  - `diffHash` (string) – matches the hash stored in artifacts.
-- **Usage**: Included in the JSON the worker ships to Codex/Gemini/Claude on every retry, satisfying DOC-REQ-006 without replaying entire transcripts.
+- **Model**: `StepAttemptState` in `self_heal.py`
+- **Fields**:
+  - `attempts_consumed`
+  - `consecutive_no_progress`
+  - `last_failure_signature`
+  - `last_diff_hash`
+- **Purpose**: Budget enforcement and no-progress detection across attempts.
 
-## Metrics Tags
-- **Counters** (`task.self_heal.attempts_total`, `task.self_heal.recovered_total`, `task.self_heal.exhausted_total`) carry tags `{class, strategy, step}`.
-- **Timers** (`task.step.duration_seconds`, `task.step.wall_timeout_total`, `task.step.idle_timeout_total`, `task.step.no_progress_total`) carry `{step, attempt}`.
-- **Storage**: Metrics are ephemeral but the tag schema is part of the contract with downstream monitoring dashboards.
+## Metrics Tag Schema
+
+- **Counters**:
+  - `task.self_heal.attempts_total` with tags `{step, attempt, class, strategy, outcome}`
+  - `task.self_heal.recovered_total` with tags `{step, attempt, class, strategy}`
+  - `task.self_heal.exhausted_total` with tags `{step, attempt, class, strategy}`
+- **Timers/Counters**:
+  - `task.step.duration_seconds`
+  - `task.step.wall_timeout_total`
+  - `task.step.idle_timeout_total`
+  - `task.step.no_progress_total`
+- **Purpose**: Operational visibility and alerting consistency with existing StatsD pipeline.
+
+## Deferred Data Surfaces
+
+- `liveControl.recovery` command payload and associated control-event schema changes.
+- Hard reset replay state transitions and `task.resume.from_step` artifacts/events.

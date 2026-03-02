@@ -1,151 +1,205 @@
-# Tasks: Worker Self-Heal System
+# Tasks: Worker Self-Heal System (Phase 1)
 
 **Input**: Design documents from `/specs/034-worker-self-heal/`
-**Prerequisites**: plan.md, spec.md, data-model.md, research.md, quickstart.md, docs/WorkerSelfHealSystem.md
-**Tests**: Run `./tools/test_unit.sh` (optionally `-k self_heal`) and `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` before publish.
-**Organization**: Tasks are grouped by user story with Setup → Foundational prerequisites, followed by a Polish phase.
+**Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
 
-## Format: `[ID] [P?] [Story] Description`
+**Tests**: Required for this feature. Include unit coverage for retry recovery, retry exhaustion, deterministic fail-fast behavior, artifacts, control compatibility, and redaction.
 
-- `[P]` indicates the task can run in parallel (independent files/deps).
-- `[Story]` is `[US1]`, `[US2]`, or `[US3]` for story-scoped work.
-- Always include concrete file paths or scripts.
-
-## Path Conventions
-
-- Worker runtime: `moonmind/agents/codex_worker/`
-- Queue services: `moonmind/workflows/agent_queue/`
-- API + dashboard: `api_service/`
-- Tests: `tests/unit/...`
-- Docs/specs: `docs/` and `specs/034-worker-self-heal/`
-
----
+**Organization**: Tasks are grouped by user story so each story can be implemented and validated independently.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Wire configuration + scaffolding so later phases can focus on behavior.
+**Purpose**: Align feature artifacts and runtime guardrails with current Phase 1 strategy before coding changes.
 
-- [X] T001 Declare STEP_MAX_ATTEMPTS, STEP_TIMEOUT_SECONDS, STEP_IDLE_TIMEOUT_SECONDS, STEP_NO_PROGRESS_LIMIT, and JOB_SELF_HEAL_MAX_RESETS in `celery_worker/speckit_worker.py` and `config.toml` so SelfHealConfig enforces DOC-REQ-002 defaults.
-- [X] T002 [P] Scaffold `moonmind/agents/codex_worker/self_heal.py` and update `moonmind/agents/codex_worker/__init__.py` to export SelfHealController dataclasses aligned with DOC-REQ-001 and DOC-REQ-002.
+- [X] T001 Align self-heal budget/default configuration wiring in `celery_worker/speckit_worker.py` and `moonmind/agents/codex_worker/self_heal.py` for DOC-REQ-002 and DOC-REQ-013.
+- [X] T002 [P] Refresh phase-aligned requirement mapping in `specs/034-worker-self-heal/spec.md` and `specs/034-worker-self-heal/contracts/requirements-traceability.md` with explicit DOC-REQ-005/DOC-REQ-006/DOC-REQ-009 deferred status.
+- [X] T003 [P] Update runtime verification steps in `specs/034-worker-self-heal/quickstart.md` to require `./tools/test_unit.sh` and scope validation gates for DOC-REQ-013.
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Core helpers (signatures, metrics, artifact plumbing) that every story needs.
+**Purpose**: Core self-heal primitives, telemetry, and artifact infrastructure required by all user stories.
 
-- [X] T003 Implement failure signature normalization + SecretRedactor hooks in `moonmind/agents/codex_worker/self_heal.py` so DOC-REQ-001, DOC-REQ-003, and DOC-REQ-012 data stays scrubbed.
-- [X] T004 [P] Create `moonmind/agents/codex_worker/metrics.py` that wraps `moonmind/workflows/speckit_celery/metrics._MetricsEmitter` for task.self_heal counters/timers (DOC-REQ-011).
-- [X] T005 [P] Extend `moonmind/workflows/agent_queue/storage.py` and `moonmind/agents/codex_worker/worker.py` to create/upload `state/self_heal/` + `state/steps/` artifacts next to patches per DOC-REQ-007.
+**⚠️ CRITICAL**: No user story implementation starts until this phase is complete.
+
+- [X] T004 Implement/normalize `SelfHealConfig`, `StepAttemptState`, failure signature hashing, and idle-timeout primitives in `moonmind/agents/codex_worker/self_heal.py` for DOC-REQ-001, DOC-REQ-002, and DOC-REQ-003.
+- [X] T005 [P] Implement self-heal metric emitters and tag schema in `moonmind/agents/codex_worker/metrics.py` for DOC-REQ-010 and DOC-REQ-011.
+- [X] T006 [P] Implement artifact path/storage helpers for step and self-heal state files in `moonmind/workflows/agent_queue/storage.py` for DOC-REQ-007.
+- [X] T007 Wire shared codex worker exports for self-heal + metrics contracts in `moonmind/agents/codex_worker/__init__.py` for DOC-REQ-013 runtime integration.
+- [X] T008 Add foundational config/primitive validation tests in `tests/unit/agents/codex_worker/test_self_heal.py` for DOC-REQ-001 and DOC-REQ-002.
+- [X] T009 [P] Add foundational telemetry validation tests in `tests/unit/agents/codex_worker/test_metrics.py` for DOC-REQ-011.
+
+**Checkpoint**: Foundation ready. User story work can begin.
 
 ---
 
 ## Phase 3: User Story 1 - Automatic Stuck-Step Recovery (Priority: P1) 🎯 MVP
 
-**Goal**: Workers autonomously detect stuck steps, classify failures, and recover via bounded soft resets.
+**Goal**: Recover retryable step failures in-step using bounded retries and escalate only after exhaustion.
 
-**Independent Test**: Inject a transient CLI hang and verify idle timeout → soft reset recovery without operator input (see spec).
+**Independent Test**: Simulate transient/retryable failures and verify attempt-failed/triggered/recovery events, then simulate retryable exhaustion and verify queue-retryable signaling.
+
+### Tests for User Story 1
+
+- [X] T010 [P] [US1] Add worker tests for wall-timeout, idle-timeout, and no-progress stuck detection in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-001.
+- [X] T011 [P] [US1] Add worker tests for retryable vs deterministic classification and fail-fast behavior in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-003 and DOC-REQ-013.
+- [X] T012 [P] [US1] Add worker tests for soft-reset recovery and retryable exhaustion queue escalation in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-004, DOC-REQ-008, and DOC-REQ-010.
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Implement wall-clock (asyncio) + idle watchdogs and no-progress counters wired to `OutputChunkCallback` inside `moonmind/agents/codex_worker/self_heal.py` per DOC-REQ-001.
-- [ ] T007 [P] [US1] Encode SelfHealStrategy selection (soft reset vs hard reset vs queue retry) with attempt budget decrements + failure-class heuristics inside `moonmind/agents/codex_worker/self_heal.py`, satisfying DOC-REQ-002 and DOC-REQ-003.
-- [ ] T008 [US1] Wrap the step execution loop in `moonmind/agents/codex_worker/worker.py` with the controller so soft resets restart runtimes, cancel/pause/takeover checks run before each attempt, and exhausted retries surface as queue retries (DOC-REQ-004, DOC-REQ-008).
-- [ ] T009 [P] [US1] Extend `_compose_step_instruction_for_runtime` and artifact writers in `moonmind/agents/codex_worker/worker.py` to emit the minimal retry context envelope plus `state/self_heal/attempt-*.json` metadata (DOC-REQ-006, DOC-REQ-010).
-- [ ] T010 [P] [US1] Emit `task.step.attempt.*`/`task.self_heal.*` events and StatsD counters/timers via the new metrics adapter inside `moonmind/agents/codex_worker/worker.py` (DOC-REQ-010, DOC-REQ-011).
-- [ ] T011 [P] [US1] Ensure failure signatures, retry prompts, and stored artifacts route through `SecretRedactor` before persistence in `moonmind/agents/codex_worker/self_heal.py` and `moonmind/agents/codex_worker/worker.py`, covering DOC-REQ-012.
+- [X] T013 [US1] Implement bounded codex step attempt loop with `soft_reset` retries in `moonmind/agents/codex_worker/worker.py` for DOC-REQ-004 and DOC-REQ-013.
+- [X] T014 [US1] Implement wall/idle/no-progress detection integration between `moonmind/agents/codex_worker/worker.py` and `moonmind/agents/codex_worker/self_heal.py` for DOC-REQ-001.
+- [X] T015 [US1] Implement failure classification and retry policy routing in `moonmind/agents/codex_worker/worker.py` for DOC-REQ-003.
+- [X] T016 [US1] Implement self-heal lifecycle events and queue retry metadata (`run_quality_reason.category=self_heal`) in `moonmind/agents/codex_worker/worker.py` for DOC-REQ-008 and DOC-REQ-010.
+- [X] T017 [US1] Implement redaction of failure signatures and emitted payload fields in `moonmind/agents/codex_worker/worker.py` and `moonmind/agents/codex_worker/publish_sanitization.py` for DOC-REQ-012.
 
-### Validation for User Story 1
-
-- [ ] T012 [US1] Expand `tests/unit/agents/codex_worker/test_worker.py` to simulate wall/idle/no-progress detections, budget exhaustion, and cancel/pause/takeover gating that verifies DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, and DOC-REQ-008.
-- [ ] T013 [P] [US1] Add worker tests asserting soft reset retries, minimal retry context payloads, StatsD/event emission, and scrubbed artifacts in `tests/unit/agents/codex_worker/test_worker.py`, validating DOC-REQ-004, DOC-REQ-006, DOC-REQ-010, DOC-REQ-011, and DOC-REQ-012.
+**Checkpoint**: User Story 1 is independently functional and testable.
 
 ---
 
-## Phase 4: User Story 2 - Deterministic Checkpoint Resume (Priority: P2)
+## Phase 4: User Story 2 - Deterministic Checkpoint Metadata (Priority: P2)
 
-**Goal**: Persist per-step checkpoints and replay them deterministically for hard resets or operator resumes.
+**Goal**: Persist deterministic step and attempt artifacts that are stable inputs for later replay phases.
 
-**Independent Test**: Finish steps 1-3, force step 4 to fail repeatedly, trigger hard reset, and confirm replayed checkpoints rebuild workspace before resuming (see spec).
+**Independent Test**: Verify successful step checkpoints and failed-attempt self-heal artifacts are written with required fields, hashes, and redacted summaries.
+
+### Tests for User Story 2
+
+- [X] T018 [P] [US2] Add checkpoint artifact content tests in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-007.
+- [X] T019 [P] [US2] Add self-heal attempt artifact content tests in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-007 and DOC-REQ-010.
+- [X] T020 [P] [US2] Add artifact storage helper tests in `tests/unit/workflows/agent_queue/test_artifact_storage.py` for DOC-REQ-007.
+- [X] T021 [P] [US2] Add deferred-scope regression tests in `tests/unit/agents/codex_worker/test_worker.py` asserting retry attempts continue to reuse base step instructions while DOC-REQ-006 remains gated to Phase 2+.
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Persist `state/steps/step-XXXX.json` metadata next to each patch in `moonmind/agents/codex_worker/worker.py` and register uploads through `moonmind/workflows/agent_queue/storage.py`, satisfying DOC-REQ-007.
-- [ ] T015 [P] [US2] Implement a HardResetWorkspaceBuilder in `moonmind/agents/codex_worker/self_heal.py` that reclones the baseline repo, replays recorded patches with hash validation, and reruns the failing step per DOC-REQ-005 and DOC-REQ-007.
-- [ ] T016 [US2] Emit `task.resume.from_step` events with checkpoint metadata/diff hashes when hard reset or resume completes inside `moonmind/agents/codex_worker/worker.py`, covering DOC-REQ-005 and DOC-REQ-010.
+- [X] T022 [US2] Persist successful step checkpoint artifacts under `state/steps/` in `moonmind/agents/codex_worker/worker.py` for DOC-REQ-007.
+- [X] T023 [US2] Persist per-attempt self-heal artifacts under `state/self_heal/` in `moonmind/agents/codex_worker/worker.py` and `moonmind/workflows/agent_queue/storage.py` for DOC-REQ-007.
+- [X] T024 [US2] Emit self-heal StatsD counters/timers with stable tags/outcomes in `moonmind/agents/codex_worker/worker.py` and `moonmind/agents/codex_worker/metrics.py` for DOC-REQ-011.
+- [X] T025 [US2] Preserve Phase 1 behavior in `moonmind/agents/codex_worker/worker.py` (no retry-prompt envelope mutation yet) and keep DOC-REQ-006 activation criteria explicit in Phase 2+ traceability/docs.
 
-### Validation for User Story 2
-
-- [ ] T017 [US2] Add deterministic replay tests in `tests/unit/agents/codex_worker/test_worker.py` and `tests/unit/workflows/agent_queue/test_repositories.py` that cover StepCheckpointState writes, hash verification, and failure modes (DOC-REQ-005, DOC-REQ-007).
-- [ ] T018 [P] [US2] Extend worker tests to simulate `resume_from_step` hard resets and assert `task.resume.from_step` events/artifacts in `tests/unit/agents/codex_worker/test_worker.py`, validating DOC-REQ-005 and DOC-REQ-010.
+**Checkpoint**: User Stories 1 and 2 work independently with persistent artifacts/metrics.
 
 ---
 
-## Phase 5: User Story 3 - Operator-Controlled Recovery Actions (Priority: P3)
+## Phase 5: User Story 3 - Operator Compatibility During Retries (Priority: P3)
 
-**Goal**: Allow operators to issue retry/hard-reset/resume commands via API/dashboard and have workers honor them.
+**Goal**: Ensure self-heal retries preserve pause/takeover/cancel semantics and current control-surface boundaries.
 
-**Independent Test**: Pause a task mid-retry, send `hard_reset_step` via control API, and confirm the worker resumes using the requested strategy once unpaused (see spec).
+**Independent Test**: During retry conditions, verify pause/takeover blocks next-attempt launch and cancel stops execution without additional retries.
+
+### Tests for User Story 3
+
+- [X] T026 [P] [US3] Add pause/takeover gating tests in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-008.
+- [X] T027 [P] [US3] Add cancellation short-circuit tests in `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-008.
+- [X] T028 [P] [US3] Add API/service tests rejecting recovery actions (`retry_step`, `hard_reset_step`, `resume_from_step`) in `tests/unit/api/routers/test_task_runs.py` and `tests/unit/workflows/agent_queue/test_service.py` for DOC-REQ-005 and DOC-REQ-009.
 
 ### Implementation for User Story 3
 
-- [ ] T019 [US3] Update `api_service/api/routers/task_runs.py` (and related schemas) to accept `retry_step`, `hard_reset_step`, and `resume_from_step` actions with validation + audit logging per DOC-REQ-009.
-- [ ] T020 [P] [US3] Extend `moonmind/workflows/agent_queue/service.py` and `moonmind/workflows/agent_queue/repositories.py` to persist `liveControl.recovery`, guard invalid stepIds, and emit control events per DOC-REQ-009.
-- [ ] T021 [P] [US3] Update `moonmind/agents/codex_worker/worker.py` to parse `payload.liveControl.recovery`, inject operator overrides into the controller, and emit `task.control.recovery.*` acknowledgements satisfying DOC-REQ-009 and DOC-REQ-010.
-- [ ] T022 [US3] Enhance `api_service/static/task_dashboard/dashboard.js` so dashboard users can issue Retry/Hard Reset/Resume commands and see pending recovery state (DOC-REQ-009).
+- [X] T029 [US3] Enforce pause/takeover/cancel checks at each self-heal attempt boundary in `moonmind/agents/codex_worker/worker.py` for DOC-REQ-008.
+- [X] T030 [US3] Keep task-run control action allowlist (`pause`, `resume`, `takeover`) in `moonmind/workflows/agent_queue/service.py` and `api_service/api/routers/task_runs.py` for DOC-REQ-009.
+- [X] T031 [US3] Keep recovery-action deferrals explicit in `specs/034-worker-self-heal/contracts/task-run-recovery.openapi.yaml` and `specs/034-worker-self-heal/contracts/requirements-traceability.md` for DOC-REQ-005 and DOC-REQ-009.
 
-### Validation for User Story 3
-
-- [ ] T023 [US3] Add `tests/unit/api/routers/test_task_runs.py` coverage for the new recovery actions (validation errors, success payloads, audit logging) to validate DOC-REQ-009.
-- [ ] T024 [P] [US3] Expand `tests/unit/workflows/agent_queue/test_service_hardening.py` and `tests/unit/workflows/agent_queue/test_repositories.py` to verify `liveControl.recovery` persistence plus `task.control.recovery.*` payloads per DOC-REQ-009 and DOC-REQ-010.
+**Checkpoint**: All three user stories are independently testable and control-compatible.
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-**Purpose**: Align docs/runbooks and verify the full suite before shipping.
+**Purpose**: Final hardening, full-suite validation, and requirement traceability closure.
 
-- [ ] T025 Update `docs/WorkerSelfHealSystem.md`, `specs/034-worker-self-heal/quickstart.md`, and `specs/034-worker-self-heal/contracts/requirements-traceability.md` with the implemented controller APIs, metrics, and smoke-test steps.
-- [ ] T026 [P] Run `./tools/test_unit.sh` plus `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` and walk through the quickstart scenarios in `specs/034-worker-self-heal/quickstart.md` to capture release notes + log evidence.
+- [X] T032 [P] Add regression tests for secret scrubbing edge cases in `tests/unit/agents/codex_worker/test_self_heal.py` and `tests/unit/agents/codex_worker/test_worker.py` for DOC-REQ-012.
+- [X] T033 Validate DOC-REQ-001 through DOC-REQ-013 coverage rows and status text in `specs/034-worker-self-heal/contracts/requirements-traceability.md`.
+- [X] T034 Run runtime tasks gate `SPECIFY_FEATURE=034-worker-self-heal .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` and fix gaps in `specs/034-worker-self-heal/tasks.md` for DOC-REQ-013.
+- [X] T035 Run required unit suite `./tools/test_unit.sh` and record final verification notes in `specs/034-worker-self-heal/quickstart.md` for DOC-REQ-013.
 
 ---
 
 ## Dependencies & Execution Order
 
-- Setup (T001-T002) must finish before foundational helpers can compile.
-- Foundational (T003-T005) blocks every user story because timers, metrics, and artifact plumbing are required everywhere.
-- User Story 1 (T006-T013) delivers the MVP; User Story 2 (T014-T018) depends on Setup/Foundational + US1 controller hooks; User Story 3 (T019-T024) depends on US1 controller APIs and US2 checkpoint metadata for resume actions.
-- Polish (T025-T026) runs last after all user stories pass their validation tasks.
+### Phase Dependencies
 
-**Parallel Opportunities**
-- T002/T004/T005 can run alongside documentation audits once T001 is done.
-- Within US1, T007, T009, and T010 can run in parallel after T006 lands because they touch distinct helpers.
-- US2 replay logic (T015) and event wiring (T016) can progress while US1 tests (T012-T013) run, as long as T005 is complete.
-- US3 UI work (T022) can proceed in parallel with API/repository changes once the request schema in T019 stabilizes.
+- **Phase 1 (Setup)**: No dependencies.
+- **Phase 2 (Foundational)**: Depends on Phase 1 and blocks all user stories.
+- **Phase 3 (US1)**: Depends on Phase 2.
+- **Phase 4 (US2)**: Depends on Phase 2 and integrates with US1 artifact/event contracts.
+- **Phase 5 (US3)**: Depends on Phase 2 and validates compatibility with US1 retry loop.
+- **Phase 6 (Polish)**: Depends on completion of selected user stories.
+
+### User Story Dependencies
+
+- **US1 (P1)**: MVP; no dependency on other stories once foundational work is complete.
+- **US2 (P2)**: Depends on US1 event/attempt loop semantics for artifact parity checks.
+- **US3 (P3)**: Depends on US1 retry-loop behavior to verify pause/takeover/cancel boundaries.
+
+### Within Each User Story
+
+- Story tests are written before story implementation and should fail initially.
+- Retry/control primitives must exist before event/artifact enrichment.
+- Runtime implementation completes before full-suite validation.
+
+---
+
+## Parallel Opportunities
+
+- T002 and T003 can run in parallel during setup.
+- T005, T006, and T009 can run in parallel in foundational work.
+- US1 test tasks T010-T012 can run in parallel.
+- US2 test tasks T018-T021 can run in parallel.
+- US3 test tasks T026-T028 can run in parallel.
+- Polish tasks T032 and T033 can run in parallel before final gates T034-T035.
+
+---
 
 ## Parallel Example: User Story 1
 
 ```bash
-# Run watchers + strategy logic in parallel once T006 is merged
-Task T007: Strategy selection in moonmind/agents/codex_worker/self_heal.py
-Task T009: Minimal retry context + attempt artifacts in moonmind/agents/codex_worker/worker.py
-Task T010: StatsD + event emission in moonmind/agents/codex_worker/worker.py
+# Parallel US1 tests
+Task: "T010 [US1] Add worker tests for timeout/no-progress stuck detection in tests/unit/agents/codex_worker/test_worker.py"
+Task: "T011 [US1] Add worker tests for classification/fail-fast behavior in tests/unit/agents/codex_worker/test_worker.py"
+Task: "T012 [US1] Add worker tests for soft-reset recovery and exhaustion escalation in tests/unit/agents/codex_worker/test_worker.py"
 ```
+
+## Parallel Example: User Story 2
+
+```bash
+# Parallel US2 artifact validations
+Task: "T018 [US2] Add checkpoint artifact content tests in tests/unit/agents/codex_worker/test_worker.py"
+Task: "T019 [US2] Add self-heal attempt artifact content tests in tests/unit/agents/codex_worker/test_worker.py"
+Task: "T020 [US2] Add artifact storage helper tests in tests/unit/workflows/agent_queue/test_artifact_storage.py"
+Task: "T021 [US2] Add deferred-scope regression tests in tests/unit/agents/codex_worker/test_worker.py"
+```
+
+## Parallel Example: User Story 3
+
+```bash
+# Parallel US3 control-compatibility validations
+Task: "T026 [US3] Add pause/takeover gating tests in tests/unit/agents/codex_worker/test_worker.py"
+Task: "T027 [US3] Add cancellation short-circuit tests in tests/unit/agents/codex_worker/test_worker.py"
+Task: "T028 [US3] Add API/service tests rejecting deferred recovery actions in tests/unit/api/routers/test_task_runs.py and tests/unit/workflows/agent_queue/test_service.py"
+```
+
+---
 
 ## Implementation Strategy
 
 ### MVP First (User Story 1 Only)
-1. Complete Setup + Foundational phases.
-2. Deliver US1 (T006-T013) to unlock bounded self-heal with soft resets.
-3. Validate via the idle-timeout independent test before moving on.
+
+1. Complete Phase 1 and Phase 2.
+2. Complete Phase 3 (US1).
+3. Validate US1 independently with T010-T012 and relevant runtime checks.
+4. Demo/deploy MVP behavior for in-step self-heal.
 
 ### Incremental Delivery
-1. After MVP, implement US2 (T014-T018) to add deterministic hard resets/resume.
-2. Finish US3 (T019-T024) for operator control surfaces once replay data exists.
-3. Close with Polish (T025-T026) and rerun the full test/integration suites.
+
+1. Ship US1 retry recovery.
+2. Add US2 artifact determinism and telemetry validation.
+3. Add US3 control compatibility and deferred action guardrails.
+4. Finish with Phase 6 cross-cutting validation and required gates.
 
 ### Parallel Team Strategy
-- Team A: Worker controller + tests (US1).
-- Team B: Checkpoint replay + storage (US2).
-- Team C: API/service/dashboard controls (US3).
-- Coordinate via StatsD/event schemas defined in T004/T010 to avoid drift.
+
+1. One engineer handles foundational runtime primitives (T004-T007).
+2. One engineer drives US1/US3 worker-loop and control compatibility tasks.
+3. One engineer drives US2 artifact/metrics tasks and test coverage.
+4. Merge at Phase 6 for final validation gates.
