@@ -7243,7 +7243,7 @@ class CodexWorker:
         if task is None:
             return
         with suppress(asyncio.CancelledError):
-            await task
+            _ = await task
 
     @staticmethod
     def _hash_text(value: str) -> str | None:
