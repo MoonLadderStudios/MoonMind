@@ -2,7 +2,8 @@
 """Lightweight PR finalize helper for pr-resolver.
 
 This script re-checks snapshot state and only performs merge/block decisions.
-It is intended for low-cost follow-up runs after conflicts/comments/CI issues were fixed.
+It is intended for low-cost follow-up runs after conflicts/comments/CI issues
+were fixed.
 """
 
 from __future__ import annotations
@@ -14,22 +15,34 @@ import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from pr_resolve_contract import (  # noqa: E402
+    EXIT_CODE_BLOCKED,
+    EXIT_CODE_FAILED,
+    EXIT_CODE_MERGED,
+    FINALIZE_ONLY_RETRY_REASONS,
+    FULL_REMEDIATION_REASONS,
+    RESULT_SCHEMA_VERSION,
+    now_utc_iso,
+    normalize_text,
+    remediation_next_step,
+)
+
 CONFLICTING_MERGEABLE = {"CONFLICTING", "DIRTY"}
 DIRECT_MERGE_STATE = {"CLEAN"}
 
 
-def _normalize_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def _is_conflicting(pr: dict[str, Any]) -> bool:
     mergeable = pr.get("mergeable")
-    merge_state = _normalize_text(pr.get("mergeStateStatus")).upper()
+    merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
     if merge_state == "DIRTY":
         return True
     if isinstance(mergeable, bool):
         return mergeable is False
-    mergeable_text = _normalize_text(mergeable).upper()
+    mergeable_text = normalize_text(mergeable).upper()
     return mergeable_text in CONFLICTING_MERGEABLE
 
 
@@ -55,14 +68,14 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         return {"action": "blocked", "reason": "actionable_comments"}
     if _is_conflicting(pr):
         return {"action": "blocked", "reason": "merge_conflicts"}
-    if _normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
+    if normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
         return {"action": "blocked", "reason": "ci_signal_degraded"}
     if bool(ci.get("hasFailures")):
         return {"action": "blocked", "reason": "ci_failures"}
     if bool(ci.get("isRunning")):
         return {"action": "blocked", "reason": "ci_running"}
 
-    merge_state = _normalize_text(pr.get("mergeStateStatus")).upper()
+    merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
     if merge_state in DIRECT_MERGE_STATE:
         return {"action": "merge_now", "reason": "ci_complete"}
 
@@ -99,17 +112,35 @@ def _write_result(
     snapshot: dict[str, Any],
     decision: str,
     merge_outcome: str,
+    status: str,
     reason: str | None = None,
 ) -> None:
     pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
+    next_step = "done"
+    if status == "blocked":
+        next_step = remediation_next_step(reason or "")
+        if reason in FINALIZE_ONLY_RETRY_REASONS:
+            next_step = "retry_finalize_after_backoff"
+        if reason in FULL_REMEDIATION_REASONS:
+            next_step = "run_full_remediation"
+
     payload: dict[str, Any] = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "tool": "pr_resolve_finalize",
+        "timestamp": now_utc_iso(),
         "pr_number": pr.get("number"),
         "pr_url": pr.get("url"),
         "decision": decision,
         "merge_outcome": merge_outcome,
+        "status": status,
+        "attempt": 1,
+        "max_attempts": 1,
+        "escalations": 0,
+        "next_step": next_step,
     }
     if reason:
         payload["reason"] = reason
+        payload["final_reason"] = reason
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -140,6 +171,16 @@ def main() -> None:
         default="artifacts/pr_resolver_result.json",
         help="Result artifact path",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not execute gh pr merge even if merge gates pass.",
+    )
+    parser.add_argument(
+        "--strict-exit-codes",
+        action="store_true",
+        help="Return exit code 2 when blocked (default keeps blocked as exit code 0).",
+    )
     args = parser.parse_args()
 
     snapshot_script = Path(__file__).with_name("pr_resolve_snapshot.py")
@@ -153,7 +194,7 @@ def main() -> None:
         decision = evaluate_finalize_action(snapshot)
 
         pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
-        pr_selector = _normalize_text(args.pr) or _normalize_text(pr.get("number"))
+        pr_selector = normalize_text(args.pr) or normalize_text(pr.get("number"))
         if not pr_selector:
             raise RuntimeError("unable to determine PR selector from args or snapshot")
 
@@ -161,35 +202,54 @@ def main() -> None:
         reason = decision["reason"]
 
         if action == "merge_now":
+            if args.dry_run:
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision="merge gate passed (dry-run)",
+                    merge_outcome="skipped",
+                    status="blocked",
+                    reason="dry_run",
+                )
+                print("Merge gate passed (dry-run).")
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
             _merge_pr(pr_selector, args.merge_method)
             _write_result(
                 result_path,
                 snapshot=snapshot,
                 decision="merged immediately",
                 merge_outcome="merged",
+                status="merged",
                 reason=reason,
             )
             print("PR merged.")
-            return
+            sys.exit(EXIT_CODE_MERGED)
 
         _write_result(
             result_path,
             snapshot=snapshot,
             decision="blocked",
             merge_outcome="blocked",
+            status="blocked",
             reason=reason,
         )
         print(f"Blocked: {reason}")
+        sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         payload = {
+            "schema_version": RESULT_SCHEMA_VERSION,
+            "tool": "pr_resolve_finalize",
+            "timestamp": now_utc_iso(),
             "decision": "failed",
             "merge_outcome": "failed",
+            "status": "failed",
             "reason": str(exc),
+            "final_reason": str(exc),
         }
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(str(exc), file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_FAILED)
 
 
 if __name__ == "__main__":

@@ -407,7 +407,7 @@ def main():
     pr_cmd.extend(
         [
             "--json",
-            "number,title,url,isDraft,state,headRefName,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
+            "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
         ]
     )
 

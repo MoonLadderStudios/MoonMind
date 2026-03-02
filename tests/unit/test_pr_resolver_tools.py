@@ -57,6 +57,34 @@ def pr_resolve_finalize_module() -> dict[str, Any]:
     )
 
 
+@pytest.fixture
+def pr_resolve_full_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "pr-resolver"
+            / "bin"
+            / "pr_resolve_full.py"
+        )
+    )
+
+
+@pytest.fixture
+def pr_resolve_orchestrate_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "pr-resolver"
+            / "bin"
+            / "pr_resolve_orchestrate.py"
+        )
+    )
+
+
 def test_parse_remote_url_accepts_https_and_ssh_urls(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -287,3 +315,130 @@ def test_finalize_blocks_when_ci_signal_is_degraded(
     )
 
     assert decision == {"action": "blocked", "reason": "ci_signal_degraded"}
+
+
+def test_full_marks_actionable_comments_as_needs_remediation(
+    pr_resolve_full_module: dict[str, Any],
+) -> None:
+    evaluate_full_state = pr_resolve_full_module["evaluate_full_state"]
+    result = evaluate_full_state(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
+            "ci": {"isRunning": True, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": True,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+    assert result["status"] == "needs_remediation"
+    assert result["reason"] == "actionable_comments"
+    assert result["next_step"] == "run_fix_comments_skill"
+
+
+def test_orchestrate_actionable_comments_escalates_once_then_merges(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "actionable_comments"},
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    full_calls: list[tuple[int, int, str]] = []
+    sleeps: list[int] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda attempt, escalation, reason: (
+            full_calls.append((attempt, escalation, reason))
+            or {"status": "needs_remediation", "merge_outcome": "blocked", "reason": reason}
+        ),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=2,
+        fix_max_iterations=3,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert len(full_calls) == 1
+    assert full_calls[0][2] == "actionable_comments"
+    assert sleeps == []
+
+
+def test_orchestrate_caps_retries_with_attempts_exhausted(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: {
+            "status": "blocked",
+            "merge_outcome": "blocked",
+            "reason": "actionable_comments",
+        },
+        full_runner=lambda _attempt, _escalation, reason: {
+            "status": "needs_remediation",
+            "merge_outcome": "blocked",
+            "reason": reason,
+        },
+        sleep_fn=lambda _seconds: None,
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=2,
+        fix_max_iterations=3,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 3
+    assert result["status"] == "attempts_exhausted"
+    assert result["merge_outcome"] == "attempts_exhausted"
+    assert result["final_reason"] == "actionable_comments"
+
+
+def test_orchestrate_ci_running_uses_finalize_only_retry_path(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    sleeps: list[int] = []
+    full_invocations = 0
+
+    def full_runner(_attempt: int, _escalation: int, _reason: str) -> dict[str, Any]:
+        nonlocal full_invocations
+        full_invocations += 1
+        return {"status": "failed", "merge_outcome": "failed", "reason": "unexpected"}
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=full_runner,
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=2,
+        fix_max_iterations=3,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert full_invocations == 0
+    assert sleeps == [15]

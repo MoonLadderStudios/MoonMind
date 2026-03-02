@@ -2,19 +2,63 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "pr_number": { "type": "integer" },
-    "pr_url": { "type": "string" },
+    "schema_version": { "type": "integer" },
+    "tool": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": "string" },
+    "pr_number": { "type": ["integer", "null"] },
+    "pr_url": { "type": ["string", "null"] },
     "decision": {
       "type": "string",
-      "description": "A summary of the actions taken (e.g., Fixed merge conflicts, Fixed CI failures)"
+      "description": "Summary of the final orchestration/finalize decision."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["merged", "blocked", "attempts_exhausted", "failed", "skipped", "ready_for_finalize", "needs_remediation"]
     },
     "merge_outcome": {
       "type": "string",
-      "enum": ["merged", "auto_merge_enabled", "skipped", "blocked", "failed"]
+      "enum": ["merged", "auto_merge_enabled", "skipped", "blocked", "failed", "attempts_exhausted"]
     },
     "reason": {
-      "type": "string",
-      "description": "Optional reason if skipped or blocked"
+      "type": ["string", "null"],
+      "description": "Blocking or failure reason when applicable."
+    },
+    "final_reason": {
+      "type": ["string", "null"],
+      "description": "Normalized terminal reason for orchestrated flow."
+    },
+    "next_step": { "type": "string" },
+    "attempt": { "type": "integer" },
+    "max_attempts": { "type": "integer" },
+    "attempt_count": { "type": "integer" },
+    "escalations": { "type": "integer" },
+    "finalize_max_retries": { "type": "integer" },
+    "fix_max_iterations": { "type": "integer" },
+    "max_iterations": { "type": "integer" },
+    "merge_method": { "type": "string" },
+    "decisions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "attempt_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attempt": { "type": ["integer", "null"] },
+          "stage": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": ["string", "null"] },
+          "decision": { "type": ["string", "null"] },
+          "sleep_seconds": { "type": ["integer", "null"] },
+          "escalation": { "type": ["integer", "null"] },
+          "max_iterations": { "type": ["integer", "null"] },
+          "timestamp": { "type": "string" }
+        },
+        "required": ["stage", "status", "timestamp"]
+      }
     }
   },
   "required": ["decision", "merge_outcome"]
