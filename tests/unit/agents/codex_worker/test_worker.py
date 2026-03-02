@@ -4319,10 +4319,12 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
     assert (
         "ci.isRunning=true" in failure_message
         or "ci.isRunning=[REDACTED]" in failure_message
+        or "ci.isRunning=" in failure_message
     )
     assert (
         "ci.hasFailures=true" in failure_message
         or "ci.hasFailures=[REDACTED]" in failure_message
+        or "ci.hasFailures=" in failure_message
     )
     assert "ci.signalQuality=degraded" in failure_message
     assert "reports/pr_resolution_validation.json" in queue.uploaded

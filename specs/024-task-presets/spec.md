@@ -1,104 +1,86 @@
-# Feature Specification: Task Presets Catalog
+# Feature Specification: Task Presets Strategy Alignment
 
 **Feature Branch**: `024-task-presets`
-**Created**: 2026-02-18
+**Created**: 2026-03-01
 **Status**: Draft
-**Input**: User description: "Create docs/TaskPresetsSystem.md which expands option 2 into a full technical design and implement the server-hosted task preset template system with UI conveniences and save-as-template flows."
+**Input**: User description: "Update specs/024-task-presets to make it align with the current state and strategy of the MoonMind project. Implement all of the updated tasks when done. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Apply catalog template to a new task (Priority: P1)
+### User Story 1 - Runtime orchestration preset follows MoonMind publish strategy (Priority: P1)
 
-Staff engineers drafting a new task open the Task Queue UI, browse the shared template catalog, preview a preset, provide required inputs, and insert the expanded steps directly into the step editor without touching raw JSON.
+Platform operators apply the global `speckit-orchestrate` task preset to queue jobs and expect runtime execution to stop at implementation/reporting while MoonMind publish stage controls commit/PR behavior.
 
-**Why this priority**: Reusable orchestrations significantly reduce drafting time and drive consistency; without this flow the catalog is unused.
+**Why this priority**: Runtime workers must not perform direct git publish actions when MoonMind wrapper stages own publish semantics.
 
-**Independent Test**: From a clean browser session, a user can browse templates, preview steps, apply inputs, choose append vs replace, and see expanded steps rendered with deterministic IDs in the editor.
+**Independent Test**: Expand the seeded preset and verify final instructions explicitly prohibit runtime commit/push and describe report handoff instead of opening PRs.
 
 **Acceptance Scenarios**:
 
-1. **Given** a catalog template that requires inputs, **When** the user submits valid input values, **Then** the UI displays a preview and inserts concrete steps with deterministic IDs into `task.steps[]`.
-2. **Given** existing draft steps, **When** the user chooses "Replace all steps", **Then** the editor removes previous steps, inserts the expanded preset, and records the applied template metadata.
+1. **Given** the seeded `speckit-orchestrate` template, **When** step instructions are loaded from the catalog, **Then** no step instructs direct commit or PR creation from runtime execution.
+2. **Given** runtime mode orchestration, **When** final validation gates pass, **Then** the preset directs the agent to return a final report and defer publish actions to MoonMind publish stage.
 
 ---
 
-### User Story 2 - Save curated steps as a reusable template (Priority: P1)
+### User Story 2 - Existing deployments receive preset behavior updates safely (Priority: P1)
 
-Power users select a subset of task steps they just executed successfully, scrub secrets, parameterize repeated phrases, and save them as a personal or team template for later reuse.
+Platform maintainers migrate existing databases and expect the seeded `speckit-orchestrate` template row/version content to align with the current YAML definition without manual SQL edits.
 
-**Why this priority**: The catalog stays relevant only if teams can capture real workflows rapidly without leaving the task UI.
+**Why this priority**: Seed file updates alone do not modify environments that have already applied prior migrations.
 
-**Independent Test**: Select steps, invoke "Save as template", configure metadata, inputs, and scope, submit without validation errors, and see the template appear under the expected scope.
+**Independent Test**: Apply the new migration against an environment containing the preset and verify template/version records refresh using seed-derived capabilities and steps.
 
 **Acceptance Scenarios**:
 
-1. **Given** selected steps that contain sensitive tokens, **When** the user invokes "Save as template", **Then** the UI highlights detected secrets and the server rejects unredacted values.
-2. **Given** non-contiguous step selections, **When** the user saves them as a template, **Then** the resulting blueprint preserves relative order and input placeholders.
+1. **Given** an existing `speckit-orchestrate` template row, **When** the alignment migration runs, **Then** template/version `required_capabilities` and `steps` are updated from the current seed file.
+2. **Given** a deployment missing the seed file or template row, **When** migration runs, **Then** it exits without error and leaves schema/data intact.
 
 ---
 
-### User Story 3 - Track template usage and enforce RBAC (Priority: P2)
+### User Story 3 - Spec artifact set reflects current implemented architecture (Priority: P2)
 
-Team leads administer the template catalog, ensuring that team-only presets stay private, global presets undergo review, and audit logs capture who applies each version.
+Engineers using `specs/024-task-presets` as a reference see accurate file paths, migration IDs, endpoint surface, and test locations that match today’s repository.
 
-**Why this priority**: Governance prevents accidental sharing of sensitive automation and supports compliance reviews.
+**Why this priority**: Stale specs create implementation drift and misleading remediation work.
 
-**Independent Test**: Apply templates under different scopes with distinct users and verify RBAC enforcement plus audit records.
-
-**Acceptance Scenarios**:
-
-1. **Given** a personal template, **When** another user attempts to load it, **Then** the API denies access and the UI hides it from listings.
-2. **Given** a global template marked inactive, **When** a user attempts to apply it, **Then** the UI surfaces a warning and expansion requires explicit confirmation while audit logs capture the event.
-
----
-
-### User Story 4 - CLI/MCP users expand templates via API (Priority: P3)
-
-Automation scripts and CLI tooling fetch the catalog and invoke the expand endpoint, receiving concrete steps to merge into JSON payloads without duplicating business logic.
-
-**Why this priority**: Ensures parity for non-UI workflows and avoids manual drift.
-
-**Independent Test**: Using service tokens, call `GET /api/task-step-templates` and `POST /api/task-step-templates/{slug}:expand`, receiving validated steps ready for queue submission.
+**Independent Test**: Cross-check `spec.md`, `plan.md`, `tasks.md`, and contract docs against current source tree paths and API routes.
 
 **Acceptance Scenarios**:
 
-1. **Given** a valid API token, **When** the CLI calls the list endpoint with tag filters, **Then** the response only includes templates matching search criteria and scope permissions.
-2. **Given** an automation request referencing disallowed step keys, **When** the server validates the template expansion, **Then** it returns a schema error and no task is enqueued.
+1. **Given** updated spec artifacts, **When** reviewers inspect listed implementation paths, **Then** referenced files exist in the repository and match the current module layout.
+2. **Given** updated tasks, **When** implementation completes, **Then** every task is marked complete and points to real runtime/test/doc surfaces.
 
 ### Edge Cases
 
-- What happens when two users edit the same template concurrently? The API must enforce version immutability and reject edits to released versions.
-- How does the system handle missing input values or invalid enum submissions? Expansion should fail with actionable validation errors before altering the task.
-- How are templates referencing deprecated skills treated? Expansion must surface capability errors and block enqueueing until dependencies are resolved.
+- Seed YAML unavailable at migration time; migration must no-op instead of failing deploy.
+- Template slug exists but version row is missing; migration should still be best-effort and not break unrelated upgrades.
+- Future seed revisions may add more steps; alignment logic should update stored step payload wholesale from YAML source.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: System MUST host a catalog of task step templates with slug, title, description, inputs schema, step blueprints, scope metadata, and version history.
-- **FR-002**: System MUST expose REST endpoints to list templates (filterable by scope, tags, favorites, recency) and fetch individual versions.
-- **FR-003**: System MUST provide a server-side expand endpoint returning concrete `steps[]`, deterministic IDs, derived capabilities, and audit metadata after applying user inputs.
-- **FR-004**: System MUST validate expanded steps against the existing task contract, rejecting forbidden keys, empty instructions, or output beyond configured limits.
-- **FR-005**: System MUST persist audit data on each applied template (slug, version, inputs) inside the task record for later review.
-- **FR-006**: System MUST provide UI affordances to browse, preview, append/replace, group, and diff template steps without modifying the worker payload schema.
-- **FR-007**: System MUST allow authorized users to convert selected draft steps into new templates, including secret scrubbing, input placeholder detection, scope selection, and optional sharing workflows.
-- **FR-008**: System MUST enforce RBAC so that personal templates remain private, team templates require membership, and global templates require admin approval before activation.
-- **FR-009**: System MUST support CLI/MCP parity so automations can discover, expand, and apply templates via the same API contracts as the UI, including error semantics.
-- **FR-010**: System MUST surface telemetry and governance artifacts (usage counters, review status, soft-delete) to support lifecycle management and compliance.
+- **FR-001**: `specs/024-task-presets` artifacts MUST describe the current task preset implementation surfaces (actual migration IDs, service modules, router paths, and test locations used in this repository).
+- **FR-002**: The seeded `speckit-orchestrate` preset MUST not instruct runtime agents to create commits, push branches, or open pull requests directly.
+- **FR-003**: The `speckit-orchestrate` preset MUST instruct runtime execution to return a final report and defer publish behavior to MoonMind publish stage.
+- **FR-004**: A new idempotent Alembic migration MUST synchronize existing `speckit-orchestrate` template/version records with the current seed YAML definition.
+- **FR-005**: Automated tests MUST validate the seeded preset’s publish-stage-safe instruction language and protect against regressions.
+- **FR-006**: Validation MUST run through `./tools/test_unit.sh` per repository testing policy.
+- **FR-007**: Delivery MUST include production runtime code changes and validation tests; documentation/spec-only updates are out of scope for completion.
 
 ### Key Entities
 
-- **TaskStepTemplate**: Canonical catalog entry containing slug, title, description, scope, tags, required capabilities, and latest version pointer.
-- **TemplateVersion**: Immutable record of a template release with version string, inputs schema, step blueprints, activation flag, reviewer metadata, and seed provenance.
-- **TemplateInputDefinition**: Field-level schema describing name, label, type (text/enum/boolean/etc.), validation rules, and default values consumed during expansion.
-- **TemplateApplication**: Audit object captured per task storing template slug, version, user inputs, applied timestamps, and derived step IDs.
-- **TemplateScope**: Authorization context referencing owner (user/team/global) plus RBAC policies controlling visibility and edit rights.
+- **TaskPresetSeedDocument**: YAML definition in `api_service/data/task_step_templates/speckit-orchestrate.yaml` containing required capabilities and ordered orchestration steps.
+- **TaskPresetTemplateRecord**: `task_step_templates` row storing scope, slug, and top-level required capabilities.
+- **TaskPresetVersionRecord**: `task_step_template_versions` row storing versioned step blueprints and required capabilities.
+- **PresetAlignmentMigration**: Alembic migration that updates existing seeded preset records to match current YAML content.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: At least 70% of new runtime tasks created by internal users within four weeks of launch include `appliedStepTemplates` metadata referencing a catalog preset.
-- **SC-002**: 90% of template expansions complete under 300 ms at P95, including validation and deterministic ID generation, when executed inside the API service.
-- **SC-003**: Secret-scrubbing heuristics reduce reported incidents of leaked tokens in saved templates to zero in the first release window.
-- **SC-004**: Governance telemetry shows <5% of template applications fail due to RBAC or validation errors after the first month, indicating accurate scopes and user education.
+- **SC-001**: Seeded `speckit-orchestrate` final step language contains explicit "do not commit/push" guidance and contains no direct commit/PR creation directives.
+- **SC-002**: Migration applies cleanly in existing environments and updates seeded preset template/version fields using YAML-derived data.
+- **SC-003**: Unit test coverage includes regression checks for preset instruction language and seed capability/runtime neutrality.
+- **SC-004**: Updated `specs/024-task-presets/tasks.md` is fully completed (`[X]`) with references to implemented files and executed validation command.
+- **SC-005**: Completion evidence shows both runtime production code updates and validation test updates in the same delivery.
