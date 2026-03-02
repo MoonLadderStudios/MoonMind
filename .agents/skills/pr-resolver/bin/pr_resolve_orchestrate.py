@@ -26,8 +26,8 @@ from pr_resolve_contract import (  # noqa: E402
     RESULT_SCHEMA_VERSION,
     classify_retry_action,
     compute_backoff_seconds,
-    now_utc_iso,
     normalize_text,
+    now_utc_iso,
     parse_reason,
     remediation_next_step,
 )
@@ -111,9 +111,7 @@ def _build_result(
         "finalize_max_retries": finalize_max_retries,
         "fix_max_iterations": fix_max_iterations,
         "escalations": escalations,
-        "attempt_count": sum(
-            1 for item in history if item.get("stage") == "finalize"
-        ),
+        "attempt_count": sum(1 for item in history if item.get("stage") == "finalize"),
         "started_at": started_at,
         "finished_at": finished_at,
         "attempt_history": history,
@@ -566,7 +564,9 @@ def main() -> None:
     )
 
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps(result_payload, indent=2) + "\n", encoding="utf-8")
+    result_path.write_text(
+        json.dumps(result_payload, indent=2) + "\n", encoding="utf-8"
+    )
     print(json.dumps(result_payload, indent=2))
     raise SystemExit(exit_code)
 

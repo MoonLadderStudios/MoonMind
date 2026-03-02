@@ -26,8 +26,8 @@ from pr_resolve_contract import (  # noqa: E402
     FINALIZE_ONLY_RETRY_REASONS,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
-    now_utc_iso,
     normalize_text,
+    now_utc_iso,
     remediation_next_step,
 )
 

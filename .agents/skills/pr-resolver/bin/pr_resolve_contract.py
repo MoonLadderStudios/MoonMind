@@ -72,7 +72,7 @@ def compute_backoff_seconds(
     max_sleep = max(0, int(max_sleep_seconds))
     if base == 0 or max_sleep == 0:
         return 0
-    value = base * (2**max(0, int(retry_index)))
+    value = base * (2 ** max(0, int(retry_index)))
     return min(max_sleep, value)
 
 

@@ -344,7 +344,11 @@ def test_orchestrate_actionable_comments_escalates_once_then_merges(
 
     finalize_results = iter(
         [
-            {"status": "blocked", "merge_outcome": "blocked", "reason": "actionable_comments"},
+            {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "actionable_comments",
+            },
             {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
         ]
     )
@@ -355,7 +359,11 @@ def test_orchestrate_actionable_comments_escalates_once_then_merges(
         finalize_runner=lambda _attempt: next(finalize_results),
         full_runner=lambda attempt, escalation, reason: (
             full_calls.append((attempt, escalation, reason))
-            or {"status": "needs_remediation", "merge_outcome": "blocked", "reason": reason}
+            or {
+                "status": "needs_remediation",
+                "merge_outcome": "blocked",
+                "reason": reason,
+            }
         ),
         sleep_fn=lambda seconds: sleeps.append(seconds),
         monotonic_fn=lambda: 0.0,
