@@ -24,3 +24,10 @@ def test_agent_job_event_level_enum_uses_lowercase_values() -> None:
 
     level_enum = models.AgentJobEvent.__table__.c.level.type
     assert set(level_enum.enums) == {"info", "warn", "error"}
+
+
+def test_agent_job_has_created_at_id_ordering_index() -> None:
+    """Task list keyset pagination requires a composite created_at/id index."""
+
+    index_names = {index.name for index in models.AgentJob.__table__.indexes}
+    assert "ix_agent_jobs_created_at_id" in index_names

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -210,6 +212,15 @@ class QueueSystemResponse:
 
     job: models.AgentJob | None
     system: QueueSystemMetadata
+
+
+@dataclass(frozen=True, slots=True)
+class QueueJobPage:
+    """One keyset-paginated queue jobs page."""
+
+    items: tuple[models.AgentJob, ...]
+    page_size: int
+    next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -937,6 +948,67 @@ class AgentQueueService:
             job_type=normalized_type if normalized_type else None,
             limit=limit,
             offset=offset,
+        )
+
+    @staticmethod
+    def _encode_job_cursor(*, created_at: datetime, job_id: UUID) -> str:
+        payload = json.dumps(
+            {
+                "created_at": created_at.astimezone(UTC).isoformat(),
+                "id": str(job_id),
+            }
+        ).encode()
+        return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_job_cursor(cursor: str) -> tuple[datetime, UUID]:
+        token = str(cursor or "").strip()
+        if not token:
+            raise AgentQueueValidationError("cursor is invalid")
+        if len(token) > 1024:
+            raise AgentQueueValidationError("cursor is invalid")
+        padding = "=" * (-len(token) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode(token + padding).decode()
+            payload = json.loads(decoded)
+            created_at = datetime.fromisoformat(str(payload["created_at"]))
+            job_id = UUID(str(payload["id"]))
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise AgentQueueValidationError("cursor is invalid") from exc
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        return created_at.astimezone(UTC), job_id
+
+    async def list_jobs_page(
+        self,
+        *,
+        status: Optional[models.AgentJobStatus] = None,
+        job_type: Optional[str] = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> QueueJobPage:
+        """Return one keyset-paginated queue jobs page with opaque cursor token."""
+
+        page_size = max(1, min(int(limit), 200))
+        normalized_type = job_type.strip() if job_type else None
+        cursor_tuple = self._decode_job_cursor(cursor) if cursor else None
+        jobs, has_more = await self._repository.list_jobs_page(
+            status=status,
+            job_type=normalized_type if normalized_type else None,
+            cursor=cursor_tuple,
+            limit=page_size,
+        )
+        next_cursor: str | None = None
+        if has_more and jobs:
+            tail = jobs[-1]
+            next_cursor = self._encode_job_cursor(
+                created_at=tail.created_at,
+                job_id=tail.id,
+            )
+        return QueueJobPage(
+            items=tuple(jobs),
+            page_size=page_size,
+            next_cursor=next_cursor,
         )
 
     async def claim_job(
