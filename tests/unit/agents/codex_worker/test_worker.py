@@ -4315,16 +4315,16 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
     assert queue.completed == []
     assert len(queue.failed) == 1
     failure_message = queue.failed[0]
-    assert "pr-resolution final state unresolved" in queue.failed[0]
+    assert "pr-resolution final state unresolved" in failure_message
     assert (
-        "ci.isRunning=true" in queue.failed[0]
-        or "ci.isRunning=[REDACTED]" in queue.failed[0]
+        "ci.isRunning=true" in failure_message
+        or "ci.isRunning=[REDACTED]" in failure_message
     )
     assert (
-        "ci.hasFailures=true" in queue.failed[0]
-        or "ci.hasFailures=[REDACTED]" in queue.failed[0]
+        "ci.hasFailures=true" in failure_message
+        or "ci.hasFailures=[REDACTED]" in failure_message
     )
-    assert "ci.signalQuality=degraded" in queue.failed[0]
+    assert "ci.signalQuality=degraded" in failure_message
     assert "reports/pr_resolution_validation.json" in queue.uploaded
     assert handler.calls == ["codex_skill:pr-resolver:True"]
 
