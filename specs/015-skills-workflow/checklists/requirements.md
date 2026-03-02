@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Skills-First Workflow Umbrella
+# Specification Quality Checklist: Skills Workflow Alignment Refresh
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-02-14  
+**Purpose**: Validate specification completeness and quality before implementation  
+**Created**: 2026-03-02  
 **Feature**: `specs/015-skills-workflow/spec.md`
 
 ## Content Quality
@@ -26,9 +26,9 @@
 
 - [X] All functional requirements have clear acceptance criteria
 - [X] User scenarios cover primary flows
-- [X] Feature meets measurable outcomes defined in Success Criteria
+- [X] Feature includes explicit runtime and validation deliverables
 - [X] No implementation details leak into specification
 
 ## Notes
 
-- Checklist completed for planning readiness.
+- Checklist refreshed for canonical runtime request intake, including the explicit runtime scope guard and preserved constraints.

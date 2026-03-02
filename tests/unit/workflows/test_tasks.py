@@ -57,6 +57,46 @@ TEST_GITHUB_REPOSITORY = "moonmind/test-repo"
 TEST_CODEX_VOLUME = "codex_auth_test"
 
 
+def test_task_sequence_uses_canonical_runtime_stage_names():
+    """Workflow tasks should expose canonical runtime stage names."""
+
+    assert tasks.TASK_DISCOVER == "discover_next_phase"
+    assert tasks.TASK_SUBMIT == "submit_codex_job"
+    assert tasks.TASK_PUBLISH == "apply_and_publish"
+    assert tasks.TASK_SEQUENCE == (
+        "discover_next_phase",
+        "submit_codex_job",
+        "apply_and_publish",
+    )
+
+
+def test_stage_requires_speckit_only_for_speckit_adapter(monkeypatch):
+    """Speckit CLI checks should only run for Speckit-routed skill execution."""
+
+    monkeypatch.setattr(
+        tasks,
+        "get_stage_adapter",
+        lambda skill_name: "speckit" if skill_name == "speckit" else "custom",
+    )
+
+    assert tasks._stage_requires_speckit(selected_skill="speckit", use_skills=True)
+    assert not tasks._stage_requires_speckit(
+        selected_skill="custom-skill",
+        use_skills=True,
+    )
+
+
+def test_stage_requires_speckit_false_when_skills_path_disabled(monkeypatch):
+    """Direct-only execution should skip Speckit verification even for Speckit skill."""
+
+    monkeypatch.setattr(tasks, "get_stage_adapter", lambda _skill_name: "speckit")
+
+    assert not tasks._stage_requires_speckit(
+        selected_skill="speckit",
+        use_skills=False,
+    )
+
+
 @asynccontextmanager
 async def workflow_db(monkeypatch, tmp_path):
     """Provide an isolated async database session maker for workflow tests."""

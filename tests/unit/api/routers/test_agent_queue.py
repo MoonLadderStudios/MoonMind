@@ -505,6 +505,30 @@ def test_create_job_rejects_claude_runtime_without_api_key(
     service.create_job.assert_awaited_once()
 
 
+def test_create_job_non_manifest_validation_error_keeps_generic_mapping(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Non-manifest validation errors should keep generic queue error semantics."""
+
+    test_client, service = client
+    service.create_job.side_effect = AgentQueueValidationError("invalid payload")
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    body = response.json()
+    assert body["detail"]["code"] == "invalid_queue_payload"
+    assert body["detail"]["message"] == "Queue request payload is invalid."
+
+
 def test_create_job_with_attachments_success(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -695,7 +719,9 @@ def test_create_manifest_job_validation_error(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_manifest_job"
+    assert detail["message"] == "invalid manifest"
 
 
 def test_resolve_manifest_job_secrets_success(

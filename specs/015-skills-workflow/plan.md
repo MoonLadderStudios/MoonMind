@@ -1,34 +1,58 @@
-# Implementation Plan: Skills-First Workflow Umbrella
+# Implementation Plan: Skills Workflow Alignment Refresh
 
-**Branch**: `015-skills-workflow` | **Date**: 2026-02-14 | **Spec**: `specs/015-skills-workflow/spec.md`
+**Branch**: `015-skills-workflow` | **Date**: 2026-03-02 | **Spec**: `specs/015-skills-workflow/spec.md`
 **Input**: Feature specification from `/specs/015-skills-workflow/spec.md`
 
 ## Summary
 
-Adopt a skills-first workflow architecture where workers always include Speckit capability, workflow stages execute through stage contracts with allowlisted skill selection, and direct implementations remain as fallbacks. Deliver the fastest operator path for authenticated Codex workers and Google Gemini embeddings through compose/runtime/documentation alignment.
+Align `specs/015-skills-workflow` with current MoonMind runtime strategy by using canonical workflow stage names, documenting shared-skills workspace behavior, and preserving runtime/API metadata observability (`selectedSkill`, `adapterId`, `executionPath` to API `selected_skill`, `adapter_id`, `execution_path`).  
+The selected orchestration mode for this feature is **runtime implementation**, so planning explicitly includes production code surfaces under `moonmind/` and validation through `./tools/test_unit.sh` instead of docs-only completion.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11  
-**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x, PostgreSQL, Pydantic settings, Codex CLI, Spec Kit CLI (`speckit`), Gemini CLI, existing MoonMind workflow modules  
-**Storage**: Existing workflow persistence tables and artifact roots (`var/artifacts/workflow_runs`, optional `var/artifacts/agent_jobs`)  
-**Testing**: Unit tests via `./tools/test_unit.sh`; targeted integration/smoke verification via Docker Compose service startup checks  
-**Target Platform**: Linux Docker Compose runtime for API + Celery workers  
-**Project Type**: Backend workflow orchestration and worker runtime evolution with documentation/runbook updates  
-**Performance Goals**: No material increase in worker startup latency; stage routing overhead remains bounded to lightweight skill-selection and dispatch checks  
-**Constraints**: Preserve queue compatibility (`speckit`, `codex`, `gemini`), preserve existing API behavior during migration, keep Speckit always available, avoid interactive auth in worker runtime  
-**Scale/Scope**: Workflow orchestration path updates, worker startup checks, settings/flags, documentation, and test coverage for parity/fallback/rollout
+**Language/Version**: Python 3.11 runtime target (project range `>=3.10,<3.14`)  
+**Primary Dependencies**: FastAPI, Pydantic v2, Celery, SQLAlchemy, Docker SDK  
+**Storage**: PostgreSQL (`spec_automation_runs` / `spec_automation_task_states`), filesystem artifacts under `var/artifacts/spec_workflows`  
+**Testing**: `./tools/test_unit.sh` (canonical unit-test entrypoint)  
+**Target Platform**: Docker Compose services on Linux (`api`, `codex-worker`, `gemini-worker`, `rabbitmq`)  
+**Project Type**: Backend monorepo (API + workers + workflow engine)  
+**Performance Goals**: No additional DB round-trips for metadata normalization; preserve existing workflow/API latency envelope  
+**Constraints**: Preserve backward compatibility for legacy persisted metadata; fail-fast for unsupported skill/adapter combos; keep runtime-vs-docs mode behavior aligned with selected runtime mode  
+**Scale/Scope**: Focused refresh of `specs/015-skills-workflow` artifacts and targeted workflow/API metadata surfaces
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- `.specify/memory/constitution.md` currently contains placeholder text and no enforceable MUST/SHOULD clauses.
-- Repository constraints from `AGENTS.md` are explicitly enforced here:
-  - unit validation uses `./tools/test_unit.sh`;
-  - runtime implementation (not docs-only) is required for execution phases.
+### Pre-Phase 0 Gate
 
-**Gate Status**: PASS WITH NOTE.
+| Principle | Status | Notes |
+|-----------|--------|-------|
+| I. One-Click Deployment with Smart Defaults | PASS | Quickstart uses current compose services and explicit auth prerequisites. |
+| II. Powerful Runtime Configurability | PASS | Stage skill selection and runtime mode remain configuration-driven. |
+| III. Modular and Extensible Architecture | PASS | Changes target workflow model normalization + schema/contract layers without cross-cutting rewrites. |
+| IV. Avoid Exclusive Proprietary Vendor Lock-In | PASS | Skills-first adapter contract remains explicit (`adapterId` surfaced). |
+| V. Self-Healing by Default | PASS | Compatibility defaults for legacy metadata preserve deterministic diagnostics. |
+| VI. Facilitate Continuous Improvement | PASS | Structured per-phase metadata remains queryable through API payloads. |
+| VII. Spec-Driven Development Is the Source of Truth | PASS | Spec/plan/research/data-model/contracts/quickstart are refreshed together for drift control. |
+| VIII. Skills Are First-Class and Easy to Add | PASS | Stage contracts preserve explicit skill and adapter resolution metadata. |
+
+**Gate Result (Pre-Phase 0)**: PASS
+
+### Post-Phase 1 Re-Check
+
+| Principle | Status | Notes |
+|-----------|--------|-------|
+| I. One-Click Deployment with Smart Defaults | PASS | Fast-path docs remain consistent with auth scripts and current service names. |
+| II. Powerful Runtime Configurability | PASS | Contracts document conditional Speckit verification based on configured stage skills. |
+| III. Modular and Extensible Architecture | PASS | API schema contract and workflow metadata model remain separated by module boundaries. |
+| IV. Avoid Exclusive Proprietary Vendor Lock-In | PASS | Adapter metadata is explicit and portable in structured payloads. |
+| V. Self-Healing by Default | PASS | Legacy default derivation rules are preserved and testable. |
+| VI. Facilitate Continuous Improvement | PASS | Contracted observability fields support triage without raw worker internals. |
+| VII. Spec-Driven Development Is the Source of Truth | PASS | `DOC-REQ-*` traceability document maps each requirement to implementation + validation. |
+| VIII. Skills Are First-Class and Easy to Add | PASS | Shared skills workspace and stage execution contracts are updated to current runtime behavior. |
+
+**Gate Result (Post-Phase 1)**: PASS
 
 ## Project Structure
 
@@ -41,82 +65,46 @@ specs/015-skills-workflow/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
+│   ├── compose-fast-path.md
+│   ├── requirements-traceability.md
 │   ├── skills-stage-contract.md
-│   └── compose-fast-path.md
+│   └── spec-automation-api.openapi.yaml
 └── tasks.md
 ```
 
 ### Source Code (repository root)
 
 ```text
-celery_worker/
-├── speckit_worker.py
-└── gemini_worker.py
+api_service/
+└── api/
+    └── routers/
+        └── spec_automation.py
 
-moonmind/config/
-└── settings.py
+moonmind/
+├── schemas/
+│   └── workflow_models.py
+└── workflows/
+    ├── skills/
+    │   ├── registry.py
+    │   └── runner.py
+    └── speckit_celery/
+        ├── models.py
+        └── tasks.py
 
-moonmind/workflows/
-├── __init__.py
-├── speckit_celery/
-│   ├── models.py
-│   ├── orchestrator.py
-│   ├── services.py
-│   └── tasks.py
-└── skills/                        # new workflow skills adapter package
-    ├── __init__.py
-    ├── contracts.py
-    ├── registry.py
-    ├── runner.py
-    └── speckit_adapter.py
+tests/
+└── unit/
+    ├── api/
+    │   └── test_spec_automation.py
+    └── workflows/
+        ├── test_spec_automation_env.py
+        └── test_tasks.py
 
-api_service/api/routers/
-└── workflows.py
-
-docs/
-├── CodexCliWorkers.md
-└── SpecKitAutomationInstructions.md
-
-README.md
-docker-compose.yaml
-
-tests/unit/workflows/
-├── test_tasks.py
-├── test_workflow_env.py
-├── test_worker_entrypoints.py    # new
-└── test_skills_runner.py          # new
-
-tests/unit/agents/codex_worker/
-└── test_cli.py
+tools/
+└── test_unit.sh
 ```
 
-**Structure Decision**: Keep existing workflow modules as compatibility surfaces, introduce a dedicated `moonmind/workflows/skills/` adapter layer for stage contract execution and fallback logic, and avoid disruptive API/queue renames in this migration.
-
-## Phase 0: Research Plan
-
-1. Define stage-contract boundaries that preserve current behavior while enabling skills-first dispatch.
-2. Decide skill registry/allowlist model and override precedence (global default, per-stage, per-run).
-3. Define rollout controls (shadow/canary/fallback) with minimal operational complexity.
-4. Define startup prerequisite checks for Speckit availability, Codex auth readiness, and Google embedding prerequisites.
-5. Define the minimal compose and README updates that preserve "fastest path" operator experience.
-
-## Phase 1: Design Outputs
-
-- `research.md`: decisions, alternatives, and rationale for skills-first adapter architecture and rollout.
-- `data-model.md`: runtime value objects/enums for stage contract execution, path metadata, and startup capability profiles.
-- `contracts/skills-stage-contract.md`: canonical stage input/output contract and fallback semantics.
-- `contracts/compose-fast-path.md`: runtime env and docker-compose contract for Codex auth + Gemini embedding fast path.
-- `quickstart.md`: deterministic startup and verification flow for operators.
-
-## Post-Design Constitution Re-check
-
-- Design maintains runtime-first implementation intent and test validation requirements.
-- No enforceable constitution conflicts were identified beyond placeholder constitution content.
-
-**Gate Status**: PASS.
+**Structure Decision**: Use the existing backend monorepo structure, with workflow normalization in `moonmind/workflows/speckit_celery/`, API schema/serialization in `moonmind/schemas/` and `api_service/api/routers/`, and regression validation in `tests/unit/`.
 
 ## Complexity Tracking
 
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| None | N/A | N/A |
+No constitution violations identified for this plan.
