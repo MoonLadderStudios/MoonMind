@@ -1,29 +1,29 @@
-# Research: Task Presets Catalog
+# Research: Task Presets Strategy Alignment
 
-## Decision: Catalog storage + versioning layout
-- **Decision**: Model templates and versions separately. `task_step_templates` stores identity/scope metadata; `task_step_template_versions` stores immutable blueprints, inputs schema, and annotations. Seed YAML files hydrate both tables at migration time.
-- **Rationale**: Separation keeps slug ownership/governance distinct from version history, allows soft-deleting templates without losing version audit, and simplifies "latest version" lookups.
+## Decision: Treat `speckit-orchestrate.yaml` as source of truth for seeded behavior
+- **Decision**: Use the YAML seed file as the authoritative runtime instruction contract and synchronize existing DB rows from it via migration.
+- **Rationale**: Existing environments already contain seeded rows; seed file edits alone do not propagate after initial migrations.
 - **Alternatives considered**:
-  - *Single table with JSON `versions[]`*: complicates SQL filtering and RBAC per version; poor for Alembic migrations.
-  - *File backed catalog only*: works for defaults but prevents UI/CLI creation flows and per-user scopes.
+  - *Manual SQL patching*: error-prone and non-repeatable across environments.
+  - *Service startup auto-backfill*: introduces runtime side effects and complicates rollout safety.
 
-## Decision: Expansion + templating engine
-- **Decision**: Use Jinja2 sandboxed environment with a curated set of filters to substitute `{{inputs.*}}` and built-ins (now, iso_today, counter). Templates compile once at load; expansion clones environment with per-request variables.
-- **Rationale**: Jinja2 already bundled via FastAPI for templates, has mature escaping and conditionals if we later enable optional `when` logic, and sandbox mode lets us disallow unsafe attributes.
+## Decision: Remove direct commit/PR directives from runtime preset instructions
+- **Decision**: Replace final preset step language with report-only handoff that explicitly defers commit/push/PR actions to MoonMind publish stage.
+- **Rationale**: Current project strategy separates runtime execution from publish stage responsibilities; runtime instructions should not conflict.
 - **Alternatives considered**:
-  - *`str.format` / f-string style*: lacks sandboxing, no conditionals, error-prone default handling.
-  - *Custom DSL*: higher maintenance and not needed for v1 scope.
+  - *Keep commit/PR directives and rely on operator discipline*: leaves contradictory guidance and repeated policy violations.
+  - *Delete final step entirely*: loses useful final status-report guidance.
 
-## Decision: Secret scrubbing + parameterization
-- **Decision**: Reuse existing secret detectors from `moonmind.utils.secrets` (heuristics for `ghp_`, `token=`, PEM blocks). On save, run text through detectors and refuse to persist until scrubbed; UI proactively highlights hits. Provide quick actions to convert repeated strings into input variables before submission.
-- **Rationale**: Reusing shared detectors reduces false negatives, and blocking server-side ensures CLI/MCP clients comply even if UI misses a case.
+## Decision: Add regression tests around seed content
+- **Decision**: Add focused unit tests that parse the seed YAML and assert publish-stage-safe wording plus runtime-neutral capabilities.
+- **Rationale**: Seed regressions can silently reintroduce policy drift unless explicitly tested.
 - **Alternatives considered**:
-  - *Rely only on UI redaction*: brittle for CLI/MCP flows.
-  - *Encrypt secret-laden templates*: defeats the goal of shareable presets and would still leak when expanded.
+  - *Rely on docs review only*: too fragile for policy-critical wording.
+  - *Full migration integration test suite*: heavier than needed for this narrow alignment change.
 
-## Decision: Deterministic step IDs
-- **Decision**: Format `stepId` as `tpl:{slug}:{version}:{index:02d}` plus suffix when duplicate indexes exist (e.g., `:a`, `:b`). Include hash of normalized instructions when template is inserted multiple times in one task.
-- **Rationale**: Determinism simplifies diff review, templates remain auditable, and duplicates remain unique when repeated.
+## Decision: Preserve mode-aware orchestration behavior in seed instructions
+- **Decision**: Keep the seed template wired to `inputs.orchestration_mode` for scope validation gates and remediation severity, so runtime mode enforces implementation scope while docs mode remains documentation-only permissive.
+- **Rationale**: MoonMind strategy now separates execution intent by mode; hardcoding runtime semantics would break docs workflows and hidden fallback behavior violates fail-fast clarity.
 - **Alternatives considered**:
-  - *Random UUIDs*: lose human readability and hamper cross-run comparisons.
-  - *Delegating to UI*: duplicates logic across clients and risks collisions.
+  - *Hardcode runtime-only validation*: rejects legitimate docs-mode orchestration.
+  - *Split into two separate presets*: duplicates maintenance and risks behavior drift between templates.

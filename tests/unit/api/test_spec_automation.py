@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterator
+from typing import Any, Iterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -52,14 +52,22 @@ class FakeTaskState:
 
     def get_skill_execution_metadata(self) -> dict | None:
         metadata = self.get_metadata() or {}
-        selected = metadata.get("selectedSkill")
-        execution = metadata.get("executionPath")
+
+        def _coerce_str(value: Any) -> str | None:
+            if isinstance(value, str):
+                return value.strip() or None
+            return None
+
+        selected = _coerce_str(metadata.get("selectedSkill"))
+        adapter = _coerce_str(metadata.get("adapterId"))
+        execution = _coerce_str(metadata.get("executionPath"))
         used_skills = metadata.get("usedSkills")
         used_fallback = metadata.get("usedFallback")
         shadow_mode = metadata.get("shadowModeRequested")
-
         if selected is None and self.phase.value.startswith("speckit_"):
             selected = "speckit"
+        if adapter is None and selected == "speckit":
+            adapter = "speckit"
         if execution is None and selected == "speckit":
             execution = "skill"
         if used_skills is None and execution is not None:
@@ -69,6 +77,7 @@ class FakeTaskState:
 
         if (
             selected is None
+            and adapter is None
             and execution is None
             and used_skills is None
             and used_fallback is None
@@ -78,6 +87,7 @@ class FakeTaskState:
 
         return {
             "selectedSkill": selected,
+            "adapterId": adapter,
             "executionPath": execution,
             "usedSkills": used_skills,
             "usedFallback": used_fallback,
@@ -185,6 +195,7 @@ def test_get_run_detail_success(
     assert data["phases"][0]["phase"] == task_state.phase.value
     assert data["phases"][0]["metadata"] == {"branch": "speckit/branch"}
     assert data["phases"][0]["selected_skill"] == "speckit"
+    assert data["phases"][0]["adapter_id"] == "speckit"
     assert data["phases"][0]["execution_path"] == "skill"
     assert data["artifacts"][0]["artifact_id"] == str(artifact.id)
     repo.get_run_detail.assert_awaited_once_with(run_id)
@@ -201,6 +212,7 @@ def test_get_run_detail_uses_explicit_skill_metadata(
         status=models.SpecAutomationTaskStatus.SUCCEEDED,
         metadata={
             "selectedSkill": "custom-skill",
+            "adapterId": "custom-adapter",
             "executionPath": "direct_fallback",
             "usedSkills": True,
             "usedFallback": True,
@@ -215,10 +227,63 @@ def test_get_run_detail_uses_explicit_skill_metadata(
     payload = response.json()
     phase_payload = payload["phases"][0]
     assert phase_payload["selected_skill"] == "custom-skill"
+    assert phase_payload["adapter_id"] == "custom-adapter"
     assert phase_payload["execution_path"] == "direct_fallback"
     assert phase_payload["used_skills"] is True
     assert phase_payload["used_fallback"] is True
     assert phase_payload["shadow_mode_requested"] is False
+
+
+def test_get_run_detail_backfills_blank_speckit_adapter_fields(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    http_client, repo, _user = client
+    run_id = uuid4()
+    run = _build_run(run_id)
+    task_state = FakeTaskState(
+        phase=models.SpecAutomationPhase.SPECKIT_ANALYZE,
+        status=models.SpecAutomationTaskStatus.SUCCEEDED,
+        metadata={
+            "selectedSkill": "speckit",
+            "adapterId": "   ",
+            "executionPath": "   ",
+        },
+    )
+    repo.get_run_detail.return_value = (run, [task_state], [])
+
+    response = http_client.get(f"/api/spec-automation/runs/{run_id}")
+
+    assert response.status_code == 200
+    phase_payload = response.json()["phases"][0]
+    assert phase_payload["selected_skill"] == "speckit"
+    assert phase_payload["adapter_id"] == "speckit"
+    assert phase_payload["execution_path"] == "skill"
+    assert phase_payload["used_skills"] is True
+    assert phase_payload["used_fallback"] is False
+
+
+def test_get_run_detail_keeps_non_speckit_partial_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    http_client, repo, _user = client
+    run_id = uuid4()
+    run = _build_run(run_id)
+    task_state = FakeTaskState(
+        phase=models.SpecAutomationPhase.PREPARE_JOB,
+        status=models.SpecAutomationTaskStatus.SUCCEEDED,
+        metadata={"executionPath": "direct_only"},
+    )
+    repo.get_run_detail.return_value = (run, [task_state], [])
+
+    response = http_client.get(f"/api/spec-automation/runs/{run_id}")
+
+    assert response.status_code == 200
+    phase_payload = response.json()["phases"][0]
+    assert phase_payload["selected_skill"] is None
+    assert phase_payload["adapter_id"] is None
+    assert phase_payload["execution_path"] == "direct_only"
+    assert phase_payload["used_skills"] is False
+    assert phase_payload["used_fallback"] is False
 
 
 def test_get_run_detail_not_found(

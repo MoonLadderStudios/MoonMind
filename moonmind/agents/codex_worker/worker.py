@@ -144,6 +144,9 @@ _STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
         "step_transcript_invalid_completion_marker_count",
     }
 )
+_NON_SECRET_REDACTION_SENTINELS = frozenset(
+    {"true", "false", "none", "null", "yes", "no", "on", "off"}
+)
 _NON_SOURCE_CHANGE_PREFIXES = (
     ".github/",
     ".specify/",
@@ -8275,8 +8278,11 @@ class CodexWorker:
 
     def _register_redaction_value(self, value: str | None) -> None:
         candidate = str(value or "").strip()
-        if candidate:
-            self._dynamic_redaction_values.add(candidate)
+        if not candidate:
+            return
+        if candidate.casefold() in _NON_SECRET_REDACTION_SENTINELS:
+            return
+        self._dynamic_redaction_values.add(candidate)
 
     def _redact_text(self, text: str) -> str:
         redacted = self._secret_redactor.scrub(text)

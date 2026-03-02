@@ -1,27 +1,38 @@
-# Implementation Plan: Manifest Queue Plumbing (Phase 0)
+# Implementation Plan: Manifest Queue Alignment and Hardening
 
-**Branch**: `028-manifest-queue` | **Date**: 2026-02-19 | **Spec**: specs/028-manifest-queue/spec.md  
-**Input**: Feature specification from `specs/028-manifest-queue/spec.md`
+**Branch**: `[028-manifest-queue]` | **Date**: March 2, 2026 | **Spec**: `specs/028-manifest-queue/spec.md`  
+**Input**: Feature specification from `/specs/028-manifest-queue/spec.md`
 
 ## Summary
 
-Phase 0 adds queue plumbing for manifest ingestion. We will (1) register `manifest` as a supported job type and gate it through a manifest-specific normalization pipeline, (2) introduce a manifest contract module that parses YAML, enforces name consistency, hashes the payload, and derives required capabilities, and (3) expose `/api/manifests` CRUD plus `/runs` submission endpoints backed by the existing `manifest` table. The work happens inside the FastAPI service (`api_service`) and shared `moonmind` package, with regression coverage wired into the existing pytest suite via `./tools/test_unit.sh`.
+This feature aligns `specs/028-manifest-queue` with the current MoonMind runtime and hardening strategy while preserving existing manifest queue normalization behavior. The implementation strategy is to keep request-action validation fail-fast at the API schema boundary (`plan|run` only), keep queue normalization and metadata compatibility unchanged, and ensure validation coverage is executed via `./tools/test_unit.sh`. Per feature scope guard, this work remains in runtime mode (production code + tests), not docs-only mode.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 (repo standard)  
-**Primary Dependencies**: FastAPI (API surface), Pydantic (payload models), SQLAlchemy + Postgres (agent queue + manifest tables), internal Agent Queue service layer  
-**Storage**: Postgres (`agent_queue` tables, `manifest` table with `state_json`)  
-**Testing**: pytest executed through `./tools/test_unit.sh` (includes API + service tests)  
-**Target Platform**: Linux containers (Docker Compose stack)  
-**Project Type**: Backend services + shared library (`moonmind` package consumed by api_service and workers)  
-**Performance Goals**: Queue job creation must remain sub-50 ms p95 and not increase DB load beyond existing task submissions; manifest registry GET requests should stay cache-friendly (<10ms p95 hitting Postgres)  
-**Constraints**: Queue payloads must remain token-free, and manifest normalization must be deterministic for hashing/deletion semantics described in docs/ManifestTaskSystem.md  
-**Scale/Scope**: Support dozens of concurrent manifest submissions/day with capability derivation covering GitHub, Google Drive, Confluence, Local FS, embeddings, and vector store combinations
+**Language/Version**: Python 3.11 target runtime (project supports `>=3.10,<3.14`)  
+**Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async, Celery, PyYAML, pytest  
+**Storage**: PostgreSQL for API/queue state; RabbitMQ broker for queue dispatch; queue payload metadata in JSONB  
+**Testing**: `./tools/test_unit.sh` (required wrapper around pytest)  
+**Target Platform**: Linux containerized MoonMind API + worker services (Docker Compose/WSL workflows)  
+**Project Type**: Multi-service backend (API service + queue/workflow modules + tests)  
+**Performance Goals**: Reject unsupported manifest run actions during request parsing; preserve existing queue submit path latency and metadata behavior  
+**Constraints**: Fail-fast for unsupported runtime values; no compatibility transforms that change manifest normalization semantics; deliverables must include runtime code + tests for this feature scope; no secrets in payload/docs/logs  
+**Scale/Scope**: Focused hardening of `POST /api/manifests/{name}/runs` action validation and artifact alignment for existing manifest queue phase
 
 ## Constitution Check
 
-The `.specify/memory/constitution.md` placeholder does not define enforceable principles, so no blocking gates exist beyond standard repo guardrails (test coverage + security guardrails). We will still treat "Test-First" and "Observability" as implied requirements by ensuring new runtime code ships with pytest coverage and emits structured validation errors. **Gate Status: PASS**
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+
+- **I. One-Click Deployment**: PASS. No deployment-path changes; existing compose-based startup remains unchanged.
+- **II. Runtime Configurability**: PASS. No hardcoded runtime overrides introduced; action validation is explicit request-contract behavior.
+- **III. Modular Architecture**: PASS. Validation stays in `api_service/api/schemas.py` and queue normalization remains in `moonmind/workflows/agent_queue/manifest_contract.py`.
+- **IV. Avoid Vendor Lock-In**: PASS. No provider-specific coupling added.
+- **V. Self-Healing by Default**: PASS. No retry/state behavior regressions introduced.
+- **VI. Continuous Improvement**: PASS. Existing structured outcomes/tests remain intact and are updated for regression coverage.
+- **VII. Spec-Driven Development**: PASS. `spec.md`, `plan.md`, `tasks.md`, and design artifacts are kept synchronized with runtime reality.
+- **VIII. Skills First-Class**: PASS. Planning artifacts remain compatible with current skill-driven workflow execution.
+
+**Gate Status (Pre-Design)**: PASS.
 
 ## Project Structure
 
@@ -29,42 +40,90 @@ The `.specify/memory/constitution.md` placeholder does not define enforceable pr
 
 ```text
 specs/028-manifest-queue/
+├── plan.md                              # This file (speckit-plan output)
+├── research.md                          # Phase 0 decisions
+├── data-model.md                        # Phase 1 entity/validation model
+├── quickstart.md                        # Phase 1 validation steps
+├── contracts/
+│   ├── manifests-api.md                 # API contract for registry/runs
+│   └── requirements-traceability.md     # DOC-REQ to FR mapping + validation
+├── checklists/requirements.md
 ├── spec.md
-├── plan.md
-├── research.md
-├── data-model.md
-├── quickstart.md
-└── contracts/
-    └── manifests-api.md
+└── tasks.md
 ```
 
 ### Source Code (repository root)
 
 ```text
-moonmind/
-└── workflows/
-    └── agent_queue/
-        ├── job_types.py            # new manifest allowlist module
-        ├── manifest_contract.py    # new manifest payload normalization
-        ├── service.py              # route manifest jobs through contract
-        └── task_contract.py        # untouched (task-only contracts)
-
 api_service/
 ├── api/
-│   └── manifests.py               # new FastAPI router for registry CRUD + runs
-├── services/
-│   └── manifests_service.py       # orchestrates DB access + queue submissions
-├── db/
-│   └── models/manifest.py         # extend ManifestRecord columns
-└── tests/
-    ├── api/
-    │   └── test_manifests_api.py  # endpoint coverage
-    └── workflows/
-        └── test_agent_queue_manifest.py  # manifest contract + queue gating tests
+│   ├── schemas.py                       # ManifestRunRequest validation contract
+│   └── routers/manifests.py             # /api/manifests/{name}/runs endpoint
+└── services/manifests_service.py        # Registry-backed queue submission
+
+moonmind/workflows/agent_queue/
+├── manifest_contract.py                 # Normalization + hash/capability derivation
+├── service.py                           # Queue create/validation flow
+├── repositories.py                      # Queue persistence/claim logic
+└── job_types.py                         # manifest job type registration
+
+tests/
+├── unit/api/test_manifest_run_request_schema.py
+├── unit/api/routers/test_manifests.py
+└── unit/workflows/agent_queue/test_manifest_contract.py
 ```
 
-**Structure Decision**: Work stays inside `moonmind/workflows/agent_queue` for shared queue plumbing and `api_service` for HTTP exposure. No new top-level packages are needed; adopting dedicated modules keeps manifest-specific logic isolated from existing task contract files and simplifies future worker reuse.
+**Structure Decision**: Keep API-request validation in Pydantic schema models and preserve queue normalization in the existing agent queue contract layer. This avoids semantic drift while enforcing fail-fast behavior at the earliest boundary.
+
+## Phase 0: Research Outcomes
+
+1. Confirmed action hardening should occur in `ManifestRunRequest` schema so invalid inputs fail before `ManifestsService.submit_manifest_run`.
+2. Confirmed `normalize_manifest_job_payload()` already enforces manifest compatibility requirements (`manifestHash`, `manifestVersion`, capability derivation, secret hygiene) and should not be changed in this scope.
+3. Confirmed this feature is runtime-mode scoped (runtime code + tests), so documentation alignment must track existing/implemented runtime behavior instead of replacing runtime work.
+4. Confirmed test entrypoint requirement: use `./tools/test_unit.sh` rather than direct `pytest`.
+
+## Phase 1: Design Outputs
+
+- `research.md`: decisions and rejected alternatives for action validation boundary, artifact alignment strategy, and compatibility preservation.
+- `data-model.md`: request/response/payload entities and validation semantics.
+- `contracts/manifests-api.md`: concrete endpoint behavior, including schema-level 422 and queue-level validation 422 semantics.
+- `contracts/requirements-traceability.md`: full `DOC-REQ-*` mapping to FRs, implementation surfaces, and validation strategy.
+- `quickstart.md`: deterministic verification steps for valid/default/invalid action paths and queue metadata safety checks.
+
+## Post-Design Constitution Re-check
+
+- Re-check status for Principles I-VIII remains **PASS**.
+- No principle violations require complexity exceptions.
+- Spec-driven alignment requirement (Principle VII) is satisfied by synchronized updates across `spec.md`, `plan.md`, design artifacts, and `tasks.md`.
+
+**Gate Status (Post-Design)**: PASS.
+
+## Remediation Gates (Prompt B)
+
+- Runtime mode requires production runtime implementation tasks and explicit validation tasks in `tasks.md`; docs-only task sets are invalid for this feature.
+- Each `DOC-REQ-*` requires at least one implementation task and one validation task, with deterministic task-ID mappings kept in `tasks.md` and `contracts/requirements-traceability.md`.
+- Cross-artifact edits must remain deterministic across `spec.md`, `plan.md`, and `tasks.md` to avoid scope drift before implementation.
+
+## Prompt B Remediation Application (Step 12/16)
+
+### Completed CRITICAL/HIGH remediations
+
+- Corrected `DOC-REQ-*` task mapping determinism by aligning implementation/validation coverage in `tasks.md` with `contracts/requirements-traceability.md`.
+- Added explicit runtime-scope controls in `tasks.md` so production runtime tasks (`T010`, `T011`, `T023`) and runtime validation tasks (`T012`, `T024`, `T025`) are always auditable.
+- Re-grouped User Story 3 validation execution task `T024` under tests to preserve deterministic ordering (tests/validation before closeout).
+
+### Completed MEDIUM/LOW remediations
+
+- Added explicit Prompt B gate statements in planning artifacts so future task regeneration preserves runtime-intent requirements.
+- Added explicit `DOC-REQ` tags to phase-6 validation/sanity tasks (`T025`, `T026`) to preserve traceability closure.
+
+### Residual risks
+
+- Future changes to manifest queue metadata fields may outpace contract docs unless US3 regression tasks are completed together with traceability updates.
+- Scope creep risk remains if additional manifest execution features are added without updating the runtime scope gate tasks.
 
 ## Complexity Tracking
 
-_No additional complexity exemptions required; changes reuse existing queue + API stack and add only the minimal manifest-specific modules described above._
+| Violation | Why Needed | Simpler Alternative Rejected Because |
+|-----------|------------|-------------------------------------|
+| None | N/A | N/A |

@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Specification validated on February 19, 2026 after aligning all DOC-REQ mappings to runtime deliverables.
+- Revalidated on March 2, 2026 after adding explicit runtime scope guard language requiring production code changes plus validation tests.
