@@ -59,7 +59,7 @@ requests = "~=2.32.4"
 nltk = { git = "https://github.com/nltk/nltk.git", rev = "1056b323af6462455571302e766b67cf300aea18" }
 PyYAML = ">=6.0.2"
 asyncpg = "~=0.31.0"
-SQLAlchemy = "~=2.0.46"
+SQLAlchemy = "~=2.0.47"
 docker = "~=7.1.0"
 "fastapi-users" = { version = "~=15.0.4", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
