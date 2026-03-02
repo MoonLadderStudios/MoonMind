@@ -1,133 +1,201 @@
-# Tasks: Manifest Task System Phase 0
+# Tasks: Manifest Phase 0 Rebaseline
 
-**Input**: Design artifacts in `specs/031-manifest-phase0/` plus `docs/ManifestTaskSystem.md`
-**Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
-**Tests**: Always run `./tools/test_unit.sh` (never `pytest` directly) to validate runtime changes.
+**Input**: Design artifacts in `/specs/031-manifest-phase0/`
+**Prerequisites**: `plan.md` (required), `spec.md` (required), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
+**Tests**: Runtime validation is required by the feature spec (`DOC-REQ-009`); run `./tools/test_unit.sh` (never raw `pytest`) and runtime scope gates for final verification.
+
+**Organization**: Tasks are grouped by user story to preserve independent implementation and testing.
 
 ## Format: `[ID] [P?] [Story] Description`
 
-- **[P]** marks tasks that can proceed in parallel (no unmet dependencies, different files).
-- **[Story]** labels appear only for user-story phases (`US1`, `US2`, `US3`).
-- Every task cites an exact file path so implementers know where to work.
+- **[P]** indicates tasks that can run in parallel once dependencies are met.
+- **[Story]** labels are used only in user-story phases (`[US1]`, `[US2]`, `[US3]`).
+- Every task includes concrete file paths.
 
-## Path Conventions
+## Prompt B Scope Controls (Step 12/16)
 
-- Queue core: `moonmind/workflows/agent_queue/`
-- Queue serialization/events: `moonmind/schemas/`
-- API service: `api_service/api/routers/`, `api_service/services/`, `api_service/db/`
-- Database migrations: `api_service/migrations/versions/`
-- Tests: `tests/unit/**`
-- Config toggles: `moonmind/config/settings.py`, `config.toml`
-- Fixtures + docs: `tests/fixtures/`, `specs/031-manifest-phase0/quickstart.md`
-
----
+- Runtime implementation tasks are explicitly present: `T004-T007`, `T010-T012`, `T015-T017`, `T020-T021`.
+- Runtime validation tasks are explicitly present: `T008-T009`, `T013-T014`, `T018-T019`, `T023-T025`.
+- `DOC-REQ-*` implementation + validation coverage is enforced by `T003` and the `DOC-REQ Coverage Matrix` in this file, with persistent mapping in `specs/031-manifest-phase0/contracts/requirements-traceability.md`.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Create shared fixtures and configuration defaults that unblock all manifest phases.
+**Purpose**: Prepare shared fixtures/configuration and rebaseline metadata needed by all stories.
 
-- [X] T001 Build reusable manifest YAML fixtures (`tests/fixtures/manifests/phase0/inline.yaml`, `tests/fixtures/manifests/phase0/registry.yaml`) for queue + registry tests to consume the same payload samples.
-- [X] T002 Encode Phase 0 manifest toggles (`workflow.allow_manifest_path_source`, manifest capability flags) inside `moonmind/config/settings.py` and `config.toml` so runtime gating of `manifest.source.kind` matches docs/ManifestTaskSystem.md §6.
+- [X] T001 [P] Refresh manifest scenario fixtures in `tests/fixtures/manifests/phase0/inline.yaml` and `tests/fixtures/manifests/phase0/registry.yaml` for supported + unsupported Phase 0 payloads.
+- [X] T002 [P] Update Phase 0 runtime toggle defaults in `moonmind/config/settings.py` and `config.toml` for `allow_manifest_path_source` and base `manifest_required_capabilities` behavior.
+- [X] T003 Capture updated requirement mappings in `specs/031-manifest-phase0/contracts/requirements-traceability.md` so each `DOC-REQ-*` has implementation and validation targets before coding.
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Establish queue-wide primitives required before touching any user story.
+**Purpose**: Establish queue/contract primitives that every user story depends on.
 
-- [ ] T003 Introduce `MANIFEST_JOB_TYPE` + `SUPPORTED_QUEUE_JOB_TYPES` exports in `moonmind/workflows/agent_queue/job_types.py` and update queue modules to import the shared allowlist (DOC-REQ-001).
-- [ ] T004 Implement `normalize_manifest_job_payload` with YAML parsing, action/sourcing enforcement, options allowlist, and manifest hash/version derivation inside `moonmind/workflows/agent_queue/manifest_contract.py` (DOC-REQ-002, DOC-REQ-006, DOC-REQ-007).
-- [ ] T005 Add `detect_manifest_secret_leaks` + `collect_manifest_secret_refs` helpers to `moonmind/workflows/agent_queue/manifest_contract.py` so normalized payloads emit `manifestSecretRefs` metadata while blocking raw secrets (DOC-REQ-004, DOC-REQ-008).
+**⚠️ CRITICAL**: Complete this phase before user-story work.
+
+- [X] T004 Register and enforce the `manifest` queue type allowlist in `moonmind/workflows/agent_queue/job_types.py` and `moonmind/workflows/agent_queue/service.py` (DOC-REQ-001, DOC-REQ-009).
+- [X] T005 Implement deterministic manifest normalization and fail-fast validation (`action`, `version`, source kinds, options) in `moonmind/workflows/agent_queue/manifest_contract.py` (DOC-REQ-002, DOC-REQ-006, DOC-REQ-007, DOC-REQ-009).
+- [X] T006 Enforce server-authoritative capability derivation and ignore client capability hints in `moonmind/workflows/agent_queue/manifest_contract.py` and `moonmind/workflows/agent_queue/service.py` (DOC-REQ-003, FR-009, DOC-REQ-009).
+- [X] T007 Implement raw-secret rejection plus reference-only metadata extraction in `moonmind/workflows/agent_queue/manifest_contract.py` and sanitized payload projection in `moonmind/schemas/agent_queue_models.py` (DOC-REQ-004, DOC-REQ-008, DOC-REQ-009).
+
+**Checkpoint**: Foundational manifest primitives are ready for independent story delivery.
 
 ---
 
-## Phase 3: User Story 1 – Submit Manifest Job via Queue (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 - Rebaseline Manifest Runtime Contract (Priority: P1) 🎯 MVP
 
-**Goal**: `/api/queue/jobs` accepts `type="manifest"` payloads, normalizes them through the manifest contract, persists derived metadata, and surfaces sanitized responses.
+**Goal**: Make queue manifest submission/listing behavior match the updated runtime contract with deterministic normalization, metadata derivation, and token-safe responses.
 
-**Independent Test**: POST a manifest job to `/api/queue/jobs` with inline YAML; verify the persisted payload contains `requiredCapabilities`, `manifestHash`, `manifestVersion`, and `manifestSecretRefs`, and confirm `/api/queue/jobs?type=manifest` hides inline YAML while listing metadata.
+**Independent Test**: Submit `type="manifest"` jobs through `/api/queue/jobs`, then verify persisted + returned payloads include required metadata (`manifestHash`, `manifestVersion`, `requiredCapabilities`, optional `manifestSecretRefs`) while rejecting invalid or unsafe payloads.
 
-### Tests for User Story 1 (write first)
+### Tests for User Story 1
 
-- [ ] T006 [P] [US1] Extend `tests/unit/workflows/agent_queue/test_manifest_contract.py` with happy-path + failure cases covering action/source gating, option allowlists, capability derivation, and raw secret rejection (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-006, DOC-REQ-007).
-- [X] T007 [P] [US1] Add queue API coverage in `tests/unit/api/routers/test_agent_queue.py` to assert manifest submissions return sanitized payloads, expose `manifestSecretRefs`, and translate `ManifestContractError` into HTTP 4xx responses (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-008).
+- [X] T008 [P] [US1] Extend contract coverage in `tests/unit/workflows/agent_queue/test_manifest_contract.py` for normalization success/failure, unsupported source/action rejection, capability derivation, and raw secret blocking (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-006, DOC-REQ-007, DOC-REQ-008).
+- [X] T009 [P] [US1] Extend queue API coverage in `tests/unit/api/routers/test_agent_queue.py` for manifest submission/listing sanitization and actionable 4xx error mapping (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-008).
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Update `moonmind/workflows/agent_queue/service.py::AgentQueueService.create_job` to route manifest payloads through `normalize_manifest_job_payload`, persist derived metadata, and log manifest job type audits (DOC-REQ-001, DOC-REQ-003).
-- [ ] T009 [P] [US1] Expand `moonmind/workflows/agent_queue/models.py` (and `storage.py` if needed) so job payload rows store `manifestHash`, `manifestVersion`, `manifestSecretRefs`, and `requiredCapabilities` (DOC-REQ-003, DOC-REQ-008).
-- [ ] T010 [P] [US1] Implement `sanitize_manifest_payload` serialization inside `moonmind/schemas/agent_queue_models.py` and SSE presenters so queue/event responses expose only hashes, versions, secret refs, and capabilities (DOC-REQ-001, DOC-REQ-003, DOC-REQ-008).
-- [ ] T011 [P] [US1] Extend `api_service/api/routers/agent_queue.py` to accept `type="manifest"`, invoke the manifest contract via `AgentQueueService`, and map contract errors to FastAPI HTTPException payloads (DOC-REQ-001, DOC-REQ-002).
+- [X] T010 [US1] Route manifest submissions through the normalized contract and persist derived metadata in `moonmind/workflows/agent_queue/service.py` and `moonmind/workflows/agent_queue/models.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-009).
+- [X] T011 [P] [US1] Ensure queue response serialization hides raw manifest content while surfacing safe metadata in `moonmind/schemas/agent_queue_models.py` (DOC-REQ-004, DOC-REQ-008, DOC-REQ-009).
+- [X] T012 [P] [US1] Update manifest queue request/response validation and canonical error payloads in `api_service/api/routers/agent_queue.py` (DOC-REQ-002, DOC-REQ-007, DOC-REQ-009).
 
-**Parallel Example (US1)**: Run T006 and T007 in parallel using the fixtures from T001 while T008 builds the service plumbing; once T008 lands, T009–T011 can proceed simultaneously because they touch distinct modules (models, schemas, router).
+**Checkpoint**: US1 delivers a valid, testable Phase 0 manifest queue contract.
 
 ---
 
-## Phase 4: User Story 2 – Manage Manifest Registry Entries (Priority: P2)
+## Phase 4: User Story 2 - Align Registry + Queue Flows With Current Strategy (Priority: P2)
 
-**Goal**: Provide registry CRUD + `/runs` bridging so operators can store YAML, retrieve metadata, and enqueue jobs referencing registry content.
+**Goal**: Align manifest registry CRUD and registry-backed run submission with canonical MoonMind naming, queue contract semantics, and Phase 0 boundaries.
 
-**Independent Test**: `PUT /api/manifests/{name}` to upsert YAML, `GET /api/manifests/{name}` to retrieve sanitized metadata, and `POST /api/manifests/{name}/runs` to enqueue a job whose queue payload references the stored manifest and updates `last_run_*` fields.
+**Independent Test**: Upsert/read manifests and submit `/api/manifests/{name}/runs`; verify queue linkage metadata, fail-fast validation on unsupported inputs, and token-safe outputs.
 
-### Tests for User Story 2 (write first)
+### Tests for User Story 2
 
-- [ ] T012 [P] [US2] Expand `tests/unit/services/test_manifests_service.py` with cases for upsert validation, hash/version persistence, `/runs` bridge submissions, and secret rejection for inline payloads (DOC-REQ-004, DOC-REQ-005).
-- [ ] T013 [P] [US2] Add REST coverage in `tests/unit/api/routers/test_manifests.py` for list/get/put/post flows including name mismatches, missing manifests, and sanitized responses (DOC-REQ-005).
+- [X] T013 [P] [US2] Expand service-level coverage in `tests/unit/services/test_manifests_service.py` for registry upsert/run behavior, hash/version updates, queue-job linkage, and secret-safe enforcement (DOC-REQ-004, DOC-REQ-005, DOC-REQ-008).
+- [X] T014 [P] [US2] Expand router coverage in `tests/unit/api/routers/test_manifests.py` for list/get/put/post flows, canonical naming, not-found handling, and unsupported-action/source failures (DOC-REQ-005, DOC-REQ-006, DOC-REQ-007).
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Author/extend Alembic migration `api_service/migrations/versions/202602190003_manifest_registry_extensions.py` so `manifest` table stores `content_hash`, `version`, `last_run_*`, and `state_json/state_updated_at` columns (DOC-REQ-005).
-- [ ] T015 [P] [US2] Update `api_service/db/models.py::ManifestRecord` plus Pydantic schemas in `api_service/api/schemas.py` to expose the new registry columns and defaults (DOC-REQ-005).
-- [ ] T016 [US2] Implement `api_service/services/manifests_service.py` helpers (`upsert_manifest`, `submit_manifest_run`) that reuse `normalize_manifest_job_payload`, enforce secret policy, link queue job IDs, and update `last_run_*` metadata (DOC-REQ-004, DOC-REQ-005).
-- [ ] T017 [P] [US2] Build `api_service/api/routers/manifests.py` handlers (list/get/put/post) that serialize sanitized registry payloads without inline YAML while surfacing hash/version/secret refs (DOC-REQ-005, DOC-REQ-008).
+- [X] T015 [US2] Update registry run orchestration in `api_service/services/manifests_service.py` to reuse manifest normalization, enforce Phase 0 constraints, and persist run-link metadata (`last_run_*`, state) (DOC-REQ-002, DOC-REQ-005, DOC-REQ-009).
+- [X] T016 [P] [US2] Update API contract and canonical response fields in `api_service/api/routers/manifests.py` and `api_service/api/schemas.py` (FR-008, DOC-REQ-005, DOC-REQ-008, DOC-REQ-009).
+- [X] T017 [P] [US2] Align registry persistence fields in `api_service/db/models.py` and `api_service/migrations/versions/202602190003_manifest_registry_extensions.py` (DOC-REQ-005, DOC-REQ-009).
 
-**Parallel Example (US2)**: After T014 finalizes schema changes, T015 (models) and T016 (service) can run concurrently; T013’s router tests can stub the service while T017 wires FastAPI endpoints.
+**Checkpoint**: US2 delivers strategy-aligned registry + queue interoperability.
 
 ---
 
-## Phase 5: User Story 3 – Capability-Based Routing (Priority: P3)
+## Phase 5: User Story 3 - Lock Behavior With Regression Tests (Priority: P3)
 
-**Goal**: Ensure manifest jobs publish deterministic capability chips and that worker claim logic honors those requirements so only manifest-capable workers process these jobs.
+**Goal**: Add regression tests that prevent silent reintroduction of stale manifest behavior across queue, registry, and claim-routing paths.
 
-**Independent Test**: Submit manifests targeting different embeddings providers, vector stores, and data sources; verify persisted payloads expose the expected `requiredCapabilities`, queue listings show the chips, and `_is_job_claim_eligible` rejects workers missing any derived capability.
+**Independent Test**: Run targeted manifest suites and then `./tools/test_unit.sh`; verify intentional rule breaks produce deterministic test failures.
 
-### Tests for User Story 3 (write first)
+### Tests for User Story 3
 
-- [ ] T018 [P] [US3] Extend `tests/unit/workflows/agent_queue/test_repositories.py` to assert `_is_job_claim_eligible` blocks workers lacking `manifest`/store/source capabilities and passes when capabilities are supersets (DOC-REQ-003).
-- [ ] T019 [P] [US3] Add SSE/listing coverage in `tests/unit/workflows/agent_queue/test_service_manifest.py` (or equivalent presenter test) to confirm queue responses show capability chips, hashes, and secret refs for manifest jobs (DOC-REQ-001, DOC-REQ-003, DOC-REQ-008).
+- [X] T018 [P] [US3] Extend claim-eligibility regression coverage in `tests/unit/workflows/agent_queue/test_repositories.py` for manifest capability superset enforcement (DOC-REQ-001, DOC-REQ-003).
+- [X] T019 [P] [US3] Add cross-flow regression cases in `tests/unit/api/routers/test_agent_queue.py` and `tests/unit/api/routers/test_manifests.py` that assert fail-fast behavior for unsupported actions/source kinds and raw secrets (DOC-REQ-004, DOC-REQ-006, DOC-REQ-007).
 
 ### Implementation for User Story 3
 
-- [ ] T020 [US3] Finalize capability mapping tables inside `moonmind/workflows/agent_queue/manifest_contract.py::derive_required_capabilities` for embeddings providers, vector stores, and each `dataSources[].type` (DOC-REQ-003).
-- [ ] T021 [US3] Tighten `moonmind/workflows/agent_queue/repositories.py::_is_job_claim_eligible` so manifest jobs only dispatch to workers whose declared capabilities ⊇ derived capability chips (DOC-REQ-001, DOC-REQ-003).
-- [ ] T022 [P] [US3] Surface `requiredCapabilities`, `manifestHash`, `manifestVersion`, and `manifestSecretRefs` through `moonmind/schemas/agent_queue_models.py`, `moonmind/workflows/agent_queue/service.py` event payloads, and `/api/queue/jobs?type=manifest` filtering (DOC-REQ-001, DOC-REQ-003, DOC-REQ-008).
+- [X] T020 [US3] Harden manifest claim + metadata consistency logic in `moonmind/workflows/agent_queue/repositories.py` and `moonmind/workflows/agent_queue/service.py` to satisfy new regression assertions (DOC-REQ-001, DOC-REQ-003, DOC-REQ-008, DOC-REQ-009).
+- [X] T021 [P] [US3] Close any regression gaps in validation/sanitization behavior in `moonmind/workflows/agent_queue/manifest_contract.py` and `api_service/services/manifests_service.py` surfaced by T018-T019 (DOC-REQ-002, DOC-REQ-004, DOC-REQ-006, DOC-REQ-007, DOC-REQ-008, DOC-REQ-009).
 
-**Parallel Example (US3)**: T020 establishes the mapping tables; once merged, T018–T019 can pin expected behavior while T021–T022 update repository gating and serializers in parallel since they touch different files.
+**Checkpoint**: US3 locks the rebaseline with enforceable regression protection.
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T023 [P] Refresh `specs/031-manifest-phase0/quickstart.md` and `specs/031-manifest-phase0/contracts/requirements-traceability.md` with the new queue + registry flows and DOC-REQ-001…008 coverage notes.
-- [ ] T024 Execute `./tools/test_unit.sh` and capture manifest-focused output, ensuring CI parity before MoonMind publish.
+- [X] T022 [P] Refresh executable validation guidance in `specs/031-manifest-phase0/quickstart.md` and keep requirement/test evidence synchronized in `specs/031-manifest-phase0/contracts/requirements-traceability.md` (FR-011).
+- [X] T023 Execute `./tools/test_unit.sh` to validate full runtime and regression coverage for this feature (FR-010, DOC-REQ-009).
+- [X] T024 [P] Run runtime task-scope validation via `./.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` and capture output in `specs/031-manifest-phase0/quickstart.md` (DOC-REQ-009).
+- [X] T025 [P] Run runtime diff-scope validation via `./.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main` and capture output in `specs/031-manifest-phase0/quickstart.md` (DOC-REQ-009).
 
 ---
 
 ## Dependencies & Execution Order
 
-1. **Setup (T001–T002)** → fixtures + config gating; prerequisite for all phases.
-2. **Foundational (T003–T005)** → manifest job type + contract + secret policy; block every user story.
-3. **User Story 1 (T006–T011)** → MVP queue submission; unlocks registry + routing work.
-4. **User Story 2 (T012–T017)** → registry CRUD builds atop normalized payloads.
-5. **User Story 3 (T018–T022)** → capability routing depends on payload metadata + registry schema.
-6. **Polish (T023–T024)** → docs + verification only after runtime features stabilize.
+### Phase Dependencies
 
-Within each phase, tasks flagged `[P]` can run concurrently once their prerequisites finish.
+1. Phase 1 (Setup) starts immediately.
+2. Phase 2 (Foundational) depends on Phase 1 and blocks all user stories.
+3. Phase 3 (US1) depends on Phase 2 and is the MVP increment.
+4. Phase 4 (US2) depends on Phase 2; sequence after US1 for safer integration.
+5. Phase 5 (US3) depends on Phase 3 and Phase 4 because it locks behavior across both flows.
+6. Phase 6 (Polish) runs after all user stories are complete.
+
+### User Story Dependency Graph
+
+1. `US1 (P1)` -> baseline manifest runtime contract.
+2. `US2 (P2)` -> registry and queue strategy alignment on top of the contract.
+3. `US3 (P3)` -> regression lock across US1 + US2 behavior.
+
+### Parallel Opportunities
+
+- Phase 1: `T001` and `T002` can run in parallel.
+- US1: `T008` and `T009` can run in parallel; after `T010`, `T011` and `T012` can run in parallel.
+- US2: `T013` and `T014` can run in parallel; after `T015`, `T016` and `T017` can run in parallel.
+- US3: `T018` and `T019` can run in parallel; `T021` can run in parallel with finalizing non-overlapping fixes from `T020`.
+- Phase 6: `T024` and `T025` can run in parallel after `T023`.
+
+---
+
+## Parallel Example: User Story 2
+
+```bash
+# Parallel test prep for US2:
+Task: "Expand service-level coverage in tests/unit/services/test_manifests_service.py"
+Task: "Expand router coverage in tests/unit/api/routers/test_manifests.py"
+
+# Parallel implementation after service orchestration lands:
+Task: "Update API contract fields in api_service/api/routers/manifests.py + api_service/api/schemas.py"
+Task: "Align registry persistence fields in api_service/db/models.py + migration"
+```
+
+---
 
 ## Implementation Strategy
 
-1. Ship the **MVP** by finishing Phase 3 so manifest jobs can be submitted, stored, and observed safely.
-2. Layer **registry CRUD** (Phase 4) immediately afterward to unlock deterministic re-runs (`PUT/GET/POST /api/manifests`).
-3. Close with **capability routing + polish** (Phases 5–6) to enforce worker isolation, record documentation, and run the authoritative unit suite before handing off.
+### MVP First (US1)
 
-Delivering in this sequence ensures every checkpoint is independently testable and each user story can demonstrate value before moving forward.
+1. Complete Phase 1 and Phase 2.
+2. Deliver US1 (Phase 3) and validate queue contract independently.
+3. Treat this checkpoint as the minimum shippable rebaseline.
+
+### Incremental Delivery
+
+1. Add US2 to align registry and queue behavior with current strategy.
+2. Add US3 to lock behavior with regression tests.
+3. Finish with Phase 6 validation and traceability refresh.
+
+### Quality Gates
+
+1. Runtime scope gate (tasks): `./.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+2. Runtime scope gate (diff): `./.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`
+3. Unit suite gate: `./tools/test_unit.sh`
+4. Traceability gate: each `DOC-REQ-001` through `DOC-REQ-009` remains represented by at least one implementation task and one validation task.
+
+## Task Summary
+
+- Total tasks: **25**
+- User story tasks: **US1 = 5**, **US2 = 5**, **US3 = 4**
+- Parallelizable tasks (`[P]`): **14**
+- Suggested MVP scope: **through Phase 3 (US1)**
+- Checklist format validation: **All tasks follow `- [X] T### [P?] [US?] ...` with explicit paths**
+
+## DOC-REQ Coverage Matrix (Implementation + Validation)
+
+| DOC-REQ | Implementation Task(s) | Validation Task(s) |
+| --- | --- | --- |
+| DOC-REQ-001 | T004, T010, T020 | T009, T018, T023 |
+| DOC-REQ-002 | T005, T010, T012, T015, T021 | T008, T009, T013, T023 |
+| DOC-REQ-003 | T006, T010, T020 | T008, T009, T018, T023 |
+| DOC-REQ-004 | T007, T011, T012, T015, T021 | T008, T009, T013, T019, T023 |
+| DOC-REQ-005 | T015, T016, T017 | T013, T014, T019, T023 |
+| DOC-REQ-006 | T005, T012, T015, T021 | T008, T014, T019, T023 |
+| DOC-REQ-007 | T005, T012, T015, T021 | T008, T014, T019, T023 |
+| DOC-REQ-008 | T007, T011, T015, T016, T020, T021 | T008, T009, T013, T019, T023 |
+| DOC-REQ-009 | T002, T004, T005, T006, T007, T010, T011, T012, T015, T016, T017, T020, T021 | T023, T024, T025 |
+
+Coverage gate rule: each `DOC-REQ-*` must retain at least one implementation task and at least one validation task before implementation starts and before publish.

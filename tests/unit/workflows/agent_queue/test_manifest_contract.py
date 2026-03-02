@@ -9,6 +9,7 @@ import pytest
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.manifest_contract import (
     ManifestContractError,
+    collect_manifest_secret_refs,
     normalize_manifest_job_payload,
     sanitize_manifest_payload,
 )
@@ -187,6 +188,37 @@ dataSources:
     assert refs["profile"][0]["envKey"] == "OPENAI_API_KEY"
     assert refs["profile"][0]["normalized"] == "profile://openai#api_key"
     assert refs["vault"][0]["ref"] == "vault://kv/manifests/demo#token"
+
+
+def test_collect_manifest_secret_refs_deduplicates_entries() -> None:
+    """collect_manifest_secret_refs should normalize and dedupe profile/vault refs."""
+
+    parsed_manifest = {
+        "auth": {
+            "primary": "profile://OpenAI#API_KEY",
+            "secondary": "profile://openai#api_key",
+            "vaultA": "vault://kv/manifests/demo#token",
+            "vaultB": "vault://kv/manifests/demo#token",
+        }
+    }
+
+    refs = collect_manifest_secret_refs(parsed_manifest)
+    assert refs["profile"] == [
+        {
+            "provider": "openai",
+            "field": "api_key",
+            "envKey": "OPENAI_API_KEY",
+            "normalized": "profile://openai#api_key",
+        }
+    ]
+    assert refs["vault"] == [
+        {
+            "mount": "kv",
+            "path": "manifests/demo",
+            "field": "token",
+            "ref": "vault://kv/manifests/demo#token",
+        }
+    ]
 
 
 def test_manifest_capability_flags_extend_base(monkeypatch: pytest.MonkeyPatch) -> None:
