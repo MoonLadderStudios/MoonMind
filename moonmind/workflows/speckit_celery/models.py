@@ -388,27 +388,17 @@ class SpecAutomationTaskState(Base):
         if not isinstance(metadata, dict):
             metadata = {}
 
-        selected_skill = metadata.get("selectedSkill")
-        adapter_id = metadata.get("adapterId")
-        execution_path = metadata.get("executionPath")
+        def _coerce_str(value: Any) -> Optional[str]:
+            if isinstance(value, str):
+                return value.strip() or None
+            return None
+
+        selected_skill = _coerce_str(metadata.get("selectedSkill"))
+        adapter_id = _coerce_str(metadata.get("adapterId"))
+        execution_path = _coerce_str(metadata.get("executionPath"))
         used_skills = metadata.get("usedSkills")
         used_fallback = metadata.get("usedFallback")
         shadow_mode_requested = metadata.get("shadowModeRequested")
-
-        if isinstance(selected_skill, str):
-            selected_skill = selected_skill.strip() or None
-        else:
-            selected_skill = None
-
-        if isinstance(adapter_id, str):
-            adapter_id = adapter_id.strip() or None
-        else:
-            adapter_id = None
-
-        if isinstance(execution_path, str):
-            execution_path = execution_path.strip() or None
-        else:
-            execution_path = None
 
         if selected_skill is None and self.phase.value.startswith("speckit_"):
             selected_skill = "speckit"

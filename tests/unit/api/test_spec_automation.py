@@ -52,25 +52,17 @@ class FakeTaskState:
 
     def get_skill_execution_metadata(self) -> dict | None:
         metadata = self.get_metadata() or {}
-        selected = metadata.get("selectedSkill")
-        adapter = metadata.get("adapterId")
-        execution = metadata.get("executionPath")
+        def _coerce_str(value: Any) -> str | None:
+            if isinstance(value, str):
+                return value.strip() or None
+            return None
+
+        selected = _coerce_str(metadata.get("selectedSkill"))
+        adapter = _coerce_str(metadata.get("adapterId"))
+        execution = _coerce_str(metadata.get("executionPath"))
         used_skills = metadata.get("usedSkills")
         used_fallback = metadata.get("usedFallback")
         shadow_mode = metadata.get("shadowModeRequested")
-
-        if isinstance(selected, str):
-            selected = selected.strip() or None
-        else:
-            selected = None
-        if isinstance(adapter, str):
-            adapter = adapter.strip() or None
-        else:
-            adapter = None
-        if isinstance(execution, str):
-            execution = execution.strip() or None
-        else:
-            execution = None
         if selected is None and self.phase.value.startswith("speckit_"):
             selected = "speckit"
         if adapter is None and selected == "speckit":

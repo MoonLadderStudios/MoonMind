@@ -11,8 +11,8 @@
 
 **Purpose**: Establish traceable implementation scope and source-of-truth artifacts before code changes.
 
-- [ ] T001 Reconcile requirement mappings in `specs/015-skills-workflow/spec.md` and `specs/015-skills-workflow/contracts/requirements-traceability.md` for `DOC-REQ-001` through `DOC-REQ-008`.
-- [ ] T002 Align planning assumptions in `specs/015-skills-workflow/plan.md` and `specs/015-skills-workflow/research.md` with runtime implementation mode (`DOC-REQ-007`) and `./tools/test_unit.sh` validation (`DOC-REQ-008`).
+- [X] T001 Reconcile requirement mappings in `specs/015-skills-workflow/spec.md` and `specs/015-skills-workflow/contracts/requirements-traceability.md` for `DOC-REQ-001` through `DOC-REQ-008`.
+- [X] T002 Align planning assumptions in `specs/015-skills-workflow/plan.md` and `specs/015-skills-workflow/research.md` with runtime implementation mode (`DOC-REQ-007`) and `./tools/test_unit.sh` validation (`DOC-REQ-008`).
 
 ---
 
@@ -22,9 +22,9 @@
 
 **CRITICAL**: No user story implementation starts until this phase is complete.
 
-- [ ] T003 Normalize canonical runtime stage constants in `moonmind/workflows/speckit_celery/tasks.py` and `moonmind/workflows/speckit_celery/models.py` for `discover_next_phase`, `submit_codex_job`, and `apply_and_publish` (`DOC-REQ-001`, `DOC-REQ-007`).
-- [ ] T004 [P] Add foundational phase-state schema fields for `selected_skill`, `adapter_id`, and `execution_path` in `moonmind/schemas/workflow_models.py` (`DOC-REQ-004`, `DOC-REQ-005`).
-- [ ] T005 [P] Create reusable metadata fixture coverage for explicit and legacy payloads in `tests/unit/workflows/test_spec_automation_env.py` (`DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T003 Normalize canonical runtime stage constants in `moonmind/workflows/speckit_celery/tasks.py` and `moonmind/workflows/speckit_celery/models.py` for `discover_next_phase`, `submit_codex_job`, and `apply_and_publish` (`DOC-REQ-001`, `DOC-REQ-007`).
+- [X] T004 [P] Add foundational phase-state schema fields for `selected_skill`, `adapter_id`, and `execution_path` in `moonmind/schemas/workflow_models.py` (`DOC-REQ-004`, `DOC-REQ-005`).
+- [X] T005 [P] Create reusable metadata fixture coverage for explicit and legacy payloads in `tests/unit/workflows/test_spec_automation_env.py` (`DOC-REQ-006`, `DOC-REQ-007`).
 
 **Checkpoint**: Canonical stage + metadata foundations are in place for story-level implementation.
 
@@ -38,14 +38,14 @@
 
 ### Tests for User Story 1
 
-- [ ] T006 [P] [US1] Add normalization regression tests for explicit metadata and Speckit legacy defaults in `tests/unit/workflows/test_spec_automation_env.py` (`DOC-REQ-005`, `DOC-REQ-006`).
-- [ ] T007 [P] [US1] Add API serialization tests for `selected_skill`, `adapter_id`, and `execution_path` in `tests/unit/api/test_spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`).
+- [X] T006 [P] [US1] Add normalization regression tests for explicit metadata and Speckit legacy defaults in `tests/unit/workflows/test_spec_automation_env.py` (`DOC-REQ-005`, `DOC-REQ-006`).
+- [X] T007 [P] [US1] Add API serialization tests for `selected_skill`, `adapter_id`, and `execution_path` in `tests/unit/api/test_spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`).
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Implement backward-compatible stage metadata normalization (`selectedSkill`, `adapterId`, `executionPath`) in `moonmind/workflows/speckit_celery/models.py` (`DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`).
-- [ ] T009 [US1] Project adapter-aware phase fields through API schema and serializer code in `moonmind/schemas/workflow_models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-007`).
-- [ ] T010 [US1] Align stage/metadata documentation contracts in `specs/015-skills-workflow/contracts/skills-stage-contract.md` and `specs/015-skills-workflow/contracts/spec-automation-api.openapi.yaml` (`DOC-REQ-001`, `DOC-REQ-005`).
+- [X] T008 [US1] Implement backward-compatible stage metadata normalization (`selectedSkill`, `adapterId`, `executionPath`) in `moonmind/workflows/speckit_celery/models.py` (`DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T009 [US1] Project adapter-aware phase fields through API schema and serializer code in `moonmind/schemas/workflow_models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-007`).
+- [X] T010 [US1] Align stage/metadata documentation contracts in `specs/015-skills-workflow/contracts/skills-stage-contract.md` and `specs/015-skills-workflow/contracts/spec-automation-api.openapi.yaml` (`DOC-REQ-001`, `DOC-REQ-005`).
 
 **Checkpoint**: User Story 1 is independently testable with canonical runtime stage metadata and adapter observability.
 
@@ -59,14 +59,14 @@
 
 ### Tests for User Story 2
 
-- [ ] T011 [P] [US2] Add stage-routing and conditional Speckit verification tests in `tests/unit/workflows/test_tasks.py` (`DOC-REQ-001`, `DOC-REQ-004`).
+- [X] T011 [P] [US2] Add stage-routing and conditional Speckit verification tests in `tests/unit/workflows/test_tasks.py` (`DOC-REQ-001`, `DOC-REQ-004`).
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Implement conditional Speckit verification based on configured stage skills in `moonmind/workflows/skills/registry.py` and `moonmind/workflows/speckit_celery/tasks.py` (`DOC-REQ-004`, `DOC-REQ-007`).
-- [ ] T013 [US2] Update shared-skills workspace contract details in `specs/015-skills-workflow/contracts/compose-fast-path.md` and `specs/015-skills-workflow/contracts/skills-stage-contract.md` (`DOC-REQ-002`).
-- [ ] T014 [US2] Update worker auth/startup fast-path steps in `specs/015-skills-workflow/quickstart.md` and `specs/015-skills-workflow/contracts/compose-fast-path.md` to use `./tools/auth-codex-volume.sh` and `./tools/auth-gemini-volume.sh` (`DOC-REQ-003`).
-- [ ] T015 [US2] Validate docs-to-runtime parity and traceability entries in `specs/015-skills-workflow/contracts/requirements-traceability.md` for shared skills and conditional checks (`DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`).
+- [X] T012 [US2] Implement conditional Speckit verification based on configured stage skills in `moonmind/workflows/skills/registry.py` and `moonmind/workflows/speckit_celery/tasks.py` (`DOC-REQ-004`, `DOC-REQ-007`).
+- [X] T013 [US2] Update shared-skills workspace contract details in `specs/015-skills-workflow/contracts/compose-fast-path.md` and `specs/015-skills-workflow/contracts/skills-stage-contract.md` (`DOC-REQ-002`).
+- [X] T014 [US2] Update worker auth/startup fast-path steps in `specs/015-skills-workflow/quickstart.md` and `specs/015-skills-workflow/contracts/compose-fast-path.md` to use `./tools/auth-codex-volume.sh` and `./tools/auth-gemini-volume.sh` (`DOC-REQ-003`).
+- [X] T015 [US2] Validate docs-to-runtime parity and traceability entries in `specs/015-skills-workflow/contracts/requirements-traceability.md` for shared skills and conditional checks (`DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`).
 
 **Checkpoint**: User Story 2 documentation and runtime behavior are aligned with the current MoonMind strategy.
 
@@ -80,16 +80,16 @@
 
 ### Tests for User Story 3
 
-- [ ] T016 [P] [US3] Expand compatibility regression coverage for missing metadata keys in `tests/unit/workflows/test_spec_automation_env.py` and `tests/unit/api/test_spec_automation.py` (`DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T016 [P] [US3] Expand compatibility regression coverage for missing metadata keys in `tests/unit/workflows/test_spec_automation_env.py` and `tests/unit/api/test_spec_automation.py` (`DOC-REQ-006`, `DOC-REQ-007`).
 
 ### Implementation for User Story 3
 
-- [ ] T017 [US3] Harden legacy-safe phase projection behavior in `moonmind/workflows/speckit_celery/models.py` and `api_service/api/routers/spec_automation.py` for absent skill metadata keys (`DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T017 [US3] Harden legacy-safe phase projection behavior in `moonmind/workflows/speckit_celery/models.py` and `api_service/api/routers/spec_automation.py` for absent skill metadata keys (`DOC-REQ-006`, `DOC-REQ-007`).
 
 ### Validation for User Story 3
 
-- [ ] T018 [US3] Run `./tools/test_unit.sh` validating updates in `tests/unit/workflows/test_spec_automation_env.py`, `tests/unit/workflows/test_tasks.py`, and `tests/unit/api/test_spec_automation.py` (`DOC-REQ-008`, `DOC-REQ-007`).
-- [ ] T019 [US3] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` against runtime files in `moonmind/workflows/speckit_celery/models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-007`).
+- [X] T018 [US3] Run `./tools/test_unit.sh` validating updates in `tests/unit/workflows/test_spec_automation_env.py`, `tests/unit/workflows/test_tasks.py`, and `tests/unit/api/test_spec_automation.py` (`DOC-REQ-008`, `DOC-REQ-007`).
+- [X] T019 [US3] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` against runtime files in `moonmind/workflows/speckit_celery/models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-007`).
 
 **Checkpoint**: Runtime mode scope and backward-compatible behavior are validated.
 
@@ -99,8 +99,8 @@
 
 **Purpose**: Final cross-artifact verification and task-quality gates.
 
-- [ ] T020 [P] Run `SPECIFY_FEATURE=015-skills-workflow .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` for `specs/015-skills-workflow/tasks.md` (`DOC-REQ-007`).
-- [ ] T021 [P] Verify each `DOC-REQ-*` appears in at least one implementation and one validation task in `specs/015-skills-workflow/tasks.md` and `specs/015-skills-workflow/contracts/requirements-traceability.md` (`DOC-REQ-001`, `DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`, `DOC-REQ-008`).
+- [X] T020 [P] Run `SPECIFY_FEATURE=015-skills-workflow .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` for `specs/015-skills-workflow/tasks.md` (`DOC-REQ-007`).
+- [X] T021 [P] Verify each `DOC-REQ-*` appears in at least one implementation and one validation task in `specs/015-skills-workflow/tasks.md` and `specs/015-skills-workflow/contracts/requirements-traceability.md` (`DOC-REQ-001`, `DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`, `DOC-REQ-008`).
 
 ---
 
