@@ -52,6 +52,7 @@ class FakeTaskState:
 
     def get_skill_execution_metadata(self) -> dict | None:
         metadata = self.get_metadata() or {}
+
         def _coerce_str(value: Any) -> str | None:
             if isinstance(value, str):
                 return value.strip() or None
