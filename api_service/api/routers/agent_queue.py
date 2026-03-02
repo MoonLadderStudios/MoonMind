@@ -66,6 +66,7 @@ from moonmind.schemas.agent_queue_models import (
     QueueSafeguardResponse,
     RecoverJobRequest,
     RecoverJobResponse,
+    ResubmitJobRequest,
     RevokeTaskRunLiveSessionRequest,
     RuntimeCapabilities,
     TaskRunControlEventModel,
@@ -735,6 +736,37 @@ async def update_queued_job(
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
             expected_updated_at=payload.expected_updated_at,
+            note=payload.note,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_job(job)
+
+
+@router.post(
+    "/jobs/{job_id}/resubmit",
+    response_model=JobModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def resubmit_job(
+    job_id: UUID,
+    payload: ResubmitJobRequest,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> JobModel:
+    """Create a new queued task job from a failed/cancelled source job."""
+
+    try:
+        user_id = getattr(user, "id", None)
+        job = await service.resubmit_job(
+            job_id=job_id,
+            actor_user_id=user_id,
+            actor_is_superuser=bool(getattr(user, "is_superuser", False)),
+            job_type=payload.type,
+            payload=payload.payload,
+            priority=payload.priority,
+            affinity_key=payload.affinity_key,
+            max_attempts=payload.max_attempts,
             note=payload.note,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer

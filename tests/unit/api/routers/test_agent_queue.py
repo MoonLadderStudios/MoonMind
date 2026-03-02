@@ -474,6 +474,185 @@ def test_update_queued_job_claude_runtime_gate_maps_400(
     assert response.json()["detail"]["code"] == "claude_runtime_disabled"
 
 
+def test_resubmit_job_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """POST /jobs/{id}/resubmit should return newly created job payload."""
+
+    test_client, service = client
+    source_job_id = uuid4()
+    created_job = _build_job()
+    created_job.type = "task"
+    service.resubmit_job.return_value = created_job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "priority": 3,
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {"instructions": "Retry with edits"},
+            },
+            "maxAttempts": 4,
+            "note": "updated inputs",
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    body = response.json()
+    assert body["id"] == str(created_job.id)
+    assert body["type"] == "task"
+    service.resubmit_job.assert_awaited_once()
+    assert service.resubmit_job.await_args.kwargs["actor_is_superuser"] is False
+
+
+def test_resubmit_job_superuser_passes_authorization_flag(
+    superuser_client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Superuser requests should set actor_is_superuser on resubmit calls."""
+
+    test_client, service = superuser_client
+    source_job_id = uuid4()
+    created_job = _build_job()
+    created_job.type = "task"
+    service.resubmit_job.return_value = created_job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {"instructions": "Retry with edits"},
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    service.resubmit_job.assert_awaited_once()
+    assert service.resubmit_job.await_args.kwargs["actor_is_superuser"] is True
+
+
+def test_resubmit_job_state_conflict_maps_409(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Terminal-state eligibility conflicts should return HTTP 409."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentJobStateError("cannot resubmit")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"]["code"] == "job_state_conflict"
+
+
+def test_resubmit_job_validation_error_maps_422(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit payload validation errors should return HTTP 422."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentQueueValidationError("invalid payload")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
+
+
+def test_resubmit_job_requires_payload(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Missing resubmit payload should fail fast during request validation."""
+
+    test_client, _ = client
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={"type": "task"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_resubmit_job_claude_runtime_gate_maps_400(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit runtime gate errors should return HTTP 400."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentQueueValidationError(
+        "targetRuntime=claude requires ANTHROPIC_API_KEY"
+    )
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Test",
+                "targetRuntime": "claude",
+                "task": {"instructions": "Retry"},
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "claude_runtime_disabled"
+
+
+def test_resubmit_job_authorization_error_maps_403(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit ownership errors should return HTTP 403."""
+
+    test_client, service = client
+    service.resubmit_job.side_effect = AgentQueueJobAuthorizationError("not owner")
+
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "job_not_authorized"
+
+
+def test_resubmit_job_not_found_maps_404(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resubmit missing source job should return HTTP 404."""
+
+    test_client, service = client
+    source_job_id = uuid4()
+    service.resubmit_job.side_effect = AgentJobNotFoundError(source_job_id)
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Retry"}},
+        },
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"]["code"] == "job_not_found"
+
+
 def test_create_job_rejects_claude_runtime_without_api_key(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

@@ -2,7 +2,7 @@
 
 Status: Draft (implementation-ready)
 Owners: MoonMind Engineering
-Last Updated: 2026-02-25
+Last Updated: 2026-03-01
 
 ## 1. Purpose
 
@@ -313,3 +313,27 @@ Reason: attachments were designed to be uploaded in the same request as job crea
 
   * Add the new endpoint to `docs/TaskQueueSystem.md` API surface list (which currently enumerates create/get/claim/heartbeat/etc. but no update) .
   * Add the endpoint to `docs/TaskUiArchitecture.md` “Queue endpoints” list .
+
+---
+
+## 12. Resubmit terminal tasks
+
+MoonMind now supports a second mode on the same `/tasks/queue/new?editJobId=<jobId>` prefill route:
+
+1. **Edit mode** (in-place update)
+   * Eligible when `type="task"` and `status="queued"` and `startedAt == null`.
+   * Submit target: `PUT /api/queue/jobs/{jobId}`.
+2. **Resubmit mode** (new job creation from terminal source)
+   * Eligible when `type="task"` and `status in {"failed","cancelled"}`.
+   * Submit target: `POST /api/queue/jobs/{jobId}/resubmit`.
+   * Response is the new `JobModel` (`201 Created`), and the UI redirects to the new job detail.
+
+Resubmit is intentionally not in-place so terminal history remains immutable. The backend appends:
+
+* Source job event: `Job resubmitted` with `newJobId`, `actorUserId`, optional `note`, and `changedFields`.
+* New job event: `Job resubmitted from` with `sourceJobId`.
+
+Attachment policy for resubmit v1:
+
+* Existing attachments are **not copied** automatically.
+* Users must download from the source run and re-upload as needed.
