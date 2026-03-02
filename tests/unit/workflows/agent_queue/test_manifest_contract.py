@@ -10,6 +10,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.manifest_contract import (
     ManifestContractError,
     normalize_manifest_job_payload,
+    sanitize_manifest_payload,
 )
 
 pytestmark = [pytest.mark.speckit]
@@ -199,3 +200,36 @@ def test_manifest_capability_flags_extend_base(monkeypatch: pytest.MonkeyPatch) 
     normalized = normalize_manifest_job_payload(_payload())
 
     assert normalized["requiredCapabilities"][:3] == ["manifest", "phase0", "beta"]
+
+
+def test_sanitize_manifest_payload_preserves_metadata_without_inline_content() -> None:
+    """Sanitized payloads should keep compatibility metadata and remove raw content."""
+
+    normalized = normalize_manifest_job_payload(_payload())
+    normalized["manifestSecretRefs"] = {
+        "profile": [
+            {
+                "envKey": "OPENAI_API_KEY",
+                "normalized": "profile://openai#api_key",
+                "provider": "openai",
+                "field": "api_key",
+            }
+        ],
+        "vault": [
+            {
+                "ref": "vault://kv/manifests/demo#token",
+                "mount": "kv",
+                "path": "manifests/demo",
+                "field": "token",
+            }
+        ],
+    }
+
+    sanitized = sanitize_manifest_payload(normalized)
+
+    assert sanitized["manifestHash"] == normalized["manifestHash"]
+    assert sanitized["manifestVersion"] == normalized["manifestVersion"]
+    assert sanitized["requiredCapabilities"] == normalized["requiredCapabilities"]
+    assert "content" not in sanitized["manifest"]["source"]
+    assert sanitized["manifestSecretRefs"]["profile"][0]["envKey"] == "OPENAI_API_KEY"
+    assert sanitized["manifestSecretRefs"]["vault"][0]["ref"].startswith("vault://")

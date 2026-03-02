@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, status
+from fastapi.testclient import TestClient
 
 from api_service.api.routers import manifests as manifests_router
 from api_service.services.manifests_service import ManifestRegistryNotFoundError
@@ -35,6 +36,16 @@ def _record(**overrides):
     return SimpleNamespace(**base)
 
 
+@pytest.fixture
+def client() -> tuple[TestClient, AsyncMock]:
+    app = FastAPI()
+    app.include_router(manifests_router.router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[manifests_router._get_service] = lambda: mock_service
+    with TestClient(app) as test_client:
+        yield test_client, mock_service
+
+
 @pytest.mark.asyncio
 async def test_list_manifests_serializes_records() -> None:
     """list_manifests should return summaries for registry entries."""
@@ -52,6 +63,7 @@ async def test_list_manifests_serializes_records() -> None:
 
     assert response.items[0].name == "demo"
     assert response.items[0].content_hash == "sha256:abc"
+    assert response.items[0].last_run_status == "queued"
     service.list_manifests.assert_awaited_once_with(limit=10, search=None)
 
 
@@ -70,6 +82,29 @@ async def test_get_manifest_not_found_raises_404() -> None:
             _user=user,
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_manifest_returns_detail() -> None:
+    """get_manifest should preserve manifest detail payload shape."""
+
+    record = _record()
+    service = AsyncMock()
+    service.get_manifest.return_value = record
+    user = SimpleNamespace(id=uuid4())
+
+    response = await manifests_router.get_manifest(
+        name="demo",
+        service=service,
+        _user=user,
+    )
+
+    assert response.name == "demo"
+    assert response.content_hash == "sha256:abc"
+    assert response.last_run is not None
+    assert response.last_run.status == "queued"
+    assert response.state.state_json == {"foo": "bar"}
+    service.get_manifest.assert_awaited_once_with("demo")
 
 
 @pytest.mark.asyncio
@@ -109,6 +144,7 @@ async def test_upsert_manifest_validation_error() -> None:
             _user=user,
         )
     assert exc.value.status_code == 422
+    assert exc.value.detail == {"code": "invalid_manifest", "message": "invalid"}
 
 
 @pytest.mark.asyncio
@@ -132,8 +168,13 @@ async def test_create_manifest_run_returns_queue_metadata() -> None:
     )
 
     assert response.job_id == job.id
+    assert response.queue.type == "manifest"
     assert response.queue.required_capabilities == ["manifest"]
+    assert response.queue.manifest_hash == "sha256:def"
     service.submit_manifest_run.assert_awaited_once()
+    assert service.submit_manifest_run.await_args.kwargs["name"] == "demo"
+    assert service.submit_manifest_run.await_args.kwargs["action"] == "run"
+    assert service.submit_manifest_run.await_args.kwargs["options"] is None
 
 
 @pytest.mark.asyncio
@@ -170,3 +211,51 @@ async def test_create_manifest_run_validation_error() -> None:
             user=user,
         )
     assert exc.value.status_code == 422
+    assert exc.value.detail == {"code": "invalid_manifest_job", "message": "bad job"}
+
+
+def test_create_manifest_run_http_validation_rejects_invalid_action(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """HTTP requests with unsupported action values must fail before service submit."""
+
+    test_client, service = client
+
+    response = test_client.post(
+        "/api/manifests/demo/runs",
+        json={"action": "evaluate"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = response.json()["detail"]
+    assert detail[0]["loc"][-1] == "action"
+    service.submit_manifest_run.assert_not_awaited()
+
+
+def test_create_manifest_run_http_response_preserves_queue_metadata(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """HTTP run submissions should return queue metadata fields without transforms."""
+
+    test_client, service = client
+    job = SimpleNamespace(
+        id=uuid4(),
+        type="manifest",
+        payload={
+            "requiredCapabilities": ["manifest", "qdrant"],
+            "manifestHash": "sha256:abc123",
+        },
+    )
+    service.submit_manifest_run.return_value = job
+
+    response = test_client.post(
+        "/api/manifests/demo/runs",
+        json={"action": " PLAN "},
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    body = response.json()
+    assert body["queue"]["requiredCapabilities"] == ["manifest", "qdrant"]
+    assert body["queue"]["manifestHash"] == "sha256:abc123"
+    called = service.submit_manifest_run.await_args.kwargs
+    assert called["action"] == "plan"

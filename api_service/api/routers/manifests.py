@@ -122,7 +122,7 @@ async def upsert_manifest(
         logger.warning("Manifest upsert validation failed.", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_manifest", "message": "Invalid manifest payload"},
+            detail={"code": "invalid_manifest", "message": str(exc)},
         ) from exc
     return _serialize_detail(record)
 
@@ -138,7 +138,7 @@ async def create_manifest_run(
     service: ManifestsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ManifestRunResponse:
-    action = (payload.action or "run").strip().lower()
+    action = payload.action
     options_payload: dict[str, Any] | None = None
     if payload.options is not None:
         options_payload = payload.options.to_payload()
