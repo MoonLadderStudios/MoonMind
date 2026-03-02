@@ -66,9 +66,6 @@
 - [X] T012 [US2] Implement conditional Speckit verification based on configured stage skills in `moonmind/workflows/skills/registry.py` and `moonmind/workflows/speckit_celery/tasks.py` (`DOC-REQ-004`, `DOC-REQ-007`).
 - [X] T013 [US2] Update shared-skills workspace contract details in `specs/015-skills-workflow/contracts/compose-fast-path.md` and `specs/015-skills-workflow/contracts/skills-stage-contract.md` (`DOC-REQ-002`).
 - [X] T014 [US2] Update worker auth/startup fast-path steps in `specs/015-skills-workflow/quickstart.md` and `specs/015-skills-workflow/contracts/compose-fast-path.md` to use `./tools/auth-codex-volume.sh` and `./tools/auth-gemini-volume.sh` (`DOC-REQ-003`).
-
-### Validation for User Story 2
-
 - [X] T015 [US2] Validate docs-to-runtime parity and traceability entries in `specs/015-skills-workflow/contracts/requirements-traceability.md` for shared skills and conditional checks (`DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`).
 
 **Checkpoint**: User Story 2 documentation and runtime behavior are aligned with the current MoonMind strategy.
@@ -104,7 +101,6 @@
 
 - [X] T020 [P] Run `SPECIFY_FEATURE=015-skills-workflow .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` for `specs/015-skills-workflow/tasks.md` (`DOC-REQ-007`).
 - [X] T021 [P] Verify each `DOC-REQ-*` appears in at least one implementation and one validation task in `specs/015-skills-workflow/tasks.md` and `specs/015-skills-workflow/contracts/requirements-traceability.md` (`DOC-REQ-001`, `DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`, `DOC-REQ-008`).
-- [X] T022 [P] Implement canonical unit-test gate documentation sync in `specs/015-skills-workflow/quickstart.md` and `specs/015-skills-workflow/contracts/requirements-traceability.md` so unit validation paths reference `./tools/test_unit.sh` (`DOC-REQ-008`).
 
 ---
 
@@ -129,7 +125,7 @@
 - T006 and T007 can run in parallel during US1 test authoring.
 - T011 can run in parallel with T013 and T014 once T012 is underway.
 - T016 can run in parallel with T017 during US3 stabilization.
-- T020 and T021 can run in parallel in the Polish phase; T022 follows once those checks pass.
+- T020 and T021 can run in parallel in the Polish phase.
 
 ---
 

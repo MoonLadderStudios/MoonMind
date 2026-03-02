@@ -352,6 +352,7 @@ def test_spec_automation_task_state_defaults_skill_metadata():
 
     assert metadata is not None
     assert metadata["selectedSkill"] == "speckit"
+    assert metadata["adapterId"] == "speckit"
     assert metadata["executionPath"] == "skill"
     assert metadata["usedSkills"] is True
     assert metadata["usedFallback"] is False
@@ -370,6 +371,7 @@ def test_spec_automation_task_state_honors_explicit_skill_metadata():
     state.set_metadata(
         {
             "selectedSkill": "custom-skill",
+            "adapterId": "custom-adapter",
             "executionPath": "direct_fallback",
             "usedSkills": True,
             "usedFallback": True,
@@ -381,8 +383,61 @@ def test_spec_automation_task_state_honors_explicit_skill_metadata():
 
     assert metadata == {
         "selectedSkill": "custom-skill",
+        "adapterId": "custom-adapter",
         "executionPath": "direct_fallback",
         "usedSkills": True,
         "usedFallback": True,
         "shadowModeRequested": False,
+    }
+
+
+def test_spec_automation_task_state_backfills_blank_speckit_adapter_fields():
+    """Blank adapter/execution fields should still default for legacy Speckit records."""
+
+    state = models.SpecAutomationTaskState(
+        id=uuid4(),
+        run_id=uuid4(),
+        phase=models.SpecAutomationPhase.SPECKIT_ANALYZE,
+        status=models.SpecAutomationTaskStatus.SUCCEEDED,
+        attempt=1,
+    )
+    state.set_metadata(
+        {
+            "selectedSkill": "speckit",
+            "adapterId": "   ",
+            "executionPath": "   ",
+        }
+    )
+
+    metadata = state.get_skill_execution_metadata()
+
+    assert metadata is not None
+    assert metadata["selectedSkill"] == "speckit"
+    assert metadata["adapterId"] == "speckit"
+    assert metadata["executionPath"] == "skill"
+    assert metadata["usedSkills"] is True
+    assert metadata["usedFallback"] is False
+
+
+def test_spec_automation_task_state_keeps_non_speckit_partial_metadata():
+    """Non-Speckit phases should not fabricate Speckit defaults for partial metadata."""
+
+    state = models.SpecAutomationTaskState(
+        id=uuid4(),
+        run_id=uuid4(),
+        phase=models.SpecAutomationPhase.PREPARE_JOB,
+        status=models.SpecAutomationTaskStatus.SUCCEEDED,
+        attempt=1,
+    )
+    state.set_metadata({"executionPath": "direct_only"})
+
+    metadata = state.get_skill_execution_metadata()
+
+    assert metadata == {
+        "selectedSkill": None,
+        "adapterId": None,
+        "executionPath": "direct_only",
+        "usedSkills": False,
+        "usedFallback": False,
+        "shadowModeRequested": None,
     }
