@@ -1,27 +1,38 @@
-# Implementation Plan: Worker Self-Heal System
+# Implementation Plan: Worker Self-Heal System (Phase 1 Alignment)
 
-**Branch**: `034-worker-self-heal` | **Date**: 2026-02-20 | **Spec**: `specs/034-worker-self-heal/spec.md`  
+**Branch**: `034-worker-self-heal` | **Date**: 2026-03-02 | **Spec**: `specs/034-worker-self-heal/spec.md`  
 **Input**: Feature specification from `/specs/034-worker-self-heal/spec.md`
 
 ## Summary
 
-Queue workers must deterministically detect stuck steps, bound retries, and recover without operator babysitting. This feature introduces a self-heal controller that wraps each step in an attempt loop with configurable budgets (wall/idle timeouts, no-progress threshold, max soft/hard resets), classifies failures into transient vs deterministic buckets, and selects soft reset, hard reset, or queue-level retry accordingly. The worker will persist checkpoint artifacts (`patches/steps/*.patch`, `state/steps/*.json`), extend live-control/queue APIs so operators can issue `retry_step`, `hard_reset_step`, or `resume_from_step`, and emit the new `task.step.attempt.*`/`task.self_heal.*` events plus StatsD metrics described in `docs/WorkerSelfHealSystem.md`. Tests and docs will prove the idle-timeout, hard-reset replay, operator commands, and metrics requirements.
+Align feature `034-worker-self-heal` to MoonMind's current phased strategy by treating worker-side in-step self-heal as the active runtime scope (Phase 1), while explicitly deferring hard-reset replay, retry-context envelope activation, and operator recovery controls to later phases. Runtime-vs-doc behavior remains aligned with orchestration intent: this feature requires production runtime implementation plus validation tests, not docs-only output.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 for workers, FastAPI, Celery, and tests; TypeScript/ES2022 for the task dashboard controls.  
-**Primary Dependencies**: `asyncio`, `httpx`, `docker` SDK, `sqlalchemy` 2.x, `FastAPI`, `pydantic` v2, RabbitMQ/Celery, StatsD emitter (`moonmind.workflows.speckit_celery.tasks._MetricsEmitter`), tmate for live sessions, pytest via `./tools/test_unit.sh`.  
-**Storage**: PostgreSQL tables (`agent_jobs`, `agent_job_events`, `task_run_control_events`, `task_run_live_sessions`) plus filesystem artifacts under `var/artifacts/agent_jobs/<run_id>/` for logs, patches, and the new `state/steps` + `state/self_heal` JSON payloads; RabbitMQ broker for job dispatch; optional object storage untouched.  
-**Testing**: `./tools/test_unit.sh` (pytest) targeting `tests/unit/agents/codex_worker`, `tests/unit/workflows/agent_queue`, and `tests/unit/api/routers/test_task_runs.py`; integration smoke via `docker compose -f docker-compose.test.yaml run orchestrator-tests` when validating live-control wiring.  
-**Target Platform**: Linux containers (Codex worker image + API + RabbitMQ + PostgreSQL) running under Docker Compose/WSL.  
-**Project Type**: Backend automation stack (Celery worker + FastAPI API + static dashboard) with shared Python packages and a small TypeScript UI bundle.  
-**Performance Goals**: Detect wall-clock overruns at 900 s and idle gaps at 300 s per attempt, resolve ≥95 % of transient/stuck failures within `step_max_attempts=3`, rebuild resume-from-step workspaces in <5 minutes for ≤10 completed steps, and emit StatsD counters/timers for every attempt/duration/timeout.  
-**Constraints**: Enforce documented budgets (max 3 attempts, 2 no-progress repeats, 1 hard reset per job), scrub secrets before persisting failure signatures/artifacts, ship minimal retry prompts (objective + failure summary + diff hash), respect cancel/pause/takeover fencing, and keep operator controls/metrics backward compatible.  
-**Scale/Scope**: Applies to all queue task jobs (typically 3–10 ordered steps) processed by a handful of Codex workers concurrently; must coordinate with server-side live-control payloads and queue-level retries without regressing existing Workflow or dashboard flows.
+**Language/Version**: Python 3.11  
+**Primary Dependencies**: `moonmind.agents.codex_worker` runtime, Celery worker runtime, StatsD client instrumentation, existing queue/job contracts, pytest  
+**Storage**: Filesystem artifacts under `var/artifacts/agent_jobs/<run_id>/state/{steps,self_heal}/`; existing queue persistence in PostgreSQL/RabbitMQ unchanged  
+**Testing**: `./tools/test_unit.sh` (required CI/local gate)  
+**Target Platform**: Linux worker runtime (local + Docker Compose services)  
+**Project Type**: Backend worker runtime behavior and telemetry update  
+**Performance Goals**: Bounded attempt loops per step; timeout/no-progress detection with no unbounded retry behavior; no additional queue round-trips for in-step retries  
+**Constraints**: Preserve existing pause/takeover/cancel semantics, preserve queue retry ownership, redact secrets in signatures/events/artifacts, avoid API/schema breaking changes in Phase 1  
+**Scale/Scope**: Codex worker execution path and related tests/docs for Phase 1 only; hard reset replay, retry-context envelope activation, and operator recovery APIs remain deferred
 
 ## Constitution Check
 
-`.specify/memory/constitution.md` is still the placeholder template with unnamed principles, so there are no enforceable gates to evaluate. Flagging **NEEDS CLARIFICATION** for product leadership to ratify the constitution; until then we proceed under the established MoonMind norms (test-first, CLI-first, observability) and will re-run this gate once the document is populated.
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+
+- **I. One-Click Deployment with Smart Defaults**: PASS. No new required services; self-heal budgets have defaults and fail-fast behavior remains explicit.
+- **II. Powerful Runtime Configurability**: PASS. Self-heal behavior is controlled by runtime env configuration (`STEP_*`, `JOB_SELF_HEAL_MAX_RESETS`) with deterministic precedence.
+- **III. Modular and Extensible Architecture**: PASS. Self-heal logic is isolated in `self_heal.py` and consumed through worker execution boundaries.
+- **IV. Avoid Exclusive Proprietary Vendor Lock-In**: PASS. Strategy and artifacts are portable JSON/event contracts; only codex runtime path is currently activated by phase choice, not by architecture lock-in.
+- **V. Self-Healing by Default**: PASS. Retryable classifications, bounded retries, deterministic exhaustion semantics, and resumable artifacts are explicit.
+- **VI. Facilitate Continuous Improvement**: PASS. Structured events/metrics and `run_quality_reason` improve failure triage and future improvements backlog quality.
+- **VII. Spec-Driven Development Is the Source of Truth**: PASS. `spec.md`, `plan.md`, and `tasks.md` are synchronized to phased runtime scope.
+- **VIII. Skills Are First-Class and Easy to Add**: PASS. No skill contract regression; worker self-heal updates do not alter skill packaging/discovery behavior.
+
+**Gate Status**: PASS.
 
 ## Project Structure
 
@@ -35,9 +46,9 @@ specs/034-worker-self-heal/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   ├── requirements-traceability.md
-│   └── task-run-recovery.openapi.yaml
-└── checklists/
+│   ├── task-run-recovery.openapi.yaml
+│   └── requirements-traceability.md
+└── tasks.md
 ```
 
 ### Source Code (repository root)
@@ -45,44 +56,55 @@ specs/034-worker-self-heal/
 ```text
 moonmind/
 ├── agents/codex_worker/
-│   ├── worker.py              # Step orchestration, live-control loop, metrics
-│   ├── handlers.py            # Codex exec adapter + output callbacks
-│   ├── secret_refs.py         # Vault + token helpers for git/publish
+│   ├── self_heal.py
+│   ├── metrics.py
+│   ├── worker.py
 │   └── __init__.py
-├── workflows/agent_queue/
-│   ├── models.py              # agent_jobs + control event tables
-│   ├── repositories.py        # liveControl + artifact persistence helpers
-│   ├── service.py             # TaskRun control API logic
-│   ├── storage.py             # Artifact IO wrappers
-│   └── task_contract.py       # Canonical payload normalization/validation
-├── workflows/speckit_celery/metrics.py (StatsD client reused by worker)
-api_service/
-├── api/routers/task_runs.py   # Operator control endpoints
-├── api/routers/agent_queue.py # Worker-auth claim/heartbeat surfaces
-├── static/task_dashboard/dashboard.js # Live-control UI + event rendering
-├── schemas.py / dependencies.py
+└── workflows/agent_queue/storage.py
+
 celery_worker/
-└── speckit_worker.py          # Worker entrypoint wiring settings
+└── speckit_worker.py
 
 tests/
-├── unit/agents/codex_worker/test_worker.py
-├── unit/api/routers/test_task_runs.py
-├── unit/workflows/agent_queue/test_service_hardening.py
-├── unit/workflows/agent_queue/test_repositories.py
-└── unit/workflows/agent_queue/test_task_contract.py
-
-docs/
-├── WorkerSelfHealSystem.md
-├── WorkerPauseSystem.md
-└── TasksStepSystem.md
-
-tools/test_unit.sh             # Canonical pytest runner
+├── unit/agents/codex_worker/
+│   ├── test_self_heal.py
+│   ├── test_metrics.py
+│   └── test_worker.py
+└── unit/workflows/agent_queue/test_artifact_storage.py
 ```
 
-**Structure Decision**: Keep all self-heal logic inside `moonmind/agents/codex_worker` so a single controller owns attempt budgeting, metrics, and checkpoint replay. Server-side queue changes stay in `moonmind/workflows/agent_queue` and FastAPI routers under `api_service/api/routers` to ensure auditability and operator UX remain centralized. Tests mirror this split—worker behavior in `tests/unit/agents/codex_worker`, persistence/control logic in `tests/unit/workflows/agent_queue`, and HTTP/UI coverage in `tests/unit/api`. This layout limits blast radius and preserves existing deployment boundaries.
+**Structure Decision**: Keep the implementation in the existing codex worker runtime path and shared artifact/metrics modules. Avoid new services or API surfaces in Phase 1; capture deferred Phase 2/3 surfaces only in design docs/contracts.
+
+## Phase 0: Research Outcomes
+
+Research outputs are captured in `specs/034-worker-self-heal/research.md` and resolve planning unknowns:
+
+1. Adopt phased scope (Phase 1 runtime delivery now; Phases 2/3 deferred).
+2. Place self-heal attempt loop directly in codex step execution path.
+3. Detect stuck behavior via wall timeout, idle timeout, and no-progress signature/diff tracking.
+4. Escalate retryable exhaustion through structured `run_quality_reason` to queue retries.
+5. Persist attempt/checkpoint artifacts now to support replay/operator controls later.
+6. Preserve strict redaction while avoiding over-redaction of short diagnostic tokens.
+
+## Phase 1: Design Outputs
+
+- `data-model.md`: defines `StepCheckpointState`, `SelfHealAttemptArtifact`, retry metadata, in-memory attempt state, and metrics tag schema.
+- `contracts/task-run-recovery.openapi.yaml`: documents active Phase 1 control surface (pause/resume/takeover) and explicitly defers recovery action APIs.
+- `contracts/requirements-traceability.md`: maps each `DOC-REQ-001..013` to FRs, runtime surfaces, and validation strategy.
+- `quickstart.md`: deterministic smoke checks for retry recovery, retryable exhaustion, deterministic fail-fast behavior, control compatibility, and required unit test gate.
+
+`spec.md` includes `DOC-REQ-*` entries and all are mapped in `contracts/requirements-traceability.md` with planned/implemented validation; no unmapped requirement remains.
+
+## Post-Design Constitution Re-check
+
+- Phase 1 design keeps runtime behavior configurable and bounded, with explicit operator-observable events/metrics/artifacts.
+- Deferred Phase 2/3 items are documented as explicit non-goals for this phase, preventing hidden scope expansion.
+- Runtime deliverable requirement (production code + tests) is preserved in both `spec.md` and `tasks.md`.
+
+**Gate Status**: PASS.
 
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|---------------------------------------|
-| _None_ | – | – |
+|-----------|------------|--------------------------------------|
+| None | N/A | N/A |

@@ -19,6 +19,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.service import (
     AgentQueueJobAuthorizationError,
+    AgentQueueValidationError,
     LiveSessionNotFoundError,
     LiveSessionStateError,
 )
@@ -309,6 +310,30 @@ def test_apply_control_action_success(client: tuple[TestClient, AsyncMock]) -> N
 
     assert response.status_code == 200
     assert response.json()["status"] == "running"
+    service.apply_control_action.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["retry_step", "hard_reset_step", "resume_from_step"],
+)
+def test_apply_control_action_rejects_deferred_recovery_actions(
+    client: tuple[TestClient, AsyncMock],
+    action: str,
+) -> None:
+    test_client, service = client
+    task_run_id = uuid4()
+    service.apply_control_action.side_effect = AgentQueueValidationError(
+        "action must be one of: pause, resume, takeover"
+    )
+
+    response = test_client.post(
+        f"/api/task-runs/{task_run_id}/control",
+        json={"action": action},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
     service.apply_control_action.assert_awaited_once()
 
 
