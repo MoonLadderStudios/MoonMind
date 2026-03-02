@@ -1,128 +1,201 @@
-# Tasks: Manifest Queue Plumbing (Phase 0)
+# Tasks: Manifest Queue Alignment and Hardening
 
-**Input**: Design documents from `specs/028-manifest-queue/`
-**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
+**Input**: Design documents from `/specs/028-manifest-queue/`  
+**Prerequisites**: `plan.md` (required), `spec.md` (required), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
+
+**Tests**: Unit and regression validation is required by this feature and must run via `./tools/test_unit.sh`.
+
+**Organization**: Tasks are grouped by user story so each story can be implemented and validated independently.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: Task can run in parallel (different files, no dependency on incomplete tasks)
+- **[Story]**: Story label for user-story phases only (`[US1]`, `[US2]`, `[US3]`)
+- Every task includes an exact file path
+
+## Prompt B Scope Controls (Step 12/16)
+
+- Runtime implementation tasks are explicitly present: `T010`, `T011`, `T023`.
+- Runtime validation tasks are explicitly present: `T012`, `T024`, `T025`.
+- `DOC-REQ-*` implementation + validation coverage is enforced in this file and mapped in `specs/028-manifest-queue/contracts/requirements-traceability.md`.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Align on scope and confirm repo health before code changes.
+**Purpose**: Establish baseline context and traceability inputs before implementation work.
 
-- [ ] T001 Review specs/028-manifest-queue/spec.md and plan.md to restate queue + registry deliverables (specs/028-manifest-queue)
-- [ ] T002 Run baseline tests via ./tools/test_unit.sh to capture current failures before modifications (tools/test_unit.sh)
+- [X] T001 Review runtime baseline paths and behavior in api_service/api/schemas.py, api_service/api/routers/manifests.py, api_service/services/manifests_service.py, and moonmind/workflows/agent_queue/manifest_contract.py
+- [X] T002 [P] Capture baseline manifest-scope validation output using ./tools/test_unit.sh and record notes in specs/028-manifest-queue/checklists/requirements.md
+- [X] T003 [P] Extract DOC-REQ coverage targets from specs/028-manifest-queue/spec.md into specs/028-manifest-queue/contracts/requirements-traceability.md
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Shared scaffolding required by every user story.
+**Purpose**: Align shared contracts and coverage artifacts required by all stories.
 
-- [ ] T003 Add reusable manifest fixtures/conftest helpers for queue tests (tests/unit/workflows/agent_queue/conftest.py)
-- [ ] T004 Document manifest payload sample + capability matrix in data model notes for reference during implementation (specs/028-manifest-queue/data-model.md)
+**CRITICAL**: Complete this phase before starting user-story implementation.
 
-**Checkpoint**: Shared fixtures + references exist so story phases can focus on implementation details without re-deriving test data.
+- [X] T004 Normalize shared request/response contract definitions in specs/028-manifest-queue/data-model.md and specs/028-manifest-queue/contracts/manifests-api.md for ManifestRunRequest and ManifestRunResponse
+- [X] T005 [P] Align runtime-scope and strategy language in specs/028-manifest-queue/plan.md and specs/028-manifest-queue/research.md for production-code-plus-tests delivery
+- [X] T006 [P] Ensure one-row-per-requirement traceability with implementation surfaces in specs/028-manifest-queue/contracts/requirements-traceability.md for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, and DOC-REQ-005
+- [X] T007 Define feature verification checklist entries in specs/028-manifest-queue/checklists/requirements.md for artifact consistency and runtime validation gating
 
----
-
-## Phase 3: User Story 1 - Queue Accepts Manifest Jobs (Priority: P1) 🎯 MVP
-
-**Goal**: Agent Queue accepts `type="manifest"` jobs using a centralized job-type set.
-
-**Independent Test**: POST `/api/queue/jobs` with a valid manifest payload should succeed and enqueue a job categorized as `manifest`. Invalid job types must still be rejected.
-
-### Implementation
-
-- [ ] T005 [P] [US1] Create moonmind/workflows/agent_queue/job_types.py exporting canonical + legacy + manifest job types for reuse
-- [ ] T006 [US1] Update moonmind/workflows/agent_queue/service.py to import job_types, include `manifest`, and surface a clear validation error listing supported types
-- [ ] T007 [P] [US1] Update worker token / policy plumbing (moonmind/workflows/agent_queue/models.py + related services) so capability filters allow `manifest` when requested
-
-### Validation
-
-- [ ] T008 [US1] Add queue service tests covering manifest allowlist + rejection paths (tests/unit/workflows/agent_queue/test_manifest_job_type.py)
-
-**Checkpoint**: Agent Queue interface now recognizes `manifest`; other job types unaffected.
+**Checkpoint**: Shared design and coverage artifacts are synchronized and ready for story execution.
 
 ---
 
-## Phase 4: User Story 2 - API Normalizes Manifest Payloads (Priority: P1)
+## Phase 3: User Story 1 - Fail-Fast Manifest Run Actions (Priority: P1) MVP
 
-**Goal**: Manifest contract module validates YAML, enforces name consistency, computes hashes, and derives capabilities before a job reaches the queue.
+**Goal**: Reject unsupported `action` values at request parsing time while preserving supported/default behavior.
 
-**Independent Test**: Calling `AgentQueueService.create_job(type="manifest", payload=...)` should yield a normalized payload with `manifestHash`, `manifestVersion`, derived capabilities, and deterministic run config merging; name mismatches generate 400 errors.
+**Independent Test**: `ManifestRunRequest` accepts `plan`/`run` (including normalized case/whitespace) and rejects unsupported/non-string/null values before queue submission.
 
-### Tests First (recommended)
+### Tests for User Story 1
 
-- [ ] T009 [P] [US2] Write manifest contract unit tests for capability derivation, hash computation, options precedence, and token-free enforcement (tests/unit/workflows/agent_queue/test_manifest_contract.py)
+- [X] T008 [P] [US1] Add schema tests for action defaulting, normalization, and rejection in tests/unit/api/test_manifest_run_request_schema.py (DOC-REQ-001, DOC-REQ-003, DOC-REQ-004)
+- [X] T009 [P] [US1] Add router tests ensuring unsupported action requests return HTTP 422 before service submission in tests/unit/api/routers/test_manifests.py (DOC-REQ-001, DOC-REQ-004)
 
-### Implementation
+### Implementation for User Story 1
 
-- [ ] T010 [P] [US2] Implement moonmind/workflows/agent_queue/manifest_contract.py with `ManifestContractError`, `derive_required_capabilities`, and `normalize_manifest_job_payload`
-- [ ] T011 [US2] Wire AgentQueueService.create_job to invoke manifest contract path + emit normalized payload metadata (moonmind/workflows/agent_queue/service.py)
-- [ ] T012 [US2] Ensure manifest contract reuses shared manifest fixtures + raises descriptive validation errors for mismatched names or raw secrets (moonmind/workflows/agent_queue/manifest_contract.py)
+- [X] T010 [US1] Enforce strict action allowlist (`plan|run`) and normalization in api_service/api/schemas.py (DOC-REQ-001, DOC-REQ-004)
+- [X] T011 [US1] Preserve normalized action pass-through without fallback transforms in api_service/api/routers/manifests.py (DOC-REQ-001)
+- [X] T012 [US1] Validate User Story 1 via ./tools/test_unit.sh focused on manifest request schema and manifests router coverage (DOC-REQ-001, DOC-REQ-003, DOC-REQ-004)
 
-### Validation
-
-- [ ] T013 [US2] Extend queue service tests to assert normalized payload fields and errors flow through public API (tests/unit/workflows/agent_queue/test_manifest_job_type.py)
-
-**Checkpoint**: Manifest jobs are normalized deterministically and blocked when invalid.
+**Checkpoint**: Unsupported actions fail fast and never reach queue submission logic.
 
 ---
 
-## Phase 5: User Story 3 - Manifest Registry CRUD + Run Submission (Priority: P2)
+## Phase 4: User Story 2 - Spec Artifacts Match Runtime Reality (Priority: P1)
 
-**Goal**: Provide `/api/manifests` CRUD + `/runs` endpoints backed by the manifest table and queue contract.
+**Goal**: Keep `specs/028-manifest-queue` artifacts accurate for current code paths, contracts, and project strategy.
 
-**Independent Test**: PUT + GET `/api/manifests/{name}` should persist YAML + hash metadata, and POST `/runs` should enqueue a manifest job referencing the stored manifest with derived capabilities visible in the response.
+**Independent Test**: Cross-artifact review confirms spec, plan, contracts, and quickstart paths/semantics match current implementation files and behavior.
 
-### Implementation
+### Implementation for User Story 2
 
-- [ ] T014 [P] [US3] Extend ManifestRecord columns and create matching Alembic migration for version/hash/run state metadata (api_service/db/models.py, api_service/migrations/versions)
-- [ ] T015 [US3] Build manifests service to wrap DB CRUD + queue submission logic (api_service/services/manifests_service.py)
-- [ ] T016 [US3] Implement FastAPI router for `/api/manifests` CRUD + `/runs`, wiring dependencies + auth (api_service/api/routers/manifests.py)
-- [ ] T017 [P] [US3] Integrate router into application startup + dependency wiring (api_service/api/routers/__init__.py, api_service/main.py)
+- [X] T013 [P] [US2] Update current-state requirements and acceptance criteria in specs/028-manifest-queue/spec.md (DOC-REQ-002)
+- [X] T014 [P] [US2] Align implementation strategy and structure references in specs/028-manifest-queue/plan.md (DOC-REQ-002, DOC-REQ-004)
+- [X] T015 [P] [US2] Align validation semantics and entity definitions in specs/028-manifest-queue/data-model.md (DOC-REQ-002, DOC-REQ-001, DOC-REQ-005)
+- [X] T016 [P] [US2] Align endpoint request/response/error contracts in specs/028-manifest-queue/contracts/manifests-api.md (DOC-REQ-002, DOC-REQ-001, DOC-REQ-005)
+- [X] T017 [US2] Align operator verification flow with required test wrapper in specs/028-manifest-queue/quickstart.md (DOC-REQ-002, DOC-REQ-003)
+- [X] T018 [US2] Update full requirement traceability mappings in specs/028-manifest-queue/contracts/requirements-traceability.md (DOC-REQ-002)
 
-### Validation
+### Validation for User Story 2
 
-- [ ] T018 [P] [US3] Add router/service unit tests covering CRUD, name mismatch, missing manifest, and queue submission hooks (tests/unit/api/routers/test_manifests.py)
+- [X] T019 [US2] Validate artifact file-path and behavior consistency in specs/028-manifest-queue/checklists/requirements.md (DOC-REQ-002)
+- [X] T020 [US2] Validate DOC-REQ task coverage in specs/028-manifest-queue/tasks.md so each DOC-REQ has implementation and validation tasks (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005)
 
-**Checkpoint**: Operators can manage manifests over HTTP and submit manifest queue jobs via registry entries.
+### DOC-REQ Coverage Matrix (Validated 2026-03-02)
+
+- DOC-REQ-001: Implementation tasks T010, T011, T015, T016; validation tasks T008, T009, T012, T020
+- DOC-REQ-002: Implementation tasks T013, T014, T015, T016, T017, T018; validation tasks T019, T020, T026
+- DOC-REQ-003: Implementation tasks T017; validation tasks T008, T012, T024
+- DOC-REQ-004: Implementation tasks T010, T011, T023; validation tasks T009, T012, T020, T024, T025
+- DOC-REQ-005: Implementation tasks T015, T016, T023; validation tasks T020, T021, T022, T024
+
+**Checkpoint**: Spec artifacts and runtime implementation references are synchronized.
 
 ---
 
-## Phase 6: Polish & Cross-Cutting
+## Phase 5: User Story 3 - Regression Coverage for Alignment Rules (Priority: P2)
 
-- [ ] T019 [P] Refresh specs/028-manifest-queue/quickstart.md with any new smoke-test steps discovered during implementation
-- [ ] T020 [P] Harden logging + error responses to ensure no raw secrets leak in manifest payloads (moonmind/workflows/agent_queue/manifest_contract.py and api_service/api/routers/manifests.py)
-- [ ] T021 Re-run ./tools/test_unit.sh and capture artifacts/logs for review (tools/test_unit.sh)
+**Goal**: Protect action-validation hardening and queue metadata compatibility with focused regression tests.
+
+**Independent Test**: `./tools/test_unit.sh` confirms action validation behavior and manifest queue metadata compatibility tests pass.
+
+### Tests for User Story 3
+
+- [X] T021 [P] [US3] Add manifest queue compatibility regression cases in tests/unit/workflows/agent_queue/test_manifest_contract.py for manifestHash, manifestVersion, requiredCapabilities, and secret-hygiene outputs (DOC-REQ-005)
+- [X] T022 [P] [US3] Add manifests API queue metadata regression cases in tests/unit/api/routers/test_manifests.py for queue.requiredCapabilities and queue.manifestHash responses (DOC-REQ-005)
+- [X] T024 [US3] Execute full regression validation using ./tools/test_unit.sh and record manifest-scope results in specs/028-manifest-queue/checklists/requirements.md (DOC-REQ-003, DOC-REQ-004, DOC-REQ-005)
+
+### Implementation for User Story 3
+
+- [X] T023 [US3] Preserve queue metadata compatibility across api_service/services/manifests_service.py and moonmind/workflows/agent_queue/manifest_contract.py while adding any required hardening adjustments (DOC-REQ-004, DOC-REQ-005)
+
+**Checkpoint**: Regression coverage protects runtime hardening and compatibility behavior.
+
+---
+
+## Phase 6: Polish & Cross-Cutting Concerns
+
+**Purpose**: Final validation and delivery-readiness checks across all stories.
+
+- [X] T025 [P] Run runtime tasks scope gate with .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime for specs/028-manifest-queue/tasks.md (DOC-REQ-004)
+- [X] T026 [P] Perform final cross-artifact sanity pass in specs/028-manifest-queue/spec.md, specs/028-manifest-queue/plan.md, and specs/028-manifest-queue/tasks.md for consistent language and task ordering (DOC-REQ-002)
 
 ---
 
 ## Dependencies & Execution Order
 
-1. Complete Phase 1 setup to ensure scope alignment and baseline test signal.
-2. Phase 2 fixtures/documentation unblock every user story; finish before touching runtime code.
-3. Phase 3 (US1) must finish before manifest contract or registry work so queue accepts the new job type.
-4. Phase 4 (US2) depends on US1 and provides normalization required by registry submissions.
-5. Phase 5 (US3) depends on US2 because routers/service call into manifest contract for queue submissions.
-6. Phase 6 polish tasks run after all targeted user stories reach their checkpoints.
+### Phase Dependencies
+
+- **Phase 1 (Setup)**: Starts immediately.
+- **Phase 2 (Foundational)**: Depends on Phase 1 and blocks all user stories.
+- **Phase 3 (US1)**: Depends on Phase 2 completion.
+- **Phase 4 (US2)**: Depends on Phase 2 completion; can run in parallel with US1 when staffed.
+- **Phase 5 (US3)**: Depends on Phase 2 completion and should consume outputs from US1/US2.
+- **Phase 6 (Polish)**: Depends on completion of selected user stories.
+
+### User Story Dependencies
+
+- **US1 (P1)**: Can start after foundational phase; no dependency on other stories.
+- **US2 (P1)**: Can start after foundational phase; independent but informs final artifact validation.
+- **US3 (P2)**: Depends on US1 validation behavior and US2 artifact/contract alignment.
+
+### Within Each User Story
+
+- Tests first (where present), then implementation, then story-level validation command execution.
 
 ## Parallel Opportunities
 
-1. After Phase 2 completes, T005 + T007 (US1 implementation) can run in parallel while T009 prepares manifest contract tests.
-2. Once manifest contract baseline tests exist, T010 + T011 can proceed concurrently with Alembic/model work (T014) because they touch disjoint directories.
-3. Router implementation (T016) can run in parallel with queue service test hardening (T013) once manifest contract code stabilizes.
-4. Final polish tasks (T019–T021) can be parallelized; they touch docs/logging/tests independently.
+- T002 and T003 can run in parallel in Setup.
+- T005 and T006 can run in parallel in Foundational.
+- T008 and T009 can run in parallel in US1 tests.
+- T013 through T016 can run in parallel in US2 implementation.
+- T021 and T022 can run in parallel in US3 tests.
+- T025 and T026 can run in parallel in final polish.
+
+## Parallel Example: User Story 1
+
+```bash
+Task: "T008 [US1] Add schema tests in tests/unit/api/test_manifest_run_request_schema.py"
+Task: "T009 [US1] Add router tests in tests/unit/api/routers/test_manifests.py"
+```
+
+## Parallel Example: User Story 2
+
+```bash
+Task: "T013 [US2] Update specs/028-manifest-queue/spec.md"
+Task: "T014 [US2] Update specs/028-manifest-queue/plan.md"
+Task: "T016 [US2] Update specs/028-manifest-queue/contracts/manifests-api.md"
+```
+
+## Parallel Example: User Story 3
+
+```bash
+Task: "T021 [US3] Add compatibility regression cases in tests/unit/workflows/agent_queue/test_manifest_contract.py"
+Task: "T022 [US3] Add metadata regression cases in tests/unit/api/routers/test_manifests.py"
+```
 
 ## Implementation Strategy
 
-### MVP (User Story 1 only)
+### MVP First (User Story 1 Only)
 
-- Deliver queue allowlist + manifest normalization entry point so inline manifest jobs can be enqueued manually.
-- Validate via queue service tests and minimal manual POST /api/queue/jobs submission.
+1. Complete Phase 1 (Setup).
+2. Complete Phase 2 (Foundational).
+3. Complete Phase 3 (US1).
+4. Validate fail-fast behavior through T012.
 
-### Incremental Extensions
+### Incremental Delivery
 
-1. Layer manifest contract module + tests to ensure deterministic payloads (User Story 2).
-2. Add registry CRUD + `/runs` endpoints + tests (User Story 3).
-3. Polish docs/logging/tests for operator readiness.
+1. Deliver US1 hardening (MVP).
+2. Deliver US2 artifact alignment and traceability.
+3. Deliver US3 regression hardening.
+4. Finish cross-cutting polish and scope gates.
 
-Each increment should be individually testable via `./tools/test_unit.sh` and, when applicable, manual HTTP calls scripted in quickstart.md.
+### Parallel Team Strategy
+
+1. Team aligns shared foundations (Phases 1-2).
+2. One engineer executes US1 runtime hardening while another executes US2 artifact alignment.
+3. US3 regression work starts after US1/US2 outputs stabilize.

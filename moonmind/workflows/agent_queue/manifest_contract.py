@@ -168,7 +168,7 @@ def normalize_manifest_job_payload(
     required_capabilities = derive_required_capabilities(parsed_manifest)
     options = _normalize_options(manifest_obj.get("options"))
     effective_run_config = _build_effective_run_config(parsed_manifest, options)
-    secret_refs = _collect_secret_refs(parsed_manifest)
+    secret_refs = collect_manifest_secret_refs(parsed_manifest)
 
     source["contentHash"] = manifest_hash
     source["version"] = manifest_version
@@ -603,9 +603,11 @@ def _looks_like_base64_secret(value: str) -> bool:
     return bool(_BASE64ISH_RE.fullmatch(compact))
 
 
-def _collect_secret_refs(
+def collect_manifest_secret_refs(
     manifest: Mapping[str, Any],
 ) -> dict[str, list[dict[str, str]]]:
+    """Collect deduplicated profile/vault secret references from manifest content."""
+
     profile_refs: list[ManifestProfileSecretRef] = []
     vault_refs: list[ManifestVaultSecretRef] = []
     seen_profile: set[str] = set()
@@ -719,4 +721,5 @@ __all__ = [
     "derive_required_capabilities",
     "sanitize_manifest_payload",
     "detect_manifest_secret_leaks",
+    "collect_manifest_secret_refs",
 ]

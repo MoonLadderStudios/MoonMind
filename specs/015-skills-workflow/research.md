@@ -1,39 +1,43 @@
-# Research: Skills-First Workflow Umbrella
+# Research: Skills Workflow Alignment Refresh
 
-## Decision 1: Treat Speckit as baseline capability, not a separate workflow mode
+## Decision 1: Adopt current runtime stage names as the canonical contract
 
-- **Decision**: Keep Speckit installed and verified on worker startup for all relevant workers, but remove the notion of a unique "Speckit workflow mode" from orchestration policy.
-- **Rationale**: This preserves current execution safety and operator expectations while allowing broader skills-based routing.
+- **Decision**: Replace legacy stage names (`specify`, `plan`, `tasks`, `analyze`, `implement`) with runtime stage task names (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`) across `015` artifacts.
+- **Rationale**: Current workers, task payloads, and stage routing all execute on the three runtime task stages.
 - **Alternatives considered**:
-  - Keep Speckit as a dedicated workflow mode: rejected because it blocks generic skills-first expansion.
-  - Remove Speckit defaults entirely: rejected because it risks immediate regressions for existing workflows.
+  - Keep legacy stage terms in `015`: rejected because it creates contract drift with production behavior.
 
-## Decision 2: Add a skills adapter layer with direct-stage fallback
+## Decision 2: Surface adapter metadata in Spec Automation phase responses
 
-- **Decision**: Introduce a `skills` adapter layer that resolves stage requests to allowlisted skills first and falls back to direct implementations when configured.
-- **Rationale**: This creates a controlled migration path without requiring disruptive rewrites of existing task logic.
+- **Decision**: Include `adapterId` in normalized phase metadata and expose it as `adapter_id` in API responses.
+- **Rationale**: Stage-level observability needs both selected skill and selected adapter to diagnose routing issues quickly.
 - **Alternatives considered**:
-  - Full rewrite to skills-only execution with no fallback: rejected due migration risk.
-  - Keep ad hoc stage-to-function dispatch only: rejected because it does not support multi-skill policy.
+  - Keep adapter data only in raw metadata payloads: rejected because consumers would need custom payload parsing and lose typed API support.
 
-## Decision 3: Keep existing queue and API compatibility while adding execution metadata
+## Decision 3: Preserve compatibility defaults for legacy Speckit metadata
 
-- **Decision**: Maintain existing queue names and `/api/workflows` compatibility while enriching run/task metadata with skill id, execution path, and timings.
-- **Rationale**: Fastest path avoids client breakage and allows incremental rollout.
+- **Decision**: For legacy Speckit phase records missing skill fields, derive defaults (`selectedSkill=speckit`, `adapterId=speckit`, `executionPath=skill`).
+- **Rationale**: Historical records should remain interpretable without requiring data backfills.
 - **Alternatives considered**:
-  - Rename queues/routes immediately to generic names: rejected because migration blast radius is unnecessary for first rollout.
+  - Return null for missing fields: rejected because it weakens operator diagnostics on older runs.
 
-## Decision 4: Use explicit rollout controls (shadow, canary, per-stage toggles)
+## Decision 4: Align shared-skills workspace contracts with run materialization
 
-- **Decision**: Add global and per-stage skills flags, plus shadow/canary controls, with default policy set to skills-first and Speckit defaults.
-- **Rationale**: Enables safe, measurable rollout and rapid rollback.
+- **Decision**: Document `.agents/skills` and `.gemini/skills` as links to a single run-scoped `skills_active` directory.
+- **Rationale**: Current workers materialize one shared active skill set and expose it to both adapters through workspace links.
 - **Alternatives considered**:
-  - Big-bang switch to skills-first for all traffic: rejected due operational risk.
-  - Manual per-run switches only: rejected due insufficient governance at scale.
+  - Keep per-adapter independent skill mirrors as the primary contract: rejected because it no longer matches runtime behavior.
 
-## Decision 5: Optimize operator path in docs + compose around Codex auth and Gemini embedding defaults
+## Decision 5: Keep Speckit verification conditional on selected/configured stage skills
 
-- **Decision**: Standardize quickstart on one-time Codex auth-volume login plus required env defaults (`GOOGLE_API_KEY`, `DEFAULT_EMBEDDING_PROVIDER=google`, `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`, `CODEX_ENV`, `CODEX_MODEL`, `GITHUB_TOKEN`).
-- **Rationale**: Operator friction is the largest practical blocker to adoption.
+- **Decision**: Verify Speckit CLI only for stages that actually resolve to a Speckit-backed adapter when skills mode is enabled.
+- **Rationale**: Startup and per-stage checks should align with selected stage-skill strategy, not assume unconditional Speckit usage.
 - **Alternatives considered**:
-  - Keep credential/setup guidance fragmented across multiple docs: rejected because it slows onboarding and increases failure rate.
+  - Keep unconditional Speckit checks for all runs: rejected because it blocks non-Speckit stage strategies and misrepresents runtime policy.
+
+## Decision 6: Keep runtime-vs-docs behavior aligned with orchestration mode
+
+- **Decision**: Treat this feature as runtime implementation mode and require production code surfaces plus unit validation via `./tools/test_unit.sh`.
+- **Rationale**: The feature input explicitly requires runtime deliverables, so docs-only completion is not acceptable for this scope.
+- **Alternatives considered**:
+  - Execute as docs-only refresh mode: rejected because it would violate FR-007/FR-008 and leave runtime expectations unverified.
