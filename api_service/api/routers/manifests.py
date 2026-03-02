@@ -122,7 +122,7 @@ async def upsert_manifest(
         logger.warning("Manifest upsert validation failed.", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_manifest", "message": "Invalid manifest payload"},
+            detail={"code": "invalid_manifest", "message": str(exc)},
         ) from exc
     return _serialize_detail(record)
 

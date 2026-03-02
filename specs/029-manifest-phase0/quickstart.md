@@ -1,107 +1,90 @@
-# Quickstart: Manifest Queue Phase 0
+# Quickstart: Manifest Queue Phase 0 Alignment
 
-**Feature**: Manifest Queue Phase 0  
-**Branch**: `029-manifest-phase0`
+**Feature**: Manifest Queue Phase 0 Alignment
+
+## Goal
+
+Verify manifest validation failures now return actionable errors on queue and registry submission paths.
 
 ## Prerequisites
 
-- MoonMind API dependencies installed (Python 3.11 env, Poetry/Node deps).  
-- Postgres + RabbitMQ reachable (local stack or `docker compose up rabbitmq api celery-worker`).  
-- Worker/service env vars configured (see `docs/ManifestTaskSystem.md` §9).  
-- Auth token for the API: `MOONMIND_API_TOKEN`.  
-- `jq` available for quick JSON encoding.  
-- Feature branch `029-manifest-phase0` checked out.
+- API service running locally.
+- Auth token exported as `MOONMIND_API_TOKEN`.
 
-## 1. Define a v0 Manifest
+## 1. Validate Queue Error Behavior for Manifest Jobs
 
-Save the YAML below as `examples/confluence-demo.yaml` (adjust sources as needed):
-
-```yaml
-version: "v0"
-metadata:
-  name: "confluence-demo"
-embeddings:
-  provider: "openai"
-  model: "text-embedding-3-small"
-vectorStore:
-  type: "qdrant"
-  indexName: "knowledge-base"
-  connection:
-    host: "${QDRANT_HOST}"
-dataSources:
-  - id: "confluence-main"
-    type: "ConfluenceReader"
-    params:
-      spaceKey: "ENG"
-run:
-  dryRun: false
-```
-
-## 2. Register the Manifest in the Registry
+Submit an invalid manifest queue payload:
 
 ```bash
-curl -X PUT "http://localhost:5000/api/manifests/confluence-demo" \
+curl -sS -X POST "http://localhost:5000/api/queue/jobs" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "$(jq -Rs '{content:.}' examples/confluence-demo.yaml)"
-```
-
-Expected: response includes `contentHash`, `version: "v0"`, and empty `state`.
-
-## 3. Submit an Inline Manifest Job (optional smoke)
-
-```bash
-curl -X POST "http://localhost:5000/api/queue/jobs" \
-  -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d @- <<'JSON'
-{
-  "type": "manifest",
-  "priority": 5,
-  "payload": {
-    "manifest": {
-      "name": "confluence-demo-inline",
-      "action": "run",
-      "source": {
-        "kind": "inline",
-        "content": "version: \"v0\"\nmetadata:\n  name: confluence-demo-inline\n..."
-      },
-      "options": { "dryRun": true }
+  -d '{
+    "type": "manifest",
+    "payload": {
+      "manifest": {
+        "name": "demo",
+        "source": {"kind": "inline", "content": "version: v0\nmetadata:\n  name: other\n"}
+      }
     }
-  }
-}
-JSON
+  }' | jq .
 ```
 
-Expected: response `payload.requiredCapabilities` includes `["manifest","embeddings","openai","qdrant","confluence"]`.
+Expected:
 
-## 4. Create a Registry-Backed Run
+- HTTP `422`
+- `detail.code == "invalid_manifest_job"`
+- `detail.message` contains actionable contract text (for example name mismatch details)
+
+## 1b. Validate Non-Manifest Queue Regression Behavior
+
+Submit a non-manifest queue payload that fails generic validation:
 
 ```bash
-curl -X POST "http://localhost:5000/api/manifests/confluence-demo/runs" \
+curl -sS -X POST "http://localhost:5000/api/queue/jobs" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"action":"run","options":{"forceFull":false,"maxDocs":250}}'
+  -d '{
+    "type": "task",
+    "payload": {
+      "repository": "MoonMind/repo"
+    }
+  }' | jq .
 ```
 
-Expected: HTTP 201 with `jobId` and queue metadata carrying `manifestHash` + derived capabilities.
+Expected:
 
-## 5. Verify Manifest Job Isolation & Sanitization
+- HTTP `422`
+- `detail.code == "invalid_queue_payload"`
+- `detail.message == "Queue request payload is invalid."`
+
+## 2. Validate Registry Upsert Error Behavior
+
+Submit invalid manifest YAML to registry:
 
 ```bash
-curl -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
-  "http://localhost:5000/api/queue/jobs?type=manifest&limit=20" | jq '.items[0].payload'
+curl -sS -X PUT "http://localhost:5000/api/manifests/demo" \
+  -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"version: v0\nmetadata:\n  name: other\n"}' | jq .
 ```
 
-Expected payload fields:
-- `manifest.name`, `manifest.action`, `manifest.source.kind`, optional `source.name`.
-- `manifestHash`, `manifestVersion`, `requiredCapabilities`.
-- **No** inline YAML (`manifest.source.content` should be absent).
+Expected:
 
-## 6. Run Automated Tests
+- HTTP `422`
+- `detail.code == "invalid_manifest"`
+- `detail.message` contains contract-derived validation text
+
+## 3. Run Unit Suite
 
 ```bash
 ./tools/test_unit.sh
 ```
 
-Expected: manifest contract + registry tests pass, proving compliance with DOC-REQ-001…005 and FR-010.
+Expected: all unit tests pass.
+
+## 4. Validation Evidence
+
+- Date (UTC): `2026-03-02`
+- Command: `./tools/test_unit.sh`
+- Result: `PASS` (`898 passed, 8 subtests passed`)

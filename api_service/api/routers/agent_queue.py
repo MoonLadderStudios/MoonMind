@@ -74,6 +74,7 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
     AgentArtifactNotFoundError,
@@ -619,6 +620,16 @@ async def create_job(
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
         )
+    except AgentQueueValidationError as exc:
+        if payload.type == MANIFEST_JOB_TYPE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_manifest_job",
+                    "message": str(exc),
+                },
+            ) from exc
+        raise _to_http_exception(exc) from exc
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)
