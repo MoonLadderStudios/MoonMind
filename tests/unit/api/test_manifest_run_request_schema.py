@@ -39,8 +39,9 @@ def test_manifest_run_request_rejects_non_string_action() -> None:
         ManifestRunRequest(action=123)
 
 
-def test_manifest_run_request_rejects_null_action() -> None:
-    """Null action payloads should fail schema validation."""
+def test_manifest_run_request_defaults_blank_action_to_run() -> None:
+    """Blank or null action values should default to run."""
 
-    with pytest.raises(ValidationError, match="action must be one of: plan, run"):
-        ManifestRunRequest(action=None)
+    assert ManifestRunRequest(action=None).action == "run"
+    assert ManifestRunRequest(action="").action == "run"
+    assert ManifestRunRequest(action="   ").action == "run"
