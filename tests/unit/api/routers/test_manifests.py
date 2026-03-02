@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import manifests as manifests_router
+from api_service.api.routers.agent_queue import _WorkerRequestAuth
 from api_service.services.manifests_service import ManifestRegistryNotFoundError
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.service import AgentQueueValidationError
@@ -44,6 +45,19 @@ def client() -> tuple[TestClient, AsyncMock]:
     app.dependency_overrides[manifests_router._get_service] = lambda: mock_service
     with TestClient(app) as test_client:
         yield test_client, mock_service
+
+
+def _worker_auth(**overrides: object) -> _WorkerRequestAuth:
+    base = {
+        "auth_source": "worker_token",
+        "worker_id": "worker-1",
+        "allowed_repositories": (),
+        "allowed_job_types": (),
+        "capabilities": (),
+        "token_id": None,
+    }
+    base.update(overrides)
+    return _WorkerRequestAuth(**base)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -212,6 +226,65 @@ async def test_create_manifest_run_validation_error() -> None:
         )
     assert exc.value.status_code == 422
     assert exc.value.detail == {"code": "invalid_manifest_job", "message": "bad job"}
+
+
+@pytest.mark.asyncio
+async def test_update_manifest_state_returns_detail() -> None:
+    """update_manifest_state should serialize persisted checkpoint data."""
+
+    record = _record(state_json={"docs": {"cursor": "abc"}})
+    service = AsyncMock()
+    service.update_manifest_state.return_value = record
+
+    payload = manifests_router.ManifestStateUpdateRequest(
+        state_json={"docs": {"cursor": "abc"}},
+        last_run_status="succeeded",
+    )
+    response = await manifests_router.update_manifest_state(
+        name="demo",
+        payload=payload,
+        service=service,
+        worker_auth=_worker_auth(),
+    )
+
+    assert response.name == "demo"
+    assert response.state.state_json == {"docs": {"cursor": "abc"}}
+    service.update_manifest_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_manifest_state_not_found() -> None:
+    """Missing manifests should return 404 from state update endpoint."""
+
+    service = AsyncMock()
+    service.update_manifest_state.side_effect = ManifestRegistryNotFoundError("missing")
+
+    with pytest.raises(HTTPException) as exc:
+        await manifests_router.update_manifest_state(
+            name="missing",
+            payload=manifests_router.ManifestStateUpdateRequest(state_json={}),
+            service=service,
+            worker_auth=_worker_auth(),
+        )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_manifest_state_requires_worker_token() -> None:
+    """Manifest state callbacks should reject non-worker auth."""
+
+    service = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await manifests_router.update_manifest_state(
+            name="demo",
+            payload=manifests_router.ManifestStateUpdateRequest(state_json={}),
+            service=service,
+            worker_auth=_worker_auth(auth_source="oidc", worker_id=None),
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "worker_not_authorized"
 
 
 def test_create_manifest_run_http_validation_rejects_invalid_action(

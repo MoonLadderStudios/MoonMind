@@ -4,17 +4,11 @@
 **Prerequisites**: `plan.md` (required), `spec.md` (required), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`  
 **Tests**: Automated tests are required by the spec; run via `./tools/test_unit.sh`.
 
-## Prompt B Scope Controls (Step 12/16)
-
-- Runtime implementation tasks are explicitly present: `T001-T004`, `T006-T007`, `T010`.
-- Runtime validation tasks are explicitly present: `T005`, `T008-T009`, `T011-T013`.
-- `DOC-REQ-*` implementation + validation coverage is enforced by task mappings in this file and `specs/030-manifest-phase1/contracts/requirements-traceability.md`.
-
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: Align shared API contracts and schema surfaces for Phase 1 worker-readiness scope.
 
-- [X] T001 Reconcile manifest worker request/response schemas with `specs/030-manifest-phase1/contracts/manifest-phase1.openapi.yaml` in `moonmind/schemas/agent_queue_models.py` (`ManifestSecretResolutionRequest`, `ManifestSecretResolutionResponse`) and `api_service/api/schemas.py` (`ManifestStateUpdateRequest`) (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
+- [ ] T001 Reconcile manifest worker request/response schemas with `specs/030-manifest-phase1/contracts/manifest-phase1.openapi.yaml` in `api_service/api/schemas.py` for `ManifestSecretResolutionRequest`, `ManifestSecretResolutionResponse`, and `ManifestStateUpdateRequest` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
 
 ---
 
@@ -22,8 +16,8 @@
 
 **Purpose**: Ensure core router/service guardrails are in place before story-specific validation.
 
-- [X] T002 Implement/normalize manifest secret reference extraction and unresolved-key fail-fast handling in `api_service/api/routers/agent_queue.py` for malformed `manifestSecretRefs` payload safety (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004)
-- [X] T003 Implement/normalize `update_manifest_state(...)` persistence semantics in `api_service/services/manifests_service.py` for `state_json`, `state_updated_at`, and optional `last_run_*` updates (DOC-REQ-003, DOC-REQ-004)
+- [ ] T002 Implement/normalize manifest secret reference extraction and unresolved-key fail-fast handling in `api_service/api/routers/agent_queue.py` for malformed `manifestSecretRefs` payload safety (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004)
+- [ ] T003 Implement/normalize `update_manifest_state(...)` persistence semantics in `api_service/services/manifests_service.py` for `state_json`, `state_updated_at`, and optional `last_run_*` updates (DOC-REQ-003, DOC-REQ-004)
 
 **Checkpoint**: Foundational runtime behavior is ready for user-story specific endpoint completion and tests.
 
@@ -37,11 +31,11 @@
 
 ### Implementation for User Story 1
 
-- [X] T004 [US1] Finalize `POST /api/queue/jobs/{job_id}/manifest/secrets` in `api_service/api/routers/agent_queue.py` with worker-token auth, `manifest` capability checks, running-state checks, ownership checks, profile resolution, and vault pass-through shaping (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004)
+- [ ] T004 [US1] Finalize `POST /api/queue/jobs/{job_id}/manifest/secrets` in `api_service/api/routers/agent_queue.py` with worker-token auth, `manifest` capability checks, running-state checks, ownership checks, profile resolution, and vault pass-through shaping (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004)
 
 ### Validation for User Story 1
 
-- [X] T005 [US1] Extend secret-resolution coverage in `tests/unit/api/routers/test_agent_queue.py` for happy-path profile/vault resolution plus unresolved-profile, malformed-ref, and non-manifest denial behavior (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004)
+- [ ] T005 [US1] Extend secret-resolution coverage in `tests/unit/api/routers/test_agent_queue.py` for happy-path profile/vault resolution plus unresolved-profile and malformed-ref error behavior (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004)
 
 **Checkpoint**: User Story 1 is independently functional and testable.
 
@@ -55,13 +49,13 @@
 
 ### Implementation for User Story 2
 
-- [X] T006 [US2] Implement/normalize `POST /api/manifests/{name}/state` route wiring and not-found handling in `api_service/api/routers/manifests.py` using `ManifestsService.update_manifest_state(...)` (DOC-REQ-003, DOC-REQ-004)
-- [X] T007 [US2] Ensure manifest state callback field mapping and timestamp update behavior in `api_service/services/manifests_service.py` aligns with `specs/030-manifest-phase1/data-model.md` (DOC-REQ-003, DOC-REQ-004)
+- [ ] T006 [US2] Implement/normalize `POST /api/manifests/{name}/state` route wiring and not-found handling in `api_service/api/routers/manifests.py` using `ManifestsService.update_manifest_state(...)` (DOC-REQ-003, DOC-REQ-004)
+- [ ] T007 [US2] Ensure manifest state callback field mapping and timestamp update behavior in `api_service/services/manifests_service.py` aligns with `specs/030-manifest-phase1/data-model.md` (DOC-REQ-003, DOC-REQ-004)
 
 ### Validation for User Story 2
 
-- [X] T008 [P] [US2] Add/update service persistence tests in `tests/unit/services/test_manifests_service.py` for `state_json`, `state_updated_at`, and optional `last_run_*` updates (DOC-REQ-003, DOC-REQ-004)
-- [X] T009 [P] [US2] Add/update route tests in `tests/unit/api/routers/test_manifests.py` for successful callback persistence and 404 behavior on missing manifests (DOC-REQ-003, DOC-REQ-004)
+- [ ] T008 [P] [US2] Add/update service persistence tests in `tests/unit/services/test_manifests_service.py` for `state_json`, `state_updated_at`, and optional `last_run_*` updates (DOC-REQ-003, DOC-REQ-004)
+- [ ] T009 [P] [US2] Add/update route tests in `tests/unit/api/routers/test_manifests.py` for successful callback persistence and 404 behavior on missing manifests (DOC-REQ-003, DOC-REQ-004)
 
 **Checkpoint**: User Story 2 is independently functional and testable.
 
@@ -75,11 +69,11 @@
 
 ### Implementation for User Story 3
 
-- [X] T010 [US3] Harden denied-path responses for capability and ownership violations in `api_service/api/routers/agent_queue.py` so unauthorized callers never receive resolved secret values (DOC-REQ-001, DOC-REQ-004)
+- [ ] T010 [US3] Harden denied-path responses for capability and ownership violations in `api_service/api/routers/agent_queue.py` so unauthorized callers never receive resolved secret values (DOC-REQ-001, DOC-REQ-004)
 
 ### Validation for User Story 3
 
-- [X] T011 [US3] Add explicit authorization regression tests in `tests/unit/api/routers/test_agent_queue.py` for missing-manifest-capability and wrong-owner secret resolution attempts (DOC-REQ-001, DOC-REQ-004)
+- [ ] T011 [US3] Add explicit authorization regression tests in `tests/unit/api/routers/test_agent_queue.py` for missing-manifest-capability and wrong-owner secret resolution attempts (DOC-REQ-001, DOC-REQ-004)
 
 **Checkpoint**: User Story 3 authorization guarantees are independently testable.
 
@@ -89,8 +83,8 @@
 
 **Purpose**: Execute full runtime validation and confirm scope guard compliance.
 
-- [X] T012 Run full unit suite via `./tools/test_unit.sh` and resolve failures in `tests/unit/api/routers/test_agent_queue.py`, `tests/unit/api/routers/test_manifests.py`, and `tests/unit/services/test_manifests_service.py` (DOC-REQ-004)
-- [X] T013 Run runtime scope gate `./.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` and address any missing runtime/test changes in `api_service/` or `tests/` before handoff (DOC-REQ-004)
+- [ ] T012 Run full unit suite via `./tools/test_unit.sh` and resolve failures in `tests/unit/api/routers/test_agent_queue.py`, `tests/unit/api/routers/test_manifests.py`, and `tests/unit/services/test_manifests_service.py` (DOC-REQ-004)
+- [ ] T013 Run runtime scope gate `./.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` and address any missing runtime/test changes in `api_service/` or `tests/` before handoff (DOC-REQ-004)
 
 ---
 
@@ -151,11 +145,7 @@ Task: "T009 [US2] Add/update route tests in tests/unit/api/routers/test_manifest
 
 ### Traceability Coverage
 
-- DOC-REQ-001 implementation: T002, T004, T010
-- DOC-REQ-001 validation: T005, T011, T012, T013
-- DOC-REQ-002 implementation: T001, T002, T004
-- DOC-REQ-002 validation: T005, T012, T013
-- DOC-REQ-003 implementation: T001, T003, T006, T007
-- DOC-REQ-003 validation: T008, T009, T012, T013
-- DOC-REQ-004 implementation: T001, T002, T003, T004, T006, T007, T010
-- DOC-REQ-004 validation: T005, T008, T009, T011, T012, T013
+- DOC-REQ-001: T002, T004, T005, T010, T011
+- DOC-REQ-002: T001, T002, T004, T005
+- DOC-REQ-003: T001, T003, T006, T007, T008, T009
+- DOC-REQ-004: T001-T013

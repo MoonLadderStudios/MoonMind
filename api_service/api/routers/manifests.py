@@ -8,6 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.routers.agent_queue import _require_worker_auth, _WorkerRequestAuth
 from api_service.api.schemas import (
     ManifestDetailModel,
     ManifestListResponse,
@@ -16,6 +17,7 @@ from api_service.api.schemas import (
     ManifestRunRequest,
     ManifestRunResponse,
     ManifestStateModel,
+    ManifestStateUpdateRequest,
     ManifestSummaryModel,
     ManifestUpsertRequest,
 )
@@ -171,3 +173,41 @@ async def create_manifest_run(
         manifest_hash=queue_payload.get("manifestHash"),
     )
     return ManifestRunResponse(job_id=job.id, queue=queue_metadata)
+
+
+@router.post("/{name}/state", response_model=ManifestDetailModel)
+async def update_manifest_state(
+    name: str,
+    payload: ManifestStateUpdateRequest,
+    service: ManifestsService = Depends(_get_service),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> ManifestDetailModel:
+    """Persist worker checkpoint state and optional run metadata."""
+
+    if worker_auth.auth_source != "worker_token":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "worker_not_authorized",
+                "message": "manifest state callback requires worker-token authentication",
+            },
+        )
+
+    try:
+        record = await service.update_manifest_state(
+            name=name,
+            state_json=payload.state_json,
+            last_run_job_id=payload.last_run_job_id,
+            last_run_status=payload.last_run_status,
+            last_run_started_at=payload.last_run_started_at,
+            last_run_finished_at=payload.last_run_finished_at,
+        )
+    except ManifestRegistryNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "manifest_not_found",
+                "message": f"Manifest '{name}' not found",
+            },
+        ) from exc
+    return _serialize_detail(record)

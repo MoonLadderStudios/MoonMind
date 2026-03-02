@@ -118,3 +118,30 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
             assert record is not None
             assert record.last_run_job_id == job_id
             assert record.last_run_status == queue_models.AgentJobStatus.QUEUED.value
+
+
+async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
+    tmp_path: Path,
+) -> None:
+    """update_manifest_state should persist state_json and optional run metadata."""
+
+    async with manifest_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            queue_service = SimpleNamespace(create_job=None)
+            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+
+            await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
+            last_job_id = uuid4()
+            updated = await service.update_manifest_state(
+                name="demo",
+                state_json={"docs": {"cursor": "abc", "docHashes": {"doc-1": "h1"}}},
+                last_run_job_id=last_job_id,
+                last_run_status="succeeded",
+            )
+
+            assert updated.state_json == {
+                "docs": {"cursor": "abc", "docHashes": {"doc-1": "h1"}}
+            }
+            assert updated.last_run_job_id == last_job_id
+            assert updated.last_run_status == "succeeded"
+            assert updated.state_updated_at is not None

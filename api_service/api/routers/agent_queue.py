@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -29,7 +30,11 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.schemas import QueueSystemMetadataModel
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_auth_manager,
+    get_current_user,
+    get_current_user_optional,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
@@ -52,6 +57,10 @@ from moonmind.schemas.agent_queue_models import (
     JobListResponse,
     JobModel,
     JobWithAttachmentsResponse,
+    ManifestSecretProfileValue,
+    ManifestSecretResolutionRequest,
+    ManifestSecretResolutionResponse,
+    ManifestSecretVaultValue,
     MigrationTelemetryResponse,
     QueueSafeguardJobModel,
     QueueSafeguardResponse,
@@ -368,6 +377,65 @@ def _summarize_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     # Keep the summary payload intentionally narrow to reduce serialization overhead.
     return summary_payload
+
+
+def _extract_manifest_secret_refs(
+    payload: dict[str, Any] | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return normalized profile/vault secret refs from a manifest queue payload."""
+
+    if not isinstance(payload, dict):
+        return ([], [])
+    refs_obj = payload.get("manifestSecretRefs")
+    if not isinstance(refs_obj, dict):
+        return ([], [])
+
+    profile_refs: list[dict[str, str]] = []
+    seen_profile: set[str] = set()
+    profile_payload = refs_obj.get("profile")
+    if not isinstance(profile_payload, list):
+        profile_payload = []
+    for entry in profile_payload:
+        if not isinstance(entry, dict):
+            continue
+        env_key = str(entry.get("envKey") or "").strip()
+        if not env_key:
+            continue
+        dedupe_key = str(entry.get("normalized") or env_key).strip().lower()
+        if dedupe_key in seen_profile:
+            continue
+        seen_profile.add(dedupe_key)
+        profile_refs.append(
+            {
+                "provider": str(entry.get("provider") or "").strip(),
+                "field": str(entry.get("field") or "").strip(),
+                "envKey": env_key,
+                "normalized": str(entry.get("normalized") or "").strip(),
+            }
+        )
+
+    vault_refs: list[dict[str, str]] = []
+    seen_vault: set[str] = set()
+    vault_payload = refs_obj.get("vault")
+    if not isinstance(vault_payload, list):
+        vault_payload = []
+    for entry in vault_payload:
+        if not isinstance(entry, dict):
+            continue
+        ref = str(entry.get("ref") or "").strip()
+        if not ref or ref in seen_vault:
+            continue
+        seen_vault.add(ref)
+        vault_refs.append(
+            {
+                "mount": str(entry.get("mount") or "").strip(),
+                "path": str(entry.get("path") or "").strip(),
+                "field": str(entry.get("field") or "").strip(),
+                "ref": ref,
+            }
+        )
+
+    return (profile_refs, vault_refs)
 
 
 def _serialize_job_for_list(
@@ -1019,6 +1087,103 @@ async def heartbeat_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(heartbeat_result.job, heartbeat_result.system)
+
+
+@router.post(
+    "/jobs/{job_id}/manifest/secrets",
+    response_model=ManifestSecretResolutionResponse,
+)
+async def resolve_manifest_job_secrets(
+    job_id: UUID,
+    payload: ManifestSecretResolutionRequest,
+    service: AgentQueueService = Depends(_get_service),
+    auth_manager=Depends(get_auth_manager),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> ManifestSecretResolutionResponse:
+    """Resolve manifest profile references for the running, claimed worker job."""
+
+    try:
+        if worker_auth.auth_source != "worker_token" or not worker_auth.worker_id:
+            raise AgentQueueAuthorizationError(
+                "manifest secret resolution requires worker-token authentication"
+            )
+        available_caps = {
+            str(token or "").strip().lower() for token in worker_auth.capabilities
+        }
+        if MANIFEST_JOB_TYPE not in available_caps:
+            raise AgentQueueAuthorizationError(
+                "worker token does not allow manifest secret resolution"
+            )
+
+        job = await service.get_job(job_id)
+        if job is None:
+            raise AgentJobNotFoundError(job_id)
+        if job.type != MANIFEST_JOB_TYPE:
+            raise AgentQueueValidationError(
+                "manifest secret resolution only supports manifest jobs"
+            )
+        if job.status is not models.AgentJobStatus.RUNNING:
+            raise AgentJobStateError(
+                f"Job {job_id} is {job.status.value} and cannot resolve secrets"
+            )
+        if job.claimed_by != worker_auth.worker_id:
+            raise AgentQueueAuthorizationError(
+                f"Job {job_id} is owned by {job.claimed_by or 'none'}"
+            )
+
+        profile_refs, vault_refs = _extract_manifest_secret_refs(job.payload)
+        profile_items: list[ManifestSecretProfileValue] = []
+        unresolved: list[str] = []
+        requester_user = (
+            SimpleNamespace(id=job.requested_by_user_id)
+            if job.requested_by_user_id is not None
+            else None
+        )
+        if payload.include_profile:
+            for ref in profile_refs:
+                env_key = ref["envKey"]
+                value = await auth_manager.get_secret(
+                    "profile",
+                    key=env_key,
+                    user=requester_user,
+                )
+                if not value:
+                    unresolved.append(env_key)
+                    continue
+                profile_items.append(
+                    ManifestSecretProfileValue(
+                        provider=ref["provider"] or None,
+                        field=ref["field"] or None,
+                        env_key=env_key,
+                        normalized=ref["normalized"] or None,
+                        value=str(value),
+                    )
+                )
+
+            if unresolved:
+                unresolved_text = ", ".join(sorted(set(unresolved)))
+                raise AgentQueueValidationError(
+                    f"manifest profile secret references could not be resolved: {unresolved_text}"
+                )
+
+        vault_items: list[ManifestSecretVaultValue] = []
+        if payload.include_vault:
+            vault_items = [
+                ManifestSecretVaultValue(
+                    mount=ref["mount"] or None,
+                    path=ref["path"] or None,
+                    field=ref["field"] or None,
+                    ref=ref["ref"],
+                )
+                for ref in vault_refs
+            ]
+
+        return ManifestSecretResolutionResponse(
+            profile=profile_items,
+            vault=vault_items,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
 
 
 @router.post("/jobs/{job_id}/complete", response_model=JobModel)

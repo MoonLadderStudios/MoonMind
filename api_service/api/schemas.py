@@ -196,6 +196,18 @@ class ManifestRunRequest(BaseModel):
         return normalized
 
 
+class ManifestStateUpdateRequest(BaseModel):
+    """Request payload for manifest state callback updates."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state_json: dict[str, Any] = Field(..., alias="stateJson")
+    last_run_job_id: Optional[uuid.UUID] = Field(None, alias="lastRunJobId")
+    last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
+    last_run_started_at: Optional[datetime] = Field(None, alias="lastRunStartedAt")
+    last_run_finished_at: Optional[datetime] = Field(None, alias="lastRunFinishedAt")
+
+
 class ManifestRunQueueMetadata(BaseModel):
     """Returned queue metadata after submitting a manifest run."""
 
