@@ -41,6 +41,19 @@ class UpdateQueuedJobRequest(BaseModel):
     note: Optional[str] = Field(None, alias="note", max_length=256)
 
 
+class ResubmitJobRequest(BaseModel):
+    """Request body for terminal task resubmissions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = Field(..., alias="type")
+    priority: int = Field(0, alias="priority")
+    payload: dict[str, Any] = Field(..., alias="payload")
+    affinity_key: Optional[str] = Field(None, alias="affinityKey")
+    max_attempts: int = Field(3, alias="maxAttempts", ge=1)
+    note: Optional[str] = Field(None, alias="note", max_length=256)
+
+
 class ClaimJobRequest(BaseModel):
     """Request body for claiming queue jobs."""
 
@@ -301,6 +314,8 @@ class JobListResponse(BaseModel):
     offset: int = Field(0, alias="offset", ge=0)
     limit: int = Field(0, alias="limit", ge=0)
     has_more: bool = Field(False, alias="hasMore")
+    page_size: int = Field(0, alias="page_size", ge=0)
+    next_cursor: str | None = Field(None, alias="next_cursor")
 
 
 class ArtifactModel(BaseModel):

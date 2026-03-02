@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -29,7 +30,11 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.schemas import QueueSystemMetadataModel
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_auth_manager,
+    get_current_user,
+    get_current_user_optional,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
@@ -52,11 +57,16 @@ from moonmind.schemas.agent_queue_models import (
     JobListResponse,
     JobModel,
     JobWithAttachmentsResponse,
+    ManifestSecretProfileValue,
+    ManifestSecretResolutionRequest,
+    ManifestSecretResolutionResponse,
+    ManifestSecretVaultValue,
     MigrationTelemetryResponse,
     QueueSafeguardJobModel,
     QueueSafeguardResponse,
     RecoverJobRequest,
     RecoverJobResponse,
+    ResubmitJobRequest,
     RevokeTaskRunLiveSessionRequest,
     RuntimeCapabilities,
     TaskRunControlEventModel,
@@ -74,6 +84,8 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
+from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
     AgentArtifactNotFoundError,
@@ -368,6 +380,65 @@ def _summarize_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return summary_payload
 
 
+def _extract_manifest_secret_refs(
+    payload: dict[str, Any] | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return normalized profile/vault secret refs from a manifest queue payload."""
+
+    if not isinstance(payload, dict):
+        return ([], [])
+    refs_obj = payload.get("manifestSecretRefs")
+    if not isinstance(refs_obj, dict):
+        return ([], [])
+
+    profile_refs: list[dict[str, str]] = []
+    seen_profile: set[str] = set()
+    profile_payload = refs_obj.get("profile")
+    if not isinstance(profile_payload, list):
+        profile_payload = []
+    for entry in profile_payload:
+        if not isinstance(entry, dict):
+            continue
+        env_key = str(entry.get("envKey") or "").strip()
+        if not env_key:
+            continue
+        dedupe_key = str(entry.get("normalized") or env_key).strip().lower()
+        if dedupe_key in seen_profile:
+            continue
+        seen_profile.add(dedupe_key)
+        profile_refs.append(
+            {
+                "provider": str(entry.get("provider") or "").strip(),
+                "field": str(entry.get("field") or "").strip(),
+                "envKey": env_key,
+                "normalized": str(entry.get("normalized") or "").strip(),
+            }
+        )
+
+    vault_refs: list[dict[str, str]] = []
+    seen_vault: set[str] = set()
+    vault_payload = refs_obj.get("vault")
+    if not isinstance(vault_payload, list):
+        vault_payload = []
+    for entry in vault_payload:
+        if not isinstance(entry, dict):
+            continue
+        ref = str(entry.get("ref") or "").strip()
+        if not ref or ref in seen_vault:
+            continue
+        seen_vault.add(ref)
+        vault_refs.append(
+            {
+                "mount": str(entry.get("mount") or "").strip(),
+                "path": str(entry.get("path") or "").strip(),
+                "field": str(entry.get("field") or "").strip(),
+                "ref": ref,
+            }
+        )
+
+    return (profile_refs, vault_refs)
+
+
 def _serialize_job_for_list(
     job: models.AgentJob,
     *,
@@ -548,6 +619,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
+        raw_message = str(exc).strip()
         lowered = str(exc).lower()
         if "targetruntime=claude requires anthropic_api_key" in lowered:
             return HTTPException(
@@ -579,6 +651,15 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
+        else:
+            cause = getattr(exc, "__cause__", None)
+            while isinstance(cause, Exception):
+                if isinstance(cause, ManifestContractError):
+                    # Surface actionable manifest contract failures to API clients.
+                    message = raw_message
+                    break
+                cause = getattr(cause, "__cause__", None)
+
         return HTTPException(
             status_code=status_code,
             detail={
@@ -619,6 +700,16 @@ async def create_job(
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
         )
+    except AgentQueueValidationError as exc:
+        if payload.type == MANIFEST_JOB_TYPE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_manifest_job",
+                    "message": str(exc),
+                },
+            ) from exc
+        raise _to_http_exception(exc) from exc
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)
@@ -645,6 +736,37 @@ async def update_queued_job(
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
             expected_updated_at=payload.expected_updated_at,
+            note=payload.note,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_job(job)
+
+
+@router.post(
+    "/jobs/{job_id}/resubmit",
+    response_model=JobModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def resubmit_job(
+    job_id: UUID,
+    payload: ResubmitJobRequest,
+    service: AgentQueueService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> JobModel:
+    """Create a new queued task job from a failed/cancelled source job."""
+
+    try:
+        user_id = getattr(user, "id", None)
+        job = await service.resubmit_job(
+            job_id=job_id,
+            actor_user_id=user_id,
+            actor_is_superuser=bool(getattr(user, "is_superuser", False)),
+            job_type=payload.type,
+            payload=payload.payload,
+            priority=payload.priority,
+            affinity_key=payload.affinity_key,
+            max_attempts=payload.max_attempts,
             note=payload.note,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -799,7 +921,8 @@ async def list_jobs(
     status_filter: Optional[str] = Query(None, alias="status"),
     type_filter: Optional[str] = Query(None, alias="type"),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None, alias="cursor"),
+    offset: int | None = Query(None, ge=0),
     summary: bool = Query(False, alias="summary"),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -819,24 +942,52 @@ async def list_jobs(
                 },
             ) from exc
 
-    try:
-        fetch_limit = limit + 1
-        jobs = await service.list_jobs(
-            status=parsed_status,
-            job_type=type_filter,
-            limit=fetch_limit,
-            offset=offset,
+    cursor_token = str(cursor).strip() if cursor is not None else None
+    if cursor_token == "":
+        cursor_token = None
+    if cursor_token is not None and offset is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_pagination_args",
+                "message": "cursor and offset cannot be used together.",
+            },
         )
+
+    try:
+        if cursor_token is not None or offset is None:
+            page = await service.list_jobs_page(
+                status=parsed_status,
+                job_type=type_filter,
+                limit=limit,
+                cursor=cursor_token,
+            )
+            items = list(page.items)
+            next_cursor = page.next_cursor
+            has_more = next_cursor is not None
+            effective_offset = 0
+        else:
+            fetch_limit = limit + 1
+            jobs = await service.list_jobs(
+                status=parsed_status,
+                job_type=type_filter,
+                limit=fetch_limit,
+                offset=offset,
+            )
+            has_more = len(jobs) > limit
+            items = jobs[:limit]
+            next_cursor = None
+            effective_offset = offset
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
 
-    has_more = len(jobs) > limit
-    items = jobs[:limit]
     return JobListResponse(
         items=[_serialize_job_for_list(job, compact_payload=summary) for job in items],
-        offset=offset,
+        offset=effective_offset,
         limit=limit,
         has_more=has_more,
+        page_size=limit,
+        next_cursor=next_cursor,
     )
 
 
@@ -997,6 +1148,103 @@ async def heartbeat_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(heartbeat_result.job, heartbeat_result.system)
+
+
+@router.post(
+    "/jobs/{job_id}/manifest/secrets",
+    response_model=ManifestSecretResolutionResponse,
+)
+async def resolve_manifest_job_secrets(
+    job_id: UUID,
+    payload: ManifestSecretResolutionRequest,
+    service: AgentQueueService = Depends(_get_service),
+    auth_manager=Depends(get_auth_manager),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> ManifestSecretResolutionResponse:
+    """Resolve manifest profile references for the running, claimed worker job."""
+
+    try:
+        if worker_auth.auth_source != "worker_token" or not worker_auth.worker_id:
+            raise AgentQueueAuthorizationError(
+                "manifest secret resolution requires worker-token authentication"
+            )
+        available_caps = {
+            str(token or "").strip().lower() for token in worker_auth.capabilities
+        }
+        if MANIFEST_JOB_TYPE not in available_caps:
+            raise AgentQueueAuthorizationError(
+                "worker token does not allow manifest secret resolution"
+            )
+
+        job = await service.get_job(job_id)
+        if job is None:
+            raise AgentJobNotFoundError(job_id)
+        if job.type != MANIFEST_JOB_TYPE:
+            raise AgentQueueValidationError(
+                "manifest secret resolution only supports manifest jobs"
+            )
+        if job.status is not models.AgentJobStatus.RUNNING:
+            raise AgentJobStateError(
+                f"Job {job_id} is {job.status.value} and cannot resolve secrets"
+            )
+        if job.claimed_by != worker_auth.worker_id:
+            raise AgentQueueAuthorizationError(
+                f"Job {job_id} is owned by {job.claimed_by or 'none'}"
+            )
+
+        profile_refs, vault_refs = _extract_manifest_secret_refs(job.payload)
+        profile_items: list[ManifestSecretProfileValue] = []
+        unresolved: list[str] = []
+        requester_user = (
+            SimpleNamespace(id=job.requested_by_user_id)
+            if job.requested_by_user_id is not None
+            else None
+        )
+        if payload.include_profile:
+            for ref in profile_refs:
+                env_key = ref["envKey"]
+                value = await auth_manager.get_secret(
+                    "profile",
+                    key=env_key,
+                    user=requester_user,
+                )
+                if not value:
+                    unresolved.append(env_key)
+                    continue
+                profile_items.append(
+                    ManifestSecretProfileValue(
+                        provider=ref["provider"] or None,
+                        field=ref["field"] or None,
+                        env_key=env_key,
+                        normalized=ref["normalized"] or None,
+                        value=str(value),
+                    )
+                )
+
+            if unresolved:
+                unresolved_text = ", ".join(sorted(set(unresolved)))
+                raise AgentQueueValidationError(
+                    f"manifest profile secret references could not be resolved: {unresolved_text}"
+                )
+
+        vault_items: list[ManifestSecretVaultValue] = []
+        if payload.include_vault:
+            vault_items = [
+                ManifestSecretVaultValue(
+                    mount=ref["mount"] or None,
+                    path=ref["path"] or None,
+                    field=ref["field"] or None,
+                    ref=ref["ref"],
+                )
+                for ref in vault_refs
+            ]
+
+        return ManifestSecretResolutionResponse(
+            profile=profile_items,
+            vault=vault_items,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
 
 
 @router.post("/jobs/{job_id}/complete", response_model=JobModel)

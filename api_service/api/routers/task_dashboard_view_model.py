@@ -133,9 +133,10 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         "statusMaps": status_maps(),
         "sources": {
             "queue": {
-                "list": "/api/queue/jobs",
+                "list": "/api/tasks",
                 "create": "/api/queue/jobs",
                 "update": "/api/queue/jobs/{id}",
+                "resubmit": "/api/queue/jobs/{id}/resubmit",
                 "detail": "/api/queue/jobs/{id}",
                 "cancel": "/api/queue/jobs/{id}/cancel",
                 "events": "/api/queue/jobs/{id}/events",

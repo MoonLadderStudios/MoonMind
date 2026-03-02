@@ -1,124 +1,128 @@
-# Feature Specification: Manifest Task System Phase 1
+# Feature Specification: Manifest Task System Phase 1 (Worker Readiness)
 
 **Feature Branch**: `[030-manifest-phase1]`  
-**Created**: February 19, 2026  
-**Status**: Draft  
-**Input**: User description: "Implement Phase 1 of the manifest task system as described in docs/ManifestTaskSystem.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+**Created**: March 1, 2026  
+**Updated**: March 2, 2026  
+**Status**: Active  
+**Input**: User description: "Update specs/030-manifest-phase1 to make it align with the current state and strategy of the MoonMind project. Implement all of the updated tasks when done. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+
+## Strategy Alignment
+
+Phase 0 control-plane work is already present in the repository (manifest queue type, payload normalization, manifest registry CRUD, run submission, and capability-based claim filtering).  
+Phase 1 is therefore narrowed to worker-readiness control-plane surfaces that unblock a dedicated manifest worker without introducing the full `manifest_v0` execution engine in this iteration.  
+As of March 2, 2026, baseline implementations for these Phase 1 surfaces exist in this branch; this spec keeps them in scope as required runtime deliverables and requires validation coverage before phase closure.
 
 ## Source Document Requirements
 
-- **DOC-REQ-001 (ManifestTaskSystem §8.1-§8.2)**: Build the dedicated `moonmind/manifest_v0` package with models, YAML IO, validation, interpolation, secret handling, adapters, transforms, embeddings factory, vector store factory, id policy, state store, engine orchestration, and reports that drive validate → fetch → transform → embed → upsert/delete pipelines.
-- **DOC-REQ-002 (ManifestTaskSystem §8.3)**: Implement the `ReaderAdapter` protocol, including `SourceDocument`, `SourceChange`, and `PlanStats` data contracts so adapters can plan, emit `upsert`/`delete` changes, and checkpoint incremental state.
-- **DOC-REQ-003 (ManifestTaskSystem §8.4)**: Ship the baseline adapters (`GithubRepositoryReaderAdapter`, `GoogleDriveReaderAdapter`, `ConfluenceReaderAdapter`, `SimpleDirectoryReaderAdapter`) and map each to the queue capability tokens described in the doc.
-- **DOC-REQ-004 (ManifestTaskSystem §8.5-§8.6)**: Provide deterministic transform + chunking stages (HTML stripping, splitter, metadata enrichment) that output chunk hashes/doc hashes so unchanged content can be skipped and deletions detected.
-- **DOC-REQ-005 (ManifestTaskSystem §8.7)**: Create an embeddings factory that honors the manifest `embeddings` block, enforces dimension compatibility with the destination collection, and batches work while emitting safe progress events.
-- **DOC-REQ-006 (ManifestTaskSystem §8.8)**: Implement a vector store factory for `vectorStore.type="qdrant"` that can connect via env/profile/vault references, optionally create collections when allowed, and fail fast when collections or distance metrics mismatch expectations.
-- **DOC-REQ-007 (ManifestTaskSystem §8.9)**: Every upserted point must include manifest name, data source id, doc id, doc hash, chunk index, and only allowlisted metadata fields to enforce namespace isolation and leakage prevention.
-- **DOC-REQ-008 (ManifestTaskSystem §8.10)**: Enforce deterministic point IDs, delete-then-upsert semantics for changed documents, delete-by-filter when documents disappear, and respect `forceFull` overrides for complete re-syncs.
-- **DOC-REQ-009 (ManifestTaskSystem §8.11 & §7.1)**: Persist checkpoint state per `(manifest.name, dataSource.id)` inside the manifest registry (`state_json` or companion table) with timestamps so runs resume incrementally after success.
-- **DOC-REQ-010 (ManifestTaskSystem §9.1-§9.2)**: Introduce the `moonmind-manifest-worker` service that only claims `type="manifest"` jobs, validates environment/config (Qdrant reachability, embedding credentials) before processing, and advertises capabilities that cover manifest pipelines.
-- **DOC-REQ-011 (ManifestTaskSystem §9.3-§9.4)**: The worker must emit ordered stage events (`validate`→`plan`→`fetch`→`transform`→`embed`→`upsert`→`finalize`) with counts/timings and upload required artifacts (logs, original/resolved manifests, plan/run summaries, checkpoints, errors) with secret redaction.
-- **DOC-REQ-012 (ManifestTaskSystem §9.5 & §11.1-§11.3)**: Support cancellation requests, finish safe boundaries, acknowledge cancellation, and ensure logs/artifacts never leak raw secrets—only env/profile/vault references.
-- **DOC-REQ-013 (ManifestTaskSystem §6.3-§6.4 & Phase 1 scope)**: Manifest ingestion must accept `inline` and `registry` source kinds (with `path` acceptable for dev/test), respect action modes (`plan` vs `run`), and honor queue-level overrides for `dryRun`, `forceFull`, and `maxDocs` without allowing structural overrides.
+- **DOC-REQ-001 (ManifestTaskSystem §11.2)**: Manifest-capable workers must be able to resolve profile-backed secret references via `POST /api/queue/jobs/{jobId}/manifest/secrets`, while keeping queue payloads token-free.
+- **DOC-REQ-002 (ManifestTaskSystem §11.2)**: Vault references from `manifestSecretRefs.vault` must be returned as pass-through metadata for direct worker-side Vault resolution.
+- **DOC-REQ-003 (ManifestTaskSystem §8.11 & §7.1)**: Workers must be able to persist manifest checkpoint state and run metadata back to the registry through a dedicated state callback endpoint.
+- **DOC-REQ-004 (Runtime intent guard)**: Delivery must include production runtime code changes and automated validation through `./tools/test_unit.sh`.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Execute Declarative Manifest Runs End-to-End (Priority: P1)
+### User Story 1 - Resolve Manifest Secrets at Runtime (Priority: P1)
 
-A manifest operator queues a `manifest` job referencing a v0 YAML definition and expects the manifest worker to validate, fetch sources, transform/chunk, embed, upsert/delete in Qdrant, generate artifacts, and update checkpoints without manual intervention.
+A manifest worker has claimed a running manifest job and needs profile/env-backed credential values plus vault reference metadata without exposing raw secrets in queue payloads.
 
-**Why this priority**: Phase 1’s purpose is to deliver the actual ingestion pipeline; without end-to-end execution the earlier queue plumbing provides no business value.
+**Why this priority**: Without secret resolution, a manifest worker cannot execute authenticated sources/providers safely.
 
-**Independent Test**: Submit a manifest run via `/api/queue/jobs` or `/api/manifests/{name}/runs`, let the manifest worker process it, and verify Qdrant receives deterministic points, checkpoints persist, and artifacts summarize the run.
-
-**Acceptance Scenarios**:
-
-1. **Given** a valid manifest referencing GitHub + Confluence sources, **When** the manifest worker claims the job, **Then** it emits each stage event, uploads plan/run summary artifacts, writes/upserts points with stable IDs, and persists checkpoint state.
-2. **Given** a manifest whose manifest YAML metadata name differs from the payload, **When** the worker validates during `moonmind.manifest.validate`, **Then** it fails fast, produces an error artifact, and leaves Qdrant unchanged.
-
----
-
-### User Story 2 - Incremental Sync with Checkpoints (Priority: P2)
-
-A platform engineer reruns a manifest after documents were updated in the source systems and expects the engine to skip unchanged documents, upsert only modified chunks, and delete entries for removed docs using stored checkpoints.
-
-**Why this priority**: Incremental and idempotent behavior avoids re-embedding entire corpora and makes manifests reliable for production syncs.
-
-**Independent Test**: Run the same manifest twice, modify a single document between runs, and confirm only the affected points are re-embedded while deletions happen when documents disappear or `forceFull` is toggled.
+**Independent Test**: Call `POST /api/queue/jobs/{jobId}/manifest/secrets` for a running, claimed manifest job and verify profile refs resolve to values, vault refs are returned as metadata, and invalid job/auth states fail fast.
 
 **Acceptance Scenarios**:
 
-1. **Given** a prior successful run stored checkpoint hashes, **When** the next run sees identical doc hashes, **Then** the engine skips embedding/upsert work, emits plan stats that show zero changes, and finishes faster.
-2. **Given** a manifest run executed with `forceFull=true`, **When** documents are missing compared to the previous checkpoint, **Then** the engine deletes the stale points and records deletion counts in the run summary artifact.
+1. **Given** a running manifest job with `manifestSecretRefs.profile` and `manifestSecretRefs.vault`, **When** the owning worker requests secret resolution, **Then** the API returns resolved profile values and vault metadata without returning inline manifest YAML.
+2. **Given** a non-manifest job or unclaimed manifest job, **When** the endpoint is called, **Then** the API rejects the request with authorization/state validation errors.
 
 ---
 
-### User Story 3 - Observe and Govern Manifest Runs (Priority: P3)
+### User Story 2 - Persist Manifest Checkpoint State (Priority: P2)
 
-A queue administrator monitors manifest jobs via the existing task dashboard/SSE feed and expects manifest runs to publish detailed stage events, artifact links, and cancellation acknowledgements distinct from codex/gemini jobs.
+A manifest worker needs to persist incremental checkpoint state and final run metadata so later runs can resume from current state.
 
-**Why this priority**: Operators must see whether manifests are progressing, stalled, or cancelled and need artifacts for audits/debugging.
+**Why this priority**: Incremental sync and observability depend on durable state updates in the registry before the full ingestion worker lands.
 
-**Independent Test**: Watch SSE events for a manifest job, cancel the job mid-run, and confirm events include stage transitions, counts, artifact uploads, and a cancellation acknowledgement before the worker stops.
+**Independent Test**: Call `POST /api/manifests/{name}/state` with `stateJson` and run metadata fields, then `GET /api/manifests/{name}` and verify the updated state and timestamps are persisted.
 
 **Acceptance Scenarios**:
 
-1. **Given** a manifest job is mid-`embed`, **When** an admin issues a cancellation via the queue API, **Then** the worker completes the in-flight batch, emits a cancellation event, uploads partial summaries, and acknowledges the cancel request.
-2. **Given** manifest jobs run daily, **When** the admin reviews artifacts, **Then** each run includes `manifest/resolved.yaml` with references redacted plus run summaries listing documents processed, embeddings counts, and deletion totals.
+1. **Given** an existing manifest registry entry, **When** the worker posts checkpoint state, **Then** `state_json`, `state_updated_at`, and `updated_at` are updated.
+2. **Given** run metadata in the callback payload, **When** state is persisted, **Then** `last_run_*` fields are updated consistently for operator visibility.
 
 ---
+
+### User Story 3 - Enforce Worker-Only Secret Access (Priority: P3)
+
+Platform operators need confidence that manifest secret resolution is restricted to manifest-capable workers that own the running job.
+
+**Why this priority**: Secret material must not be retrievable by unrelated workers or non-running jobs.
+
+**Independent Test**: Attempt secret resolution with missing `manifest` capability and with wrong job ownership; verify authorization failures.
+
+**Acceptance Scenarios**:
+
+1. **Given** a worker token without `manifest` capability, **When** it calls the manifest secrets endpoint, **Then** the API returns `403`.
+2. **Given** a manifest job claimed by worker A, **When** worker B requests secrets, **Then** the API rejects the request and does not return any secret values.
 
 ### Edge Cases
 
-- Source adapter returns an unexpected capability token; the engine must reject the manifest before execution so jobs never become unclaimable.
-- Qdrant collection dimension mismatches the manifest embeddings configuration; worker preflight must detect and fail with actionable guidance rather than producing corrupt points.
-- Manifest references a secret via `${ENV_VAR}` that is missing at runtime; worker should halt during validation, emit an error artifact, and never log raw secret placeholders.
-- Registry-backed run references a manifest whose YAML has changed since the job was queued; manifest hash/version stored in payload must let the worker detect drift and optionally warn/abort according to doc guidance.
+- Profile/env secret references are declared but unresolved at runtime; endpoint must fail with a clear validation error listing unresolved keys.
+- Job contains malformed `manifestSecretRefs` payload shape; endpoint must return an empty list for invalid sections rather than crash.
+- State updates target a missing manifest name; endpoint must return 404 without mutating queue data.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001 (DOC-REQ-001)**: Create the `moonmind/manifest_v0` package tree (models, yaml_io, validator, interpolate, secret_refs, readers, transforms, embeddings_factory, vector_store_factory, id_policy, state_store, engine, reports) and wire it into the runtime so manifest jobs can call `engine.plan`/`engine.run` entry points.
-- **FR-002 (DOC-REQ-002)**: Define `SourceDocument`, `SourceChange`, and `PlanStats` dataclasses plus the `ReaderAdapter` protocol, then refactor all adapters to emit deterministic `upsert` or `delete` changes along with checkpoint snapshots.
-- **FR-003 (DOC-REQ-003)**: Implement the four baseline adapters (GitHub repository, Google Drive, Confluence, Simple Directory) with capability labels that match queue derivation rules, ensuring each adapter knows how to load credentials via env/profile/vault references only.
-- **FR-004 (DOC-REQ-004)**: Build deterministic transform pipelines that include HTML stripping, token-based chunking, and metadata enrichment, producing chunk + doc hashes so idempotency logic can skip unchanged data and support deletions.
-- **FR-005 (DOC-REQ-005)**: Develop an embeddings factory that chooses providers/models from the manifest, enforces dimension compatibility with the Qdrant collection, and emits safe progress events for batching and timings.
-- **FR-006 (DOC-REQ-006 & DOC-REQ-013)**: Provide a vector store factory for Qdrant that resolves connections from env/profile/vault refs, optionally creates collections when `allowCreateCollection=true`, validates distance metric + dimensions, and supports inline/registry/path source kinds with respect to action (`plan` vs `run`) and queue overrides (`dryRun`, `forceFull`, `maxDocs`).
-- **FR-007 (DOC-REQ-007)**: Apply metadata allowlists at ingestion time so every point includes manifest + dataSource context, doc identifiers, doc/chunk hashes, and only explicitly allowed metadata fields before upserting into Qdrant.
-- **FR-008 (DOC-REQ-008)**: Implement stable SHA-256 point IDs derived from manifest name, data source, source doc id, chunk index, and embeddings context; delete old points before re-upserting changed docs and delete-by-filter for removed docs.
-- **FR-009 (DOC-REQ-009)**: Store checkpoint state in the manifest registry (`state_json` or sub-table), update it after successful runs, include timestamps, and reload it at run start to drive incremental fetch/delete logic.
-- **FR-010 (DOC-REQ-010)**: Introduce the `moonmind-manifest-worker` executable/service that claims `type="manifest"` jobs, performs preflight checks (Qdrant reachability, embeddings credentials, collection readiness), and uses queue heartbeats consistent with existing worker patterns.
-- **FR-011 (DOC-REQ-011)**: Emit ordered stage events with counts/timings to the queue event stream and upload required artifacts (logs, input/resolved manifests, plan.json, run_summary.json, checkpoint.json, errors.json) with token redaction to keep operators informed.
-- **FR-012 (DOC-REQ-012)**: Honor cancellation requests by exiting at safe boundaries, acknowledging the cancel event, and ensuring logs/artifacts redact secrets and reflect partial completion where applicable.
-- **FR-013 (Runtime intent guard)**: Deliver production runtime code plus automated unit/integration coverage (executed via `./tools/test_unit.sh`) for manifest_v0 packages, adapters, vector + embedding factories, worker orchestration, and cancellation paths so Phase 1 ships with verifiable runtime behavior.
+- **FR-001 (DOC-REQ-001, DOC-REQ-002)**: Ensure a worker-facing endpoint `POST /api/queue/jobs/{jobId}/manifest/secrets` exists in `api_service/api/routers/agent_queue.py` and returns `ManifestSecretResolutionResponse`.
+- **FR-002 (DOC-REQ-001)**: Secret resolution endpoint must only allow worker-token authenticated callers that advertise `manifest` capability.
+- **FR-003 (DOC-REQ-001)**: Secret resolution endpoint must require `job.type == "manifest"`, `job.status == running`, and `job.claimed_by == worker_id` before any secret is resolved.
+- **FR-004 (DOC-REQ-001, DOC-REQ-002)**: For each profile reference, resolve values through `AuthProviderManager.get_secret(provider="profile", key=<envKey>, user=<job requester>)`; return vault references as metadata-only pass-through.
+- **FR-005 (DOC-REQ-003)**: Ensure `ManifestStateUpdateRequest` schema and `POST /api/manifests/{name}/state` route exist and persist `state_json` and `state_updated_at`.
+- **FR-006 (DOC-REQ-003)**: Extend `ManifestsService` with `update_manifest_state(...)` to persist state and optional `last_run_job_id`, `last_run_status`, `last_run_started_at`, and `last_run_finished_at`.
+- **FR-007 (DOC-REQ-004)**: Add/extend unit tests for queue secret resolution endpoint and manifest state persistence paths.
+- **FR-008 (DOC-REQ-004)**: Validate runtime behavior with `./tools/test_unit.sh`.
 
 ### Key Entities *(include if feature involves data)*
 
-- **ManifestV0**: Typed representation of the manifest YAML (metadata, dataSources, transforms, embeddings, vector store, security, run config) consumed by the engine and adapters.
-- **SourceDocument / SourceChange**: Data plane structures emitted by adapters to describe fetched content, document hashes, metadata, and whether the change is an upsert or delete.
-- **CheckpointState**: Serialized per-manifest/dataSource state (timestamps, doc-hash maps, cursors) stored in the registry so incremental runs resume accurately.
-- **ManifestWorkerRunContext**: Aggregates queue payload, derived capabilities, resolved secret references, Qdrant connection, and stage progress for a single job claim.
-- **StageEventPayload**: Structured data sent during `moonmind.manifest.*` events containing stage names, counts, durations, manifest identifiers, and artifact references for observability.
+- **ManifestSecretResolutionRequest**: Worker request flags controlling inclusion of profile and vault secret sections.
+- **ManifestSecretResolutionResponse**: Response envelope containing resolved profile secret values and pass-through vault refs.
+- **ManifestStateUpdateRequest**: Registry callback payload carrying `stateJson` and optional run metadata updates.
+- **ManifestRecord**: Existing registry record whose `state_json`, `state_updated_at`, and `last_run_*` fields are updated during worker callbacks.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: For representative manifests covering all four adapters, 95% of re-runs finish with ≤10% of the embedding workload of the initial run thanks to checkpointed hash comparisons, as verified by automated tests.
-- **SC-002**: Manifest worker emits every required stage event and artifact for at least one happy-path and one failure-path test run, with SSE logs confirming ordered transitions and no missing stages.
-- **SC-003**: Cancellation tests demonstrate the worker acknowledges cancel requests within 10 seconds, stops further Qdrant writes, and uploads partial run summaries describing processed/deleted document counts.
-- **SC-004**: `./tools/test_unit.sh` executes a suite that exercises adapters, embedding/vector factories, checkpoint persistence, worker preflight, and cancellation flows with ≥90% code coverage for the new manifest_v0 + worker modules.
+- **SC-001**: Secret resolution endpoint returns resolved values for profile refs and pass-through vault refs for running/claimed manifest jobs in unit tests.
+- **SC-002**: Secret resolution endpoint rejects at least three invalid states in tests: missing manifest capability, wrong ownership, and non-manifest job type.
+- **SC-003**: State update endpoint persists `state_json` and updates timestamp/run metadata fields for existing manifests in unit tests.
+- **SC-004**: `./tools/test_unit.sh` passes with new and existing tests.
 
 ## Assumptions & Constraints
 
-- Phase 1 builds on Phase 0 queue plumbing and registry APIs, so job type registration and manifest normalization already exist and do not need duplication.
-- Qdrant remains the only supported vector store in this phase; additional stores will be considered in later phases once the v0 engine proves stable.
-- Secrets are always referenced via env/profile/vault tokens; neither queue payloads nor artifacts may contain raw credentials, and workers must fail fast when references cannot be resolved.
-- Runtime code must be validated by running `./tools/test_unit.sh`; no docs-only deliverables satisfy the runtime guard for this feature.
+- This phase intentionally does not ship the full `moonmind/manifest_v0` engine or dedicated `moonmind-manifest-worker` daemon.
+- Queue payloads remain token-free; secret values are only returned to authorized worker-token callers.
+- Existing manifest registry schema columns (`state_json`, `state_updated_at`, `last_run_*`) remain authoritative for callback persistence.
+- Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests.
 
-## Dependencies
+## Prompt B Remediation Status (Step 12/16)
 
-- Existing Agent Queue infrastructure for job submission, heartbeats, cancellation, and artifact upload APIs.
-- Manifest registry schema (`manifest` table + new `state_json` columns) introduced in Phase 0 to persist manifest definitions and checkpoint state.
-- Qdrant deployments accessible from worker environments plus embedding provider credentials (OpenAI, Google, Ollama) configured via env/profile/vault references.
+### CRITICAL/HIGH remediation status
+
+- Runtime-mode requirement coverage is explicit and deterministic across artifacts:
+  - Production runtime code task coverage in `tasks.md`: `T001-T004`, `T006-T007`, `T010`.
+  - Validation task coverage in `tasks.md`: `T005`, `T008-T009`, `T011-T013`.
+- `DOC-REQ-*` coverage is explicit:
+  - Source requirements (`DOC-REQ-001` through `DOC-REQ-004`) are defined in this spec.
+  - Per-`DOC-REQ-*` implementation and validation task mappings are defined in `specs/030-manifest-phase1/contracts/requirements-traceability.md` and mirrored in `tasks.md`.
+
+### MEDIUM/LOW remediation status
+
+- Task descriptions and traceability mappings were normalized to match current runtime file ownership (`moonmind/schemas/agent_queue_models.py` + `api_service/*`) so regeneration remains deterministic.
+- Prompt B runtime scope controls were added to `tasks.md` for auditable runtime-vs-validation gate checks.
+
+### Residual risks
+
+- Dedicated `manifest_v0` execution runtime is intentionally deferred, so worker-readiness APIs can be complete while full manifest execution remains future scope.
+- Secret provider behavior still depends on profile secret availability at runtime; unresolved refs are intentionally fail-fast and require operator remediation of user profile secrets.

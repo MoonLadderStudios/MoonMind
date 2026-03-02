@@ -1,32 +1,46 @@
-# Implementation Plan: Manifest Task System Phase 1
+# Implementation Plan: Manifest Task System Phase 1 (Worker Readiness)
 
-**Branch**: `[030-manifest-phase1]` | **Date**: February 19, 2026 | **Spec**: `specs/030-manifest-phase1/spec.md`
+**Branch**: `030-manifest-phase1` | **Date**: 2026-03-02 | **Spec**: `specs/030-manifest-phase1/spec.md`  
 **Input**: Feature specification from `/specs/030-manifest-phase1/spec.md`
 
 ## Summary
 
-Phase 1 implements the execution half of the manifest task system so queued manifests actually ingest content declaratively. Delivery spans the new `moonmind/manifest_v0` package (models, adapters, transforms, embeddings/vector store factories, id policy, checkpoint/state handling) and the `moonmind-manifest-worker` runtime that claims `type="manifest"` jobs, emits stage events, uploads artifacts, honors cancellations, and redacts secrets. The engine must support inline + registry source kinds, deterministically chunk/embed/upsert/delete documents into Qdrant using manifest-provided embeddings, and persist checkpoint state through the manifest registry so incremental reruns skip unchanged data. Unit/integration tests executed via `./tools/test_unit.sh` will target adapters, factories, state persistence, worker orchestration, cancellation, and artifact/event publication to satisfy the runtime guard.
+Phase 0 control-plane foundations for manifest queue jobs are already in the repository.  
+Phase 1 is narrowed to worker-readiness surfaces: worker-only secret resolution for running claimed manifest jobs, manifest state callback persistence, and validation coverage.  
+Selected orchestration mode is runtime (not docs-only), so completion requires production runtime code paths plus `./tools/test_unit.sh` validation.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 (matching MoonMind services + Celery workers)  
-**Primary Dependencies**: FastAPI, SQLAlchemy, Celery, httpx, PyYAML, Pydantic v2, Qdrant client SDK, selected embedding SDKs (OpenAI, Google Generative AI, Ollama), `tiktoken`/`nltk`-style tokenizers for chunking  
-**Storage**: PostgreSQL `manifest` table (plus new `state_json` fields) for registry + checkpoints, Qdrant vector store for manifests, object storage/artifact bucket for worker reports  
-**Testing**: `./tools/test_unit.sh` (pytest wrapper) for manifests engine + worker, with new unit suites under `tests/unit/manifest_v0`, `tests/unit/agents/manifest_worker`, and contract tests for registry checkpoint updates  
-**Target Platform**: MoonMind API + Celery workers running in Docker/WSL; manifest worker is a Python CLI/daemon deployed as its own service container  
-**Project Type**: Backend services + worker runtime + supporting libraries  
-**Performance Goals**: Manifest runs must stream stage events within <2 s of stage transitions, embed batches sized to keep Qdrant upsert throughput ≥2k chunks/minute on reference manifests, and incremental reruns should avoid >10% redundant embeddings when checkpoints indicate no changes  
-**Constraints**: No raw secrets in payloads/events/artifacts; deterministic point IDs (sha256 of manifest/dataSource/doc/chunk/embedding info); engine limited to `vectorStore.type="qdrant"`; enforcement of `manifest.options` override rules; runtime guard demands production code + automated tests  
-**Scale/Scope**: Expected dozens of manifests covering GitHub/Drive/Confluence/local FS with tens of thousands of documents per run, requiring resumable processing and cancellation-safe batching
+**Language/Version**: Python 3.11  
+**Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async service/repository stack, AuthProviderManager (`profile` + env fallback)  
+**Storage**: PostgreSQL manifest registry (`manifest` table with `state_json`, `state_updated_at`, `last_run_*` fields) and existing agent queue tables  
+**Testing**: `./tools/test_unit.sh`  
+**Target Platform**: MoonMind API service and worker-token authenticated queue clients in Docker/Linux deployment  
+**Project Type**: Backend API + service-layer runtime feature  
+**Performance Goals**: Preserve existing queue/manifest API latency characteristics; add no new long-running operations to request path  
+**Constraints**: Queue payloads remain token-free; secret resolution restricted to manifest-capable owning worker on running jobs; fail fast on unresolved profile refs; keep runtime-vs-docs behavior aligned with runtime mode  
+**Scale/Scope**: Control-plane worker readiness only; excludes `manifest_v0` execution engine and dedicated manifest daemon rollout
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- `.specify/memory/constitution.md` remains an unratified template with placeholder headings, so there are no enforced project-specific principles beyond repository guardrails.
-- Default governance therefore defers to AGENTS security/runtime guardrails (no secrets, runtime deliverables + tests).
+### Pre-Design Gate
 
-**Gate Status**: PASS WITH NOTE — document absence of a ratified constitution and proceed.
+- **I. One-Click Deployment with Smart Defaults**: PASS. No new required services or secrets; additive API/service behavior only.
+- **II. Powerful Runtime Configurability**: PASS. Runtime behavior remains driven by existing worker token + payload contracts; no hidden mode coercion.
+- **III. Modular and Extensible Architecture**: PASS. Changes stay in existing router/schema/service boundaries without cross-module coupling.
+- **IV. Avoid Exclusive Proprietary Vendor Lock-In**: PASS. Secret and state callback contracts remain provider-neutral and portable.
+- **V. Self-Healing by Default**: PASS. State callback persistence enables deterministic resume/checkpoint behavior for worker retries.
+- **VI. Facilitate Continuous Improvement**: PASS. Unit coverage + deterministic error responses improve operator feedback loops.
+- **VII. Spec-Driven Development Is the Source of Truth**: PASS. Plan, research, data model, contracts, quickstart, and tasks remain synchronized to `DOC-REQ-*`.
+- **VIII. Skills Are First-Class and Easy to Add**: PASS. Worker-facing contract changes do not alter skill packaging or execution contracts.
+
+### Post-Design Re-Check
+
+- PASS. Phase 0/1 artifacts (`research.md`, `data-model.md`, `contracts/`, `quickstart.md`) resolve unknowns and preserve scoped runtime behavior.
+- PASS. Runtime-mode guard remains explicit: docs-only completion is invalid for this feature.
+- PASS. No constitution violations require Complexity Tracking exceptions.
 
 ## Project Structure
 
@@ -34,99 +48,103 @@ Phase 1 implements the execution half of the manifest task system so queued mani
 
 ```text
 specs/030-manifest-phase1/
-├── plan.md                       # This file (speckit-plan output)
-├── research.md                   # Phase 0 findings for engine + worker
-├── data-model.md                 # ManifestV0 entities, SourceChange, checkpoints
-├── quickstart.md                 # Runbook for manifest worker + sample run
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
 ├── contracts/
-│   ├── manifest-phase1.openapi.yaml     # Stage event + artifact schema contract
-│   └── requirements-traceability.md     # DOC-REQ ↔ FR mapping
-├── checklists/requirements.md    # From speckit-specify
-└── tasks.md                      # Generated later via speckit-tasks
+│   ├── manifest-phase1.openapi.yaml
+│   └── requirements-traceability.md
+├── checklists/
+│   └── requirements.md
+└── tasks.md
 ```
 
 ### Source Code (repository root)
 
 ```text
-moonmind/
-├── manifest_v0/
-│   ├── __init__.py
-│   ├── models.py                 # ManifestV0 schema + run config parsing
-│   ├── yaml_io.py                # Load/serialize helpers with redaction
-│   ├── validator.py              # Schema + semantic validation
-│   ├── interpolate.py            # Env/profile/vault resolution wrappers
-│   ├── secret_refs.py            # Vault/profile reference parsing + redaction
-│   ├── readers/
-│   │   ├── base.py               # ReaderAdapter protocol + dataclasses
-│   │   ├── github.py
-│   │   ├── google_drive.py
-│   │   ├── confluence.py
-│   │   └── simple_directory.py
-│   ├── transforms/
-│   │   ├── html.py
-│   │   ├── splitter.py
-│   │   └── metadata.py
-│   ├── embeddings_factory.py
-│   ├── vector_store_factory.py
-│   ├── id_policy.py
-│   ├── state_store.py
-│   ├── engine.py                 # plan()/run() orchestration + checkpoints
-│   └── reports.py
-├── agents/
-│   ├── codex_worker/...          # Existing reference implementation
-│   └── manifest_worker/
-│       ├── __init__.py
-│       ├── cli.py                # `poetry run moonmind-manifest-worker`
-│       ├── worker.py             # Queue loop, preflight, cancellation
-│       ├── handlers.py           # Stage execution + artifact upload helpers
-│       └── secret_refs.py        # Shared vault/profile resolution utilities
-└── workflows/agent_queue/
-    ├── manifest_contract.py      # Already created in Phase 0 (reuse for payloads)
-    ├── job_types.py/service.py   # Provide manifest job type + queue orchestration hooks
-    └── repositories.py           # Persist checkpoint state + events from worker
-
 api_service/
-├── api/routers/manifests.py      # Extend to expose checkpoint info + worker artifacts metadata
-├── services/manifests_service.py # Persist `state_json`, `last_run_*` after worker callbacks
-└── schemas/agent_queue_models.py # SSE/event schema additions for manifest stages
-
-moonmind/workflows/agent_queue/manifest_contract.py already exists; Phase 1 will reuse derivatives for worker-run contexts rather than modifying queue submission rules extensively.
+├── api/routers/
+│   ├── agent_queue.py
+│   └── manifests.py
+├── api/schemas.py
+└── services/manifests_service.py
 
 tests/
-├── unit/manifest_v0/             # Engine, adapters, factories, checkpoint tests
-├── unit/agents/test_manifest_worker.py
-├── unit/api/routers/test_manifests_checkpoint.py
-└── unit/workflows/agent_queue/test_manifest_integration.py
+├── unit/api/routers/test_agent_queue.py
+├── unit/api/routers/test_manifests.py
+└── unit/services/test_manifests_service.py
 ```
 
-**Structure Decision**: Mirror the existing `moonmind/manifest` legacy runner by introducing a new `manifest_v0` package dedicated to the declarative pipeline, keeping adapters/transforms modular for future reuse. The manifest worker lives beside the codex worker inside `moonmind/agents/` to share queue loop utilities while remaining specialized (`allowed_types=["manifest"]`). API/service layers only require incremental updates (manifest registry state writes, SSE schemas) rather than large restructures.
+**Structure Decision**: Reuse existing API routers and manifest service boundaries; no new service or schema migration is required for Phase 1.
 
-## Phase 0: Research Plan
+## Phase 0 - Research Summary
 
-1. **Adapter + Reader Contracts** — Validate how existing loaders (`moonmind/manifest/*`) fetch GitHub/Drive/Confluence/local FS data and decide what must change to emit `SourceDocument`/`SourceChange` objects with hashes + metadata. Research required SDKs/ratelimits for each adapter and confirm available test fixtures.
-2. **Transform + Chunking Strategy** — Evaluate open-source HTML stripping/tokenization utilities (BeautifulSoup, `bs4`, `tiktoken`, `langchain` chunkers) to choose deterministic, dependency-light implementations that match the doc’s requirements.
-3. **Embeddings + Vector Store Integration** — Determine how to wrap OpenAI/Gemini/Ollama SDKs to enforce dimension checks before Qdrant upserts and to stream progress events without leaking content; confirm Qdrant Python client usage for delete-by-filter semantics.
-4. **Checkpoint Persistence Model** — Design the structure for `ManifestRecord.state_json` (per dataSource doc-hash map, cursors, timestamps) or decide if a new `manifest_state` table is warranted; confirm transactional semantics when worker writes back state after success.
-5. **Worker Orchestration + Cancellation** — Study the codex worker’s queue loop to understand heartbeat/cancel handling, artifact uploads, SSE event posting, and decide what can be reused vs. rewritten for manifest-specific stages and metrics.
-6. **Security & Secret Resolution** — Evaluate reuse of `moonmind/agests/codex_worker/secret_refs.py` vs. building manifest-specific helpers to ensure env/profile/vault references resolve without exposing raw secrets, especially when generating `manifest/resolved.yaml` artifacts.
+`specs/030-manifest-phase1/research.md` confirms:
 
-## Phase 1: Design Outputs
+1. Secret resolution must be worker-token + capability + ownership gated.
+2. `manifestSecretRefs` is the only lookup contract source; inline manifest parsing is out of scope.
+3. Profile secret resolution should reuse `AuthProviderManager` with requester context.
+4. Worker checkpoint writes should reuse existing registry columns and fail fast on unresolved refs.
 
-- `research.md` — Document outcomes/decisions for adapters, transforms, embeddings/vector store integration, checkpoint schema, worker orchestration, and secret handling.
-- `data-model.md` — Detail ManifestV0 schema, SourceDocument/SourceChange dataclasses, CheckpointState layout, StageEvent payloads, and artifact metadata.
-- `contracts/manifest-phase1.openapi.yaml` — Define REST + SSE schema slices for manifest worker events (`moonmind.manifest.*`), artifact listings, and checkpoint update callbacks.
-- `contracts/requirements-traceability.md` — Map DOC-REQ-001…013 to FR-001…FR-013 with implementation surfaces + validation plans.
-- `quickstart.md` — Provide a runnable guide covering manifest worker bootstrap, submitting a manifest, monitoring events/artifacts, forcing incremental reruns, and cancellation tests.
+## Phase 1 - Design Outputs
 
-## Post-Design Constitution Re-check
+- `data-model.md` defines resolution request/response and state callback entities.
+- `contracts/manifest-phase1.openapi.yaml` captures endpoint contract semantics.
+- `contracts/requirements-traceability.md` maps every `DOC-REQ-*` to implementation and validation surfaces.
+- `quickstart.md` defines deterministic runtime validation flow.
 
-- No constitution updates were introduced; governance remains placeholder-only.
-- The plan continues to honor security + runtime guardrails (no secrets, automated tests required).
+## Implementation Strategy
 
-**Gate Status**: PASS.
+### 1. Secret Resolution Endpoint Hardening
+
+- Keep `POST /api/queue/jobs/{jobId}/manifest/secrets` worker-token only.
+- Enforce `manifest` capability and `job.type == manifest`, `job.status == running`, `job.claimed_by == worker`.
+- Resolve profile refs via `AuthProviderManager`; return vault refs as metadata-only pass-through.
+
+### 2. Manifest State Callback Persistence
+
+- Keep `ManifestStateUpdateRequest` and `POST /api/manifests/{name}/state` as worker callback interface.
+- Persist `state_json`, `state_updated_at`, and optional `last_run_*` fields via `ManifestsService.update_manifest_state(...)`.
+
+### 3. Validation Coverage
+
+- Router tests validate success + denied states for secret resolution.
+- Service/router tests validate state callback persistence and not-found behavior.
+- End-to-end unit gate is `./tools/test_unit.sh`.
+
+### 4. Runtime-vs-Docs Mode Alignment Gate
+
+- Current orchestration intent is runtime implementation.
+- Tasks must retain runtime code + tests; docs/spec-only task sets are non-compliant.
+- Validation scope checks should stay in runtime mode behavior for this feature.
+
+## Prompt B Remediation Application (Step 12/16)
+
+### Completed CRITICAL/HIGH remediations
+
+- Runtime mode scope gate is explicitly satisfied by production runtime code tasks (`T001-T004`, `T006-T007`, `T010`) and validation tasks (`T005`, `T008-T009`, `T011-T013`) in `tasks.md`.
+- `DOC-REQ-*` traceability includes deterministic implementation-task and validation-task mappings for `DOC-REQ-001` through `DOC-REQ-004` in `contracts/requirements-traceability.md`.
+- Cross-artifact determinism is preserved: spec runtime intent, plan constraints, and task execution coverage align without contradictory docs-only scope language.
+
+### Completed MEDIUM/LOW remediations
+
+- Added explicit Prompt B scope controls section in `tasks.md` so runtime and validation expectations stay auditable.
+- Normalized schema ownership references in tasks/traceability to match the current codebase (`moonmind/schemas/agent_queue_models.py` and `api_service/api/schemas.py`).
+
+### Residual risks
+
+- Deferred `manifest_v0` runtime execution remains an integration dependency for future phases.
+- Runtime secret availability still depends on profile provider data quality; unresolved refs intentionally fail fast to protect execution correctness.
+
+## Risks & Mitigations
+
+- **Secret leakage risk**: mitigate with capability + ownership guards and denied-path tests.
+- **Manifest state drift**: mitigate with explicit callback schema and timestamp/run-metadata persistence tests.
+- **Scope creep into full manifest engine**: mitigate by keeping non-goals explicit (`manifest_v0` executor deferred).
 
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| None | N/A | N/A |
+| _None_ | — | — |

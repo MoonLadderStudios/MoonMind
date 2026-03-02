@@ -1,0 +1,177 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Queue Terminal Resubmit API Contract
+  version: 0.1.0
+  description: |
+    Queue API contract for resubmitting eligible terminal task jobs as new queued
+    jobs while preserving source history and lineage audit events.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /api/queue/jobs/{jobId}:
+    get:
+      summary: Fetch one queue job for detail view and prefill mode resolution.
+      operationId: getQueueJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Queue job detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+        '404':
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/queue/jobs/{jobId}/resubmit:
+    post:
+      summary: Create a new queued task job from an eligible failed/cancelled source.
+      operationId: resubmitQueueJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResubmitJobRequest'
+      responses:
+        '201':
+          description: Newly created queued job generated from source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobModel'
+        '400':
+          description: Runtime gate or malformed request context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Authenticated user is not authorized for source job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Source job does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Source job is no longer eligible for resubmit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Resubmit payload failed queue contract validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    ResubmitJobRequest:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          description: Must remain `task` for v1 resubmittable jobs.
+        priority:
+          type: integer
+          default: 0
+        maxAttempts:
+          type: integer
+          minimum: 1
+          default: 3
+        affinityKey:
+          type: string
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true
+          description: Canonical task payload, normalized using create/update rules.
+        note:
+          type: string
+          maxLength: 256
+          nullable: true
+          description: Optional short reason captured in source-job audit payload.
+    JobModel:
+      type: object
+      required:
+        - id
+        - type
+        - status
+        - priority
+        - payload
+        - maxAttempts
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, dead_letter]
+        priority:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+        affinityKey:
+          type: string
+          nullable: true
+        maxAttempts:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - job_not_found
+                - job_not_authorized
+                - job_state_conflict
+                - invalid_queue_payload
+                - claude_runtime_disabled
+                - queue_internal_error
+            message:
+              type: string

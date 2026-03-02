@@ -1,14 +1,12 @@
-# Data Model: Skills-First Workflow Umbrella
+# Data Model: Skills Workflow Alignment Refresh
 
 ## Enum: WorkflowStageName
 
-Canonical stage names used by skills-first orchestration.
+Canonical stage names used by current skills-first workflow task execution.
 
-- `specify`
-- `plan`
-- `tasks`
-- `analyze`
-- `implement`
+- `discover_next_phase`
+- `submit_codex_job`
+- `apply_and_publish`
 
 ## Enum: StageExecutionPath
 
@@ -18,74 +16,104 @@ Execution path for each stage attempt.
 - `direct_fallback`
 - `direct_only`
 
-## Value Object: SkillCatalogEntry
+## Enum: OrchestrationMode
 
-Represents one registered skill option.
+Execution intent selected for the feature/update workflow.
+
+- `runtime`
+- `docs`
+
+## Value Object: StageExecutionMetadata (persisted metadata normalization)
+
+Normalized skill-routing metadata surfaced for each phase.
 
 - **Fields**:
-  - `skill_id` (string)
-  - `supported_stages` (set[WorkflowStageName])
-  - `allowlisted` (bool)
-  - `is_speckit` (bool)
-  - `health_check` (string | null)
+  - `selected_skill` (string | null)
+  - `adapter_id` (string | null)
+  - `execution_path` (`skill` | `direct_fallback` | `direct_only` | null)
+  - `used_skills` (bool | null)
+  - `used_fallback` (bool | null)
+  - `shadow_mode_requested` (bool | null)
 - **Validation rules**:
-  - `skill_id` must be unique.
-  - `supported_stages` cannot be empty.
-  - Non-allowlisted entries cannot be selected for execution.
+  - For legacy Speckit phases, missing `selected_skill` defaults to `speckit`.
+  - If `selected_skill=speckit` and `adapter_id` is missing, default `adapter_id` to `speckit`.
+  - `used_fallback=true` implies `execution_path=direct_fallback` when execution path is present.
 
-## Value Object: WorkflowStageRequest
+## Value Object: SpecAutomationPhaseState (API payload view)
 
-Canonical input to stage execution.
+Normalized API contract for phase details returned by `/api/spec-automation/runs/{run_id}`.
+
+- **Fields**:
+  - `phase` (enum)
+  - `status` (enum)
+  - `attempt` (int >= 1)
+  - `metadata` (object | null)
+  - `selected_skill` (string | null)
+  - `adapter_id` (string | null)
+  - `execution_path` (`StageExecutionPath` | null)
+  - `used_skills` (bool | null)
+  - `used_fallback` (bool | null)
+  - `shadow_mode_requested` (bool | null)
+- **Validation rules**:
+  - API `selected_skill` maps from normalized metadata `selectedSkill`.
+  - API `adapter_id` maps from normalized metadata `adapterId`.
+  - API `execution_path` maps from normalized metadata `executionPath`.
+
+## Value Object: WorkflowStageContract
+
+Canonical stage contract metadata used in `015` documentation.
 
 - **Fields**:
   - `run_id` (UUID)
   - `feature_id` (string)
-  - `stage` (WorkflowStageName)
-  - `requested_skill_id` (string | null)
-  - `payload` (dict)
-  - `metadata` (dict)
-- **Validation rules**:
-  - `run_id`, `feature_id`, and `stage` are required.
-  - If `requested_skill_id` is provided, it must be allowlisted for that stage.
-
-## Value Object: WorkflowStageResult
-
-Canonical stage output independent of provider.
-
-- **Fields**:
-  - `run_id` (UUID)
-  - `stage` (WorkflowStageName)
-  - `selected_skill_id` (string)
-  - `execution_path` (StageExecutionPath)
-  - `status` (`succeeded` | `failed`)
-  - `duration_ms` (int)
+  - `stage` (`WorkflowStageName`)
+  - `skill_execution` (`StageExecutionMetadata`)
   - `artifacts` (list[dict])
-  - `error_message` (string | null)
-- **Validation rules**:
-  - `selected_skill_id` must be populated when `execution_path=skill`.
-  - `duration_ms` must be non-negative.
 
-## Value Object: WorkerStartupProfile
+## Value Object: SharedSkillsWorkspace
 
-Captures worker readiness checks at startup.
+Run-scoped skill materialization footprint shared by Codex and Gemini adapters.
 
 - **Fields**:
-  - `worker_id` (string)
-  - `queues` (list[string])
-  - `speckit_available` (bool)
-  - `codex_preflight_status` (`passed` | `failed`)
-  - `embedding_provider` (string)
-  - `embedding_model` (string)
-  - `ready` (bool)
-  - `failure_reason` (string | null)
+  - `skills_active_path` (string)
+  - `agents_skills_path` (string)
+  - `gemini_skills_path` (string)
+  - `selection_source` (string)
+  - `skills` (list[dict])
 - **Validation rules**:
-  - `ready=true` requires `speckit_available=true` for Codex-capable workers.
-  - If `embedding_provider=google`, credential presence must be validated.
+  - `.agents/skills` and `.gemini/skills` must resolve to the same `skills_active_path`.
+
+## Value Object: WorkerFastPathProfile
+
+Startup profile expected by quickstart and compose contract.
+
+- **Fields**:
+  - `codex_auth_ready` (bool)
+  - `gemini_auth_ready` (bool)
+  - `worker_runtime_mode` (string)
+  - `default_embedding_provider` (string)
+  - `google_embedding_model` (string)
+  - `worker_token_ready` (bool)
+- **Validation rules**:
+  - If `default_embedding_provider=google`, a Google/Gemini API key must be configured.
+
+## Value Object: ImplementationIntentProfile
+
+Feature-level orchestration mode profile used for guardrails in planning/tasks.
+
+- **Fields**:
+  - `orchestration_mode` (`OrchestrationMode`)
+  - `requires_runtime_code` (bool)
+  - `requires_validation_tests` (bool)
+  - `validation_command` (string)
+- **Validation rules**:
+  - `orchestration_mode=runtime` requires `requires_runtime_code=true`.
+  - Runtime mode requires `validation_command=./tools/test_unit.sh`.
 
 ## State Transitions
 
-1. `pending` -> `skill_running` when a stage is dispatched through a selected skill.
-2. `skill_running` -> `succeeded` when skill result succeeds.
-3. `skill_running` -> `fallback_running` when skill fails and fallback is enabled.
-4. `fallback_running` -> `succeeded` when fallback succeeds.
-5. `skill_running` or `fallback_running` -> `failed` when no successful path remains.
+1. `queued` -> `running` when stage execution begins.
+2. `running` -> `skill` path result when adapter execution succeeds.
+3. `running` -> `direct_fallback` when adapter execution fails and fallback is enabled.
+4. `running` -> `direct_only` when skills routing is disabled/canaried out.
+5. `running` -> `failed` on adapter resolution or execution failure without successful fallback.

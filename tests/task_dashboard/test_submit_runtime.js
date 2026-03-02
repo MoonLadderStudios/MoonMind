@@ -508,6 +508,26 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(invalid.jobId, "");
 })();
 
+(function testParseResubmittedFromSearchParam() {
+  assert.strictEqual(typeof helpers.parseResubmittedFromSearchParam, "function");
+  const params = new URLSearchParams(
+    "resubmittedFrom=123e4567-e89b-12d3-a456-426614174000",
+  );
+  const parsed = helpers.parseResubmittedFromSearchParam(params);
+  assert.strictEqual(parsed.provided, true);
+  assert.strictEqual(parsed.jobId, "123e4567-e89b-12d3-a456-426614174000");
+
+  const missing = helpers.parseResubmittedFromSearchParam(new URLSearchParams(""));
+  assert.strictEqual(missing.provided, false);
+  assert.strictEqual(missing.jobId, "");
+
+  const invalid = helpers.parseResubmittedFromSearchParam(
+    new URLSearchParams("resubmittedFrom=../../etc/passwd"),
+  );
+  assert.strictEqual(invalid.provided, true);
+  assert.strictEqual(invalid.jobId, "");
+})();
+
 (function testIsEditableQueuedTaskJob() {
   assert.strictEqual(typeof helpers.isEditableQueuedTaskJob, "function");
   const editable = helpers.isEditableQueuedTaskJob({
@@ -537,6 +557,103 @@ const helpers = loadSubmitRuntimeHelpers();
     startedAt: null,
   });
   assert.strictEqual(wrongStatus, false);
+})();
+
+(function testIsResubmittableTaskJob() {
+  assert.strictEqual(typeof helpers.isResubmittableTaskJob, "function");
+  const failed = helpers.isResubmittableTaskJob({
+    type: "task",
+    status: "failed",
+  });
+  assert.strictEqual(failed, true);
+
+  const cancelled = helpers.isResubmittableTaskJob({
+    type: "task",
+    status: "cancelled",
+  });
+  assert.strictEqual(cancelled, true);
+
+  const queued = helpers.isResubmittableTaskJob({
+    type: "task",
+    status: "queued",
+  });
+  assert.strictEqual(queued, false);
+  const deadLetter = helpers.isResubmittableTaskJob({
+    type: "task",
+    status: "dead_letter",
+  });
+  assert.strictEqual(deadLetter, false);
+
+  const wrongType = helpers.isResubmittableTaskJob({
+    type: "manifest",
+    status: "failed",
+  });
+  assert.strictEqual(wrongType, false);
+})();
+
+(function testResolveQueuePrefillModeFromJob() {
+  assert.strictEqual(typeof helpers.resolveQueuePrefillModeFromJob, "function");
+  const editMode = helpers.resolveQueuePrefillModeFromJob({
+    type: "task",
+    status: "queued",
+    startedAt: null,
+  });
+  assert.strictEqual(editMode, "edit");
+
+  const resubmitMode = helpers.resolveQueuePrefillModeFromJob({
+    type: "task",
+    status: "failed",
+  });
+  assert.strictEqual(resubmitMode, "resubmit");
+
+  const unsupported = helpers.resolveQueuePrefillModeFromJob({
+    type: "task",
+    status: "running",
+  });
+  assert.strictEqual(unsupported, "");
+})();
+
+(function testResolveQueueDetailPrefillAction() {
+  assert.strictEqual(typeof helpers.resolveQueueDetailPrefillAction, "function");
+  const resubmitAction = helpers.resolveQueueDetailPrefillAction({
+    id: "123e4567-e89b-12d3-a456-426614174000",
+    type: "task",
+    status: "failed",
+  });
+  assert.strictEqual(resubmitAction.mode, "resubmit");
+  assert.strictEqual(resubmitAction.label, "Resubmit");
+  assert.strictEqual(
+    resubmitAction.route,
+    "/tasks/queue/new?editJobId=123e4567-e89b-12d3-a456-426614174000",
+  );
+
+  const editAction = helpers.resolveQueueDetailPrefillAction({
+    id: "123e4567-e89b-12d3-a456-426614174001",
+    type: "task",
+    status: "queued",
+    startedAt: null,
+  });
+  assert.strictEqual(editAction.mode, "edit");
+  assert.strictEqual(editAction.label, "Edit");
+})();
+
+(function testResolveQueuePrefillSubmitTarget() {
+  assert.strictEqual(typeof helpers.resolveQueuePrefillSubmitTarget, "function");
+
+  const editTarget = helpers.resolveQueuePrefillSubmitTarget("edit", {
+    update: "/api/queue/jobs/{id}",
+  });
+  assert.strictEqual(editTarget.method, "PUT");
+  assert.strictEqual(editTarget.endpointTemplate, "/api/queue/jobs/{id}");
+
+  const resubmitTarget = helpers.resolveQueuePrefillSubmitTarget("resubmit", {
+    resubmit: "/api/queue/jobs/{id}/resubmit",
+  });
+  assert.strictEqual(resubmitTarget.method, "POST");
+  assert.strictEqual(
+    resubmitTarget.endpointTemplate,
+    "/api/queue/jobs/{id}/resubmit",
+  );
 })();
 
 (function testStringifySkillArgsPreservesFailureForUnserializableObjects() {

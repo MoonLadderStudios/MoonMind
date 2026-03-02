@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Manifest Task System Phase 0
+# Specification Quality Checklist: Manifest Phase 0 Rebaseline
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-02-19  
+**Created**: 2026-03-02  
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,5 +31,6 @@
 
 ## Notes
 
-- Reviewed on 2026-02-19 after first draft; no outstanding issues detected.
-- Re-validated on 2026-02-19 following Source Document Requirements + FR-016 updates; checklist remains fully passing.
+- Validated on 2026-03-02 after rebaselining `031-manifest-phase0` to current MoonMind strategy.
+- Runtime-intent guard confirmed in `spec.md`: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+- No clarification blockers remain; spec is ready for `speckit-plan`.

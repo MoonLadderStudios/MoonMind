@@ -178,8 +178,34 @@ class ManifestRunRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    action: Optional[str] = Field("run", alias="action")
+    action: str = Field("run", alias="action")
     options: Optional[ManifestRunOptions] = Field(None, alias="options")
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _validate_action(cls, value: Any) -> str:
+        if value is None:
+            return "run"
+        if not isinstance(value, str):
+            raise ValueError("action must be a string and one of: plan, run")
+        normalized = value.strip().lower()
+        if not normalized:
+            return "run"
+        if normalized not in {"plan", "run"}:
+            raise ValueError("action must be one of: plan, run")
+        return normalized
+
+
+class ManifestStateUpdateRequest(BaseModel):
+    """Request payload for manifest state callback updates."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state_json: dict[str, Any] = Field(..., alias="stateJson")
+    last_run_job_id: Optional[uuid.UUID] = Field(None, alias="lastRunJobId")
+    last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
+    last_run_started_at: Optional[datetime] = Field(None, alias="lastRunStartedAt")
+    last_run_finished_at: Optional[datetime] = Field(None, alias="lastRunFinishedAt")
 
 
 class ManifestRunQueueMetadata(BaseModel):

@@ -81,12 +81,14 @@ function createVmContext() {
     document: documentStub,
     console,
     HTMLInputElement: function HTMLInputElement() {},
+    URLSearchParams,
     setTimeout,
     clearTimeout,
     setInterval,
     clearInterval,
   };
   windowStub.HTMLInputElement = context.HTMLInputElement;
+  windowStub.URLSearchParams = URLSearchParams;
   return context;
 }
 
@@ -113,6 +115,9 @@ const {
   renderProposalLayouts,
   renderProposalActionFeedback,
   filterProposalsByTag,
+  parseQueuePaginationFromSearch,
+  applyQueuePaginationToSearch,
+  resetQueuePaginationState,
 } = helpers;
 
 function createProposalRow(overrides = {}) {
@@ -192,6 +197,56 @@ function createProposalRow(overrides = {}) {
 (function testRenderRowsTableDelegatesToQueueTable() {
   const html = renderRowsTable([createQueueRow()]);
   assert(html.includes("<th>Type</th>"));
+})();
+
+(function testQueuePaginationParsesLimitAndCursorFromUrlQuery() {
+  const parsed = parseQueuePaginationFromSearch("?source=queue&limit=100&cursor=next-token");
+  assert.strictEqual(parsed.limit, 100);
+  assert.strictEqual(parsed.cursor, "next-token");
+
+  const fallback = parseQueuePaginationFromSearch("?limit=999&cursor=   ");
+  assert.strictEqual(fallback.limit, 50);
+  assert.strictEqual(fallback.cursor, null);
+})();
+
+(function testQueuePaginationQuerySyncUpdatesLimitAndCursor() {
+  const nextQuery = applyQueuePaginationToSearch(
+    "source=queue&filterRuntime=codex&cursor=stale",
+    25,
+    "cursor-2",
+  );
+  const nextParams = new URLSearchParams(nextQuery);
+  assert.strictEqual(nextParams.get("source"), "queue");
+  assert.strictEqual(nextParams.get("filterRuntime"), "codex");
+  assert.strictEqual(nextParams.get("limit"), "25");
+  assert.strictEqual(nextParams.get("cursor"), "cursor-2");
+
+  const firstPageQuery = applyQueuePaginationToSearch(nextQuery, 50, null);
+  const firstPageParams = new URLSearchParams(firstPageQuery);
+  assert.strictEqual(firstPageParams.get("limit"), "50");
+  assert.strictEqual(firstPageParams.get("cursor"), null);
+})();
+
+(function testQueuePaginationResetClearsCursorStackForFilterChanges() {
+  const paginationState = {
+    limit: 100,
+    cursor: "cursor-3",
+    cursorStack: ["", "cursor-1", "cursor-2"],
+    nextCursor: "cursor-4",
+    hasMore: true,
+    pageStart: 201,
+    pageEnd: 300,
+  };
+
+  resetQueuePaginationState(paginationState);
+  assert.strictEqual(paginationState.limit, 100);
+  assert.strictEqual(paginationState.cursor, null);
+  assert.strictEqual(Array.isArray(paginationState.cursorStack), true);
+  assert.strictEqual(paginationState.cursorStack.length, 0);
+  assert.strictEqual(paginationState.nextCursor, null);
+  assert.strictEqual(paginationState.hasMore, false);
+  assert.strictEqual(paginationState.pageStart, 0);
+  assert.strictEqual(paginationState.pageEnd, 0);
 })();
 
 (function testRenderQueueCardsRendersOnlyQueueRows() {

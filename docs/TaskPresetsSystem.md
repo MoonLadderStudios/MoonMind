@@ -217,6 +217,7 @@ CLI + MCP usage: same endpoints with service tokens; they use `expand` and merge
 - `task.requiredCapabilities` becomes `union(task-level, template-derived)` before job creation.
 - `task.skill` precedence remains unchanged; steps with explicit `skill` override take priority, others inherit.
 - Task payload includes `appliedStepTemplates` array for observability but workers ignore it.
+- Runtime orchestration presets must not instruct direct commit/push/PR actions; MoonMind wrapper publish stage owns repository publishing behavior.
 
 ## 9. Template Lifecycle and Governance
 
@@ -248,4 +249,3 @@ Rollouts include feature flags (`taskTemplateCatalog.enabled`, `templateSave.ena
 - Should template inputs support validation expressions (regex/min length) beyond current primitives?
 - How should we handle templates that need conditional step inclusion (e.g., optional verification step)? Proposal: add `when` expressions referencing inputs but postpone to v2.
 - Do we allow auto-upgrading tasks when a template version is deprecated? Current stance: no auto-mutation; rely on UI warnings.
-

@@ -388,24 +388,22 @@ class SpecAutomationTaskState(Base):
         if not isinstance(metadata, dict):
             metadata = {}
 
-        selected_skill = metadata.get("selectedSkill")
-        execution_path = metadata.get("executionPath")
+        def _coerce_str(value: Any) -> Optional[str]:
+            if isinstance(value, str):
+                return value.strip() or None
+            return None
+
+        selected_skill = _coerce_str(metadata.get("selectedSkill"))
+        adapter_id = _coerce_str(metadata.get("adapterId"))
+        execution_path = _coerce_str(metadata.get("executionPath"))
         used_skills = metadata.get("usedSkills")
         used_fallback = metadata.get("usedFallback")
         shadow_mode_requested = metadata.get("shadowModeRequested")
 
-        if isinstance(selected_skill, str):
-            selected_skill = selected_skill.strip() or None
-        else:
-            selected_skill = None
-
-        if isinstance(execution_path, str):
-            execution_path = execution_path.strip() or None
-        else:
-            execution_path = None
-
         if selected_skill is None and self.phase.value.startswith("speckit_"):
             selected_skill = "speckit"
+        if adapter_id is None and selected_skill == "speckit":
+            adapter_id = "speckit"
         if execution_path is None and selected_skill == "speckit":
             execution_path = "skill"
 
@@ -425,6 +423,7 @@ class SpecAutomationTaskState(Base):
 
         if (
             selected_skill is None
+            and adapter_id is None
             and execution_path is None
             and used_skills_bool is None
             and used_fallback_bool is None
@@ -434,6 +433,7 @@ class SpecAutomationTaskState(Base):
 
         return {
             "selectedSkill": selected_skill,
+            "adapterId": adapter_id,
             "executionPath": execution_path,
             "usedSkills": used_skills_bool,
             "usedFallback": used_fallback_bool,

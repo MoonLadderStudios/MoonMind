@@ -1,93 +1,124 @@
-# Feature Specification: Manifest Queue Plumbing (Phase 0)
+# Feature Specification: Manifest Queue Alignment and Hardening
 
 **Feature Branch**: `028-manifest-queue`  
 **Created**: 2026-02-19  
-**Status**: Draft  
-**Input**: User description: "Implement Phase 0 of the manifest task system as described in docs/ManifestTaskSystem.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+**Updated**: 2026-03-02  
+**Status**: In Progress  
+**Input**: User description: "Update specs/028-manifest-queue to align with the current MoonMind state/strategy and implement the updated tasks." Runtime scope guard: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Queue Accepts Manifest Jobs (Priority: P1)
+### User Story 1 - Fail-Fast Manifest Run Actions (Priority: P1)
 
-As a platform engineer submitting ingestion runs, I need the Agent Queue API to accept `type="manifest"` jobs with validated payloads so manifest runs can be orchestrated alongside other tasks without manual overrides.
+As an API client submitting manifest runs, I need `/api/manifests/{name}/runs` to reject unsupported `action` values before queue submission so bad requests fail early with deterministic errors.
 
-**Why this priority**: No manifest work can progress unless the queue allows manifest job types with correctly derived capabilities and payload guards.
+**Why this priority**: Fail-fast validation for unsupported runtime input is a current MoonMind compatibility strategy and reduces invalid queue writes.
 
-**Independent Test**: Submit a POST `/api/queue/jobs` request with a valid manifest payload and verify the API persists the job, stores derived capability metadata, and exposes it through queue detail APIs without touching codex/gemini job code paths.
-
-**Acceptance Scenarios**:
-
-1. **Given** `_SUPPORTED_QUEUE_JOB_TYPES` only includes historical job types, **When** the manifest feature is enabled, **Then** the set includes `manifest` and `AgentQueueService.create_job` routes manifest payloads to the manifest normalization path.
-2. **Given** a manifest payload containing YAML and metadata, **When** the API processes it, **Then** it rejects requests where `manifest.name` and `manifest.metadata.name` differ, ensuring point IDs remain deterministic.
-
----
-
-### User Story 2 - API Normalizes Manifest Payloads (Priority: P1)
-
-As an API maintainer, I need a dedicated manifest contract module that validates manifests, derives `requiredCapabilities`, and enforces token-free payload rules so workers only see properly normalized jobs.
-
-**Why this priority**: Without manifest-specific normalization, jobs would leak through task-only validation or allow raw secrets, causing worker claim failures or policy violations.
-
-**Independent Test**: Unit tests import the manifest contract module inside the Agent Queue workflow package, pass sample manifests (`inline` and registry references), and verify the normalized payload adds `manifestHash`, `manifestVersion`, and capability arrays without mutating legacy task submissions.
+**Independent Test**: Build `ManifestRunRequest` payloads with valid and invalid action values and verify only `plan`/`run` are accepted while unsupported values raise validation errors before service submission.
 
 **Acceptance Scenarios**:
 
-1. **Given** manifests referencing multiple data sources, **When** normalization runs, **Then** `derive_required_capabilities` returns `manifest`, embeddings provider capabilities, and per-source capabilities that match Section 6.5 of the contract doc.
-2. **Given** a payload with queue options requesting `dryRun` and `maxDocs`, **When** normalization merges manifest YAML `run` values with `payload.manifest.options`, **Then** only run-control fields are overridden and structural manifest sections remain unchanged.
+1. **Given** an action value of `"run"` or `"plan"`, **When** the API parses the request, **Then** the action is accepted and forwarded to service submission.
+2. **Given** an action value with extra whitespace or mixed case (for example `" PLAN "`), **When** the API parses the request, **Then** the normalized value is accepted as `"plan"`.
+3. **Given** an unsupported action like `"evaluate"`, **When** the API parses the request, **Then** it returns a validation failure and does not call queue submission logic.
 
 ---
 
-### User Story 3 - Manifest Registry CRUD + Run Submission (Priority: P2)
+### User Story 2 - Spec Artifacts Match Runtime Reality (Priority: P1)
 
-As an operator managing manifests, I need minimal `/api/manifests` endpoints to create, read, and run manifests so I can keep YAML in Postgres and trigger ingestion jobs without filing backend requests.
+As a platform engineer, I need `specs/028-manifest-queue` artifacts to reflect the real implementation state so planning and onboarding are based on accurate contracts, paths, and behavior.
 
-**Why this priority**: Registry-backed runs unlock reuse/governance, but Phase 0 must at least persist manifests and trigger queue jobs to unblock worker development.
+**Why this priority**: The current runtime already contains Phase 0 manifest queue plumbing plus hardening; stale artifacts create implementation drift and incorrect tasking.
 
-**Independent Test**: `PUT /api/manifests/{name}` accepts YAML, stores hash/version metadata, and `POST /api/manifests/{name}/runs` creates a manifest job referencing the stored content while enforcing the same normalization and validation rules as inline submissions.
+**Independent Test**: Cross-check `spec.md`, `plan.md`, `tasks.md`, `data-model.md`, `contracts/manifests-api.md`, and `quickstart.md` against current code paths and API behavior.
 
 **Acceptance Scenarios**:
 
-1. **Given** the registry already stores a manifest, **When** a user calls `POST /api/manifests/{name}/runs`, **Then** the API fetches the canonical YAML, computes hashes, creates the queue job, and returns the job id for dashboard linking.
-2. **Given** a `GET /api/manifests/{name}` request, **When** the manifest exists, **Then** the response includes YAML, version metadata, last run pointers, and checkpoint state placeholders as described in Section 7.1.
+1. **Given** the current queue runtime, **When** maintainers review artifact file references, **Then** they point to existing paths (`moonmind/workflows/agent_queue/*`, `api_service/api/routers/manifests.py`, `api_service/services/manifests_service.py`, existing test locations).
+2. **Given** the current API behavior, **When** maintainers read the manifests contract doc, **Then** request/response and error semantics align with implementation (including validation failures and response fields).
 
 ---
+
+### User Story 3 - Regression Coverage for Alignment Rules (Priority: P2)
+
+As a maintainer, I need focused unit coverage for the new action validation rule so future changes do not reintroduce permissive behavior.
+
+**Why this priority**: Runtime hardening must be protected by automated tests that execute in the project-standard test wrapper.
+
+**Independent Test**: Run `./tools/test_unit.sh` and confirm tests assert action normalization/defaulting and unsupported action rejection.
+
+**Acceptance Scenarios**:
+
+1. **Given** valid and default action payloads, **When** schema tests run, **Then** normalization/default behavior remains deterministic.
+2. **Given** unsupported action payloads, **When** schema tests run, **Then** validation fails with a message listing supported values.
 
 ### Edge Cases
 
-- What happens when a manifest references capabilities that no worker advertises? The manifest contract must still derive capabilities and queue submissions SHOULD succeed, but operators need a validation warning (event and response) that jobs will remain unclaimed unless a worker advertises matching capabilities.
-- How does the API handle malformed or mismatched manifests (e.g., YAML without `metadata.name` or payload name mismatch)? Requests are rejected with descriptive validation errors before jobs are enqueued.
-- What happens when registry YAML changes between submission and run start? Phase 0 stores `manifestHash` and `manifestVersion` alongside each job so workers detect drift; future phases can add invalidation hooks.
+- `action` omitted from `/api/manifests/{name}/runs` requests should continue defaulting to `run`.
+- Whitespace-only or non-string action inputs should fail validation rather than silently coercing to an unsupported value.
+- Existing manifest normalization (hashing, capabilities, secret-reference extraction, payload sanitization) must remain unchanged by this hardening.
 
 ### Dependencies & Assumptions
 
-- The existing Agent Queue service, authentication, and artifact subsystems remain available; Phase 0 extends them without replacing current task functionality.
-- The `manifest` Postgres table already exists from legacy manifest sync services and can be extended without destructive migrations.
-- Worker implementations (Phase 1) are out of scope but will rely on the metadata and capabilities produced here, so payload contracts must be forward-compatible.
+- Existing manifest queue and registry plumbing remains in place and is not being redesigned in this update.
+- Runtime validation work is limited to request-shape hardening; queue payload normalization remains owned by `manifest_contract` and `AgentQueueService`.
+- Unit tests are executed through `./tools/test_unit.sh` per repository policy.
+- This feature remains runtime-intent; documentation updates alone are insufficient without corresponding production code and validation test changes.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: Update the Agent Queue allowlist so `manifest` is treated as a first-class job type, and ensure `AgentQueueService.create_job` routes manifest jobs through manifest-specific normalization without impacting existing types.
-- **FR-002**: Create an Agent Queue manifest contract module containing `ManifestContractError`, `normalize_manifest_job_payload()`, and `derive_required_capabilities()` as defined in docs/ManifestTaskSystem.md Section 6.
-- **FR-003**: Manifest normalization MUST enforce token-free payloads, verify `payload.manifest.name` matches YAML `metadata.name`, compute `manifestHash`, determine `manifestVersion`, and merge run-control options according to Section 6.2.3.
-- **FR-004**: Extend `AgentQueueService` so `create_job()` uses the manifest contract to derive `requiredCapabilities` (including data sources, embeddings provider, vector store, `manifest`) and persists results alongside the queue job record.
-- **FR-005**: Add `/api/manifests` endpoints: `GET /api/manifests`, `GET /api/manifests/{name}`, `PUT /api/manifests/{name}`, and `POST /api/manifests/{name}/runs`, wired into the existing FastAPI layer with input validation, hashing, and linkage to queue jobs.
-- **FR-006**: Ensure registry endpoints update `ManifestRecord` columns (`version`, `content_hash`, `last_run_job_id`, timestamps, `state_json`) without data loss and return metadata needed for operators to inspect manifest health.
-- **FR-007**: Provide unit tests covering manifest job creation, capability derivation, registry CRUD, and error paths so regression detection runs through `./tools/test_unit.sh`.
+- **FR-001**: Refresh `specs/028-manifest-queue` artifacts so they match current implementation structure, behavior, and strategy. *(Maps: DOC-REQ-002)*
+- **FR-002**: Manifest run request parsing MUST accept only `action` values `plan` or `run`, with normalized lowercase output. *(Maps: DOC-REQ-001)*
+- **FR-003**: Unsupported manifest run `action` values MUST fail before queue submission logic executes. *(Maps: DOC-REQ-001)*
+- **FR-004**: Existing manifest queue normalization behavior (`manifestHash`, `manifestVersion`, derived capabilities, secret reference handling, payload sanitization) MUST remain backward compatible. *(Maps: DOC-REQ-005)*
+- **FR-005**: Add or update automated tests validating action defaulting, normalization, and rejection paths, and execute them via `./tools/test_unit.sh`. *(Maps: DOC-REQ-003, DOC-REQ-004)*
+- **FR-006**: Required deliverables MUST include production runtime code changes (not docs/spec-only) plus validation tests. *(Maps: DOC-REQ-004)*
+
+## Source Document Requirements
+
+| ID | Source | Requirement | Functional Requirement Mapping |
+|----|--------|-------------|--------------------------------|
+| DOC-REQ-001 | `docs/ManifestTaskSystem.md` §6.4 | Manifest actions for queue-backed runs must remain fail-fast and limited to supported values (`plan`, `run`) in this project phase. | FR-002, FR-003 |
+| DOC-REQ-002 | `.specify/memory/constitution.md` Principle VII | Spec artifacts must stay aligned with implementation reality; if behavior changes, update `spec.md`, `plan.md`, and `tasks.md`. | FR-001 |
+| DOC-REQ-003 | `AGENTS.md` Testing Instructions | Unit validation must run through `./tools/test_unit.sh` (not direct `pytest`) so CI/local behavior stays consistent. | FR-005 |
+| DOC-REQ-004 | Runtime scope guard in feature input | Deliverables must include production runtime changes plus validation tests; docs-only updates are insufficient. | FR-005, FR-006 |
+| DOC-REQ-005 | `docs/ManifestTaskSystem.md` §6.6 | Manifest queue metadata/normalization semantics (`manifestHash`, `manifestVersion`, capabilities, secret-hygiene outputs) must remain compatible while hardening request validation. | FR-004 |
 
 ### Key Entities *(include if feature involves data)*
 
-- **ManifestJobPayload**: JSON structure accepted by `/api/queue/jobs` when `type="manifest"`; contains manifest YAML/source info, options overrides, `manifestHash`, `manifestVersion`, and derived capabilities.
-- **ManifestContract**: Manifest-specific validation layer responsible for hashing, capability derivation, name enforcement, and allowed overrides inside the Agent Queue workflow package.
-- **ManifestRecord**: Postgres model storing manifest YAML, version/hash metadata, last run references, and checkpoint state fields used by registry endpoints.
-- **Agent Queue Job**: Database entry representing work items; now includes manifest job rows with `type="manifest"`, derived capabilities, and manifest-specific payload metadata so workers can claim runs.
+- **ManifestRunRequest**: API request model for `POST /api/manifests/{name}/runs`; now explicitly constrained to supported actions.
+- **ManifestRunResponse**: API response containing queue metadata (`type`, `requiredCapabilities`, `manifestHash`) and job identifier.
+- **ManifestQueuePayload**: Persisted queue payload generated by `normalize_manifest_job_payload`; unchanged by this feature except for upstream request hardening.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: Creating a manifest via `PUT /api/manifests/{name}` followed by `POST /api/manifests/{name}/runs` results in a persisted queue job whose payload contains normalized manifest fields (`manifestHash`, `requiredCapabilities`, version) and the job appears in queue listings under the manifest category.
-- **SC-002**: Direct `POST /api/queue/jobs` submissions with `type="manifest"` pass validation only when payload name and YAML name match, and they expose derived capabilities identical to `derive_required_capabilities()` test fixtures.
-- **SC-003**: Automated tests executed via `./tools/test_unit.sh` cover manifest job normalization, allowed options precedence, registry CRUD, and rejection paths, demonstrating runtime code plus validation tests are present.
-- **SC-004**: Queue detail APIs and generated artifacts expose manifest metadata without raw secrets, evidenced by payload snapshots or tests verifying token-free normalization.
+- **SC-001**: `specs/028-manifest-queue` artifacts no longer reference stale paths/contracts and are internally consistent.
+- **SC-002**: Invalid action values for manifest run requests are rejected at schema validation time and do not reach queue submission.
+- **SC-003**: Valid action values (`plan`, `run`) and default action behavior remain functional and covered by automated tests.
+- **SC-004**: `./tools/test_unit.sh` runs with updated runtime + test changes and reports no manifest-scope regressions (any unrelated failures are explicitly documented).
+- **SC-005**: Final deliverables include both production runtime behavior updates and validation tests, not specification changes alone.
+
+## Prompt B Remediation Status (Step 12/16)
+
+### CRITICAL/HIGH remediation status
+
+- Runtime-mode scope coverage is explicit in `tasks.md`:
+  - Production runtime implementation tasks: `T010`, `T011`, `T023`.
+  - Runtime validation tasks: `T012`, `T024`, `T025`.
+- `DOC-REQ-*` coverage remains deterministic:
+  - Every `DOC-REQ-001` through `DOC-REQ-005` maps to implementation + validation tasks in `tasks.md`.
+  - `contracts/requirements-traceability.md` mirrors those mappings with implementation surfaces and validation strategy.
+
+### MEDIUM/LOW remediation status
+
+- Prompt B scope controls were added to `tasks.md` so runtime and `DOC-REQ-*` gates remain visible before implementation.
+- User Story 3 task grouping now keeps execution validation (`T024`) in test coverage, improving deterministic ordering.
+
+### Residual risks
+
+- Manifest queue compatibility can still regress if downstream payload-shape changes bypass `manifest_contract` coverage.
+- Cross-artifact drift can recur in future edits unless `T020`, `T025`, and `T026` are run and recorded each cycle.
