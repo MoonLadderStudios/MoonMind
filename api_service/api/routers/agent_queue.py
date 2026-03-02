@@ -584,13 +584,13 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             message = "Artifact file is missing from storage."
         else:
             cause = getattr(exc, "__cause__", None)
-            while isinstance(cause, Exception) and cause is not None:
+            while isinstance(cause, Exception):
                 if isinstance(cause, ManifestContractError):
                     # Surface actionable manifest contract failures to API clients.
                     message = raw_message
                     break
                 cause = getattr(cause, "__cause__", None)
-        
+
         return HTTPException(
             status_code=status_code,
             detail={
