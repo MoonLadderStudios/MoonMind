@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Manifest Queue Phase 0
+# Specification Quality Checklist: Manifest Queue Alignment and Hardening
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: February 19, 2026
-**Feature**: specs/029-manifest-phase0/spec.md
+**Purpose**: Validate specification completeness and quality before implementation and remediation  
+**Created**: 2026-03-02  
+**Feature**: specs/028-manifest-queue/spec.md
 
 ## Content Quality
 
@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Revalidated on March 2, 2026 after adding explicit runtime scope guard language requiring production code changes plus validation tests.
+Validated against runtime-intent guard requiring production code changes plus validation tests; no clarification markers remain.
