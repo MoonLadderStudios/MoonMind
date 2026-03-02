@@ -1260,30 +1260,17 @@ def test_list_jobs_includes_cursor_metadata_for_default_path(
     )
 
 
-def test_list_jobs_clamps_limit_for_cursor_path(
+def test_list_jobs_rejects_limit_above_max(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """Cursor list path should clamp oversized limits instead of scanning full table."""
+    """Requesting cursor list limits above the upper bound should fail validation."""
 
     test_client, service = client
-    service.list_jobs_page.return_value = QueueJobPage(
-        items=tuple(),
-        page_size=200,
-        next_cursor=None,
-    )
-
     response = test_client.get("/api/queue/jobs?limit=999")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["limit"] == 200
-    assert body["page_size"] == 200
-    service.list_jobs_page.assert_awaited_once_with(
-        status=None,
-        job_type=None,
-        limit=200,
-        cursor=None,
-    )
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
 
 
 def test_list_jobs_forwards_cursor_token(
@@ -1316,6 +1303,19 @@ def test_list_jobs_rejects_cursor_with_offset(
 
     test_client, service = client
     response = test_client.get("/api/queue/jobs?cursor=abc&offset=50")
+
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
+
+
+def test_list_jobs_rejects_cursor_with_zero_offset(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Explicitly provided zero-offset is still incompatible with cursor mode."""
+
+    test_client, service = client
+    response = test_client.get("/api/queue/jobs?cursor=abc&offset=0")
 
     assert response.status_code == 422
     service.list_jobs.assert_not_awaited()

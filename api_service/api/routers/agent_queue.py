@@ -798,9 +798,9 @@ async def list_jobs(
     *,
     status_filter: Optional[str] = Query(None, alias="status"),
     type_filter: Optional[str] = Query(None, alias="type"),
-    limit: int = Query(50),
+    limit: int = Query(50, ge=1, le=200),
     cursor: str | None = Query(None, alias="cursor"),
-    offset: int = Query(0, ge=0),
+    offset: int | None = Query(None, ge=0),
     summary: bool = Query(False, alias="summary"),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -820,11 +820,10 @@ async def list_jobs(
                 },
             ) from exc
 
-    page_size = max(1, min(int(limit), 200))
     cursor_token = str(cursor).strip() if cursor is not None else None
     if cursor_token == "":
         cursor_token = None
-    if cursor_token is not None and offset > 0:
+    if cursor_token is not None and offset is not None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -834,11 +833,11 @@ async def list_jobs(
         )
 
     try:
-        if cursor_token is not None or offset == 0:
+        if cursor_token is not None or offset is None:
             page = await service.list_jobs_page(
                 status=parsed_status,
                 job_type=type_filter,
-                limit=page_size,
+                limit=limit,
                 cursor=cursor_token,
             )
             items = list(page.items)
@@ -846,15 +845,15 @@ async def list_jobs(
             has_more = next_cursor is not None
             effective_offset = 0
         else:
-            fetch_limit = page_size + 1
+            fetch_limit = limit + 1
             jobs = await service.list_jobs(
                 status=parsed_status,
                 job_type=type_filter,
                 limit=fetch_limit,
                 offset=offset,
             )
-            has_more = len(jobs) > page_size
-            items = jobs[:page_size]
+            has_more = len(jobs) > limit
+            items = jobs[:limit]
             next_cursor = None
             effective_offset = offset
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -863,9 +862,9 @@ async def list_jobs(
     return JobListResponse(
         items=[_serialize_job_for_list(job, compact_payload=summary) for job in items],
         offset=effective_offset,
-        limit=page_size,
+        limit=limit,
         has_more=has_more,
-        page_size=page_size,
+        page_size=limit,
         next_cursor=next_cursor,
     )
 

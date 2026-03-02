@@ -185,22 +185,27 @@ def test_tasks_api_alias_returns_queue_list_shape(client: TestClient) -> None:
     assert body["next_cursor"] is None
 
 
-def test_tasks_api_alias_forwards_cursor_and_clamped_limit() -> None:
+def test_tasks_api_alias_rejects_cursor_with_offset_above_limit() -> None:
     with _client_with_mock_service() as (test_client, service):
         response = test_client.get("/api/tasks?limit=999&cursor=opaque123")
 
-    assert response.status_code == 200
-    service.list_jobs_page.assert_awaited_once_with(
-        status=None,
-        job_type=None,
-        limit=200,
-        cursor="opaque123",
-    )
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
 
 
 def test_tasks_api_alias_rejects_cursor_with_offset() -> None:
     with _client_with_mock_service() as (test_client, service):
         response = test_client.get("/api/tasks?cursor=opaque&offset=5")
+
+    assert response.status_code == 422
+    service.list_jobs.assert_not_awaited()
+    service.list_jobs_page.assert_not_awaited()
+
+
+def test_tasks_api_alias_rejects_cursor_with_zero_offset() -> None:
+    with _client_with_mock_service() as (test_client, service):
+        response = test_client.get("/api/tasks?cursor=opaque&offset=0")
 
     assert response.status_code == 422
     service.list_jobs.assert_not_awaited()
