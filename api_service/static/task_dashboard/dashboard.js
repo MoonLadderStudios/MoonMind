@@ -476,7 +476,7 @@
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const ACTIVE_QUEUE_FETCH_LIMIT = 50;
   const ACTIVE_ORCHESTRATOR_FETCH_LIMIT = 50;
-  const QUEUE_PAGE_SIZE_OPTIONS = [20, 50];
+  const QUEUE_PAGE_SIZE_OPTIONS = [20, 25, 50, 100];
   const DEFAULT_QUEUE_PAGE_SIZE = 50;
   const pollers = [];
   const disposers = [];
@@ -2762,7 +2762,12 @@
       resolveSubmitRuntime,
       isWorkerSubmitRuntime,
       parseEditJobSearchParam,
+      parseResubmittedFromSearchParam,
+      isResubmittableTaskJob,
       isEditableQueuedTaskJob,
+      resolveQueuePrefillModeFromJob,
+      resolveQueueDetailPrefillAction,
+      resolveQueuePrefillSubmitTarget,
       normalizeOrchestratorPriority,
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
@@ -6995,7 +7000,7 @@
 
     const loadDetail = async () => {
       try {
-        const [job, artifactsPayload, attachmentsPayload] = await Promise.all([
+        const detailResults = await Promise.allSettled([
           fetchJson(endpoint("/api/queue/jobs/{id}", { id: jobId })),
           fetchJson(endpoint("/api/queue/jobs/{id}/artifacts", { id: jobId })),
           fetchJson(
@@ -7005,6 +7010,17 @@
             ),
           ),
         ]);
+        const [jobResult, artifactsResult, attachmentsResult] = detailResults;
+        if (jobResult.status === "rejected" || artifactsResult.status === "rejected") {
+          const error =
+            jobResult.status === "rejected"
+              ? jobResult.reason
+              : artifactsResult.reason;
+          throw error;
+        }
+
+        const jobPayload = jobResult.value;
+        const artifactsPayload = artifactsResult.value;
         let liveSession = null;
         let liveSessionError = null;
         let liveSessionRouteMissing = false;
@@ -7027,13 +7043,22 @@
             liveSessionError = message || "Live session unavailable.";
           }
         }
-        state.job = job;
+        state.job = jobPayload;
         state.artifacts = artifactsPayload?.items || [];
-        state.attachments = attachmentsPayload?.items || [];
+        if (attachmentsResult.status === "fulfilled") {
+          state.attachments = attachmentsResult.value?.items || [];
+          setDetailNotice("");
+        } else {
+          state.attachments = [];
+          const attachmentError =
+            String(attachmentsResult.reason?.message || "").trim() ||
+            "Unknown attachment load failure";
+          setDetailNotice(`Attachments failed to load: ${attachmentError}`, false);
+          console.warn("queue attachments load failed", attachmentsResult.reason);
+        }
         state.liveSession = liveSession;
         state.liveSessionError = liveSessionError;
         state.liveSessionRouteMissing = liveSessionRouteMissing;
-        setDetailNotice("");
         renderJobSummary();
         renderLiveSession();
         renderArtifacts();
