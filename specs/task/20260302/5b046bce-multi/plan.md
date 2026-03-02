@@ -98,30 +98,6 @@ tests/
 
 **Gate Status (Post-Design)**: PASS.
 
-## Remediation Gates (Prompt B)
-
-- Runtime mode requires production runtime implementation tasks and explicit validation tasks in `tasks.md`; docs-only task sets are invalid for this feature.
-- Each `DOC-REQ-*` requires at least one implementation task and one validation task, with deterministic task-ID mappings kept in `tasks.md` and `contracts/requirements-traceability.md`.
-- Cross-artifact edits must remain deterministic across `spec.md`, `plan.md`, and `tasks.md` to avoid scope drift before implementation.
-
-## Prompt B Remediation Application (Step 12/16)
-
-### Completed CRITICAL/HIGH remediations
-
-- Corrected `DOC-REQ-*` task mapping determinism by aligning implementation/validation coverage in `tasks.md` with `contracts/requirements-traceability.md`.
-- Added explicit runtime-scope controls in `tasks.md` so production runtime tasks (`T010`, `T011`, `T023`) and runtime validation tasks (`T012`, `T024`, `T025`) are always auditable.
-- Re-grouped User Story 3 validation execution task `T024` under tests to preserve deterministic ordering (tests/validation before closeout).
-
-### Completed MEDIUM/LOW remediations
-
-- Added explicit Prompt B gate statements in planning artifacts so future task regeneration preserves runtime-intent requirements.
-- Added explicit `DOC-REQ` tags to phase-6 validation/sanity tasks (`T025`, `T026`) to preserve traceability closure.
-
-### Residual risks
-
-- Future changes to manifest queue metadata fields may outpace contract docs unless US3 regression tasks are completed together with traceability updates.
-- Scope creep risk remains if additional manifest execution features are added without updating the runtime scope gate tasks.
-
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
