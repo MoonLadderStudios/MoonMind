@@ -31,4 +31,4 @@
 
 ## Notes
 
-Checklist completed after full spec review; no follow-ups required before speckit-plan.
+Checklist completed after full spec review; runtime scope guard enforced: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."

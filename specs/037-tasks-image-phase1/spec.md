@@ -1,132 +1,148 @@
-# Feature Specification: Tasks Image Attachments Phase 1
+# Feature Specification: Tasks Image Attachments Phase 1 (Runtime Alignment)
 
-**Feature Branch**: `[037-tasks-image-phase1]`  
+**Feature Branch**: `037-tasks-image-phase1`  
 **Created**: 2026-02-23  
+**Updated**: 2026-03-01  
 **Status**: Draft  
-**Input**: User description: "Implement Phase 1 of the Tasks Image System from docs/TasksImageSystem.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
-
-## Source Document Requirements
-
-| ID | Source | Requirement |
-|----|--------|-------------|
-| DOC-REQ-001 | docs/TasksImageSystem.md - Summary & API Design | Task creation must accept PNG/JPEG/WebP attachments via `POST /api/queue/jobs/with-attachments`, allow optional `captions` JSON hints keyed by filename, emit `Attachment uploaded` queue events per file, and only surface the job as claimable after every image persists inside the transaction. |
-| DOC-REQ-002 | docs/TasksImageSystem.md - Data Model & Validation Rules | Attachments must be validated (type whitelist, per-file and total byte limits, count limits, signature sniffing, sanitized filenames) and stored as `AgentJobArtifact` rows under `inputs/<attachmentUuid>/<sanitized_filename>` with digests. |
-| DOC-REQ-003 | docs/TasksImageSystem.md - API Design (List/Download) | Dashboard users and workers require list/download endpoints scoped to `inputs/` artifacts; worker endpoints demand worker-token auth plus an active claim enforced by job status and `claimed_by`. |
-| DOC-REQ-004 | docs/TasksImageSystem.md - Authorization & Storage | The `inputs/` namespace is reserved for user attachments: worker uploads into it are rejected, filenames must prevent traversal, and read access is limited to the job owner or the claiming worker. |
-| DOC-REQ-005 | docs/TasksImageSystem.md - Worker Changes | Workers must extend `QueueApiClient`, download attachments into `repo/.moonmind/inputs`, emit manifest + vision context files, update `artifacts/task_context.json`, and fire `task.attachments.*` events with counts and bytes. |
-| DOC-REQ-006 | docs/TasksImageSystem.md - Prompt Injection | Runtime prompts must inject an `INPUT ATTACHMENTS` block pointing to `.moonmind/attachments_manifest.json` and inlining `image_context.md` before workspace instructions so every runtime consumes derived context. |
-| DOC-REQ-007 | docs/TasksImageSystem.md - Vision Context Generation | A reusable `moonmind/vision` module must expose caption/OCR services governed by `MOONMIND_VISION_*` env vars, default to Gemini (`models/gemini-2.5-flash`), and support an enable flag plus provider/model overrides. |
-| DOC-REQ-008 | docs/TasksImageSystem.md - Tasks Dashboard UI Changes | The dashboard must expose an attachments picker (drag/drop + file list) with validation feedback at creation time and a job-detail attachments panel with preview/download controls. |
-| DOC-REQ-009 | docs/TasksImageSystem.md - Storage Layout | Server artifacts live under `var/artifacts/agent_jobs/<jobId>/inputs/...` and workers store downloads under `.moonmind/inputs` with `.git/info/exclude` defenses so attachments never enter commits. |
-| DOC-REQ-010 | docs/TasksImageSystem.md - Validation & Authorization | Security guardrails must enforce allowed image types, sanitized filenames, size/count caps, prohibition on post-creation uploads, and ownership/worker-token checks while logging upload/download/context events. |
-| DOC-REQ-011 | docs/TasksImageSystem.md - Testing Strategy | Phase 1 requires automated tests covering API validation/auth, integration flows confirming workers receive attachments before execution, and worker tests verifying downloads, `.git/info/exclude`, and prompt context injection. |
+**Input**: User description: "Update `specs/037-tasks-image-phase1` to make it align with the current state and strategy of the MoonMind project. Implement all of the updated tasks when done. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests. Preserve all user-provided constraints."  
+**Implementation Intent**: Runtime implementation. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Submit Tasks With Image Attachments (Priority: P1)
+### User Story 1 - Submit Task With Image Attachments (Priority: P1)
 
-A dashboard user attaches one or more screenshots or design images to a new task so the downstream worker has visual context when the job is claimed.
+As a dashboard user, I can submit a queue task with supported image attachments and trust that the job is not available for claim until attachments are persisted.
 
-**Why this priority**: Without reliable attachment ingest, workers cannot see the visual cues that the customer is trying to convey, so this is the core value driver for the system.
+**Why this priority**: Reliable attachment ingestion is the entry point for all downstream image-aware task execution.
 
-**Independent Test**: Use the dashboard (or a mocked API client) to upload 1-10 PNG/JPEG/WebP files totaling ≤25MB via `POST /api/queue/jobs/with-attachments` and confirm the job appears as queued only after attachments metadata is returned.
+**Independent Test**: Submit queue tasks with supported image files and verify validation, storage, and claimability gating behave correctly.
 
 **Acceptance Scenarios**:
 
-1. **Given** a user selects supported image files within the limit, **When** they submit the task, **Then** the API persists the job plus attachment metadata atomically and the job becomes claimable with attachment counts/sizes visible in the response.
-2. **Given** a user drags in an SVG or oversized file, **When** they attempt to submit, **Then** the UI surfaces a validation error (type or size) without creating or queuing the job.
-3. **Given** a user supplies optional caption hints in the `captions` JSON payload, **When** the request succeeds, **Then** those hints are stored alongside attachment metadata so workers can reference the human-provided descriptions.
+1. **Given** a valid queue task payload with supported image files, **When** the task is created, **Then** attachments are persisted and indexed before the task becomes claimable.
+2. **Given** unsupported or invalid attachment payloads, **When** create is attempted, **Then** the API rejects the request with validation errors and no task is exposed for claim.
 
 ---
 
-### User Story 2 - Worker Prepares Vision Context (Priority: P2)
+### User Story 2 - Worker Consumes Attachments During Prepare (Priority: P1)
 
-A Codex/Gemini/Claude worker automatically downloads attachments, summarizes their contents, and injects that context into the runtime prompt before reasoning about the task.
+As a worker runtime, I need attachment files and generated context artifacts prepared before execution so runtime instructions can use them deterministically.
 
-**Why this priority**: Deterministic download + context generation ensures every worker run has the same visual information, which directly influences output quality and mitigates hallucinations.
+**Why this priority**: Attachment-aware execution requires deterministic local files, metadata, and prompt context.
 
-**Independent Test**: Claim a task with attachments in a staging worker, capture prepare-stage logs, and verify `.moonmind/inputs`, `.moonmind/attachments_manifest.json`, `.moonmind/vision/image_context.md`, and updated `artifacts/task_context.json` are produced before execution starts.
+**Independent Test**: Claim a task with attachments and verify prepare downloads, artifact generation, event emission, and runtime instruction composition.
 
 **Acceptance Scenarios**:
 
-1. **Given** a worker claims a job that has attachments, **When** prepare runs, **Then** each attachment downloads to `.moonmind/inputs/<id>-<filename>`, the manifest lists ids/digests/local paths, and context generation populates captions (or an explicit disabled message).
-2. **Given** `MOONMIND_VISION_CONTEXT_ENABLED` is set to `false`, **When** the prepare stage completes, **Then** the manifest still exists, the prompt injection states that vision context is disabled, and the worker continues without failure.
+1. **Given** a claimed task with persisted attachments, **When** prepare runs, **Then** the worker downloads files into `.moonmind/inputs`, writes a manifest, and renders image context.
+2. **Given** prepare succeeds, **When** execution instructions are composed, **Then** an `INPUT ATTACHMENTS` section is injected before `WORKSPACE` and references generated artifacts.
 
 ---
 
-### User Story 3 - Review Attachments From Job Detail (Priority: P3)
+### User Story 3 - Review Attachments in Queue Detail (Priority: P2)
 
-A task owner can review or download the images they uploaded from the dashboard job detail view to confirm the system preserved their intent.
+As a task owner, I can inspect and download submitted attachments from the queue detail view, including image previews for supported content types.
 
-**Why this priority**: Visibility and auditability reassure users that sensitive images remain intact and accessible only to authorized viewers.
+**Why this priority**: Visibility and retrieval of submitted inputs are needed for debugging, trust, and operator workflows.
 
-**Independent Test**: Open a job detail page that includes attachments, preview the thumbnail modal for at least one image, and download another image while verifying access controls enforce job ownership.
+**Independent Test**: Open queue detail for an attachment-enabled task and verify attachment listing, previews, and download behavior.
 
 **Acceptance Scenarios**:
 
-1. **Given** a job owner opens the attachments panel, **When** they click a thumbnail, **Then** a preview modal renders the sanitized filename plus image and offers a download action.
-2. **Given** a different authenticated user without job ownership attempts to load the attachment URL, **When** the request reaches the API, **Then** it is rejected with an authorization error and no bytes are streamed.
+1. **Given** a queue task owned by the current user, **When** queue detail loads, **Then** attachment metadata and preview/download affordances are shown.
+2. **Given** an unauthorized or non-owner context, **When** attachment endpoints are called, **Then** access is denied by ownership/claim checks.
+
+---
 
 ### Edge Cases
 
-- Multiple attachments share the same original filename; sanitization must keep unique on-disk names while preserving a user-visible label so downloads are disambiguated.
-- Users attempt to upload more than the configured maximum attachment count (e.g., >10); the API returns a precise error indicating the allowed count and no partial uploads are stored.
-- Attachments exceed the total-byte budget; the system calculates the aggregate payload before persistence and rejects the request with guidance on size limits.
-- Worker downloads fail mid-stream; the worker must verify digests, retry idempotently, and emit a failure metric if integrity cannot be re-established before execution.
-- Vision provider credentials are unavailable; prepare completes with a logged warning and instructs the runtime prompt that image context could not be generated instead of silently omitting attachments.
+- Attachment payload exceeds max file size, count, or total size limits.
+- Content-type header and sniffed signature do not match supported image formats.
+- Worker prepare download fails mid-stream; partial local artifacts must not produce successful context generation.
+- Worker or user endpoints are requested for artifacts outside the reserved attachment namespace.
+- Request includes `captions` hints before caption persistence support exists; API must fail-fast with explicit error.
 
 ## Requirements *(mandatory)*
 
+### Source Document Requirements
+
+- **DOC-REQ-001** (Source: `docs/TaskQueueSystem.md`, attachment API section; `docs/TasksImageSystem.md`, API Design): Queue task creation supports multipart image attachments and keeps jobs non-claimable until attachment persistence completes.
+- **DOC-REQ-002** (Source: `docs/TaskQueueSystem.md`, attachment validation/storage section; `docs/TasksImageSystem.md`, Validation Rules): Attachment ingestion enforces supported image types, signature sniffing, and configured size/count limits.
+- **DOC-REQ-003** (Source: `docs/TaskQueueSystem.md`, reserved `inputs/` namespace section; `docs/TasksImageSystem.md`, Data Model/Storage): Attachment artifacts persist under the reserved `inputs/` namespace with deterministic metadata, and worker uploads cannot write into that namespace.
+- **DOC-REQ-004** (Source: `docs/TaskQueueSystem.md`, attachment list/download section; `docs/TasksImageSystem.md`, API Design + Authorization): User and worker attachment list/download APIs enforce owner/active-claim authorization boundaries.
+- **DOC-REQ-005** (Source: `docs/TasksImageSystem.md`, Worker Changes): Worker prepare downloads attachments, writes manifest/context artifacts, records task context attachment summary data, and emits lifecycle events.
+- **DOC-REQ-006** (Source: `docs/TasksImageSystem.md`, Prompt Injection): Runtime instruction composition injects an `INPUT ATTACHMENTS` block before `WORKSPACE`.
+- **DOC-REQ-007** (Source: `docs/TasksImageSystem.md`, Image Context Generation): Vision context generation remains toggleable via runtime settings while preserving deterministic artifact output in prepare flows.
+- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md`, dashboard attachment references; `docs/TasksImageSystem.md`, Tasks Dashboard UI Changes): Dashboard create/detail experiences support attachment upload plus preview/download visibility.
+- **DOC-REQ-009** (Source: `docs/TasksImageSystem.md`, resolved Phase 1 scope): `captions` input remains explicitly deferred in Phase 1 and unsupported payloads fail-fast.
+- **DOC-REQ-010** (Source: task objective provided in this feature request): Completion deliverables include production runtime code changes; docs/spec-only output is insufficient.
+- **DOC-REQ-011** (Source: task objective provided in this feature request): Completion deliverables include validation tests executed via `./tools/test_unit.sh`.
+
 ### Functional Requirements
 
-- **FR-001** (Maps to DOC-REQ-001): The queue API MUST implement `POST /api/queue/jobs/with-attachments`, processing the JSON job payload, optional `captions` hints keyed by filename, and file uploads in a single transaction so no job enters the queue or becomes claimable until each attachment is validated, persisted, and an `Attachment uploaded` queue event fires per file.
-- **FR-002** (Maps to DOC-REQ-003): The system MUST expose attachment list and download endpoints for both dashboard users and workers; worker endpoints MUST require worker-token authentication plus an active claim (`job.status = RUNNING` and `claimed_by` matches the token) and the QueueApiClient MUST mirror these capabilities for all runtimes.
-- **FR-003** (Maps to DOC-REQ-002): Attachment ingestion MUST enforce PNG/JPEG/WebP content types via signature sniffing, sanitize filenames, cap the per-file, per-job, and count limits, compute a SHA-256 digest, and persist the file under `inputs/<attachmentUuid>/<sanitized_filename>` in `AgentJobArtifact` records.
-- **FR-004** (Maps to DOC-REQ-004, DOC-REQ-010): The `inputs/` namespace MUST remain read-only for workers—server-side upload APIs reject any artifact whose name starts with `inputs/`, filenames MUST eliminate traversal characters, and read access MUST be limited to the job owner or the currently claiming worker.
-- **FR-005** (Maps to DOC-REQ-005, DOC-REQ-009): During the worker prepare stage the system MUST download attachment binaries into `repo/.moonmind/inputs`, ensure `.git/info/exclude` ignores `.moonmind/`, and write `repo/.moonmind/attachments_manifest.json` that enumerates ids, filenames, digests, sizes, and local paths.
-- **FR-006** (Maps to DOC-REQ-005, DOC-REQ-011): Workers MUST emit `task.attachments.download.started`, `task.attachments.download.finished`, and `task.attachments.context.generated` events with attachment counts/bytes and provider names, and update `artifacts/task_context.json` under a new `attachments` key summarizing what was downloaded.
-- **FR-007** (Maps to DOC-REQ-007): The platform MUST implement a shared `moonmind/vision` module governed by `MOONMIND_VISION_CONTEXT_ENABLED`, `MOONMIND_VISION_PROVIDER`, `MOONMIND_VISION_MODEL`, `MOONMIND_VISION_MAX_TOKENS`, and `MOONMIND_VISION_OCR_ENABLED`, defaulting to Gemini models while allowing operators to disable or swap providers without code changes.
-- **FR-008** (Maps to DOC-REQ-006): `_compose_step_instruction_for_runtime` (and any equivalent entry point) MUST prepend an `INPUT ATTACHMENTS` block that points to `.moonmind/attachments_manifest.json`, explains where binaries live, and inlines or references `repo/.moonmind/vision/image_context.md` before workspace instructions for Codex, Gemini, and Claude runtimes.
-- **FR-009** (Maps to DOC-REQ-001, DOC-REQ-008): The Tasks Dashboard MUST add an attachments section to the task creation form with drag/drop UX, validation feedback, and progress indicators plus a job-detail panel that lists sanitized filenames, types, sizes, and offers preview/download actions backed by the new endpoints.
-- **FR-010** (Maps to DOC-REQ-009): Attachment storage MUST adhere to the documented layout: artifacts on the server under `var/artifacts/agent_jobs/<jobId>/inputs/...` and worker-local copies under `.moonmind/inputs` and `.moonmind/vision`, ensuring no attachment paths appear in git status diffs.
-- **FR-011** (Maps to DOC-REQ-010): Security controls MUST block uploads after job creation, enforce content-type and size guardrails, reject SVG or other disallowed formats, sanitize filenames deterministically, and audit attachment upload/download/context actions via queue events or logs for later review.
-- **FR-012** (Maps to DOC-REQ-011 + runtime guard): Delivery MUST include production runtime code plus automated validation (unit tests via `./tools/test_unit.sh` and integration/worker tests) that exercise attachment validation, worker downloads, `.moonmind` manifest creation, prompt injection, and access controls, satisfying the runtime scope guard.
+- **FR-001** (`DOC-REQ-001`): Queue task creation MUST support multipart image attachments and MUST keep tasks non-claimable until attachment persistence completes.
+- **FR-002** (`DOC-REQ-002`): Attachment ingestion MUST enforce supported image type checks, signature sniffing, per-file limits, total-size limits, and max-count limits.
+- **FR-003** (`DOC-REQ-003`): Persisted attachment artifacts MUST remain under reserved `inputs/<attachment-id>/<sanitized-filename>` paths with digest, byte-size, and media-type metadata.
+- **FR-004** (`DOC-REQ-003`): Worker artifact upload APIs MUST reject attempts to write into the reserved `inputs/` attachment namespace.
+- **FR-005** (`DOC-REQ-004`): User attachment list/download APIs MUST expose only attachment artifacts and MUST enforce task ownership authorization.
+- **FR-006** (`DOC-REQ-004`): Worker attachment list/download APIs MUST expose only attachment artifacts and MUST enforce active claim ownership for the claiming worker.
+- **FR-007** (`DOC-REQ-005`, `DOC-REQ-007`): Worker prepare MUST download attachments to `.moonmind/inputs`, generate `.moonmind/attachments_manifest.json`, generate `.moonmind/vision/image_context.md`, and record attachment summary data in `task_context.json`.
+- **FR-008** (`DOC-REQ-005`): Worker prepare MUST emit attachment lifecycle events for download start, download finish, and context generation completion.
+- **FR-009** (`DOC-REQ-006`): Runtime instruction composition MUST inject an `INPUT ATTACHMENTS` block before `WORKSPACE`, including references to manifest path, local attachment directory, and generated context.
+- **FR-010** (`DOC-REQ-008`): Dashboard runtime config and UI MUST support attachment upload at task create time plus attachment preview/download in queue detail.
+- **FR-011** (`DOC-REQ-009`): The API MUST fail-fast on unsupported `captions` attachment input until caption persistence is explicitly implemented in a later phase.
+- **FR-012** (`DOC-REQ-010`): Completion deliverables MUST include production runtime code changes across API, worker, and dashboard surfaces; docs-only or spec-only updates are insufficient.
+- **FR-013** (`DOC-REQ-011`): Completion deliverables MUST include validation tests run via `./tools/test_unit.sh` that cover attachment ingestion/authorization, worker prepare artifact generation + prompt ordering, and dashboard attachment visibility flows.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Task Attachment Input Artifact**: Represents each sanitized user image with metadata (id, original filename, sanitized name, content type, digest, size, storage path) stored under the reserved `inputs/` namespace.
-- **Attachment Manifest**: A job-scoped JSON file (`repo/.moonmind/attachments_manifest.json`) capturing attachment metadata, optional `userCaptionHint` strings sourced from the `captions` payload, and local paths that runtimes and diagnostics can consume without hitting the API again.
-- **Image Context Document**: A deterministic markdown file (`repo/.moonmind/vision/image_context.md`) that records safety notices, attachment order, generated captions, and optional OCR text for prompt injection and artifact review.
+- **Attachment Artifact**: Job artifact persisted in the reserved `inputs/` namespace with sanitized filename, digest, size, and content type.
+- **Attachment Manifest**: `.moonmind/attachments_manifest.json` generated during worker prepare with one entry per downloaded attachment.
+- **Vision Context Document**: `.moonmind/vision/image_context.md` generated during worker prepare for runtime prompt guidance.
+- **Attachment-Aware Task Context**: `task_context.json` enrichment that summarizes attachment count and generated artifact paths.
+
+### Assumptions & Dependencies
+
+- Existing queue attachment endpoints and namespace reservation rules remain the canonical integration points.
+- Worker prepare has access to attachment list/download endpoints for claimed jobs.
+- Dashboard queue create/detail screens remain the Phase 1 UX surfaces for attachment workflows.
+- MoonMind compatibility policy remains in force: no hidden compatibility transforms affecting runtime model/effort/publish semantics.
+
+### Non-Goals
+
+- Persisting user-provided `captions` hints from create payloads.
+- Native multimodal provider message APIs for direct image message transport.
+- Provider-backed OCR/caption generation beyond deterministic file/context scaffolding in this phase.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: 100% of validation test runs that submit up to 10 attachments totaling ≤25MB observe the job becoming claimable only after the attachments metadata is present in the response and downloadable by a worker.
-- **SC-002**: 100% of unsupported file types or limit violations are rejected within 1 second at the API boundary with actionable error messages and no partially stored artifacts.
-- **SC-003**: For 100% of worker executions that include attachments, prepare-stage logs show matching download/context events, manifest + context files exist, and prompt payloads include the attachment block before workspace instructions.
-- **SC-004**: Dashboard usability testing demonstrates that attachment previews render and downloads initiate in under 2 seconds for files up to 10MB, and no unauthorized user can retrieve the same assets.
+- **SC-001**: Attachment-enabled task creation enforces validation and persistence gating with zero claimable tasks emitted before attachments persist in validation coverage.
+- **SC-002**: Worker prepare deterministically produces local downloads, manifest, and vision context for attachment-enabled tasks in automated tests.
+- **SC-003**: Runtime instructions include `INPUT ATTACHMENTS` before `WORKSPACE` for attachment-enabled tasks in automated tests.
+- **SC-004**: Dashboard create/detail flows expose attachment upload and preview/download behaviors for authorized users while preventing unauthorized access.
+- **SC-005**: Required validation coverage passes through `./tools/test_unit.sh` after runtime implementation updates.
 
-## Scope Boundaries
+## Prompt B Remediation Status (Step 12/16)
 
-### In Scope
+### CRITICAL/HIGH remediation status
 
-- API, storage, dashboard UI, and worker changes described in docs/TasksImageSystem.md Phase 1.
-- Vision module configuration, feature flags, and manifest/context artifact creation.
-- Instrumentation and queue events related to attachment download/context generation.
-- Automated validation (unit + integration + worker tests) that prove runtime code paths function end-to-end.
+- Runtime-mode coverage is explicit in `tasks.md` with production runtime implementation tasks and required validation tasks listed under Prompt B scope controls.
+- `DOC-REQ-*` traceability now includes deterministic implementation-task and validation-task mappings for `DOC-REQ-001` through `DOC-REQ-011` in `contracts/requirements-traceability.md`.
+- Cross-artifact alignment is explicit: runtime implementation intent in this spec, runtime constraints in `plan.md`, and execution/validation sequencing in `tasks.md` are consistent.
 
-### Out of Scope
+### MEDIUM/LOW remediation status
 
-- Allowing attachment uploads or edits after job creation; users must resubmit if they forget an image.
-- Supporting non-image file types, animated formats beyond GIF (explicitly excluded), or SVG ingestion.
-- Adding new artifact retention policies beyond piggybacking on existing `AgentJobArtifact` cleanup jobs.
-- Native multimodal runtime messaging (Phase 3) or database schema changes for attachment metadata roles.
+- Wording has been normalized across artifacts to keep runtime-first constraints deterministic and avoid docs-only interpretation drift.
 
-## Assumptions & Dependencies
+### Residual risks
 
-- Existing artifact retention jobs continue to clean up both outputs and the new `inputs/` namespace on the same schedule.
-- Workers already export the necessary API keys (Gemini/OpenAI/Anthropic) so the vision module can reuse them without new credential distribution.
-- Dashboard front-end builds can leverage existing file-upload infrastructure (multipart form-data + progress events) to add the attachments section.
-- Worker sandboxes allow outbound HTTPS so attachments can be downloaded from the API artifact store before execution.
-- Queue event consumers and observability pipelines can ingest the new `task.attachments.*` metrics without additional schema changes.
+- The feature spans API, queue service/storage, worker prepare, and dashboard surfaces, so integration defects can still appear until implementation tasks and unit validation tasks are executed.
+- Final validation evidence remains open until `./tools/test_unit.sh` execution is recorded in `quickstart.md`.
+
+## Security & Compatibility Guardrails
+
+- Preserve reserved attachment namespace rules and authorization boundaries; do not widen access scope.
+- Do not introduce compatibility transforms that alter runtime model identifiers, effort values, queue semantics, or publish behavior.
+- Keep `.moonmind/` artifacts local to runtime execution and excluded from repository tracking.

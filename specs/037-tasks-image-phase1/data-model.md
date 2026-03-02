@@ -71,5 +71,5 @@
 | `MOONMIND_VISION_OCR_ENABLED` | `true` | When false, skip OCR subsection but still emit placeholder text. |
 
 ## Traceability Hooks
-- Requirements with prefix `DOC-REQ-*` map to FR-001..FR-012 (see `contracts/requirements-traceability.md`).
+- Requirements with prefix `DOC-REQ-*` map to FR-001..FR-013 (see `contracts/requirements-traceability.md`).
 - Research + plan reference ensures Phase 2 (tasks) can link to the same manifest/context artifacts.

@@ -1,27 +1,101 @@
-# Implementation Plan: Tasks Image Attachments Phase 1
+# Implementation Plan: Tasks Image Attachments Phase 1 (Runtime Alignment)
 
-**Branch**: `037-tasks-image-phase1` | **Date**: 2026-02-23 | **Spec**: `specs/037-tasks-image-phase1/spec.md`  
-**Input**: Feature specification from `/specs/037-tasks-image-phase1/spec.md`
+**Branch**: `037-tasks-image-phase1` | **Date**: 2026-03-01 | **Spec**: `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/spec.md`  
+**Input**: Feature specification from `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/spec.md`
 
 ## Summary
 
-Implement Phase 1 of `docs/TasksImageSystem.md`: queue job creation must atomically persist PNG/JPEG/WebP attachments under the reserved `inputs/` namespace, expose list/download APIs for job owners and claiming workers, and ensure workers download attachments during prepare to produce `.moonmind/inputs`, `.moonmind/attachments_manifest.json`, and `.moonmind/vision/image_context.md`. Prompt payloads for Codex/Gemini/Claude must prepend an `INPUT ATTACHMENTS` block referencing those artifacts, and the Tasks Dashboard must gain attachment pickers plus a job-detail panel. A reusable `moonmind/vision` module governs caption/OCR generation with Gemini defaults and feature flags. Automated tests cover API validation, worker prepare flows, prompt injection, and dashboard UX contracts.
+Align `037-tasks-image-phase1` to the MoonMind runtime strategy by treating this feature as **runtime mode** work, not docs-only work.  
+Plan output preserves already-landed attachment APIs and focuses implementation/verification on remaining runtime surfaces: worker prepare attachment orchestration, prompt injection ordering, dashboard create/detail attachment UX, and required validation execution via `./tools/test_unit.sh`.
+
+## Current-State Assessment
+
+### Already Present in Repository
+
+- Queue/service attachment ingestion and validation flow for create-with-attachments.
+- User and worker attachment list/download endpoints with authorization checks.
+- Reserved `inputs/` namespace protections for attachment artifacts.
+- Vision settings/config surface in runtime settings.
+
+### Runtime Alignment Focus for This Feature
+
+- Worker prepare-stage download pipeline (`.moonmind/inputs`, manifest, context, events).
+- Runtime instruction composition ordering (`INPUT ATTACHMENTS` before `WORKSPACE`).
+- Dashboard runtime config and UI plumbing for create/detail attachment workflows.
+- Required validation execution via `./tools/test_unit.sh` in completion criteria.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 for API + workers, FastAPI 0.129, SQLAlchemy 2.x, Celery 5.4; TypeScript/ES2022 bundled to vanilla JS for dashboard; TailwindCSS for styling.  
-**Primary Dependencies**: FastAPI upload stack (`UploadFile`, Starlette), SQLAlchemy ORM, Pydantic v2 models, httpx AsyncClient, Docker SDK (worker containers), Node + Tailwind build, StatsD instrumentation.  
-**Storage**: PostgreSQL `agent_jobs` + `agent_job_artifacts`, filesystem artifact root `var/artifacts/agent_jobs/<jobId>/inputs/...`, worker-local `.moonmind/` tree inside repo checkout, RabbitMQ for job dispatch.  
-**Testing**: `./tools/test_unit.sh` (pytest) for API/service/worker/dashboard view models; optional `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` for end-to-end.  
-**Target Platform**: Linux containers (Compose stack) plus local dev shells/WSL.  
-**Project Type**: Backend services + Celery worker + web dashboard bundle.  
-**Performance Goals**: keep attachment upload validation <1 s for ≤25 MB total, worker download manifest creation before runtime start, dashboard preview render <2 s for ≤10MB images.  
-**Constraints**: attachments limited to PNG/JPEG/WebP, enforce sanitized filenames + digest logging, `.moonmind/` excluded from git, prompt injection must precede workspace instructions, instrumentation must emit `task.attachments.*` events.  
-**Scale/Scope**: queue jobs typically carry ≤10 images; features must not regress existing artifact APIs or worker throughput.
+**Language/Version**: Python 3.11 target (repo supports `>=3.10,<3.14`), plus browser JavaScript for dashboard UI  
+**Primary Dependencies**: FastAPI, Pydantic Settings, SQLAlchemy/asyncpg, Celery/RabbitMQ, Starlette streaming responses, Tailwind build pipeline for dashboard CSS  
+**Storage**: PostgreSQL for queue/job metadata; filesystem artifact storage under `var/artifacts/agent_jobs`; local worker runtime artifacts under `.moonmind/`  
+**Testing**: Pytest-based suites executed via `./tools/test_unit.sh` (mandatory wrapper)  
+**Target Platform**: Linux containers via Docker Compose (`api`, `celery-worker`, `rabbitmq`, optional `orchestrator`)  
+**Project Type**: Monorepo backend + static dashboard frontend served by API service  
+**Performance Goals**: Preserve existing queue execution behavior while enforcing deterministic attachment persistence-before-claim and prepare-stage artifact generation  
+**Constraints**: Enforce attachment type/count/size limits; preserve reserved `inputs/` namespace protections; no compatibility transforms affecting runtime model/effort/publish semantics; runtime mode requires production code changes (docs-only is non-compliant)  
+**Scale/Scope**: Phase 1 image attachments only; max attachment count/bytes controlled by `AGENT_JOB_ATTACHMENT_*`; captions explicitly deferred/fail-fast
 
 ## Constitution Check
 
-`.specify/memory/constitution.md` remains a placeholder template with unnamed principles. No enforceable gates can be applied; flagging **NEEDS CLARIFICATION** for governance to define concrete standards. Proceeding under MoonMind runtime guardrails (runtime code + automated tests required) and Spec Kit instructions. Gate re-check after design shows no new conflicts.
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+
+### Pre-Research Gate
+
+- **I. One-Click Deployment with Smart Defaults**: PASS. Feature uses existing compose services and config defaults.
+- **II. Powerful Runtime Configurability**: PASS. Attachment and vision behavior stays env-configured (`AGENT_JOB_ATTACHMENT_*`, `MOONMIND_VISION_*`) with deterministic precedence.
+- **III. Modular and Extensible Architecture**: PASS. Changes remain in existing module boundaries (queue service/router, worker, dashboard view model/UI).
+- **IV. Avoid Exclusive Proprietary Vendor Lock-In**: PASS. Vision path remains provider-configurable and produces portable text/json artifacts.
+- **V. Self-Healing by Default**: PASS. Prepare-stage workflow emits explicit events and keeps deterministic failure behavior on validation/download errors.
+- **VI. Facilitate Continuous Improvement**: PASS. Artifacts/events/logs remain inspectable for operator debugging and follow-up improvements.
+- **VII. Spec-Driven Development Is the Source of Truth**: PASS. `spec.md`, `plan.md`, `tasks.md` and traceability mapping are maintained together.
+- **VIII. Skills Are First-Class and Easy to Add**: PASS. Execution remains skill-driven with explicit artifacts and validation requirements.
+
+### Post-Design Re-Check
+
+- PASS (all principles). No new constitution violations introduced by Phase 0/1 artifacts.  
+- Runtime/docs mode alignment is explicit: feature intent and tasks require runtime code + tests; docs-only completion is rejected.
+
+## Phase 0 Research Output
+
+`research.md` resolves technical questions and records decisions for:
+- attachment storage model under reserved `inputs/` namespace,
+- dedicated user/worker attachment APIs,
+- prepare-stage download + manifest/context generation timing,
+- vision context generation strategy,
+- prompt block ordering (`INPUT ATTACHMENTS` before `WORKSPACE`).
+
+Reference: `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/research.md`
+
+## Phase 1 Design Output
+
+- Data model: `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/data-model.md`
+- API contracts: `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/contracts/attachments.openapi.yaml`
+- Requirements traceability: `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/contracts/requirements-traceability.md`
+- Validation quickstart: `/work/agent_jobs/aadac5e6-61ee-4a2f-80d5-8b6eab40c7d9/repo/specs/037-tasks-image-phase1/quickstart.md`
+
+All `DOC-REQ-*` entries in `spec.md` are mapped and include planned validation.
+
+## Implementation Surface
+
+- `api_service/api/routers/agent_queue.py`
+- `moonmind/workflows/agent_queue/task_contract.py`
+- `moonmind/workflows/agent_queue/service.py`
+- `moonmind/workflows/agent_queue/storage.py`
+- `moonmind/agents/codex_worker/worker.py`
+- `api_service/api/routers/task_dashboard_view_model.py`
+- `api_service/static/task_dashboard/dashboard.js`
+- `moonmind/vision/service.py`
+- `tests/unit/api/routers/test_agent_queue.py`
+- `tests/unit/api/routers/test_agent_queue_artifacts.py`
+- `tests/unit/workflows/agent_queue/test_artifact_storage.py`
+- `tests/unit/agents/codex_worker/test_worker.py`
+- `tests/unit/api/routers/test_task_dashboard_view_model.py`
+
+## Verification Gate
+
+- Mandatory validation command for this feature: `./tools/test_unit.sh`.
+- Runtime-mode completion is blocked until unit coverage for API, worker prepare, prompt ordering, and dashboard attachment behavior is passing via the wrapper script.
 
 ## Project Structure
 
@@ -29,124 +103,59 @@ Implement Phase 1 of `docs/TasksImageSystem.md`: queue job creation must atomica
 
 ```text
 specs/037-tasks-image-phase1/
-├── plan.md                     # This plan
-├── research.md                 # Phase 0 decisions (namespace, API, worker, vision, prompt)
-├── data-model.md               # Entity + artifact layout
-├── quickstart.md               # Validation steps for API, worker, dashboard
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
 ├── contracts/
 │   ├── attachments.openapi.yaml
 │   └── requirements-traceability.md
-└── checklists/ (feature-specific QA if requested later)
+└── tasks.md
 ```
 
-### Source Code + Tests
+### Source Code (repository root)
 
 ```text
 api_service/
-├── api/routers/agent_queue.py          # Multipart create endpoint + list/download APIs
-├── api/routers/task_dashboard.py       # Serve dashboard shell (unchanged wiring)
-├── static/task_dashboard/dashboard.js  # Queue submit UI + job detail attachments panel
-├── templates/task_dashboard.html       # Ensures config injection supports new panel states
+├── api/routers/
+│   ├── agent_queue.py
+│   └── task_dashboard_view_model.py
+└── static/task_dashboard/
+    └── dashboard.js
 
 moonmind/
-├── config/settings.py                  # Attachment + vision env flags
-├── schemas/agent_queue_models.py       # JobWithAttachments DTOs
-├── workflows/agent_queue/
-│   ├── service.py                      # Attachment validation, list/download ACL
-│   └── storage.py                      # Artifact root interactions
 ├── agents/codex_worker/
-│   ├── worker.py                       # Prepare stage downloads, manifest + prompt injection
-│   ├── handlers.py                     # Event emission hooks if needed
-│   └── utils.py                        # Filesystem helpers for `.moonmind`
-├── agents/codex_worker/metrics.py      # `task.attachments.*` counters
-├── agents/codex_worker/cli.py          # Wire new CLI flags if required
-├── vision/                             # NEW module (settings.py, service.py, ocr.py)
-
-docs/TasksImageSystem.md                # Source-of-truth spec referenced throughout
+│   └── worker.py
+├── vision/
+└── workflows/agent_queue/
+    └── service.py
 
 tests/
-├── unit/api/routers/test_agent_queue.py
-├── unit/workflows/agent_queue/test_service_attachments.py
-├── unit/agents/codex_worker/test_worker.py
-├── unit/config/test_settings.py        # env flag overrides
-└── unit/task_dashboard/test_dashboard_attachments.py (new Jest/Playwright-lite harness if needed)
+└── unit/
+    ├── agents/codex_worker/test_worker.py
+    ├── api/routers/test_agent_queue.py
+    └── api/routers/test_task_dashboard_view_model.py
 ```
 
-**Structure Decision**: Build on the existing queue/service layering (schemas → repository/service → router) and keep worker-specific logic confined to `moonmind/agents/codex_worker` plus the new `moonmind/vision` package. Dashboard updates stay in the static JS bundle so no backend template changes are required beyond config exposures already in place.
+**Structure Decision**: Keep the existing MoonMind monorepo layout and implement attachment behavior in existing API/worker/dashboard modules instead of introducing new top-level projects.
 
-## Phase 0: Research Summary
+## Prompt B Remediation Application (Step 12/16)
 
-Phase 0 outputs (`research.md`) resolved:
-1. Attachments reuse `AgentJobArtifact` storage under the reserved `inputs/` prefix; no parallel blob store is introduced.
-2. Dedicated list/download endpoints exist for user + worker contexts to enforce ACL without leaking non-input artifacts.
-3. Worker prepare stage handles download + manifest + context generation before runtime start.
-4. `moonmind/vision` module centralizes caption/OCR with Gemini defaults and feature flags.
-5. Prompt builders prepend a deterministic `INPUT ATTACHMENTS` block before workspace instructions across runtimes.
+### Completed CRITICAL/HIGH remediations
 
-These decisions remove `NEEDS CLARIFICATION` markers, so Phase 1 can focus on implementation details.
+- Added explicit Prompt B runtime scope controls in `tasks.md` so production runtime implementation tasks and validation tasks are auditable before implementation starts.
+- Expanded `contracts/requirements-traceability.md` to include deterministic implementation-task and validation-task mappings for every `DOC-REQ-001` through `DOC-REQ-011`.
+- Aligned implementation surfaces in this plan with the API, workflow service/storage, worker, vision, dashboard, and test modules referenced by the task plan.
 
-## Phase 1: Implementation Blueprint
+### Completed MEDIUM/LOW remediations
 
-### 1. Queue API + Service Hardening
-- `moonmind/config/settings.py`: ensure attachment limit env vars + allowed content types documented; add `MOONMIND_VISION_*` settings (enable flag, provider, model, max tokens, OCR toggle). Extend `WorkflowSettings` validators for tuple parsing + defaults.
-- `moonmind/workflows/agent_queue/service.py`: finalize `create_job_with_attachments` (validate `CANONICAL_TASK_JOB_TYPE`, enforce count/size/digest). Confirm `_persist_attachments` emits queue events and `list/get` methods filter to `_ATTACHMENT_NAMESPACE`. Add logging for rejected namespace usage (FR-004) and TOT bytes. Ensure `_normalize_attachment_upload` uses signature sniffing for PNG/JPEG/WebP.
-- `moonmind/workflows/agent_queue/storage.py`: verify path sanitization and `AgentQueueArtifactStorage.write_artifact` handles `inputs/` directories; add integration tests if missing.
-- `moonmind/schemas/agent_queue_models.py`: expose `JobWithAttachmentsResponse` (already present but ensure aliasing + documentation). Add dataclasses for `AttachmentManifestEntry` when referenced by worker outputs.
-- `api_service/api/routers/agent_queue.py`: keep multipart route but add worker/user list/download endpoints with limit query, worker-token enforcement, and HTTP 413/403 responses. Document `captions` optional JSON input.
-- `api_service/api/routers/task_dashboard.py`: no API change, but ensure allowable route list includes new attachments detail path segments if needed.
+- Synchronized runtime-mode wording and coverage guard language across `spec.md`, `plan.md`, and `tasks.md` to reduce ambiguity during later task regeneration.
 
-### 2. Worker Prepare Stage + Manifest Artifacts
-- `moonmind/agents/codex_worker/worker.py`:
-  - Augment `_run_prepare_stage` to call a new `_download_task_attachments` helper once the repo checkout is ready. Helper responsibilities: fetch metadata via `QueueApiClient.list_attachments_worker`, download each artifact with streaming GET, verify SHA-256 digest, write to `repo/.moonmind/inputs/<uuid>-<sanitized>`, update `.git/info/exclude` with `.moonmind/` guard, and return manifest payload.
-  - Write `.moonmind/attachments_manifest.json` with job id, downloaded timestamp, entries containing `id`, `filename`, `contentType`, `sizeBytes`, `digest`, `localPath` relative to repo root, and any `userCaptionHint` text derived from the upload-time `captions` payload.
-  - Update `artifacts/task_context.json` by merging an `attachments` object (`enabled`, `count`, `totalBytes`, manifest path, `visionContextPath`, `visionContextStatus`).
-  - Emit queue events `task.attachments.download.started/finished` and StatsD metrics for counts/bytes.
-- `QueueApiClient` class: add `list_attachments_worker(job_id)` + `download_attachment_worker(job_id, attachment_id)` that call `/attachments/worker` endpoints with worker token header; use streaming download to temporary file before rename.
-- Handle error cases: digest mismatch, HTTP 404/403, network errors with retries (bounded). On failure, raise `RuntimeError` so job fails early.
+### Residual risks
 
-### 3. Vision Context Module
-- Introduce `moonmind/vision/settings.py` + `moonmind/vision/service.py`:
-  - `VisionSettings` reads `MOONMIND_VISION_CONTEXT_ENABLED`, provider/model overrides, max tokens, OCR toggle, provider-specific env (Gemini by default, fallback to OpenAI/Anthropic later).
-  - `VisionContextGenerator` accepts attachments manifest entries, orchestrates caption generation (calls Gemini via `google-generativeai` or uses placeholder when disabled/misconfigured), optionally runs OCR via `pytesseract`/`pillow` if flag true.
-  - Output `repo/.moonmind/vision/image_context.md` per template: safety notice, enumerated attachments with metadata, `description` (caption), `ocr` (if enabled, else “OCR disabled”). Provide fallback text when provider disabled.
-  - Emit event `task.attachments.context.generated` including provider + count + status (disabled, fallback, success).
-
-### 4. Prompt Injection & Runtime Alignment
-- Update `moonmind/agents/codex_worker/worker.py::_compose_step_instruction_for_runtime` to prepend:
-  - `INPUT ATTACHMENTS` header.
-  - Bullets referencing `.moonmind/attachments_manifest.json`, `.moonmind/inputs/` path, and inline the contents of `image_context.md` (truncate >8 KB with link). Ensure block is inserted before the existing `WORKSPACE` section.
-- For Gemini/Claude adapters (`_build_non_codex_runtime_command`), ensure prompt string already includes this block (common builder). Add tests verifying final instructions include attachments block regardless of runtime.
-
-### 5. Dashboard UI & UX
-- `api_service/static/task_dashboard/dashboard.js`:
-  - Queue submit form: add drag/drop zone + file input (accept `image/png,image/jpeg,image/webp`), show previews list (filename, type, size, validation errors). Enforce max count + bytes client-side using settings from `dashboard_config` (extend config to expose `agent_job_attachment_*`). On submit, build `FormData` with `request` JSON + `files[]`. Show progress state while upload occurs.
-  - Job detail view: fetch `/api/queue/jobs/{id}/attachments` and render list with preview thumbnails (use `<img src>` from download endpoint) and download buttons linking to user download route.
-  - Worker attachments states appear in queue detail table so operators can see counts/bytes; display indicator if attachments exist but manifest missing (should not happen).
-- CSS updates (`dashboard.tailwind.css`) to style dropzone, thumbnail grid, validation errors.
-- Potential addition to `task_dashboard_view_model.build_runtime_config` to surface attachment limits & allowed MIME types to the client script.
-
-### 6. API Documentation & Contracts
-- `specs/037-tasks-image-phase1/contracts/attachments.openapi.yaml`: already drafted; keep in sync with implementation (ensure parameter refs defined once at top). Provide docstrings/responses for worker endpoints.
-- Update `docs/TasksImageSystem.md` if minor clarifications discovered during implementation.
-
-### 7. Instrumentation & Logging
-- Extend `moonmind/agents/codex_worker/metrics.py` to expose StatsD timers/counters for attachments download bytes/time and vision generation latency; call from new helpers.
-- Queue events: ensure `AgentQueueService` appends `Attachment uploaded` per file; worker emits `task.attachments.download.*` and `task.attachments.context.generated`. Tests assert events recorded.
-- Add structured logs when attachments disabled (flag false) or provider missing credentials.
-
-### 8. Testing Strategy
-- API/service: `tests/unit/api/routers/test_agent_queue.py` (multipart success/validation errors, worker/user download auth), `tests/unit/workflows/agent_queue/test_service_attachments.py` (limits, ACL, namespace guard), `tests/unit/config/test_settings.py` (vision + attachment env overrides).
-- Worker: new tests in `tests/unit/agents/codex_worker/test_worker.py` for `_download_task_attachments`, manifest writing, `.git/info/exclude`, prompt injection block contents, vision disabled/enabled flows.
-- Dashboard: add JS unit tests (if existing harness) or integration snapshot verifying queue submit view renders attachments UI; use `jest`/`vitest` or add Playwright fixture referencing `/tasks/queue/new` (if automation available). At minimum, use DOM-level tests verifying dropzone state machine.
-- Quickstart manual steps (documented in `quickstart.md`) ensure API + worker + dashboard path validated end-to-end.
-
-## Post-Design Constitution Re-check
-
-- Runtime code paths (API + worker + dashboard) plus automated tests are included, satisfying MoonMind runtime guardrail + spec instructions.
-- No additional constitution clauses exist; gate remains PASS WITH NOTE pending actual constitution content.
+- Runtime delivery remains a broad cross-module change set (API, service, worker, dashboard) and can still surface hidden integration dependencies during implementation.
+- Validation command coverage is defined, but evidence remains pending until `T028` executes and records final results in `quickstart.md`.
 
 ## Complexity Tracking
 
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|--------------------------------------|
-| None | – | – |
+No constitution violations requiring mitigation were identified.

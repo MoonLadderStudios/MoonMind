@@ -393,6 +393,51 @@
   )
     ? Boolean(systemConfig.defaultProposeTasks)
     : true;
+  const attachmentPolicyConfig =
+    systemConfig.attachmentPolicy &&
+    typeof systemConfig.attachmentPolicy === "object" &&
+    !Array.isArray(systemConfig.attachmentPolicy)
+      ? systemConfig.attachmentPolicy
+      : {};
+  const parseAttachmentPolicyInt = (rawValue, fallback) => {
+    const parsed = Number(rawValue);
+    if (Number.isFinite(parsed)) {
+      return Math.max(1, Math.trunc(parsed));
+    }
+    return fallback;
+  };
+  const parseAllowedContentTypes = () => {
+    if (!Array.isArray(attachmentPolicyConfig.allowedContentTypes)) {
+      return ["image/png", "image/jpeg", "image/webp"];
+    }
+    const normalized = attachmentPolicyConfig.allowedContentTypes
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter((value) => Boolean(value));
+    return normalized.length > 0
+      ? normalized
+      : ["image/png", "image/jpeg", "image/webp"];
+  };
+  const attachmentPolicy = {
+    enabled: Object.prototype.hasOwnProperty.call(attachmentPolicyConfig, "enabled")
+      ? Boolean(attachmentPolicyConfig.enabled)
+      : false,
+    maxCount: parseAttachmentPolicyInt(
+      attachmentPolicyConfig.maxCount,
+      10,
+    ),
+    maxBytes: parseAttachmentPolicyInt(
+      attachmentPolicyConfig.maxBytes,
+      10 * 1024 * 1024,
+    ),
+    totalBytes: Math.max(
+      1,
+      parseAttachmentPolicyInt(
+        attachmentPolicyConfig.totalBytes,
+        25 * 1024 * 1024,
+      ),
+    ),
+    allowedContentTypes: parseAllowedContentTypes(),
+  };
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const taskTemplateCatalogConfig =
     systemConfig.taskTemplateCatalog &&
@@ -431,7 +476,7 @@
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const ACTIVE_QUEUE_FETCH_LIMIT = 50;
   const ACTIVE_ORCHESTRATOR_FETCH_LIMIT = 50;
-  const QUEUE_PAGE_SIZE_OPTIONS = [25, 50, 100];
+  const QUEUE_PAGE_SIZE_OPTIONS = [20, 25, 50, 100];
   const DEFAULT_QUEUE_PAGE_SIZE = 50;
   const pollers = [];
   const disposers = [];
@@ -1577,12 +1622,17 @@
   }
 
   async function fetchJson(url, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    const body = options.body;
+    const isFormData =
+      typeof FormData === "function" && body instanceof FormData;
+    if (!isFormData && !Object.prototype.hasOwnProperty.call(headers, "Content-Type")) {
+      headers["Content-Type"] = "application/json";
+    }
+
     const response = await fetch(url, {
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers || {}),
-      },
+      headers,
       ...options,
     });
 
@@ -2582,12 +2632,12 @@
   };
 
   const parseResubmittedFromSearchParam = (searchParams) => {
-    const sourceJobValue = searchParams?.get("resubmittedFrom");
-    if (sourceJobValue === null) {
+    const resubmittedFromValue = searchParams?.get("resubmittedFrom");
+    if (resubmittedFromValue === null) {
       return { provided: false, jobId: "", rawValue: "" };
     }
-    const jobId = normalizeDashboardDetailSegment(sourceJobValue);
-    return { provided: true, jobId, rawValue: sourceJobValue };
+    const jobId = normalizeDashboardDetailSegment(resubmittedFromValue);
+    return { provided: true, jobId, rawValue: resubmittedFromValue };
   };
 
   const isEditableQueuedTaskJob = (job) => {
@@ -2610,10 +2660,17 @@
     const jobType = String(pick(job, "type") || "")
       .trim()
       .toLowerCase();
-    const status = String(pick(job, "status") || "")
+    const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
+    const rawStatus = String(pick(job, "status") || "")
       .trim()
       .toLowerCase();
-    return jobType === "task" && ["failed", "cancelled"].includes(status);
+    return (
+      jobType === "task" &&
+      (normalizedStatus === "failed" ||
+        normalizedStatus === "cancelled" ||
+        rawStatus === "failed" ||
+        rawStatus === "cancelled")
+    );
   };
 
   const resolveQueuePrefillModeFromJob = (job) => {
@@ -2627,45 +2684,37 @@
   };
 
   const resolveQueueDetailPrefillAction = (job) => {
-    const jobId = normalizeDashboardDetailSegment(pick(job, "id"));
-    if (!jobId) {
-      return { mode: "", label: "", route: "", jobId: "" };
+    const mode = resolveQueuePrefillModeFromJob(job);
+    const jobId = normalizeDashboardDetailSegment(pick(job, "id") || "");
+    if (!mode || !jobId) {
+      return { mode: "", label: "", route: "" };
     }
-    if (isEditableQueuedTaskJob(job)) {
-      return {
-        mode: "edit",
-        label: "Edit",
-        route: `/tasks/queue/new?editJobId=${encodeURIComponent(jobId)}`,
-        jobId,
-      };
-    }
-    if (isResubmittableTaskJob(job)) {
-      return {
-        mode: "resubmit",
-        label: "Resubmit",
-        route: `/tasks/queue/new?editJobId=${encodeURIComponent(jobId)}`,
-        jobId,
-      };
-    }
-    return { mode: "", label: "", route: "", jobId };
+    const route = `/tasks/queue/new?editJobId=${encodeURIComponent(jobId)}`;
+    return {
+      mode,
+      label: mode === "resubmit" ? "Resubmit" : "Edit",
+      route,
+    };
   };
 
-  const resolveQueuePrefillSubmitTarget = (mode, queueSourceConfig = {}) => {
+  const resolveQueuePrefillSubmitTarget = (mode, endpoints = {}) => {
     const normalizedMode = String(mode || "").trim().toLowerCase();
     if (normalizedMode === "edit") {
       return {
         method: "PUT",
-        endpointTemplate: queueSourceConfig.update || "/api/queue/jobs/{id}",
+        endpointTemplate: String(endpoints.update || "/api/queue/jobs/{id}").trim(),
       };
     }
     if (normalizedMode === "resubmit") {
       return {
         method: "POST",
-        endpointTemplate:
-          queueSourceConfig.resubmit || "/api/queue/jobs/{id}/resubmit",
+        endpointTemplate: String(endpoints.resubmit || "/api/queue/jobs/{id}/resubmit").trim(),
       };
     }
-    return null;
+    return {
+      method: "POST",
+      endpointTemplate: String(endpoints.create || "/api/queue/jobs").trim(),
+    };
   };
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
@@ -2720,8 +2769,8 @@
       isWorkerSubmitRuntime,
       parseEditJobSearchParam,
       parseResubmittedFromSearchParam,
-      isEditableQueuedTaskJob,
       isResubmittableTaskJob,
+      isEditableQueuedTaskJob,
       resolveQueuePrefillModeFromJob,
       resolveQueueDetailPrefillAction,
       resolveQueuePrefillSubmitTarget,
@@ -2737,11 +2786,11 @@
       stringifySkillArgs,
       buildQueueSubmissionDraftFromJob,
     };
-    window.__queueLayoutTest = {
-      queueFieldDefinitions,
-      renderQueueFieldValue,
-      renderQueueTable,
-      renderQueueCards,
+      window.__queueLayoutTest = {
+        queueFieldDefinitions,
+        renderQueueFieldValue,
+        renderQueueTable,
+        renderQueueCards,
       renderQueueLayouts,
       renderActivePageContent,
       renderRowsTable,
@@ -2749,13 +2798,13 @@
       renderProposalTable,
       renderProposalCards,
       renderProposalLayouts,
-      renderProposalActionFeedback,
-      toQueueRows,
-      parseQueuePaginationFromSearch,
-      applyQueuePaginationToSearch,
-      resetQueuePaginationState,
-    };
-  }
+        renderProposalActionFeedback,
+        toQueueRows,
+        parseQueuePaginationFromSearch,
+        applyQueuePaginationToSearch,
+        resetQueuePaginationState,
+      };
+    }
 
   async function apiPromoteProposal(proposalId, overrides = {}) {
     const endpointTemplate =
@@ -3416,7 +3465,6 @@
 
     startPolling(load, pollIntervals.list);
   }
-
   async function renderManifestListPage() {
     setView(
       "Manifest Runs",
@@ -4053,29 +4101,24 @@
     startPolling(load, pollIntervals.list);
   }
 
-  function renderQueueSubmitPage(presetRuntime, prefillContext = null) {
-    const hasPrefillContext =
-      Boolean(prefillContext) &&
-      typeof prefillContext === "object" &&
-      !Array.isArray(prefillContext);
-    const submitMode = hasPrefillContext
-      ? String(prefillContext.mode || "edit").trim().toLowerCase()
-      : "create";
-    const isEditMode = submitMode === "edit";
-    const isResubmitMode = submitMode === "resubmit";
-    const sourceJobId = hasPrefillContext
-      ? normalizeDashboardDetailSegment(prefillContext.jobId || "")
+  function renderQueueSubmitPage(presetRuntime, editContext = null) {
+    const isEditMode =
+      Boolean(editContext) &&
+      typeof editContext === "object" &&
+      !Array.isArray(editContext);
+    const editJobId = isEditMode
+      ? normalizeDashboardDetailSegment(editContext.jobId || "")
       : "";
     const editExpectedUpdatedAt = isEditMode
-      ? String(prefillContext.expectedUpdatedAt || "").trim()
+      ? String(editContext.expectedUpdatedAt || "").trim()
       : "";
-    const sourceDetailRoute = hasPrefillContext && sourceJobId
-      ? buildUnifiedTaskDetailRoute(sourceJobId, "queue")
+    const editDetailRoute = isEditMode && editJobId
+      ? buildUnifiedTaskDetailRoute(editJobId, "queue")
       : "/tasks/list?source=queue";
-    const sanitizedWorkerDraft = hasPrefillContext
-      ? normalizeSubmissionDraftForTest(prefillContext.prefillDraft || {})
+    const sanitizedWorkerDraft = isEditMode
+      ? normalizeSubmissionDraftForTest(editContext.prefillDraft || {})
       : submitDraftController.loadWorker();
-    const selectedWorkerRuntime = hasPrefillContext
+    const selectedWorkerRuntime = isEditMode
       ? normalizeTaskRuntimeInput(presetRuntime ?? sanitizedWorkerDraft.runtime) ||
         defaultTaskRuntime
       : resolveSubmitRuntime(
@@ -4135,8 +4178,32 @@
       sanitizedWorkerDraft.approvalToken || "",
     ).trim();
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
-    const primarySubmitLabel = isEditMode ? "Update" : isResubmitMode ? "Resubmit" : "Create";
-    const runtimeSubmitOptions = hasPrefillContext ? supportedTaskRuntimes : submitRuntimeOptions;
+    const attachmentAcceptedTypes = attachmentPolicy.allowedContentTypes.join(",");
+    const attachmentSectionHtml =
+      attachmentPolicy.enabled && !isEditMode
+        ? `
+        <section class="card" data-runtime-visibility="worker">
+          <label>Image Attachments (optional)
+            <input
+              type="file"
+              id="queue-attachments-input"
+              accept="${escapeHtml(attachmentAcceptedTypes)}"
+              multiple
+            />
+          </label>
+          <p class="small" id="queue-attachments-message">
+            Up to ${escapeHtml(String(attachmentPolicy.maxCount))} files, ${escapeHtml(
+              String(attachmentPolicy.maxBytes),
+            )} bytes each, ${escapeHtml(
+              String(attachmentPolicy.totalBytes),
+            )} bytes total.
+          </p>
+          <ul class="list" id="queue-attachments-list"></ul>
+        </section>
+        `
+        : "";
+    const primarySubmitLabel = isEditMode ? "Update" : "Create";
+    const runtimeSubmitOptions = isEditMode ? supportedTaskRuntimes : submitRuntimeOptions;
 
     const runtimeOptions = renderRuntimeOptions(
       runtimeSubmitOptions,
@@ -4175,33 +4242,14 @@
         `
       : "";
 
-    const submitTitle = isEditMode
-      ? "Edit Queue Task"
-      : isResubmitMode
-        ? "Resubmit Queue Task"
-        : "Submit Queue Task";
-    const submitSubtitle = isEditMode
-      ? `Editing queued task ${sourceJobId}.`
-      : isResubmitMode
-        ? `Resubmitting terminal task ${sourceJobId}.`
-        : "";
-    const resubmitAttachmentNotice = isResubmitMode
-      ? `
-        <div class="notice">
-          Attachments are not copied when resubmitting. Download any needed files from the source run and re-upload manually.
-        </div>
-      `
-      : "";
-
     setView(
-      submitTitle,
-      submitSubtitle,
+      isEditMode ? "Edit Queue Task" : "Submit Queue Task",
+      isEditMode ? `Editing queued task ${editJobId}.` : "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
         <section class="queue-steps-section stack">
           <div id="queue-steps-list" class="stack"></div>
         </section>
-        ${resubmitAttachmentNotice}
         ${templateControlsHtml}
         <label>Runtime
           <select name="runtime">
@@ -4267,13 +4315,14 @@
             )}" placeholder="auto-generated unless starting branch is non-default" />
           </label>
         </div>
-          <label>Publish Mode
+        <label>Publish Mode
           <select name="publishMode">
             <option value="pr" ${queueDraftPublishMode === "pr" ? "selected" : ""}>pr</option>
             <option value="branch" ${queueDraftPublishMode === "branch" ? "selected" : ""}>branch</option>
             <option value="none" ${queueDraftPublishMode === "none" ? "selected" : ""}>none</option>
           </select>
         </label>
+        ${attachmentSectionHtml}
         <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
             <input type="number" name="priority" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" />
@@ -4291,8 +4340,8 @@
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
           ${
-            hasPrefillContext
-              ? `<a href="${escapeHtml(sourceDetailRoute)}"><button type="button" class="secondary">Cancel</button></a>`
+            isEditMode
+              ? `<a href="${escapeHtml(editDetailRoute)}"><button type="button" class="secondary">Cancel</button></a>`
               : ""
           }
           <button type="submit" class="queue-submit-primary">
@@ -4309,6 +4358,109 @@
     if (!form || !message) {
       return;
     }
+    const attachmentInput = form.querySelector("#queue-attachments-input");
+    const attachmentMessage = form.querySelector("#queue-attachments-message");
+    const attachmentList = form.querySelector("#queue-attachments-list");
+
+    const formatAttachmentBytes = (value) => {
+      const bytes = Math.max(0, Number(value) || 0);
+      if (bytes < 1024) {
+        return `${bytes} B`;
+      }
+      if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(1)} KB`;
+      }
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+    const selectedAttachmentFiles = () =>
+      attachmentInput instanceof HTMLInputElement
+        ? Array.from(attachmentInput.files || [])
+        : [];
+    const validateAttachmentFiles = (files) => {
+      const normalizedFiles = Array.isArray(files) ? files : [];
+      const errors = [];
+      if (normalizedFiles.length > attachmentPolicy.maxCount) {
+        errors.push(
+          `Too many attachments (${normalizedFiles.length}/${attachmentPolicy.maxCount}).`,
+        );
+      }
+      let totalBytes = 0;
+      normalizedFiles.forEach((file) => {
+        const type = String(file.type || "").trim().toLowerCase();
+        if (!attachmentPolicy.allowedContentTypes.includes(type)) {
+          errors.push(`Unsupported file type for ${file.name || "attachment"}.`);
+        }
+        const sizeBytes = Math.max(0, Number(file.size) || 0);
+        if (sizeBytes > attachmentPolicy.maxBytes) {
+          errors.push(
+            `${file.name || "attachment"} exceeds ${formatAttachmentBytes(
+              attachmentPolicy.maxBytes,
+            )}.`,
+          );
+        }
+        totalBytes += sizeBytes;
+      });
+      if (totalBytes > attachmentPolicy.totalBytes) {
+        errors.push(
+          `Total attachment size exceeds ${formatAttachmentBytes(
+            attachmentPolicy.totalBytes,
+          )}.`,
+        );
+      }
+      return {
+        files: normalizedFiles,
+        ok: errors.length === 0,
+        errors,
+        totalBytes,
+      };
+    };
+    const renderAttachmentSelection = () => {
+      if (!attachmentPolicy.enabled) {
+        return;
+      }
+      const files = selectedAttachmentFiles();
+      const validation = validateAttachmentFiles(files);
+      if (attachmentList) {
+        if (!files.length) {
+          attachmentList.innerHTML = "";
+        } else {
+          attachmentList.innerHTML = files
+            .map((file) => {
+              const type = String(file.type || "unknown").trim();
+              return `<li>${escapeHtml(file.name || "attachment")} (${escapeHtml(
+                type || "unknown",
+              )}, ${escapeHtml(formatAttachmentBytes(file.size))})</li>`;
+            })
+            .join("");
+        }
+      }
+      if (attachmentMessage) {
+        if (!files.length) {
+          attachmentMessage.textContent = `Up to ${attachmentPolicy.maxCount} files, ${formatAttachmentBytes(
+            attachmentPolicy.maxBytes,
+          )} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`;
+        } else if (!validation.ok) {
+          attachmentMessage.textContent = validation.errors.join(" ");
+        } else {
+          attachmentMessage.textContent = `${files.length} attachment(s) selected (${formatAttachmentBytes(
+            validation.totalBytes,
+          )}).`;
+        }
+      }
+      if (attachmentInput instanceof HTMLInputElement) {
+        attachmentInput.setCustomValidity(
+          validation.ok ? "" : validation.errors.join(" "),
+        );
+      }
+      return validation;
+    };
+    if (attachmentInput instanceof HTMLInputElement) {
+      attachmentInput.addEventListener("change", () => {
+        renderAttachmentSelection();
+      });
+    }
+    renderAttachmentSelection();
+
     const readQueueTemplateFeatureRequest = () => {
       const input = form.querySelector("#queue-template-feature-request");
       if (!(input instanceof HTMLTextAreaElement)) {
@@ -4331,15 +4483,10 @@
         runtime: runtime || activeWorkerRuntime,
         ...(isEditMode
           ? {
-              editJobId: sourceJobId,
+              editJobId,
               expectedUpdatedAt: editExpectedUpdatedAt,
               affinityKey: queueDraftAffinityKey,
             }
-          : isResubmitMode
-            ? {
-                resubmitJobId: sourceJobId,
-                affinityKey: queueDraftAffinityKey,
-              }
           : {}),
         instruction: String(stepState[0]?.instructions || "").trim(),
         repository: String(formData.get("repository") || "").trim(),
@@ -4363,7 +4510,7 @@
       };
     };
     const persistWorkerDraft = () => {
-      if (hasPrefillContext) {
+      if (isEditMode) {
         return;
       }
       submitDraftController.saveWorker(collectWorkerDraftFromForm());
@@ -5745,6 +5892,20 @@
         maxAttempts,
         ...(affinityKey ? { affinityKey } : {}),
       };
+      const attachmentValidation =
+        attachmentPolicy.enabled && !isEditMode
+          ? renderAttachmentSelection() || validateAttachmentFiles(selectedAttachmentFiles())
+          : { ok: true, files: [], errors: [], totalBytes: 0 };
+      if (!attachmentValidation.ok) {
+        message.className = "notice error queue-submit-message";
+        message.textContent = attachmentValidation.errors.join(" ");
+        return;
+      }
+      const hasAttachments =
+        attachmentPolicy.enabled &&
+        !isEditMode &&
+        Array.isArray(attachmentValidation.files) &&
+        attachmentValidation.files.length > 0;
 
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
@@ -5752,44 +5913,46 @@
 
       try {
         if (isEditMode) {
-          const submitTarget = resolveQueuePrefillSubmitTarget("edit", queueSourceConfig);
-          const updated = await fetchJson(endpoint(submitTarget.endpointTemplate, { id: sourceJobId }), {
-            method: submitTarget.method,
+          const updateEndpointTemplate = queueSourceConfig.update || "/api/queue/jobs/{id}";
+          const updated = await fetchJson(endpoint(updateEndpointTemplate, { id: editJobId }), {
+            method: "PUT",
             body: JSON.stringify({
               ...requestBody,
               ...(editExpectedUpdatedAt ? { expectedUpdatedAt: editExpectedUpdatedAt } : {}),
             }),
           });
-          const updatedId = normalizeDashboardDetailSegment(pick(updated, "id")) || sourceJobId;
+          const updatedId = normalizeDashboardDetailSegment(pick(updated, "id")) || editJobId;
           window.location.href = buildUnifiedTaskDetailRoute(updatedId, "queue");
           return;
         }
 
-        if (isResubmitMode) {
-          const submitTarget = resolveQueuePrefillSubmitTarget("resubmit", queueSourceConfig);
-          const created = await fetchJson(
-            endpoint(submitTarget.endpointTemplate, { id: sourceJobId }),
-            {
-              method: submitTarget.method,
+        const created = hasAttachments
+          ? await fetchJson(
+              queueSourceConfig.createWithAttachments || "/api/queue/jobs/with-attachments",
+              (() => {
+                const requestForm = new FormData();
+                requestForm.append("request", JSON.stringify(requestBody));
+                attachmentValidation.files.forEach((file) => {
+                  requestForm.append("files", file, file.name || "attachment");
+                });
+                return {
+                  method: "POST",
+                  body: requestForm,
+                };
+              })(),
+            )
+          : await fetchJson(queueSourceConfig.create || "/api/queue/jobs", {
+              method: "POST",
               body: JSON.stringify(requestBody),
-            },
-          );
-          const createdId = normalizeDashboardDetailSegment(pick(created, "id"));
-          if (!createdId) {
-            throw new Error("queue resubmit response missing job id");
-          }
-          const detailRoute = buildUnifiedTaskDetailRoute(createdId, "queue");
-          window.location.href = `${detailRoute}&resubmittedFrom=${encodeURIComponent(
-            sourceJobId,
-          )}`;
-          return;
-        }
-
-        const created = await fetchJson("/api/queue/jobs", {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
-        if (!created || typeof created.id !== "string" || !created.id.trim()) {
+            });
+        const createdJobNode = pick(created, "job");
+        const createdJobId =
+          createdJobNode &&
+          typeof createdJobNode === "object" &&
+          !Array.isArray(createdJobNode)
+            ? String(pick(createdJobNode, "id") || "").trim()
+            : String(pick(created, "id") || "").trim();
+        if (!createdJobId) {
           throw new Error("queue creation response missing job id");
         }
         try {
@@ -5798,7 +5961,7 @@
           console.warn("worker draft cleanup failed after queue creation", cleanupError);
         }
         window.location.href = buildUnifiedTaskDetailRoute(
-          created.id,
+          createdJobId,
           "queue",
         );
       } catch (error) {
@@ -5821,28 +5984,9 @@
             "Queue task update is invalid: " + String(error?.message || "validation failed");
           return;
         }
-        if (isResubmitMode && status === 409) {
-          message.textContent = "This task can no longer be resubmitted. Refresh and try again.";
-          return;
-        }
-        if (isResubmitMode && status === 403) {
-          message.textContent = "You are not authorized to resubmit this queue task.";
-          return;
-        }
-        if (isResubmitMode && status === 422) {
-          message.textContent =
-            "Queue task resubmit is invalid: " + String(error?.message || "validation failed");
-          return;
-        }
-        let action = "create";
-        if (isEditMode) {
-          action = "update";
-        } else if (isResubmitMode) {
-          action = "resubmit";
-        }
-        message.textContent = `Failed to ${action} queue task: ${String(
-          error?.message || "request failed",
-        )}`;
+        message.textContent = isEditMode
+          ? "Failed to update queue task: " + String(error?.message || "request failed")
+          : "Failed to create queue task: " + String(error?.message || "request failed");
       }
     });
   }
@@ -5860,49 +6004,47 @@
         );
         return;
       }
-      const sourceJobId = editParam.jobId;
+      const editJobId = editParam.jobId;
       setView(
-        "Queue Task Prefill",
-        `Loading queue task ${sourceJobId}...`,
+        "Edit Queue Task",
+        `Loading queued task ${editJobId}...`,
         "<p class='loading'>Loading queue task draft...</p>",
         { showAutoRefreshControls: false },
       );
       try {
         const detail = await fetchJson(
           endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
-            id: sourceJobId,
+            id: editJobId,
           }),
         );
-        const prefillMode = resolveQueuePrefillModeFromJob(detail);
-        if (!prefillMode) {
+        if (!isEditableQueuedTaskJob(detail)) {
           setView(
-            "Queue Task Not Eligible",
-            `Job ${sourceJobId} is not eligible for edit or resubmit.`,
-            `<div class="notice error">Only queued, never-started task jobs can be edited. Only failed or cancelled task jobs can be resubmitted.</div><div class="actions"><a href="${escapeHtml(
-              buildUnifiedTaskDetailRoute(sourceJobId, "queue"),
+            "Queue Task Not Editable",
+            `Job ${editJobId} can no longer be edited.`,
+            `<div class="notice error">Only queued, never-started task jobs can be edited.</div><div class="actions"><a href="${escapeHtml(
+              buildUnifiedTaskDetailRoute(editJobId, "queue"),
             )}"><button type="button" class="secondary">View Details</button></a></div>`,
             { showAutoRefreshControls: false },
           );
           return;
         }
         const prefillDraft = buildQueueSubmissionDraftFromJob(detail);
-        const resolvedJobId =
-          normalizeDashboardDetailSegment(pick(detail, "id")) || sourceJobId;
+        const resolvedEditJobId =
+          normalizeDashboardDetailSegment(pick(detail, "id")) || editJobId;
         renderQueueSubmitPage(prefillDraft.runtime, {
-          mode: prefillMode,
-          jobId: resolvedJobId,
+          jobId: resolvedEditJobId,
           expectedUpdatedAt: String(pick(detail, "updatedAt") || "").trim(),
           prefillDraft,
         });
       } catch (error) {
-        console.error("queue prefill load failed", error);
+        console.error("queue edit preload failed", error);
         setView(
-          "Queue Task Prefill",
-          `Unable to load job ${sourceJobId}.`,
-          `<div class="notice error">Failed to load queue task for edit/resubmit: ${escapeHtml(
+          "Edit Queue Task",
+          `Unable to load job ${editJobId}.`,
+          `<div class="notice error">Failed to load queue task for editing: ${escapeHtml(
             String(error?.message || "request failed"),
           )}</div><div class="actions"><a href="${escapeHtml(
-            buildUnifiedTaskDetailRoute(sourceJobId, "queue"),
+            buildUnifiedTaskDetailRoute(editJobId, "queue"),
           )}"><button type="button" class="secondary">Back to Details</button></a></div>`,
           { showAutoRefreshControls: false },
         );
@@ -6096,13 +6238,7 @@
     });
   }
 
-  async function renderQueueDetailPage(jobId, options = {}) {
-    const resubmittedFromJobId = normalizeDashboardDetailSegment(
-      options && typeof options === "object" ? options.resubmittedFromJobId : "",
-    );
-    const resubmittedNotice = resubmittedFromJobId
-      ? `Resubmitted from ${resubmittedFromJobId}.`
-      : "";
+  async function renderQueueDetailPage(jobId) {
     setView(
       "Queue Job Detail",
       `Job ${jobId}`,
@@ -6156,6 +6292,13 @@
                 <tbody id="queue-artifacts-body"><tr><td colspan="5" class="small">Loading artifacts...</td></tr></tbody>
               </table>
             </section>
+            <section>
+              <h3>Input Attachments</h3>
+              <table>
+                <thead><tr><th>Preview</th><th>Name</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
+                <tbody id="queue-attachments-body"><tr><td colspan="5" class="small">Loading attachments...</td></tr></tbody>
+              </table>
+            </section>
           </div>
         </div>
       `,
@@ -6165,6 +6308,7 @@
     const state = {
       job: null,
       artifacts: [],
+      attachments: [],
       events: [],
       liveSession: null,
       liveSessionError: null,
@@ -6374,6 +6518,47 @@
       }
     };
 
+    const renderAttachments = () => {
+      const bodyNode = document.getElementById("queue-attachments-body");
+      if (!bodyNode) {
+        return;
+      }
+      const attachments = Array.isArray(state.attachments) ? state.attachments : [];
+      if (!attachments.length) {
+        bodyNode.innerHTML = "<tr><td colspan='5' class='small'>No input attachments.</td></tr>";
+        return;
+      }
+      bodyNode.innerHTML = attachments
+        .map((attachment) => {
+          const attachmentId = pick(attachment, "id");
+          const downloadUrl = endpoint(
+            queueSourceConfig.attachmentDownload ||
+              "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
+            {
+              id: jobId,
+              attachmentId,
+            },
+          );
+          const contentType = String(pick(attachment, "contentType") || "").trim();
+          const isImage = contentType.startsWith("image/");
+          const previewHtml = isImage
+            ? `<img src="${escapeHtml(downloadUrl)}" alt="${escapeHtml(
+                pick(attachment, "name") || "attachment",
+              )}" style="max-width:96px;max-height:64px;border-radius:6px;" loading="lazy" />`
+            : "-";
+          return `
+            <tr>
+              <td>${previewHtml}</td>
+              <td>${escapeHtml(pick(attachment, "name") || "")}</td>
+              <td>${escapeHtml(String(pick(attachment, "sizeBytes") || "-"))}</td>
+              <td>${escapeHtml(contentType || "-")}</td>
+              <td><a href="${escapeHtml(downloadUrl)}">Download</a></td>
+            </tr>
+          `;
+        })
+        .join("");
+    };
+
     const renderJobSummary = () => {
       const summaryNode = document.getElementById("queue-job-summary");
       const cancelActionsNode = document.getElementById("queue-cancel-actions");
@@ -6393,10 +6578,14 @@
       const canCancel = normalizedStatus === "queued" || normalizedStatus === "running";
       const cancelButtonDisabled = !canCancel || cancelPending;
       const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
-      const prefillAction = resolveQueueDetailPrefillAction(job);
+      const editJobId = normalizeDashboardDetailSegment(pick(job, "id"));
+      const canEdit = isEditableQueuedTaskJob(job) && Boolean(editJobId);
+      const editRoute = canEdit
+        ? `/tasks/queue/new?editJobId=${encodeURIComponent(editJobId)}`
+        : "";
       cancelActionsNode.innerHTML = `<div class="actions">${
-        prefillAction.route
-          ? `<a href="${escapeHtml(prefillAction.route)}"><button type="button" class="secondary">${escapeHtml(prefillAction.label)}</button></a>`
+        canEdit
+          ? `<a href="${escapeHtml(editRoute)}"><button type="button" class="secondary">Edit</button></a>`
           : ""
       }<button type="button" id="queue-cancel-button" ${
         cancelButtonDisabled ? "disabled" : ""
@@ -6817,10 +7006,27 @@
 
     const loadDetail = async () => {
       try {
-        const [job, artifactsPayload] = await Promise.all([
+        const detailResults = await Promise.allSettled([
           fetchJson(endpoint("/api/queue/jobs/{id}", { id: jobId })),
           fetchJson(endpoint("/api/queue/jobs/{id}/artifacts", { id: jobId })),
+          fetchJson(
+            endpoint(
+              queueSourceConfig.attachments || "/api/queue/jobs/{id}/attachments",
+              { id: jobId },
+            ),
+          ),
         ]);
+        const [jobResult, artifactsResult, attachmentsResult] = detailResults;
+        if (jobResult.status === "rejected" || artifactsResult.status === "rejected") {
+          const error =
+            jobResult.status === "rejected"
+              ? jobResult.reason
+              : artifactsResult.reason;
+          throw error;
+        }
+
+        const jobPayload = jobResult.value;
+        const artifactsPayload = artifactsResult.value;
         let liveSession = null;
         let liveSessionError = null;
         let liveSessionRouteMissing = false;
@@ -6843,19 +7049,31 @@
             liveSessionError = message || "Live session unavailable.";
           }
         }
-        state.job = job;
+        state.job = jobPayload;
         state.artifacts = artifactsPayload?.items || [];
+        if (attachmentsResult.status === "fulfilled") {
+          state.attachments = attachmentsResult.value?.items || [];
+          setDetailNotice("");
+        } else {
+          state.attachments = [];
+          const attachmentError =
+            String(attachmentsResult.reason?.message || "").trim() ||
+            "Unknown attachment load failure";
+          setDetailNotice(`Attachments failed to load: ${attachmentError}`, false);
+          console.warn("queue attachments load failed", attachmentsResult.reason);
+        }
         state.liveSession = liveSession;
         state.liveSessionError = liveSessionError;
         state.liveSessionRouteMissing = liveSessionRouteMissing;
-        setDetailNotice(resubmittedNotice, false);
         renderJobSummary();
         renderLiveSession();
         renderArtifacts();
+        renderAttachments();
       } catch (error) {
         console.error("queue detail load failed", error);
         state.job = null;
         state.artifacts = [];
+        state.attachments = [];
         state.liveSession = null;
         state.liveSessionError = null;
         state.liveSessionRouteMissing = false;
@@ -6863,6 +7081,7 @@
         renderJobSummary();
         renderLiveSession();
         renderArtifacts();
+        renderAttachments();
       }
     };
 
@@ -8326,8 +8545,6 @@
     const unifiedDetailMatch = normalizedRoute.match(/^\/tasks\/([^/]+)$/);
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
     const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
-    const resubmittedFromParam = parseResubmittedFromSearchParam(searchParams);
-    const resubmittedFromJobId = resubmittedFromParam.jobId;
 
     if (normalizedRoute === "/tasks") {
       await renderActivePage();
@@ -8409,7 +8626,7 @@
         .trim()
         .toLowerCase();
       if (explicitSource === "queue") {
-        await renderQueueDetailPage(candidateTaskId, { resubmittedFromJobId });
+        await renderQueueDetailPage(candidateTaskId);
         return;
       }
       if (explicitSource === "orchestrator") {
@@ -8422,7 +8639,7 @@
             id: candidateTaskId,
           }),
         );
-        await renderQueueDetailPage(candidateTaskId, { resubmittedFromJobId });
+        await renderQueueDetailPage(candidateTaskId);
         return;
       } catch (_error) {
         // fall through and probe orchestrator
