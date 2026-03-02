@@ -58,6 +58,7 @@ def _serialize_phase_state(
         stderr_path=state.stderr_path,
         metadata=state.get_metadata(),
         selected_skill=skill_meta.get("selectedSkill"),
+        adapter_id=skill_meta.get("adapterId"),
         execution_path=skill_meta.get("executionPath"),
         used_skills=skill_meta.get("usedSkills"),
         used_fallback=skill_meta.get("usedFallback"),

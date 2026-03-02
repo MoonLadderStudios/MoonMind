@@ -1,105 +1,107 @@
-# Feature Specification: Skills-First Workflow Umbrella
+# Feature Specification: Skills Workflow Alignment Refresh
 
 **Feature Branch**: `015-skills-workflow`  
-**Created**: 2026-02-14  
+**Created**: 2026-03-02  
 **Status**: Draft  
-**Input**: User description: "Move workers to always-on Speckit capability and skills-based workflow orchestration (including non-Speckit skills), with the fastest operator path for authenticated Codex workers and Gemini embeddings for vectors."
+**Input**: User description: "Update specs/015-skills-workflow to make it align with the current state and strategy of the MoonMind project. Implement all of the updated tasks when done. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests. Preserve all user-provided constraints."
+**Implementation Intent**: Runtime implementation. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Fast Worker Launch with Authenticated Codex + Gemini Embeddings (Priority: P1)
+### User Story 1 - Canonical Stage Contract and Phase Metadata (Priority: P1)
 
-As an operator, I want one clear startup path that brings up Celery workers with persistent Codex authentication and Google Gemini embeddings configured for vector workflows.
+As an operator, I want workflow stage contracts and surfaced metadata to match the live runtime behavior so API responses and artifacts are reliable during triage.
 
-**Why this priority**: If startup and auth are not deterministic, all higher-level workflow changes are blocked.
+**Why this priority**: Stage contract drift causes incorrect expectations in automation runs and slows incident response.
 
-**Independent Test**: From a fresh `.env`, complete one-time Codex volume auth, start the documented services, and verify workers start without interactive prompts while embedding defaults resolve to Google Gemini.
+**Independent Test**: Run Spec Automation phase serialization tests and verify phase payloads expose canonical skill metadata for current stage execution.
 
 **Acceptance Scenarios**:
 
-1. **Given** `GOOGLE_API_KEY`, `DEFAULT_EMBEDDING_PROVIDER=google`, and `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`, **When** the stack starts, **Then** embedding configuration resolves to Google Gemini defaults.
-2. **Given** Codex auth is completed once on the named volume, **When** `celery_codex_worker` restarts, **Then** Codex preflight succeeds without manual login.
-3. **Given** the documented quickstart command is run, **When** logs are inspected, **Then** the Codex worker reports queue bindings and a successful preflight before processing jobs.
+1. **Given** a stage execution metadata payload containing selected skill details, **When** phase state is serialized, **Then** `selected_skill`, `adapter_id`, and `execution_path` are all available.
+2. **Given** legacy phase metadata without explicit adapter data, **When** the phase belongs to Speckit stages, **Then** defaults resolve to `selected_skill=speckit` and `adapter_id=speckit`.
+3. **Given** stage contracts are reviewed in this feature, **When** stage names are referenced, **Then** they match current runtime stages (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`).
 
 ---
 
-### User Story 2 - Skills-First Execution with Speckit Always Available (Priority: P1)
+### User Story 2 - Shared Skills Runtime and Fast-Path Documentation Parity (Priority: P1)
 
-As a platform engineer, I want workflow stages to execute through a skills abstraction first, while keeping Speckit installed and available on every worker by default.
+As a platform maintainer, I want `015` design artifacts to match shared-skills runtime behavior and current worker startup practices so onboarding and operations follow the real system.
 
-**Why this priority**: This removes hard-coded "Speckit workflow" semantics while preserving existing behavior as the default path.
+**Why this priority**: `015` is a historical umbrella spec and must not contradict current runbooks.
 
-**Independent Test**: Run representative workflow stages with default policy and explicit skill overrides, verify skill execution path is used first, and confirm direct fallback works when a selected skill fails.
+**Independent Test**: Validate that the refreshed quickstart and contracts match current service names, auth scripts, and shared skills workspace conventions.
 
 **Acceptance Scenarios**:
 
-1. **Given** worker startup, **When** capability checks run, **Then** Speckit skills are verified as available regardless of selected workflow policy.
-2. **Given** a workflow stage request with no override, **When** execution begins, **Then** the stage resolves to the configured default skill (Speckit for parity).
-3. **Given** a workflow stage request with a non-Speckit skill override, **When** the skill is allowlisted and healthy, **Then** the stage runs through that skill contract.
-4. **Given** a skill invocation fails, **When** fallback is enabled, **Then** the direct stage implementation executes and records fallback metadata.
+1. **Given** worker auth prerequisites, **When** quickstart steps are followed, **Then** they use `./tools/auth-codex-volume.sh` and `./tools/auth-gemini-volume.sh` before startup.
+2. **Given** run workspace skill wiring, **When** contracts are inspected, **Then** they describe `.agents/skills` and `.gemini/skills` linking to one `skills_active` directory.
+3. **Given** worker startup checks, **When** stage skills do not require Speckit, **Then** documentation reflects conditional Speckit verification instead of unconditional global requirements.
 
 ---
 
-### User Story 3 - Progressive Rollout with Parity and Drift Controls (Priority: P2)
+### User Story 3 - Runtime Validation and Backward-Compatible Safety (Priority: P2)
 
-As a release owner, I want staged rollout controls and parity checks so skills-first adoption can expand safely without regressions.
+As a release owner, I want refreshed `015` tasks to require runtime code changes plus tests so this update is implementation-valid and not docs-only.
 
-**Why this priority**: Skills-first migration must be observable and reversible during rollout.
+**Why this priority**: Runtime intent requires enforceable implementation deltas and verification.
 
-**Independent Test**: Enable shadow and canary flags, run fixture workflows, compare skill and direct outputs, and verify metrics/logs identify execution path and timing.
+**Independent Test**: Confirm updated tasks include runtime file changes under `moonmind/` and validation via `./tools/test_unit.sh`.
 
 **Acceptance Scenarios**:
 
-1. **Given** shadow mode is enabled, **When** a stage runs, **Then** both paths can execute while only the primary path mutates state.
-2. **Given** canary percentage is configured, **When** multiple runs are triggered, **Then** only the configured subset uses skills-first as primary.
-3. **Given** parity fixtures exist, **When** regression checks run, **Then** output drift beyond defined tolerance is reported as a failure.
+1. **Given** updated `tasks.md`, **When** runtime scope is reviewed, **Then** at least one production runtime task and one validation task exist.
+2. **Given** implementation is complete, **When** tests run, **Then** `./tools/test_unit.sh` passes for the modified runtime and API metadata coverage.
 
 ### Edge Cases
 
-- Speckit skill files are missing from one runtime mirror (`.codex` vs `.agents`) even though workers expect Speckit always available.
-- A requested skill is not allowlisted for a stage.
-- Codex auth volume is missing/mis-mounted when worker preflight runs.
-- `DEFAULT_EMBEDDING_PROVIDER=google` is set without `GOOGLE_API_KEY`.
-- Skill path and direct fallback both fail for the same stage.
-- Queue pressure causes long-running fallback phases; observability must still indicate path and latency.
+- Legacy phase metadata is missing `adapterId` while consumers expect adapter-level observability.
+- Speckit is configured as the default stage skill but local mirror roots do not contain a Speckit skill directory.
+- Strict mirror validation is disabled, so startup checks rely on runtime materialization and selection diagnostics.
+- Queue consumers parse historical payloads that may not include newer skills metadata keys.
 
 ## Requirements *(mandatory)*
 
+### Documentation-Backed Requirements
+
+- **DOC-REQ-001** (Source: `moonmind/workflows/speckit_celery/tasks.py` task constants, `docs/ops-runbook.md` codex queue logging): Canonical runtime stages for this workflow are `discover_next_phase`, `submit_codex_job`, and `apply_and_publish`. *(Maps: FR-001)*
+- **DOC-REQ-002** (Source: `docs/TaskQueueSystem.md` required prepare behavior §6.2): Run workspace contracts must materialize `.agents/skills` and `.gemini/skills` links to a shared `skills_active` directory. *(Maps: FR-005)*
+- **DOC-REQ-003** (Source: `docs/SpecKitAutomation.md` operational runbook §8, `docs/ops-runbook.md` auth volume guidance): Fast-path operator docs must use `./tools/auth-codex-volume.sh` and `./tools/auth-gemini-volume.sh` before worker startup. *(Maps: FR-005)*
+- **DOC-REQ-004** (Source: `docs/SpecKitAutomation.md` health checks for bundled CLIs): Speckit CLI verification should run only when configured stage skills require the Speckit adapter. *(Maps: FR-006)*
+- **DOC-REQ-005** (Source: `.specify/memory/constitution.md` non-negotiable observability constraints): Workflow surfaces must emit structured stage metadata so operators can diagnose what happened without raw worker internals. *(Maps: FR-002, FR-004)*
+- **DOC-REQ-006** (Source: `.specify/memory/constitution.md` compatibility and migration constraints): Metadata normalization must preserve backward-compatible behavior for legacy persisted payloads where required fields may be absent. *(Maps: FR-003)*
+- **DOC-REQ-007** (Source: feature input for this refresh): Deliverables for this feature must include production runtime code updates, not docs-only edits. *(Maps: FR-007)*
+- **DOC-REQ-008** (Source: `AGENTS.md` testing instructions): Unit verification must run via `./tools/test_unit.sh` as the canonical test entrypoint. *(Maps: FR-008)*
+
 ### Functional Requirements
 
-- **FR-001**: Worker startup MUST verify Speckit capability is available for all automation worker processes, independent of selected workflow policy.
-- **FR-002**: Workflow execution MUST use a stage-based skill contract (`specify`, `plan`, `tasks`, `analyze`, `implement`) as the primary orchestration mechanism.
-- **FR-003**: The system MUST support allowlisted non-Speckit skills per stage while preserving Speckit as the default stage mapping.
-- **FR-004**: The system MUST provide a per-stage direct fallback path when skill execution fails or is explicitly bypassed.
-- **FR-005**: Workflow metadata and logs MUST record selected skill, execution path (`skill` vs `direct_fallback`), and stage timing.
-- **FR-006**: Existing queue bindings (`speckit`, `codex`, `gemini`) and existing workflow API behavior MUST remain backward compatible during migration.
-- **FR-007**: Docker Compose and environment defaults MUST document the fastest path for authenticated Codex workers and Gemini embeddings.
-- **FR-008**: Quickstart guidance MUST include one-time Codex auth volume setup, startup commands, and verification checks for worker readiness and embedding defaults.
-- **FR-009**: Startup checks MUST fail fast with actionable diagnostics when required prerequisites are missing (Speckit capability, Codex auth, or Google embedding credentials when Google is configured).
-- **FR-010**: Rollout controls MUST support global and per-stage toggles, including shadow mode and canary mode for skills-first execution.
-- **FR-011**: Test coverage MUST include skill-vs-direct parity/regression checks and fallback behavior validation.
-- **FR-012**: Implementation phase deliverables MUST include production runtime code changes and validation via `./tools/test_unit.sh`.
+- **FR-001** (`DOC-REQ-001`): `specs/015-skills-workflow` artifacts MUST reference current runtime stage names (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`).
+- **FR-002** (`DOC-REQ-005`): Spec Automation phase metadata normalization MUST expose `selectedSkill`, `adapterId`, and `executionPath` when available.
+- **FR-003** (`DOC-REQ-006`): Legacy Speckit phase metadata without explicit skill fields MUST default to `selectedSkill=speckit`, `adapterId=speckit`, and `executionPath=skill`.
+- **FR-004** (`DOC-REQ-005`): API response schemas for Spec Automation phase details MUST include adapter metadata for skills-first observability.
+- **FR-005** (`DOC-REQ-002`, `DOC-REQ-003`): Documentation contracts in `015` MUST reflect shared skills runtime layout (`skills_active`, `.agents/skills`, `.gemini/skills`) and current auth startup path.
+- **FR-006** (`DOC-REQ-004`): `015` runtime assumptions MUST align with current strategy where Speckit verification is conditioned on configured stage skills.
+- **FR-007** (`DOC-REQ-007`): Updated implementation tasks MUST include production runtime file changes and validation tests.
+- **FR-008** (`DOC-REQ-008`): Implementation validation MUST run via `./tools/test_unit.sh`.
 
 ### Key Entities *(include if feature involves data)*
 
-- **SkillCatalogEntry**: Declares skill identifier, supported stages, allowlist status, and health/preflight requirements.
-- **WorkflowStageContract**: Canonical input/output envelope for each stage execution with `run_id`, `feature_id`, `stage`, and artifact references.
-- **WorkflowExecutionPathRecord**: Captures selected skill, primary path, fallback path usage, durations, and status per stage.
-- **WorkerStartupProfile**: Captures startup checks for Speckit availability, Codex auth status, queue bindings, and readiness state.
-- **EmbeddingRuntimeProfile**: Captures resolved embedding provider/model and required credential availability at startup/runtime.
+- **StageExecutionMetadata**: Normalized phase metadata containing selected skill id, adapter id, execution path, and fallback flags.
+- **WorkflowStageContract**: Canonical definition of the three runtime stage operations (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`).
+- **SharedSkillsWorkspace**: Run-scoped skills materialization output linking `.agents/skills` and `.gemini/skills` to `skills_active`.
+- **WorkerFastPathProfile**: Startup/auth configuration profile for codex and gemini workers used by operator quickstart.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: Following quickstart from a clean environment produces a ready Codex worker and Gemini worker without interactive prompts.
-- **SC-002**: 100% of supported workflow stages can be invoked through the stage-based skill contract, with fallback available where configured.
-- **SC-003**: Parity regression suite reports no unresolved critical drift between skill-driven and direct execution for defined fixtures.
-- **SC-004**: Logs/metrics for stage execution always include stage name, selected skill id, execution path, and duration.
-- **SC-005**: Validation command `./tools/test_unit.sh` passes for the finalized implementation.
+- **SC-001**: 100% of refreshed `015` artifacts use current stage names and shared-skills runtime terminology.
+- **SC-002**: Spec Automation phase responses include `adapter_id` whenever metadata is present, with Speckit defaults for legacy stage records.
+- **SC-003**: Unit tests covering metadata normalization and API serialization pass through `./tools/test_unit.sh`.
+- **SC-004**: Updated `tasks.md` contains explicit runtime implementation and validation tasks, and all are completed.
 
 ## Assumptions
 
-- Speckit skills remain installed and are exposed through shared adapters at `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` can remain for compatibility).
-- Existing `/api/workflows` routes remain in place during this umbrella migration; naming generalization can be layered without breaking clients.
-- Google Gemini (`gemini-embedding-001`) remains the default embedding model for the fastest-path deployment profile.
+- Speckit remains the default configured stage skill in current deployments, even as policy mode may be permissive or allowlist.
+- Existing database structures and legacy workflow naming compatibility remain unchanged by this feature refresh.
+- This refresh updates `015` artifacts and targeted runtime metadata surfacing only; broader architecture evolution remains in newer specs.

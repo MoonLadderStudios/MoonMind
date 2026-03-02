@@ -389,6 +389,7 @@ class SpecAutomationTaskState(Base):
             metadata = {}
 
         selected_skill = metadata.get("selectedSkill")
+        adapter_id = metadata.get("adapterId")
         execution_path = metadata.get("executionPath")
         used_skills = metadata.get("usedSkills")
         used_fallback = metadata.get("usedFallback")
@@ -399,6 +400,11 @@ class SpecAutomationTaskState(Base):
         else:
             selected_skill = None
 
+        if isinstance(adapter_id, str):
+            adapter_id = adapter_id.strip() or None
+        else:
+            adapter_id = None
+
         if isinstance(execution_path, str):
             execution_path = execution_path.strip() or None
         else:
@@ -406,6 +412,8 @@ class SpecAutomationTaskState(Base):
 
         if selected_skill is None and self.phase.value.startswith("speckit_"):
             selected_skill = "speckit"
+        if adapter_id is None and selected_skill == "speckit":
+            adapter_id = "speckit"
         if execution_path is None and selected_skill == "speckit":
             execution_path = "skill"
 
@@ -425,6 +433,7 @@ class SpecAutomationTaskState(Base):
 
         if (
             selected_skill is None
+            and adapter_id is None
             and execution_path is None
             and used_skills_bool is None
             and used_fallback_bool is None
@@ -434,6 +443,7 @@ class SpecAutomationTaskState(Base):
 
         return {
             "selectedSkill": selected_skill,
+            "adapterId": adapter_id,
             "executionPath": execution_path,
             "usedSkills": used_skills_bool,
             "usedFallback": used_fallback_bool,
