@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Manifest Phase 0 Rebaseline
+# Specification Quality Checklist: Manifest Queue Alignment and Hardening
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
+**Purpose**: Validate specification completeness and quality before implementation and remediation  
 **Created**: 2026-03-02  
-**Feature**: [spec.md](../spec.md)
+**Feature**: specs/028-manifest-queue/spec.md
 
 ## Content Quality
 
@@ -31,6 +31,4 @@
 
 ## Notes
 
-- Validated on 2026-03-02 after rebaselining `031-manifest-phase0` to current MoonMind strategy.
-- Runtime-intent guard confirmed in `spec.md`: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
-- No clarification blockers remain; spec is ready for `speckit-plan`.
+Validated against runtime-intent guard requiring production code changes plus validation tests; no clarification markers remain.

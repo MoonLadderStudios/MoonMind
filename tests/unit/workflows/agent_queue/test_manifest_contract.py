@@ -9,7 +9,9 @@ import pytest
 from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue.manifest_contract import (
     ManifestContractError,
+    collect_manifest_secret_refs,
     normalize_manifest_job_payload,
+    sanitize_manifest_payload,
 )
 
 pytestmark = [pytest.mark.speckit]
@@ -188,6 +190,37 @@ dataSources:
     assert refs["vault"][0]["ref"] == "vault://kv/manifests/demo#token"
 
 
+def test_collect_manifest_secret_refs_deduplicates_entries() -> None:
+    """collect_manifest_secret_refs should normalize and dedupe profile/vault refs."""
+
+    parsed_manifest = {
+        "auth": {
+            "primary": "profile://OpenAI#API_KEY",
+            "secondary": "profile://openai#api_key",
+            "vaultA": "vault://kv/manifests/demo#token",
+            "vaultB": "vault://kv/manifests/demo#token",
+        }
+    }
+
+    refs = collect_manifest_secret_refs(parsed_manifest)
+    assert refs["profile"] == [
+        {
+            "provider": "openai",
+            "field": "api_key",
+            "envKey": "OPENAI_API_KEY",
+            "normalized": "profile://openai#api_key",
+        }
+    ]
+    assert refs["vault"] == [
+        {
+            "mount": "kv",
+            "path": "manifests/demo",
+            "field": "token",
+            "ref": "vault://kv/manifests/demo#token",
+        }
+    ]
+
+
 def test_manifest_capability_flags_extend_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Configured capability flags should be prepended to derived capability lists."""
 
@@ -199,3 +232,36 @@ def test_manifest_capability_flags_extend_base(monkeypatch: pytest.MonkeyPatch) 
     normalized = normalize_manifest_job_payload(_payload())
 
     assert normalized["requiredCapabilities"][:3] == ["manifest", "phase0", "beta"]
+
+
+def test_sanitize_manifest_payload_preserves_metadata_without_inline_content() -> None:
+    """Sanitized payloads should keep compatibility metadata and remove raw content."""
+
+    normalized = normalize_manifest_job_payload(_payload())
+    normalized["manifestSecretRefs"] = {
+        "profile": [
+            {
+                "envKey": "OPENAI_API_KEY",
+                "normalized": "profile://openai#api_key",
+                "provider": "openai",
+                "field": "api_key",
+            }
+        ],
+        "vault": [
+            {
+                "ref": "vault://kv/manifests/demo#token",
+                "mount": "kv",
+                "path": "manifests/demo",
+                "field": "token",
+            }
+        ],
+    }
+
+    sanitized = sanitize_manifest_payload(normalized)
+
+    assert sanitized["manifestHash"] == normalized["manifestHash"]
+    assert sanitized["manifestVersion"] == normalized["manifestVersion"]
+    assert sanitized["requiredCapabilities"] == normalized["requiredCapabilities"]
+    assert "content" not in sanitized["manifest"]["source"]
+    assert sanitized["manifestSecretRefs"]["profile"][0]["envKey"] == "OPENAI_API_KEY"
+    assert sanitized["manifestSecretRefs"]["vault"][0]["ref"].startswith("vault://")

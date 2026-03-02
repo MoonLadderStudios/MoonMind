@@ -74,6 +74,8 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
+from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
     AgentArtifactNotFoundError,
@@ -548,6 +550,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
+        raw_message = str(exc).strip()
         lowered = str(exc).lower()
         if "targetruntime=claude requires anthropic_api_key" in lowered:
             return HTTPException(
@@ -579,6 +582,15 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
+        else:
+            cause = getattr(exc, "__cause__", None)
+            while isinstance(cause, Exception):
+                if isinstance(cause, ManifestContractError):
+                    # Surface actionable manifest contract failures to API clients.
+                    message = raw_message
+                    break
+                cause = getattr(cause, "__cause__", None)
+
         return HTTPException(
             status_code=status_code,
             detail={
@@ -619,6 +631,16 @@ async def create_job(
             affinity_key=payload.affinity_key,
             max_attempts=payload.max_attempts,
         )
+    except AgentQueueValidationError as exc:
+        if payload.type == MANIFEST_JOB_TYPE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_manifest_job",
+                    "message": str(exc),
+                },
+            ) from exc
+        raise _to_http_exception(exc) from exc
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(job)

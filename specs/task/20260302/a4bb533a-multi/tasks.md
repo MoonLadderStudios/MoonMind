@@ -12,18 +12,12 @@
 - **[Story]**: User story label (`[US1]`, `[US2]`)
 - Include exact file paths in each task description
 
-## Prompt B Scope Controls (Step 12/16)
-
-- Runtime implementation tasks are explicitly present: `T003`, `T004`, `T007`, `T008`, `T011`, `T012`.
-- Runtime validation tasks are explicitly present: `T005`, `T006`, `T009`, `T010`, `T015`.
-- `DOC-REQ-*` implementation + validation coverage is enforced through `T001` (traceability matrix updates), `T014` (cross-artifact sync verification), and per-requirement task mappings in `specs/029-manifest-phase0/contracts/requirements-traceability.md`.
-
 ## Phase 1: Setup (Shared Context)
 
 **Purpose**: Lock scope + traceability inputs before runtime edits.
 
-- [X] T001 Update DOC-REQ mapping notes and implementation/test targets in specs/029-manifest-phase0/contracts/requirements-traceability.md for DOC-REQ-001 through DOC-REQ-006.
-- [X] T002 [P] Update quick validation expectations for queue and registry 422 error codes/messages in specs/029-manifest-phase0/quickstart.md (DOC-REQ-002, DOC-REQ-004, DOC-REQ-005).
+- [ ] T001 Update DOC-REQ mapping notes and implementation/test targets in specs/029-manifest-phase0/contracts/requirements-traceability.md for DOC-REQ-001 through DOC-REQ-006.
+- [ ] T002 [P] Update quick validation expectations for queue and registry 422 error codes/messages in specs/029-manifest-phase0/quickstart.md (DOC-REQ-002, DOC-REQ-004, DOC-REQ-005).
 
 ---
 
@@ -33,8 +27,8 @@
 
 **⚠️ CRITICAL**: Complete this phase before user-story work.
 
-- [X] T003 Implement/confirm manifest-specific validation branch entry in api_service/api/routers/agent_queue.py while preserving existing non-manifest queue fallback behavior (DOC-REQ-001, DOC-REQ-003, DOC-REQ-006).
-- [X] T004 [P] Implement/confirm manifest registry validation boundary in api_service/api/routers/manifests.py without changing successful registry response payload shapes (DOC-REQ-004, DOC-REQ-006).
+- [ ] T003 Implement/confirm manifest-specific validation branch entry in api_service/api/routers/agent_queue.py while preserving existing non-manifest queue fallback behavior (DOC-REQ-001, DOC-REQ-003, DOC-REQ-006).
+- [ ] T004 [P] Implement/confirm manifest registry validation boundary in api_service/api/routers/manifests.py without changing successful registry response payload shapes (DOC-REQ-004, DOC-REQ-006).
 
 **Checkpoint**: Foundational router boundaries are ready for story-specific validation hardening.
 
@@ -48,13 +42,13 @@
 
 ### Tests for User Story 1
 
-- [X] T005 [P] [US1] Add/adjust router test coverage for manifest queue validation 422 mapping (`invalid_manifest_job` + contract text) in tests/unit/api/routers/test_agent_queue.py (DOC-REQ-002, DOC-REQ-005).
-- [X] T006 [P] [US1] Add/adjust regression coverage for non-manifest queue validation mapping (`invalid_queue_payload`) in tests/unit/api/routers/test_agent_queue.py (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005).
+- [ ] T005 [P] [US1] Add/adjust router test coverage for manifest queue validation 422 mapping (`invalid_manifest_job` + contract text) in tests/unit/api/routers/test_agent_queue.py (DOC-REQ-002, DOC-REQ-005).
+- [ ] T006 [P] [US1] Add/adjust regression coverage for non-manifest queue validation mapping (`invalid_queue_payload`) in tests/unit/api/routers/test_agent_queue.py (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005).
 
 ### Implementation for User Story 1
 
-- [X] T007 [US1] Update manifest `AgentQueueValidationError` handling in `create_job` within api_service/api/routers/agent_queue.py to return HTTP 422 with `code="invalid_manifest_job"` and `message=str(exc)` (DOC-REQ-002, DOC-REQ-006).
-- [X] T008 [US1] Preserve generic queue validation mapping and success payload behavior for non-manifest types in api_service/api/routers/agent_queue.py (DOC-REQ-001, DOC-REQ-003, DOC-REQ-004).
+- [ ] T007 [US1] Update manifest `AgentQueueValidationError` handling in `create_job` within api_service/api/routers/agent_queue.py to return HTTP 422 with `code="invalid_manifest_job"` and `message=str(exc)` (DOC-REQ-002, DOC-REQ-006).
+- [ ] T008 [US1] Preserve generic queue validation mapping and success payload behavior for non-manifest types in api_service/api/routers/agent_queue.py (DOC-REQ-001, DOC-REQ-003, DOC-REQ-004).
 
 **Checkpoint**: User Story 1 is independently functional and testable.
 
@@ -68,13 +62,13 @@
 
 ### Tests for User Story 2
 
-- [X] T009 [P] [US2] Add/adjust upsert validation test coverage for HTTP 422 `invalid_manifest` with contract-derived message in tests/unit/api/routers/test_manifests.py (DOC-REQ-004, DOC-REQ-005).
-- [X] T010 [P] [US2] Add/adjust registry regression tests confirming unchanged success payload shapes for list/get/run flows in tests/unit/api/routers/test_manifests.py (DOC-REQ-004, DOC-REQ-005).
+- [ ] T009 [P] [US2] Add/adjust upsert validation test coverage for HTTP 422 `invalid_manifest` with contract-derived message in tests/unit/api/routers/test_manifests.py (DOC-REQ-004, DOC-REQ-005).
+- [ ] T010 [P] [US2] Add/adjust registry regression tests confirming unchanged success payload shapes for list/get/run flows in tests/unit/api/routers/test_manifests.py (DOC-REQ-004, DOC-REQ-005).
 
 ### Implementation for User Story 2
 
-- [X] T011 [US2] Update `ManifestContractError` handling in `upsert_manifest` within api_service/api/routers/manifests.py to return HTTP 422 with `code="invalid_manifest"` and `message=str(exc)` (DOC-REQ-002, DOC-REQ-004, DOC-REQ-006).
-- [X] T012 [US2] Preserve manifest run submission 422 semantics and queue metadata response shape in api_service/api/routers/manifests.py (DOC-REQ-004).
+- [ ] T011 [US2] Update `ManifestContractError` handling in `upsert_manifest` within api_service/api/routers/manifests.py to return HTTP 422 with `code="invalid_manifest"` and `message=str(exc)` (DOC-REQ-002, DOC-REQ-004, DOC-REQ-006).
+- [ ] T012 [US2] Preserve manifest run submission 422 semantics and queue metadata response shape in api_service/api/routers/manifests.py (DOC-REQ-004).
 
 **Checkpoint**: User Story 2 is independently functional and testable.
 
@@ -84,9 +78,9 @@
 
 **Purpose**: Final consistency checks across runtime, contracts, and validation evidence.
 
-- [X] T013 [P] Align manifest validation error code/message examples in specs/029-manifest-phase0/contracts/manifest-phase0.openapi.yaml with router behavior for `/api/queue/jobs` and `/api/manifests/{name}` (DOC-REQ-002, DOC-REQ-004).
-- [X] T014 [P] Verify spec-level acceptance/traceability references stay synchronized in specs/029-manifest-phase0/spec.md and specs/029-manifest-phase0/contracts/requirements-traceability.md (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-006).
-- [X] T015 Execute validation suite via ./tools/test_unit.sh and record pass/fail evidence in specs/029-manifest-phase0/quickstart.md (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006).
+- [ ] T013 [P] Align manifest validation error code/message examples in specs/029-manifest-phase0/contracts/manifest-phase0.openapi.yaml with router behavior for `/api/queue/jobs` and `/api/manifests/{name}` (DOC-REQ-002, DOC-REQ-004).
+- [ ] T014 [P] Verify spec-level acceptance/traceability references stay synchronized in specs/029-manifest-phase0/spec.md and specs/029-manifest-phase0/contracts/requirements-traceability.md (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-006).
+- [ ] T015 Execute validation suite via ./tools/test_unit.sh and record pass/fail evidence in specs/029-manifest-phase0/quickstart.md (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006).
 
 ---
 
@@ -158,4 +152,3 @@ Task: "T006 Add/adjust non-manifest regression mapping test in tests/unit/api/ro
 - All tasks are checklist-formatted and dependency ordered.
 - `DOC-REQ-001` through `DOC-REQ-006` are explicitly carried in implementation and validation tasks.
 - Final completion requires runtime code changes plus validation evidence (`./tools/test_unit.sh`).
-- Prompt B runtime gate is satisfied only when runtime implementation tasks and validation tasks above are completed together.
