@@ -74,6 +74,7 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
+from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
     AgentArtifactNotFoundError,
@@ -580,9 +581,15 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
-        elif "manifest" in lowered and raw_message:
-            # Surface actionable manifest contract failures to API clients.
-            message = raw_message
+        else:
+            cause = getattr(exc, "__cause__", None)
+            while isinstance(cause, Exception) and cause is not None:
+                if isinstance(cause, ManifestContractError):
+                    # Surface actionable manifest contract failures to API clients.
+                    message = raw_message
+                    break
+                cause = getattr(cause, "__cause__", None)
+        
         return HTTPException(
             status_code=status_code,
             detail={

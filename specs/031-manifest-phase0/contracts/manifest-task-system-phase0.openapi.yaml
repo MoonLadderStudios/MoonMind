@@ -420,13 +420,12 @@ components:
                 type: string
               version:
                 type: string
-                nullable: true
               contentHash:
                 type: string
               updatedAt:
                 type: string
                 format: date-time
-                nullable: true
+              
               lastRunJobId:
                 type: string
                 format: uuid
@@ -438,7 +437,7 @@ components:
                 type: string
                 format: date-time
                 nullable: true
-            required: [name, contentHash]
+            required: [name, version, contentHash, updatedAt]
       required: [items]
 
     ManifestRunRequest:

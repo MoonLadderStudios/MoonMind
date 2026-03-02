@@ -113,7 +113,7 @@ curl -X POST "http://localhost:5000/api/queue/jobs" \
       "action": "run",
       "source": {
         "kind": "inline",
-        "content": "version: \"v0\"\nmetadata:\n  name: bad-secret\nembeddings:\n  provider: openai\nvectorStore:\n  type: qdrant\ndataSources:\n  - id: docs\n    type: GithubRepositoryReader\nauth:\n  apiKey: sk_live_not_allowed\n"
+        "content": "version: \"v0\"\nmetadata:\n  name: bad-secret\nembeddings:\n  provider: openai\nvectorStore:\n  type: qdrant\ndataSources:\n  - id: docs\n    type: GithubRepositoryReader\nauth:\n  apiKey: <OPENAI_API_KEY>\n"
       }
     }
   }
