@@ -867,6 +867,19 @@ def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str,
     publish = publish_raw if isinstance(publish_raw, Mapping) else {}
     codex_raw = payload.get("codex")
     codex = codex_raw if isinstance(codex_raw, Mapping) else {}
+    publish_payload = {
+        "mode": _normalize_publish_mode(publish.get("mode")),
+        "prBaseBranch": _clean_optional_str(
+            publish.get("prBaseBranch") or publish.get("baseBranch")
+        ),
+        "commitMessage": None,
+        "prTitle": None,
+        "prBody": None,
+    }
+    if "verificationSkipReason" in publish:
+        publish_payload["verificationSkipReason"] = publish.get("verificationSkipReason")
+    if "verification" in publish:
+        publish_payload["verification"] = publish.get("verification")
 
     return {
         "instructions": _clean_optional_str(payload.get("instruction"))
@@ -881,15 +894,7 @@ def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str,
             "startingBranch": _clean_optional_str(payload.get("ref")),
             "newBranch": None,
         },
-        "publish": {
-            "mode": _normalize_publish_mode(publish.get("mode")),
-            "prBaseBranch": _clean_optional_str(
-                publish.get("prBaseBranch") or publish.get("baseBranch")
-            ),
-            "commitMessage": None,
-            "prTitle": None,
-            "prBody": None,
-        },
+        "publish": publish_payload,
     }
 
 
@@ -933,11 +938,42 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
     publish_base = (
         _clean_optional_str(inputs.get("publishBaseBranch"))
         or _clean_optional_str(payload.get("publishBaseBranch"))
+        or _clean_optional_str(
+            (inputs.get("publish") or {}).get("prBaseBranch")
+            if isinstance(inputs.get("publish"), Mapping)
+            else None
+        )
+        or _clean_optional_str(
+            (inputs.get("publish") or {}).get("baseBranch")
+            if isinstance(inputs.get("publish"), Mapping)
+            else None
+        )
         or None
     )
+    inputs_publish = inputs.get("publish")
+    skill_publish_node = inputs_publish if isinstance(inputs_publish, Mapping) else {}
+    if publish_mode is None and "mode" in skill_publish_node:
+        publish_mode = _clean_optional_str(skill_publish_node.get("mode"))
+    if publish_base is None and "prBaseBranch" in skill_publish_node:
+        publish_base = _clean_optional_str(skill_publish_node.get("prBaseBranch"))
+    if publish_base is None and "baseBranch" in skill_publish_node:
+        publish_base = _clean_optional_str(skill_publish_node.get("baseBranch"))
     ref = _clean_optional_str(inputs.get("ref")) or _clean_optional_str(
         payload.get("ref")
     )
+    publish_payload = {
+        "mode": _normalize_publish_mode(publish_mode),
+        "prBaseBranch": publish_base,
+        "commitMessage": None,
+        "prTitle": None,
+        "prBody": None,
+    }
+    if "verificationSkipReason" in skill_publish_node:
+        publish_payload["verificationSkipReason"] = skill_publish_node.get(
+            "verificationSkipReason"
+        )
+    if "verification" in skill_publish_node:
+        publish_payload["verification"] = skill_publish_node.get("verification")
 
     task = {
         "instructions": instruction,
@@ -953,13 +989,7 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
             "startingBranch": ref,
             "newBranch": None,
         },
-        "publish": {
-            "mode": _normalize_publish_mode(publish_mode),
-            "prBaseBranch": publish_base,
-            "commitMessage": None,
-            "prTitle": None,
-            "prBody": None,
-        },
+        "publish": publish_payload,
     }
     if repository:
         task["skill"]["args"].setdefault("repo", repository)

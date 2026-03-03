@@ -624,6 +624,32 @@ def test_normalize_legacy_exec_payload_adds_task_contract_fields() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
+def test_normalize_legacy_exec_payload_preserves_publish_verification_skip_reason() -> None:
+    """Legacy codex_exec payload should preserve publish verification skip reason."""
+
+    normalized = normalize_queue_job_payload(
+        job_type="codex_exec",
+        payload={
+            "repository": "Moon/Mind",
+            "instruction": "Run tests",
+            "publish": {
+                "mode": "branch",
+                "verificationSkipReason": {
+                    "category": "infrastructure",
+                    "reason": "verification unavailable in this environment",
+                    "ticket": "T-123",
+                },
+            },
+        },
+    )
+
+    assert normalized["task"]["publish"]["verificationSkipReason"] == {
+        "category": "infrastructure",
+        "reason": "verification unavailable in this environment",
+        "ticket": "T-123",
+    }
+
+
 def test_normalize_legacy_exec_payload_defaults_publish_mode_to_pr() -> None:
     """Legacy codex_exec payloads should default publish mode to PR when omitted."""
 
@@ -663,6 +689,35 @@ def test_build_canonical_view_for_skill_payload_sets_skill_id() -> None:
     assert canonical["task"]["skill"]["id"] == "speckit"
     assert canonical["task"]["instructions"] == "Run"
     assert canonical["targetRuntime"] == "codex"
+
+
+def test_normalize_legacy_skill_payload_preserves_publish_verification_skip_reason() -> None:
+    """Legacy codex_skill payload should preserve publish verification skip reason."""
+
+    canonical = build_canonical_task_view(
+        job_type="codex_skill",
+        payload={
+            "skillId": "speckit",
+            "inputs": {
+                "repo": "Moon/Mind",
+                "instruction": "Run",
+                "publish": {
+                    "mode": "branch",
+                    "verificationSkipReason": {
+                        "category": "ci",
+                        "reason": "pipeline not available",
+                        "ticket": "INFRA-9",
+                    },
+                },
+            },
+        },
+    )
+
+    assert canonical["task"]["publish"]["verificationSkipReason"] == {
+        "category": "ci",
+        "reason": "pipeline not available",
+        "ticket": "INFRA-9",
+    }
 
 
 def test_normalize_legacy_skill_payload_defaults_publish_mode_to_pr() -> None:
