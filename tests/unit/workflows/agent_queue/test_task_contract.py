@@ -624,7 +624,9 @@ def test_normalize_legacy_exec_payload_adds_task_contract_fields() -> None:
     assert normalized["requiredCapabilities"] == ["codex", "git", "gh"]
 
 
-def test_normalize_legacy_exec_payload_preserves_publish_verification_skip_reason() -> None:
+def test_normalize_legacy_exec_payload_preserves_publish_verification_skip_reason() -> (
+    None
+):
     """Legacy codex_exec payload should preserve publish verification skip reason."""
 
     normalized = normalize_queue_job_payload(
@@ -691,7 +693,9 @@ def test_build_canonical_view_for_skill_payload_sets_skill_id() -> None:
     assert canonical["targetRuntime"] == "codex"
 
 
-def test_normalize_legacy_skill_payload_preserves_publish_verification_skip_reason() -> None:
+def test_normalize_legacy_skill_payload_preserves_publish_verification_skip_reason() -> (
+    None
+):
     """Legacy codex_skill payload should preserve publish verification skip reason."""
 
     canonical = build_canonical_task_view(

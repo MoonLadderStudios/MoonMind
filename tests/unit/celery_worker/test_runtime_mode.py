@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-
-
 from celery_worker.runtime_mode import (
     format_invalid_claude_cli_auth_mode_error,
     inspect_claude_home_for_auth_mode,

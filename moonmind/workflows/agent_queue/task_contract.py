@@ -877,7 +877,9 @@ def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str,
         "prBody": None,
     }
     if "verificationSkipReason" in publish:
-        publish_payload["verificationSkipReason"] = publish.get("verificationSkipReason")
+        publish_payload["verificationSkipReason"] = publish.get(
+            "verificationSkipReason"
+        )
     if "verification" in publish:
         publish_payload["verification"] = publish.get("verification")
 
