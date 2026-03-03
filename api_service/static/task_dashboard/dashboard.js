@@ -5971,6 +5971,12 @@
         console.error("queue submit failed", error);
         message.className = "notice error queue-submit-message";
         const status = Number(error?.status || 0);
+        const queueDetail =
+          error?.payload && typeof error.payload === "object" ? error.payload.detail : null;
+        const queueDebugMessage =
+          queueDetail && typeof queueDetail === "object" && !Array.isArray(queueDetail)
+            ? String(queueDetail.debugMessage || "").trim()
+            : "";
         if (isEditMode && status === 409) {
           message.textContent = "This task already started or changed. Refresh and try again.";
           return;
@@ -5980,13 +5986,26 @@
           return;
         }
         if (isEditMode && status === 422) {
+          const debugSuffix =
+            queueDetail &&
+            String(queueDetail.code || "").toLowerCase() === "invalid_queue_payload" &&
+            queueDebugMessage
+              ? ` (details: ${queueDebugMessage})`
+              : "";
           message.textContent =
-            "Queue task update is invalid: " + String(error?.message || "validation failed");
+            `Queue task update is invalid: ${String(error?.message || "validation failed")}${debugSuffix}`;
           return;
         }
+        const baseMessage = String(error?.message || "request failed");
+        const debugSuffix =
+          queueDetail &&
+          String(queueDetail.code || "").toLowerCase() === "invalid_queue_payload" &&
+          queueDebugMessage
+            ? ` (details: ${queueDebugMessage})`
+            : "";
         message.textContent = isEditMode
-          ? "Failed to update queue task: " + String(error?.message || "request failed")
-          : "Failed to create queue task: " + String(error?.message || "request failed");
+          ? `Failed to update queue task: ${baseMessage}${debugSuffix}`
+          : `Failed to create queue task: ${baseMessage}${debugSuffix}`;
       }
     });
   }
