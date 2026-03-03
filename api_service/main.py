@@ -178,7 +178,9 @@ async def _initialize_oidc_provider(app: FastAPI):
             logger.error(f"Failed to fetch Google OIDC discovery document: {e}")
             raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
         except httpx.HTTPStatusError as e:
-            logger.error(f"Failed to fetch Google OIDC discovery document, status code {e.response.status_code}: {e}")
+            logger.error(
+                f"Failed to fetch Google OIDC discovery document, status code {e.response.status_code}: {e}"
+            )
             raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
         except Exception as e:
             logger.error(f"Error processing Google OIDC discovery document: {e}")
