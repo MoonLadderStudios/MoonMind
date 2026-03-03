@@ -6749,7 +6749,7 @@ class CodexWorker:
                 "repository": str(canonical_payload.get("repository") or "").strip(),
                 "targetRuntime": runtime_mode,
                 "task": {
-                    "instructions": "TODO: replace with the proposed follow-up task objective",
+                    "instructions": "<OBJECTIVE>",
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
                         "mode": runtime_mode,
