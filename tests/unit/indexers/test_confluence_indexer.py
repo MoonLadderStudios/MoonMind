@@ -32,6 +32,48 @@ class TestConfluenceIndexer(unittest.TestCase):
         self.assertEqual(self.indexer.base_url, "http://fake-confluence.com")
         self.assertIsInstance(self.indexer.reader, MagicMock)
 
+    def test_init_missing_base_url(self):
+        with self.assertRaises(ValueError) as context:
+            ConfluenceIndexer(
+                base_url="",
+                api_token="fake_token",
+                user_name="fake_user",
+                logger=MagicMock(),
+            )
+        self.assertEqual(str(context.exception), "Confluence URL is required to set up Confluence")
+
+    def test_init_missing_api_token(self):
+        with self.assertRaises(ValueError) as context:
+            ConfluenceIndexer(
+                base_url="http://fake-confluence.com",
+                api_token="",
+                user_name="fake_user",
+                logger=MagicMock(),
+            )
+        self.assertEqual(str(context.exception), "Confluence API key is required to set up Confluence")
+
+    def test_init_missing_user_name(self):
+        with self.assertRaises(ValueError) as context:
+            ConfluenceIndexer(
+                base_url="http://fake-confluence.com",
+                api_token="fake_token",
+                user_name="",
+                logger=MagicMock(),
+            )
+        self.assertEqual(str(context.exception), "Confluence username is required to set up Confluence")
+
+    @patch("llama_index.core.VectorStoreIndex.from_documents")
+    def test_index_missing_parameters(self, mock_from_documents):
+        with self.assertRaises(ValueError) as context:
+            self.indexer.index(
+                storage_context=self.mock_storage_context,
+                service_context=self.mock_service_context,
+            )
+        self.assertEqual(
+            str(context.exception),
+            "Must provide page_id, space_key (with or without page_title), or cql_query.",
+        )
+
     @patch("llama_index.core.VectorStoreIndex.from_documents")
     @patch("llama_index.core.node_parser.SimpleNodeParser.from_defaults")
     def test_index_by_space_key(
