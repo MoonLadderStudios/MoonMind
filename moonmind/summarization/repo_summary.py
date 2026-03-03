@@ -4,8 +4,6 @@ import os
 
 import toml  # For pyproject.toml or other toml files
 
-# We might need find_files or similar from utils later
-# from moonmind.utils.find_files import find_files
 
 logger = logging.getLogger(__name__)
 
