@@ -550,7 +550,9 @@ class AgentQueueService:
             )
         return job
 
-    def _is_publish_preflight_verification_gap(self, source_job: models.AgentJob) -> bool:
+    def _is_publish_preflight_verification_gap(
+        self, source_job: models.AgentJob
+    ) -> bool:
         """Detect the specific publish preflight failure mode we can safely recover from."""
 
         if source_job.type != CANONICAL_TASK_JOB_TYPE:
@@ -610,7 +612,9 @@ class AgentQueueService:
 
         source_skip_reason = source_publish.get("verificationSkipReason")
         if isinstance(source_skip_reason, dict):
-            request_publish["verificationSkipReason"] = copy.deepcopy(source_skip_reason)
+            request_publish["verificationSkipReason"] = copy.deepcopy(
+                source_skip_reason
+            )
             return
 
         if self._is_publish_preflight_verification_gap(source_job):
