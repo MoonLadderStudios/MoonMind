@@ -12,7 +12,7 @@ import os  # For path operations
 # Now proceed with other imports
 from uuid import uuid4
 
-import requests
+import httpx
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -153,7 +153,7 @@ def _initialize_contexts(app_state, app_settings):
     logger.info("Storage and service contexts initialized successfully.")
 
 
-def _initialize_oidc_provider(app: FastAPI):
+async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
     provider = settings.oidc.AUTH_PROVIDER
     if provider == "google":
@@ -162,7 +162,8 @@ def _initialize_oidc_provider(app: FastAPI):
             discovery_url = (
                 f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
             )
-            response = requests.get(discovery_url)
+            async with httpx.AsyncClient() as client:
+                response = await client.get(discovery_url)
             response.raise_for_status()
             discovery_doc = response.json()
             jwks_uri = discovery_doc.get("jwks_uri")
@@ -173,8 +174,11 @@ def _initialize_oidc_provider(app: FastAPI):
                 )
             app.state.jwks_uri = jwks_uri
             logger.info("Successfully fetched and stored Google JWKS URI.")
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(f"Failed to fetch Google OIDC discovery document: {e}")
+            raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to fetch Google OIDC discovery document, status code {e.response.status_code}: {e}")
             raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
         except Exception as e:
             logger.error(f"Error processing Google OIDC discovery document: {e}")
@@ -363,7 +367,7 @@ async def startup_event():
     _initialize_vector_store(app.state, settings)
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
-    _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
+    await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     try:
         app.state.retrieval_service = ContextRetrievalService(
             settings=RagRuntimeSettings.from_env()
