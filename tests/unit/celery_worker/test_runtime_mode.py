@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 
-import pytest
 
 from celery_worker.runtime_mode import (
     format_invalid_claude_cli_auth_mode_error,
@@ -93,9 +91,7 @@ def test_format_invalid_claude_cli_auth_mode_error_redacts_value() -> None:
 def test_inspect_claude_home_missing_for_oauth_mode() -> None:
     """oauth mode with no CLAUDE_HOME should return missing_for_oauth issue."""
 
-    home, issue = inspect_claude_home_for_auth_mode(
-        auth_mode="oauth", claude_home=None
-    )
+    home, issue = inspect_claude_home_for_auth_mode(auth_mode="oauth", claude_home=None)
     assert home is None
     assert issue == "missing_for_oauth"
 
