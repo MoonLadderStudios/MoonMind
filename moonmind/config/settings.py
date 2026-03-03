@@ -1,6 +1,5 @@
 import os
 import re
-from pathlib import Path
 from typing import Annotated, Any, Optional, Sequence
 from urllib.parse import urlsplit
 
@@ -11,8 +10,9 @@ from moonmind.claude.runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state,
 )
+from moonmind.config.jules_settings import JulesSettings
+from moonmind.config.paths import ENV_FILE
 
-ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -1528,6 +1528,7 @@ class AppSettings(BaseSettings):
     )
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
+    jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
         None,
         env=("MOONMIND_ENABLE_TASK_PROPOSALS", "ENABLE_TASK_PROPOSALS"),

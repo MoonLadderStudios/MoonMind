@@ -1,5 +1,9 @@
 """MCP tool-surface components for MoonMind."""
 
+from moonmind.mcp.jules_tool_registry import (
+    JulesToolExecutionContext,
+    JulesToolRegistry,
+)
 from moonmind.mcp.tool_registry import (
     QueueToolExecutionContext,
     QueueToolRegistry,
@@ -12,6 +16,8 @@ from moonmind.mcp.tool_registry import (
 )
 
 __all__ = [
+    "JulesToolExecutionContext",
+    "JulesToolRegistry",
     "QueueToolExecutionContext",
     "QueueToolRegistry",
     "ToolArgumentsValidationError",
