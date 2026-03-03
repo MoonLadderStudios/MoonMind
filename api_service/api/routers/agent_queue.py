@@ -648,11 +648,6 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
         raw_message = str(exc).strip()
-        detail: dict[str, Any] = {
-            "code": code,
-            "message": message,
-            "debugMessage": raw_message,
-        }
         lowered = str(exc).lower()
         if "targetruntime=claude requires anthropic_api_key" in lowered:
             return HTTPException(
@@ -690,11 +685,14 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                 if isinstance(cause, ManifestContractError):
                     # Surface actionable manifest contract failures to API clients.
                     message = raw_message
-                    detail["message"] = message
                     break
                 cause = getattr(cause, "__cause__", None)
 
-        detail["message"] = message
+        detail: dict[str, Any] = {
+            "code": code,
+            "message": message,
+            "debugMessage": raw_message,
+        }
         return HTTPException(status_code=status_code, detail=detail)
     logger.exception("Unhandled agent queue exception")
     return HTTPException(
