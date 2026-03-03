@@ -11,9 +11,13 @@ import subprocess
 from typing import Mapping, Sequence
 
 from celery_worker.runtime_mode import (
+    format_invalid_claude_cli_auth_mode_error,
     format_invalid_gemini_cli_auth_mode_error,
+    inspect_claude_home_for_auth_mode,
     inspect_gemini_home_for_auth_mode,
+    is_invalid_claude_cli_auth_mode,
     is_invalid_gemini_cli_auth_mode,
+    resolve_claude_cli_auth_mode,
     resolve_gemini_cli_auth_mode,
 )
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
@@ -302,12 +306,40 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         if runtime_name == "claude":
             if runtime_name not in capabilities:
                 continue
-            gate = build_runtime_gate_state(
-                env=source,
-                error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+            claude_auth_mode, claude_auth_mode_raw = resolve_claude_cli_auth_mode(
+                env=source
             )
-            if not gate.enabled:
-                raise RuntimeError(gate.error_message)
+            if is_invalid_claude_cli_auth_mode(claude_auth_mode_raw):
+                raise RuntimeError(
+                    format_invalid_claude_cli_auth_mode_error(claude_auth_mode_raw)
+                )
+            if claude_auth_mode == "api_key":
+                gate = build_runtime_gate_state(
+                    env=source,
+                    error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+                )
+                if not gate.enabled:
+                    raise RuntimeError(gate.error_message)
+            elif claude_auth_mode == "oauth":
+                claude_home = source.get("CLAUDE_HOME")
+                _claude_home, issue = inspect_claude_home_for_auth_mode(
+                    auth_mode="oauth",
+                    claude_home=claude_home,
+                    isdir=os.path.isdir,
+                    access=os.access,
+                )
+                if issue == "missing_for_oauth":
+                    raise RuntimeError(
+                        "CLAUDE_HOME is required for OAuth Claude CLI authentication."
+                    )
+                if issue == "not_directory":
+                    raise RuntimeError(
+                        f"CLAUDE_HOME must point to an existing directory: {_claude_home}"
+                    )
+                if issue == "not_writable_for_oauth":
+                    raise RuntimeError(
+                        "CLAUDE_HOME must be writable for OAuth Claude CLI authentication."
+                    )
             try:
                 resolved_paths["claude"] = verify_cli_is_executable(
                     str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip()

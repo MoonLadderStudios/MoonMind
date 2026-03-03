@@ -187,6 +187,14 @@ services:
       - codex_auth_volume:${CODEX_HOME:-/home/app/.codex}
     restart: "no"
 
+  claude-auth-init:
+    image: alpine:3.20
+    command: >-
+      sh -lc "mkdir -p ${CLAUDE_HOME:-/home/app/.claude} && chown -R 1000:1000 ${CLAUDE_HOME:-/home/app/.claude} && chmod 0775 ${CLAUDE_HOME:-/home/app/.claude}"
+    volumes:
+      - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
+    restart: "no"
+
   codex-worker:
     build:
       context: .
@@ -359,6 +367,9 @@ services:
       - CODEX_CONFIG_HOME=${CODEX_CONFIG_HOME:-/home/app/.codex}
       - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_HOME=${CLAUDE_HOME:-/home/app/.claude}
+      - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
+      - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - MOONMIND_WORKER_ID=${MOONMIND_CLAUDE_WORKER_ID:-claude-worker-1}
       - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
@@ -398,6 +409,7 @@ services:
     volumes:
       - .:/workspace
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - claude_auth_volume:${CLAUDE_HOME:-/home/app/.claude}
       - speckit_workspaces:/work/runs
       - ./var/artifacts:/workspace/var/artifacts
       - agent_workspaces:/work/agent_jobs
@@ -412,6 +424,8 @@ services:
       agent-workspaces-init:
         condition: service_completed_successfully
       codex-auth-init:
+        condition: service_completed_successfully
+      claude-auth-init:
         condition: service_completed_successfully
     networks:
       - local-network
@@ -614,6 +628,7 @@ volumes:
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   gemini_auth_volume:
+  claude_auth_volume:
 
 networks:
   local-network:

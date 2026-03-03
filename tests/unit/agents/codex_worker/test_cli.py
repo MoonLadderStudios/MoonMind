@@ -845,6 +845,92 @@ def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -
         )
 
 
+def test_run_preflight_claude_oauth_with_valid_home_succeeds(monkeypatch) -> None:
+    """Claude oauth mode with a valid writable CLAUDE_HOME should pass preflight."""
+
+    calls: list[list[str]] = []
+    verifications: list[str] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(os.path, "isdir", lambda path: path == "/tmp/claude-auth")
+    monkeypatch.setattr(os, "access", lambda _p, _m: True)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "claude",
+            "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
+            "CLAUDE_HOME": "/tmp/claude-auth",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
+
+    assert "claude" in verifications
+
+
+def test_run_preflight_claude_oauth_missing_home_raises(monkeypatch) -> None:
+    """Claude oauth mode with no CLAUDE_HOME should fail with a clear error."""
+
+    monkeypatch.setattr(
+        cli, "verify_cli_is_executable", lambda name: f"/usr/bin/{name}"
+    )
+
+    with pytest.raises(RuntimeError, match="CLAUDE_HOME is required"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "claude",
+                "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+
+def test_run_preflight_claude_oauth_non_directory_home_raises(monkeypatch) -> None:
+    """Claude oauth mode with a non-existent CLAUDE_HOME directory should fail."""
+
+    monkeypatch.setattr(
+        cli, "verify_cli_is_executable", lambda name: f"/usr/bin/{name}"
+    )
+    monkeypatch.setattr(os.path, "isdir", lambda path: False)
+
+    with pytest.raises(RuntimeError, match="must point to an existing directory"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "claude",
+                "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
+                "CLAUDE_HOME": "/tmp/no-such-dir",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+
+def test_run_preflight_claude_invalid_auth_mode_redacts_value(monkeypatch) -> None:
+    """Invalid Claude auth mode should fail with a redacted diagnostic."""
+
+    monkeypatch.setattr(
+        cli, "verify_cli_is_executable", lambda name: f"/usr/bin/{name}"
+    )
+
+    with pytest.raises(RuntimeError, match=r"received <redacted:\d+ chars>"):
+        cli.run_preflight(
+            env={
+                "MOONMIND_WORKER_RUNTIME": "claude",
+                "MOONMIND_CLAUDE_CLI_AUTH_MODE": "AIza-secret-like-value",
+                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            }
+        )
+
+
 def test_main_returns_error_when_run_fails(monkeypatch) -> None:
     """CLI main should exit 1 when async runtime fails."""
 

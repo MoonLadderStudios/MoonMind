@@ -12,6 +12,12 @@ GeminiHomeValidationIssue = Literal[
     "not_directory",
     "not_writable_for_oauth",
 ]
+ALLOWED_CLAUDE_CLI_AUTH_MODES = frozenset({"api_key", "oauth"})
+ClaudeHomeValidationIssue = Literal[
+    "missing_for_oauth",
+    "not_directory",
+    "not_writable_for_oauth",
+]
 
 
 def resolve_worker_runtime(
@@ -110,6 +116,62 @@ def inspect_gemini_home_for_auth_mode(
     """Validate GEMINI_HOME rules for the requested auth mode."""
 
     normalized_home = str(gemini_home or "").strip() or None
+    if not normalized_home:
+        if auth_mode == "oauth":
+            return None, "missing_for_oauth"
+        return None, None
+
+    if not isdir(normalized_home):
+        return normalized_home, "not_directory"
+
+    if auth_mode == "oauth" and not access(normalized_home, os.W_OK | os.X_OK):
+        return normalized_home, "not_writable_for_oauth"
+
+    return normalized_home, None
+
+
+def resolve_claude_cli_auth_mode(
+    *,
+    env: Mapping[str, str] | None = None,
+    default_mode: str = "api_key",
+) -> tuple[str, str]:
+    """Resolve Claude CLI auth mode and return (mode, raw_value)."""
+
+    env_map = env or os.environ
+    raw = str(env_map.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", default_mode)).strip()
+    mode = raw.lower() if raw else default_mode
+    if mode not in ALLOWED_CLAUDE_CLI_AUTH_MODES:
+        return default_mode, raw
+    return mode, raw
+
+
+def is_invalid_claude_cli_auth_mode(raw_value: str) -> bool:
+    """Return whether raw auth-mode input is an unsupported non-empty value."""
+
+    raw = str(raw_value).strip()
+    return bool(raw) and raw.lower() not in ALLOWED_CLAUDE_CLI_AUTH_MODES
+
+
+def format_invalid_claude_cli_auth_mode_error(raw_value: str) -> str:
+    """Build a safe, actionable invalid-auth-mode error message."""
+
+    summary = summarize_untrusted_auth_mode_value(raw_value)
+    return (
+        "MOONMIND_CLAUDE_CLI_AUTH_MODE must be one of: api_key, oauth "
+        f"(received {summary})"
+    )
+
+
+def inspect_claude_home_for_auth_mode(
+    *,
+    auth_mode: str,
+    claude_home: str | None,
+    isdir: Callable[[str], bool] = os.path.isdir,
+    access: Callable[[str, int], bool] = os.access,
+) -> tuple[str | None, ClaudeHomeValidationIssue | None]:
+    """Validate CLAUDE_HOME rules for the requested auth mode."""
+
+    normalized_home = str(claude_home or "").strip() or None
     if not normalized_home:
         if auth_mode == "oauth":
             return None, "missing_for_oauth"

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
+
+CLAUDE_HOME="${CLAUDE_HOME:-/home/app/.claude}"
+CLAUDE_TERM="${TERM:-xterm-256color}"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker CLI is not available." >&2
+  exit 127
+fi
+
+if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+  docker network create "$NETWORK_NAME" >/dev/null
+fi
+
+if ! [ -t 0 ] || ! [ -t 1 ]; then
+  echo "Error: Claude login requires an interactive terminal."
+  echo "Run this command from an interactive shell."
+  exit 1
+fi
+
+COMPOSE_NETWORK_ARGS=()
+if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
+  COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
+fi
+
+docker compose run --rm -it \
+  -e MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth \
+  -e ANTHROPIC_API_KEY= \
+  -e CLAUDE_API_KEY= \
+  -e TERM="${CLAUDE_TERM}" \
+  -e CLAUDE_HOME="${CLAUDE_HOME}" \
+  "${COMPOSE_NETWORK_ARGS[@]}" \
+  claude-worker \
+  bash -lc 'unset ANTHROPIC_API_KEY CLAUDE_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude login'

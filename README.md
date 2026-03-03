@@ -38,8 +38,10 @@ MoonMind exposes all of this through:
     ```bash
     ./tools/auth-codex-volume.sh
     ./tools/auth-gemini-volume.sh
+    ./tools/auth-claude-volume.sh   # oauth mode only (skip for api_key mode)
     ```
     This persists Codex auth in `codex_auth_volume` and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
+    For the Claude worker, `MOONMIND_CLAUDE_CLI_AUTH_MODE=api_key` (the default) uses `ANTHROPIC_API_KEY` from `.env` — no volume setup needed. Set `MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth` in `.env` and run `./tools/auth-claude-volume.sh` once to persist browser-based OAuth credentials in `claude_auth_volume`.
     By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If required runtime auth is missing, the worker stays idle and retries until runtime-specific preflight checks pass.
 3.  **Start the services** using the following command:
     ```bash
