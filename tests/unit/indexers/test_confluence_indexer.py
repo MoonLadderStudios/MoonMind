@@ -40,9 +40,7 @@ class TestConfluenceIndexer(unittest.TestCase):
                 user_name="fake_user",
                 logger=MagicMock(),
             )
-        self.assertEqual(
-            str(context.exception), "Confluence URL is required to set up Confluence"
-        )
+        self.assertEqual(str(context.exception), "Confluence URL is required to set up Confluence")
 
     def test_init_missing_api_token(self):
         with self.assertRaises(ValueError) as context:
@@ -52,10 +50,7 @@ class TestConfluenceIndexer(unittest.TestCase):
                 user_name="fake_user",
                 logger=MagicMock(),
             )
-        self.assertEqual(
-            str(context.exception),
-            "Confluence API key is required to set up Confluence",
-        )
+        self.assertEqual(str(context.exception), "Confluence API key is required to set up Confluence")
 
     def test_init_missing_user_name(self):
         with self.assertRaises(ValueError) as context:
@@ -65,10 +60,7 @@ class TestConfluenceIndexer(unittest.TestCase):
                 user_name="",
                 logger=MagicMock(),
             )
-        self.assertEqual(
-            str(context.exception),
-            "Confluence username is required to set up Confluence",
-        )
+        self.assertEqual(str(context.exception), "Confluence username is required to set up Confluence")
 
     @patch("llama_index.core.VectorStoreIndex.from_documents")
     def test_index_missing_parameters(self, mock_from_documents):
