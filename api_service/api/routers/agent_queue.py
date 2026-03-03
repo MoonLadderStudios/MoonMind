@@ -127,9 +127,8 @@ def _log_queue_validation_failure(
     error: AgentQueueValidationError,
     payload_summary: dict[str, Any] | None = None,
 ) -> None:
-    request_id = (
-        request.headers.get("x-request-id")
-        or request.headers.get("x-correlation-id")
+    request_id = request.headers.get("x-request-id") or request.headers.get(
+        "x-correlation-id"
     )
     client_host = request.client.host if request.client else None
     context = {
