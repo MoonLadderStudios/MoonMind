@@ -59,6 +59,15 @@ _ATTACHMENT_EXTENSION_MAP = {
     "image/webp": ".webp",
 }
 _RUNTIME_CAPABILITY_RUNTIMES = {"codex", "gemini", "claude"}
+_PUBLISH_PREFLIGHT_VERIFICATION_GAP_TEXT = (
+    "publish preflight failed: source-code changes detected but no "
+    "verification command result was captured in artifacts"
+)
+_RESUBMIT_PUBLISH_SKIP_REASON_CATEGORY = "resubmit"
+_RESUBMIT_PUBLISH_SKIP_REASON = (
+    "Re-run accepted from previous publish preflight failure with no verification "
+    "evidence available."
+)
 
 
 class AgentQueueValidationError(ValueError):
@@ -541,6 +550,75 @@ class AgentQueueService:
             )
         return job
 
+    def _is_publish_preflight_verification_gap(self, source_job: models.AgentJob) -> bool:
+        """Detect the specific publish preflight failure mode we can safely recover from."""
+
+        if source_job.type != CANONICAL_TASK_JOB_TYPE:
+            return False
+        if str(source_job.finish_outcome_code or "").lower() != "failed":
+            return False
+        if str(source_job.finish_outcome_stage or "").lower() != "publish":
+            return False
+
+        error_message = (source_job.error_message or "").lower()
+        if _PUBLISH_PREFLIGHT_VERIFICATION_GAP_TEXT in error_message:
+            return True
+
+        summary = source_job.finish_summary_json
+        if isinstance(summary, dict):
+            reason = ""
+            publish = summary.get("publish")
+            if isinstance(publish, dict):
+                reason = str(publish.get("reason") or "")
+            return _PUBLISH_PREFLIGHT_VERIFICATION_GAP_TEXT in reason.lower()
+        return False
+
+    def _inject_resubmit_publish_skip_reason(
+        self,
+        *,
+        source_job: models.AgentJob,
+        payload: dict[str, Any],
+    ) -> None:
+        """Preserve or synthesize skip reason to avoid brittle resubmit failures."""
+
+        source_payload = source_job.payload
+        if not isinstance(source_payload, dict):
+            return
+
+        source_task = source_payload.get("task")
+        request_task = payload.get("task")
+        if not (isinstance(source_task, dict) and isinstance(request_task, dict)):
+            return
+
+        source_publish = source_task.get("publish")
+        request_publish = request_task.get("publish")
+        if not isinstance(request_publish, dict):
+            request_publish = {}
+            request_task["publish"] = request_publish
+
+        if not isinstance(source_publish, dict):
+            return
+
+        if "verificationSkipReason" in request_publish:
+            return
+
+        publish_mode = self._clean_optional_str(request_publish.get("mode"))
+        if publish_mode is None:
+            publish_mode = self._clean_optional_str(source_publish.get("mode"))
+        if (publish_mode or "").lower() == "none":
+            return
+
+        source_skip_reason = source_publish.get("verificationSkipReason")
+        if isinstance(source_skip_reason, dict):
+            request_publish["verificationSkipReason"] = copy.deepcopy(source_skip_reason)
+            return
+
+        if self._is_publish_preflight_verification_gap(source_job):
+            request_publish["verificationSkipReason"] = {
+                "category": _RESUBMIT_PUBLISH_SKIP_REASON_CATEGORY,
+                "reason": _RESUBMIT_PUBLISH_SKIP_REASON,
+            }
+
     async def create_job_with_attachments(
         self,
         *,
@@ -750,9 +828,14 @@ class AgentQueueService:
             if actor_user_id is not None
             else source_job.requested_by_user_id
         )
+        normalized_payload = copy.deepcopy(dict(payload or {}))
+        self._inject_resubmit_publish_skip_reason(
+            source_job=source_job,
+            payload=normalized_payload,
+        )
         new_job = await self._create_job_record(
             job_type=candidate_type,
-            payload=copy.deepcopy(dict(payload or {})),
+            payload=normalized_payload,
             priority=priority,
             created_by_user_id=effective_created_by,
             requested_by_user_id=effective_requested_by,

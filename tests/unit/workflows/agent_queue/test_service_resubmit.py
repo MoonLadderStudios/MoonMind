@@ -157,6 +157,113 @@ async def test_resubmit_job_success_creates_new_job_and_audit_events(
 
 
 @pytest.mark.parametrize(
+    "terminal_status",
+    (models.AgentJobStatus.FAILED, models.AgentJobStatus.CANCELLED),
+)
+async def test_resubmit_job_preserves_source_publish_verification_skip_reason(
+    tmp_path: Path,
+    terminal_status: models.AgentJobStatus,
+) -> None:
+    """Source job verification skip metadata should be carried to resubmitted jobs."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            owner_id = uuid4()
+            source_job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Test",
+                    "task": {
+                        "instructions": "Initial objective",
+                        "publish": {
+                            "mode": "branch",
+                            "verificationSkipReason": {
+                                "category": "task-review",
+                                "reason": "manual review branch",
+                            },
+                        },
+                    },
+                },
+                priority=1,
+                max_attempts=3,
+                created_by_user_id=owner_id,
+                requested_by_user_id=owner_id,
+            )
+            await _set_terminal_status(repo, source_job, terminal_status)
+
+            created = await service.resubmit_job(
+                job_id=source_job.id,
+                actor_user_id=owner_id,
+                job_type="task",
+                payload={
+                    "repository": "Moon/Test",
+                    "task": {"instructions": "Retry objective"},
+                },
+            )
+
+    assert created.payload["task"]["publish"]["verificationSkipReason"] == {
+        "category": "task-review",
+        "reason": "manual review branch",
+    }
+
+
+async def test_resubmit_job_auto_infers_publish_skip_reason_on_preflight_gap(
+    tmp_path: Path,
+) -> None:
+    """Resubmission should inherit explicit skip reason when previous publish preflight failed."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            owner_id = uuid4()
+            source_job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Test",
+                    "task": {
+                        "instructions": "Initial objective",
+                        "publish": {"mode": "branch"},
+                    },
+                },
+                priority=1,
+                max_attempts=3,
+                created_by_user_id=owner_id,
+                requested_by_user_id=owner_id,
+            )
+            source_job.finish_outcome_code = "FAILED"
+            source_job.finish_outcome_stage = "publish"
+            source_job.error_message = (
+                "publish preflight failed: source-code changes detected but no "
+                "verification command result was captured in artifacts; provide "
+                "task.publish.verificationSkipReason with category/reason to skip "
+                "intentionally"
+            )
+            await repo.commit()
+            await _set_terminal_status(repo, source_job, models.AgentJobStatus.FAILED)
+
+            created = await service.resubmit_job(
+                job_id=source_job.id,
+                actor_user_id=owner_id,
+                job_type="task",
+                payload={
+                    "repository": "Moon/Test",
+                    "task": {"instructions": "Retry objective"},
+                },
+            )
+
+    assert created.payload["task"]["publish"]["verificationSkipReason"] == {
+        "category": "resubmit",
+        "reason": (
+            "Re-run accepted from previous publish preflight failure with no "
+            "verification evidence available."
+        ),
+    }
+
+
+@pytest.mark.parametrize(
     "ineligible_status",
     (
         models.AgentJobStatus.QUEUED,
