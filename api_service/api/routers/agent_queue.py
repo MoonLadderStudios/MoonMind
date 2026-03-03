@@ -119,6 +119,35 @@ _RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude")
 _QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
 
 
+def _log_queue_validation_failure(
+    request: Request,
+    *,
+    user_id: UUID | None,
+    job_type: str | None,
+    error: AgentQueueValidationError,
+    payload_summary: dict[str, Any] | None = None,
+) -> None:
+    request_id = (
+        request.headers.get("x-request-id")
+        or request.headers.get("x-correlation-id")
+    )
+    client_host = request.client.host if request.client else None
+    context = {
+        "path": request.url.path,
+        "method": request.method,
+        "request_id": request_id,
+        "user_id": str(user_id) if user_id is not None else None,
+        "job_type": job_type,
+        "client_host": client_host,
+        "payload_summary": payload_summary or {},
+    }
+    logger.warning(
+        "Queue task validation failed: %s | context=%s",
+        str(error),
+        context,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _WorkerRequestAuth:
     """Resolved worker auth context used by mutation endpoints."""
@@ -683,6 +712,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
     status_code=status.HTTP_201_CREATED,
 )
 async def create_job(
+    request: Request,
     payload: CreateJobRequest,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
@@ -701,6 +731,24 @@ async def create_job(
             max_attempts=payload.max_attempts,
         )
     except AgentQueueValidationError as exc:
+        payload_summary: dict[str, Any] = {
+            "payload_type": type(payload.payload).__name__,
+            "payload_keys": (
+                list(payload.payload.keys())
+                if isinstance(payload.payload, dict)
+                else []
+            ),
+            "has_affinity_key": payload.affinity_key is not None,
+            "priority": payload.priority,
+            "max_attempts": payload.max_attempts,
+        }
+        _log_queue_validation_failure(
+            request=request,
+            user_id=user_id,
+            job_type=payload.type,
+            error=exc,
+            payload_summary=payload_summary,
+        )
         if payload.type == MANIFEST_JOB_TYPE:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -780,6 +828,7 @@ async def resubmit_job(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_job_with_attachments(
+    request: Request,
     request_payload: str = Form(..., alias="request"),
     files: list[UploadFile] = File(..., alias="files"),
     captions_json: str | None = Form(None, alias="captions"),
@@ -800,7 +849,13 @@ async def create_job_with_attachments(
     try:
         create_request = CreateJobRequest.model_validate_json(request_payload)
     except ValidationError as exc:
-        logger.info("Invalid attachment queue payload: %s", exc)
+        logger.warning(
+            "Invalid attachment queue payload for path=%s request_id=%s: %s",
+            request.url.path,
+            request.headers.get("x-request-id")
+            or request.headers.get("x-correlation-id"),
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -902,6 +957,27 @@ async def create_job_with_attachments(
             max_attempts=create_request.max_attempts,
             attachments=attachments,
         )
+    except AgentQueueValidationError as exc:
+        payload_summary = {
+            "request_payload_keys": (
+                list(create_request.payload.keys())
+                if isinstance(create_request.payload, dict)
+                else []
+            ),
+            "attachment_count": len(attachments),
+            "total_bytes": total_bytes,
+            "has_affinity_key": create_request.affinity_key is not None,
+            "priority": create_request.priority,
+            "max_attempts": create_request.max_attempts,
+        }
+        _log_queue_validation_failure(
+            request=request,
+            user_id=user_id,
+            job_type=create_request.type,
+            error=exc,
+            payload_summary=payload_summary,
+        )
+        raise _to_http_exception(exc) from exc
     except Exception as exc:  # pragma: no cover - service layer
         raise _to_http_exception(exc) from exc
 
