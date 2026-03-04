@@ -70,7 +70,7 @@ def update_summaries(
         f"Starting summary generation process for input_dir='{input_dir}', output_dir='{output_dir}', prompt_file='{prompt_file_path}', replace_existing={replace_existing}."
     )
     trusted_prompt_dir = prompt_safe_base_dir or str(DEFAULT_PROMPT_SAFE_BASE_DIR)
-    logger.info(f"Using trusted prompt base directory: '{trusted_prompt_dir}'")
+    logger.info("Using configured trusted prompt base directory.")
 
     try:
         # Use the passed model_factory to get the model
