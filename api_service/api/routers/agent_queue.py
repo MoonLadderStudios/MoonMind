@@ -676,7 +676,13 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             code = "attachment_too_large"
             message = "Attachment exceeds the maximum allowed size."
             detail["code"] = code
-        elif "attachment content type" in lowered or "attachment type" in lowered or "attachment format" in lowered or "attachment content type must be" in lowered or "content type must be" in lowered:
+        elif (
+            "attachment content type" in lowered
+            or "attachment type" in lowered
+            or "attachment format" in lowered
+            or "attachment content type must be" in lowered
+            or "content type must be" in lowered
+        ):
             status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
             code = "attachment_type_not_allowed"
             message = "Attachment content type is not allowed."
