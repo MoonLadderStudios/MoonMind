@@ -41,7 +41,7 @@ class DatabaseSettings(BaseSettings):
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
     )
 
 
@@ -104,7 +104,7 @@ class CelerySettings(BaseSettings):
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
     )
 
     @field_validator("accept_content", "imports", mode="before")
@@ -774,7 +774,7 @@ class SpecWorkflowSettings(BaseSettings):
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
         populate_by_name=True,
     )
 
@@ -1209,7 +1209,7 @@ class ConfluenceSettings(BaseSettings):
     confluence_enabled: bool = Field(False, env="ATLASSIAN_CONFLUENCE_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="forbid"
     )
 
 
@@ -1221,7 +1221,7 @@ class JiraSettings(BaseSettings):
     jira_enabled: bool = Field(False, env="ATLASSIAN_JIRA_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="forbid"
     )
 
 
@@ -1237,7 +1237,7 @@ class AtlassianSettings(BaseSettings):
     jira: JiraSettings = Field(default_factory=JiraSettings)
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="forbid"
     )
 
     def __init__(self, **data):
@@ -1289,7 +1289,7 @@ class LocalDataSettings(BaseSettings):
     # local_data_enabled: bool = Field(False, env="LOCAL_DATA_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="forbid"
     )
 
 
@@ -1362,7 +1362,7 @@ class FeatureFlagsSettings(BaseSettings):
         env_prefix="FEATURE_FLAGS__",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
     )
 
 
@@ -1501,7 +1501,7 @@ class TaskProposalSettings(BaseSettings):
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
     )
 
 
@@ -1880,7 +1880,7 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
     )
 
 
