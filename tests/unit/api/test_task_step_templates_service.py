@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
+import yaml
 from sqlalchemy import UniqueConstraint, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,10 +15,12 @@ from api_service.db.models import (
     Base,
     TaskStepTemplateRecent,
     TaskTemplateReleaseStatus,
+    TaskTemplateScopeType,
 )
 from api_service.services.task_templates.catalog import (
     ExpandOptions,
     TaskTemplateCatalogService,
+    TaskTemplateNotFoundError,
 )
 from api_service.services.task_templates.save import TaskTemplateSaveService
 
@@ -296,3 +299,118 @@ async def test_release_status_sets_reviewer_fields(tmp_path):
     assert reviewed["releaseStatus"] == "active"
     assert reviewed["reviewedBy"] == str(user_id)
     assert reviewed["reviewedAt"] is not None
+
+
+async def test_soft_delete_template_marks_inactive(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="to-be-deleted",
+                title="Delete Me",
+                description="Template for deletion",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "Do nothing"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            await service.soft_delete_template(
+                slug="to-be-deleted",
+                scope="personal",
+                scope_ref=str(user_id),
+            )
+
+            with pytest.raises(TaskTemplateNotFoundError, match="Template not found."):
+                await service._get_template_for_scope(
+                    slug="to-be-deleted",
+                    scope=TaskTemplateScopeType.PERSONAL,
+                    scope_ref=str(user_id),
+                    include_inactive=False,
+                )
+
+            template = await service._get_template_for_scope(
+                slug="to-be-deleted",
+                scope=TaskTemplateScopeType.PERSONAL,
+                scope_ref=str(user_id),
+                include_inactive=True,
+            )
+            assert template.is_active is False
+
+
+async def test_soft_delete_template_not_found(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            with pytest.raises(TaskTemplateNotFoundError, match="Template not found."):
+                await service.soft_delete_template(
+                    slug="does-not-exist",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                )
+
+
+async def test_import_seed_templates_success(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    seed_file = seed_dir / "my-seed.yaml"
+    seed_data = {
+        "slug": "seed-test",
+        "title": "Seed Test",
+        "description": "A test seed template",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [{"instructions": "seed step"}],
+    }
+    with open(seed_file, "w") as f:
+        yaml.dump(seed_data, f)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            created_count = await service.import_seed_templates(seed_dir=seed_dir)
+
+            assert created_count == 1
+
+            template = await service._get_template_for_scope(
+                slug="seed-test",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Seed Test"
+            assert template.description == "A test seed template"
+            assert len(template.versions) == 1
+            assert template.versions[0].version == "1.0.0"
+
+
+async def test_import_seed_templates_skips_existing(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed_dir.mkdir()
+    seed_file = seed_dir / "my-seed.yaml"
+    seed_data = {
+        "slug": "seed-test-conflict",
+        "title": "Seed Test Conflict",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [{"instructions": "seed step"}],
+    }
+    with open(seed_file, "w") as f:
+        yaml.dump(seed_data, f)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            # First import should create the template
+            created_count_first = await service.import_seed_templates(seed_dir=seed_dir)
+            assert created_count_first == 1
+
+            # Second import should skip and return 0
+            created_count_second = await service.import_seed_templates(seed_dir=seed_dir)
+            assert created_count_second == 0
