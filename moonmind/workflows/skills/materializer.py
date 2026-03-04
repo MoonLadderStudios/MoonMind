@@ -15,8 +15,10 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+import http.client
+from typing import Optional, Tuple, Any
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, HTTPHandler, HTTPSHandler, build_opener
 
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
 from .workspace_links import (
@@ -218,6 +220,96 @@ def _extract_archive(archive: Path, destination: Path) -> Path:
         ) from exc
 
 
+def _safe_create_connection(
+    address: Tuple[str, int],
+    timeout: float = socket._GLOBAL_DEFAULT_TIMEOUT,  # type: ignore
+    source_address: Optional[Tuple[str, int]] = None,
+) -> socket.socket:
+    host, port = address
+    err = None
+    try:
+        addresses = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise SkillMaterializationError(
+            "bundle_fetch_failed",
+            f"Unable to resolve skill bundle host '{host}': {exc}",
+        ) from exc
+
+    for res in addresses:
+        af, socktype, proto, canonname, sa = res
+        try:
+            ip = ipaddress.ip_address(sa[0])
+        except ValueError as exc:
+            raise SkillMaterializationError(
+                "bundle_fetch_failed",
+                f"Unable to parse resolved bundle host IP for '{host}'",
+            ) from exc
+
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise SkillMaterializationError(
+                "bundle_fetch_failed",
+                f"Skill bundle source host resolves to a non-public address: {host} ({ip})",
+            )
+
+        sock = None
+        try:
+            sock = socket.socket(af, socktype, proto)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:  # type: ignore
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sa)
+            return sock
+        except OSError as _:
+            err = _
+            if sock is not None:
+                sock.close()
+
+    if err is not None:
+        raise err
+    raise OSError("getaddrinfo returns an empty list")
+
+
+class _SafeHTTPConnection(http.client.HTTPConnection):
+    def connect(self) -> None:
+        self.sock = _safe_create_connection(
+            (self.host, self.port), self.timeout, self.source_address
+        )
+
+
+class _SafeHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        self.sock = _safe_create_connection(
+            (self.host, self.port), self.timeout, self.source_address
+        )
+        if self._tunnel_host:
+            server_hostname = self._tunnel_host
+            self._tunnel()  # type: ignore
+        else:
+            server_hostname = self.host
+
+        self.sock = self._context.wrap_socket(
+            self.sock, server_hostname=server_hostname
+        )
+
+
+class _SafeHTTPHandler(HTTPHandler):
+    def http_open(self, req: Request) -> Any:
+        return self.do_open(_SafeHTTPConnection, req)
+
+
+class _SafeHTTPSHandler(HTTPSHandler):
+    def https_open(self, req: Request) -> Any:
+        return self.do_open(_SafeHTTPSConnection, req, context=self._context)
+
+
 def _validate_public_remote_host(source_uri: str) -> None:
     parsed = urlparse(source_uri)
     hostname = parsed.hostname
@@ -261,8 +353,9 @@ def _validate_public_remote_host(source_uri: str) -> None:
 def _download_remote_bundle(source_uri: str, destination: Path) -> Path:
     _validate_public_remote_host(source_uri)
     request = Request(source_uri, method="GET")
+    opener = build_opener(_SafeHTTPHandler(), _SafeHTTPSHandler())
     try:
-        with urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
+        with opener.open(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
             final_url = response.geturl()
             _validate_public_remote_host(final_url)
             with destination.open("wb") as output:
