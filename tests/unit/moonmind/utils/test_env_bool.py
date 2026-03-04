@@ -1,7 +1,5 @@
 import pytest
-
 from moonmind.utils.env_bool import env_to_bool
-
 
 class TestEnvToBool:
     @pytest.mark.parametrize(
