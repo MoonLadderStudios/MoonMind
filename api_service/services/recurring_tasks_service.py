@@ -778,29 +778,10 @@ class RecurringTasksService:
         job_type: str,
         scan_limit: int = 1000,
     ) -> queue_models.AgentJob | None:
-        existing = await self._queue_repository.find_job_by_recurrence_run_id(
+        return await self._queue_repository.find_job_by_recurrence_run_id(
             run_id=run_id,
             job_type=job_type,
         )
-        if existing is not None:
-            return existing
-
-        jobs = await self._queue_repository.list_jobs(
-            job_type=job_type, limit=scan_limit
-        )
-        target_id = str(run_id)
-        for job in jobs:
-            payload = dict(job.payload or {})
-            system_node = payload.get("system")
-            if not isinstance(system_node, Mapping):
-                continue
-            recurrence_node = system_node.get("recurrence")
-            if not isinstance(recurrence_node, Mapping):
-                continue
-            run_value = str(recurrence_node.get("runId") or "").strip()
-            if run_value == target_id:
-                return job
-        return None
 
     @staticmethod
     def _expected_job_type_for_target_kind(kind: str) -> str | None:

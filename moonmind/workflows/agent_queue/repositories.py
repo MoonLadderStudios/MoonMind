@@ -159,13 +159,11 @@ class AgentQueueRepository:
                 models.AgentJob.payload["system"]["recurrence"]["runId"].astext
                 == run_id_text
             )
-        elif dialect_name == "sqlite":
+        else:
             stmt = stmt.where(
                 func.json_extract(models.AgentJob.payload, "$.system.recurrence.runId")
                 == run_id_text
             )
-        else:
-            return None
 
         stmt = stmt.order_by(models.AgentJob.created_at.desc()).limit(1)
         result = await self._session.execute(stmt)
