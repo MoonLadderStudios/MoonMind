@@ -69,7 +69,7 @@ def mock_cached_models_data():
     ]
 
 
-@patch("api_service.api.routers.models.model_cache.get_all_models")
+@patch("api_service.api.routers.models.model_cache.get_all_models_for_user")
 def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_data):
     """
     Test the /v1/models endpoint when the model_cache returns a list of models.
@@ -87,7 +87,7 @@ def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_d
     mock_get_all_models.assert_called_once()
 
 
-@patch("api_service.api.routers.models.model_cache.get_all_models")
+@patch("api_service.api.routers.models.model_cache.get_all_models_for_user")
 def test_get_models_empty_from_cache(mock_get_all_models):
     """
     Test the /v1/models endpoint when the model_cache returns an empty list.
@@ -104,7 +104,7 @@ def test_get_models_empty_from_cache(mock_get_all_models):
     mock_get_all_models.assert_called_once()
 
 
-@patch("api_service.api.routers.models.model_cache.get_all_models")
+@patch("api_service.api.routers.models.model_cache.get_all_models_for_user")
 def test_get_models_cache_exception(mock_get_all_models):
     """
     Test the /v1/models endpoint when model_cache.get_all_models() raises an exception.
