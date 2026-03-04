@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from api_service.auth_providers import get_current_user  # Auth dependency
+from api_service.db.base import get_async_session_context
 from api_service.db.models import User  # User model for type hinting
 from moonmind.models_cache import model_cache  # Import the model cache
 
@@ -20,10 +21,28 @@ async def health_check():  # Public
 @router.get("/")
 async def models(_user: User = Depends(get_current_user())):  # Protected
     try:
+        google_api_key = None
+        openai_api_key = None
+        try:
+            async with get_async_session_context() as db_session:
+                from api_service.api.routers.chat import get_user_api_key
+
+                google_api_key = await get_user_api_key(_user, "google", db_session)
+                openai_api_key = await get_user_api_key(_user, "openai", db_session)
+        except Exception as exc:  # pragma: no cover - DB optional in many test/dev paths
+            logger.debug(
+                "Falling back to system model provider keys for /v1/models: %s", exc
+            )
+
         # Get all models from the cache
         # The data is already formatted by the cache's _fetch_all_models method
-        # Using asyncio.to_thread to avoid blocking the event loop since get_all_models does sync I/O when refreshing
-        all_cached_models = await asyncio.to_thread(model_cache.get_all_models)
+        # Using asyncio.to_thread to avoid blocking the event loop, as
+        # get_all_models does sync I/O when refreshing.
+        all_cached_models = await asyncio.to_thread(
+            model_cache.get_all_models_for_user,
+            google_api_key=google_api_key,
+            openai_api_key=openai_api_key,
+        )
 
         if not all_cached_models:
             logger.warning(
