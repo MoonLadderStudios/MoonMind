@@ -439,10 +439,6 @@ tr[data-proposal-id].proposal-consuming td {
     display: none;
   }
 
-  .queue-table-wrapper[data-sticky-table="true"] {
-    display: block;
-  }
-
   .queue-card-list {
     display: grid;
   }

@@ -6,7 +6,7 @@ Last Updated: 2026-02-23
 
 ## 1. Purpose
 
-Define the responsive layout contract for queue list surfaces rendered from `api_service/static/task_dashboard/dashboard.js`. The goal is to keep the existing dense table for desktop/tablet viewports (md and up) while introducing a mobile-first card layout fed by the same `QueueRow` data returned by `toQueueRows()`.
+Define the responsive layout contract for queue list surfaces rendered from `api_service/static/task_dashboard/dashboard.js`. The goal is to keep the existing dense table for desktop/tablet viewports (md and up) while introducing a mobile-first card layout fed by the same normalized row data returned by `toQueueRows()` and `toOrchestratorRows()`.
 
 This document scopes the queue list (`/tasks/queue`) and the queue portions of the "Active" dashboard. Detail pages keep their current layout.
 
@@ -93,12 +93,12 @@ function renderQueueLayouts(rows) {
 Integration points:
 
 - `renderQueueListPage()` replaces `renderRowsTable(filteredRows)` with `renderQueueLayouts(filteredRows)` so filters affect both layouts simultaneously.
-- `renderActivePage()` wraps `renderRowsTable(sortRows(rows))` in the same helper so the landing page gets responsive behavior for queue records. Orchestrator rows will continue to use the table view (cards show only the queue subset when a row’s `source === "queue"`).
-- Manifest and orchestrator list pages may keep table-only layouts for now. The helper checks `row.source === "queue"` to avoid rendering cards for non-queue sources until we intentionally opt them in.
+- `renderActivePage()` wraps `renderRowsTable(sortRows(rows))` in the same helper so the landing page gets responsive behavior for both queue and orchestrator records.
+- Dedicated manifest/proposal pages may keep table-only layouts for now; they do not call `renderQueueLayouts`.
 
 ### 4.3 Card Composition
 
-`renderQueueCards(rows)` renders each queue row as a card (non-queue rows return empty strings). Structure:
+`renderQueueCards(rows)` renders each provided row as a card. Structure:
 
 1. **Header row**: job title / ID link plus queue/skill metadata for quick scanning.
 2. **Definition list**: emit a fixed leading `Status` row first, then iterate `queueFieldDefinitions` for the remaining label/value pairs.
