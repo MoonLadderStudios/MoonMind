@@ -3310,7 +3310,9 @@ class CodexWorker:
                 state.jules_last_polled_at = polled_at
                 polled_url = str(polled.url or "").strip() or None
                 status_changed = False
-                url_changed = polled_url is not None and polled_url != state.jules_task_url
+                url_changed = (
+                    polled_url is not None and polled_url != state.jules_task_url
+                )
                 if polled_url is not None:
                     state.jules_task_url = polled_url
                 current_status = self._normalize_jules_status(polled.status)
