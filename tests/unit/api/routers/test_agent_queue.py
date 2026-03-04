@@ -316,10 +316,14 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     service.create_job.assert_awaited_once()
 
 
-def test_update_queued_job_success(client: tuple[TestClient, AsyncMock]) -> None:
+def test_update_queued_job_success(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """PUT /jobs/{id} should return updated job payload."""
 
     test_client, service = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     job = _build_job()
     job.type = "task"
     service.update_queued_job.return_value = job
@@ -343,6 +347,31 @@ def test_update_queued_job_success(client: tuple[TestClient, AsyncMock]) -> None
     assert body["type"] == "task"
     service.update_queued_job.assert_awaited_once()
     assert service.update_queued_job.await_args.kwargs["actor_is_superuser"] is False
+
+
+def test_update_queued_job_disabled_auth_uses_operator_override(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disabled auth mode should bypass owner checks via operator override."""
+
+    test_client, service = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
+    job = _build_job()
+    job.type = "task"
+    service.update_queued_job.return_value = job
+
+    response = test_client.put(
+        f"/api/queue/jobs/{job.id}",
+        json={
+            "type": "task",
+            "payload": {"repository": "Moon/Test", "task": {"instructions": "Update"}},
+        },
+    )
+
+    assert response.status_code == 200
+    service.update_queued_job.assert_awaited_once()
+    assert service.update_queued_job.await_args.kwargs["actor_is_superuser"] is True
 
 
 def test_update_queued_job_superuser_passes_authorization_flag(
@@ -475,10 +504,14 @@ def test_update_queued_job_claude_runtime_gate_maps_400(
     assert response.json()["detail"]["code"] == "claude_runtime_disabled"
 
 
-def test_resubmit_job_success(client: tuple[TestClient, AsyncMock]) -> None:
+def test_resubmit_job_success(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """POST /jobs/{id}/resubmit should return newly created job payload."""
 
     test_client, service = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     source_job_id = uuid4()
     created_job = _build_job()
     created_job.type = "task"
@@ -504,6 +537,35 @@ def test_resubmit_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert body["type"] == "task"
     service.resubmit_job.assert_awaited_once()
     assert service.resubmit_job.await_args.kwargs["actor_is_superuser"] is False
+
+
+def test_resubmit_job_disabled_auth_uses_operator_override(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disabled auth mode should bypass owner checks for resubmit."""
+
+    test_client, service = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
+    source_job_id = uuid4()
+    created_job = _build_job()
+    created_job.type = "task"
+    service.resubmit_job.return_value = created_job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{source_job_id}/resubmit",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {"instructions": "Retry with edits"},
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    service.resubmit_job.assert_awaited_once()
+    assert service.resubmit_job.await_args.kwargs["actor_is_superuser"] is True
 
 
 def test_resubmit_job_superuser_passes_authorization_flag(
