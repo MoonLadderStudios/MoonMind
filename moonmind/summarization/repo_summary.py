@@ -4,6 +4,7 @@ import os
 
 import toml  # For pyproject.toml or other toml files
 
+
 logger = logging.getLogger(__name__)
 
 IGNORED_DIRS = frozenset(
