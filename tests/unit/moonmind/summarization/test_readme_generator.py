@@ -1,8 +1,7 @@
-
 # Important to ignore env file validation errors if AppSettings is accidentally loaded
 import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ["IGNORE_ENV_FILE"] = "1"
 
