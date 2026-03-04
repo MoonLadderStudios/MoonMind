@@ -9,10 +9,8 @@ def test_find_files_basic(tmp_path):
     (tmp_path / "file1.txt").write_text("hello")
     (tmp_path / "file2.txt").write_text("world")
 
-    files = list(find_files(str(tmp_path), ".txt"))
-    assert len(files) == 2
-    assert str(tmp_path / "file1.txt") in files
-    assert str(tmp_path / "file2.txt") in files
+    files = set(find_files(str(tmp_path), ".txt"))
+    assert files == {str(tmp_path / "file1.txt"), str(tmp_path / "file2.txt")}
 
 
 def test_find_files_without_dot(tmp_path):
@@ -27,10 +25,8 @@ def test_find_files_case_insensitivity(tmp_path):
     (tmp_path / "file1.TXT").write_text("hello")
     (tmp_path / "file2.Txt").write_text("world")
 
-    files = list(find_files(str(tmp_path), ".txT"))
-    assert len(files) == 2
-    assert str(tmp_path / "file1.TXT") in files
-    assert str(tmp_path / "file2.Txt") in files
+    files = set(find_files(str(tmp_path), ".txT"))
+    assert files == {str(tmp_path / "file1.TXT"), str(tmp_path / "file2.Txt")}
 
 
 def test_find_files_subdirectories(tmp_path):
@@ -39,10 +35,8 @@ def test_find_files_subdirectories(tmp_path):
     subdir.mkdir()
     (subdir / "file2.txt").write_text("world")
 
-    files = list(find_files(str(tmp_path), ".txt"))
-    assert len(files) == 2
-    assert str(tmp_path / "file1.txt") in files
-    assert str(subdir / "file2.txt") in files
+    files = set(find_files(str(tmp_path), ".txt"))
+    assert files == {str(tmp_path / "file1.txt"), str(subdir / "file2.txt")}
 
 
 def test_find_files_ignores_other_extensions(tmp_path):
