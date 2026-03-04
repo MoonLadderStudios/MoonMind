@@ -14,13 +14,17 @@ def read_text_file(file_path: str, safe_base_dir: Optional[str] = None):
         if safe_base_dir:
             base_path = pathlib.Path(safe_base_dir).resolve()
             if not target_path.is_relative_to(base_path):
-                logger.warning(f"Path traversal detected: {file_path} is outside of {safe_base_dir}")
+                logger.warning(
+                    f"Path traversal detected: {file_path} is outside of {safe_base_dir}"
+                )
                 return None
         else:
             # If no explicit safe base directory is provided, ensure the path does not contain explicit
             # relative path traversal sequences (like '..') to prevent directory traversal attacks.
             if ".." in pathlib.Path(file_path).parts:
-                logger.warning(f"Path traversal detected: {file_path} contains '..' sequences.")
+                logger.warning(
+                    f"Path traversal detected: {file_path} contains '..' sequences."
+                )
                 return None
 
         if not target_path.exists():
