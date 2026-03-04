@@ -1801,20 +1801,13 @@ class CodexWorker:
         self._last_run_outcome = outcome
         return outcome == "claimed"
 
-    async def _run_once_internal(self) -> str:
-        """Internal implementation that returns a descriptive outcome."""
-
-        if self._config.worker_runtime == "jules":
-            return await self._run_jules_software_tick()
-
-        claim_result = await self._claim_next_job()
-        metadata = claim_result.system
-        self._handle_system_metadata(metadata)
-        job = claim_result.job
-        if job is None:
-            if metadata.workers_paused:
-                return "paused"
-            return "idle"
+    async def _prepare_claimed_task_job(
+        self,
+        *,
+        job: ClaimedJob,
+        require_runtime_mode: str | None = None,
+    ) -> tuple[Mapping[str, Any], str] | None:
+        """Validate and normalize one claimed task-like queue job."""
 
         supported_types = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
         if job.type not in supported_types:
@@ -1830,7 +1823,7 @@ class CodexWorker:
                 error_message=f"unsupported job type: {job.type}",
                 retryable=False,
             )
-            return "claimed"
+            return None
         if (
             not self._config.legacy_job_types_enabled
             and job.type in LEGACY_TASK_JOB_TYPES
@@ -1847,7 +1840,7 @@ class CodexWorker:
                 error_message=f"legacy job type disabled: {job.type}",
                 retryable=False,
             )
-            return "claimed"
+            return None
 
         try:
             canonical_payload = build_canonical_task_view(
@@ -1867,7 +1860,7 @@ class CodexWorker:
                 error_message=f"invalid job payload: {exc}",
                 retryable=False,
             )
-            return "claimed"
+            return None
 
         runtime_mode = (
             str(canonical_payload.get("targetRuntime") or "codex").strip().lower()
@@ -1888,8 +1881,14 @@ class CodexWorker:
                 error_message=f"unsupported task runtime: {runtime_mode}",
                 retryable=False,
             )
-            return "claimed"
-        if not self._runtime_can_execute(runtime_mode):
+            return None
+
+        runtime_supported = (
+            runtime_mode == require_runtime_mode
+            if require_runtime_mode is not None
+            else self._runtime_can_execute(runtime_mode)
+        )
+        if not runtime_supported:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
@@ -1909,7 +1908,7 @@ class CodexWorker:
                 ),
                 retryable=False,
             )
-            return "claimed"
+            return None
 
         policy_error = self._validate_required_job_policy(canonical_payload)
         if policy_error is not None:
@@ -1929,7 +1928,29 @@ class CodexWorker:
                 error_message=policy_error,
                 retryable=False,
             )
+            return None
+
+        return canonical_payload, runtime_mode
+
+    async def _run_once_internal(self) -> str:
+        """Internal implementation that returns a descriptive outcome."""
+
+        if self._config.worker_runtime == "jules":
+            return await self._run_jules_software_tick()
+
+        claim_result = await self._claim_next_job()
+        metadata = claim_result.system
+        self._handle_system_metadata(metadata)
+        job = claim_result.job
+        if job is None:
+            if metadata.workers_paused:
+                return "paused"
+            return "idle"
+
+        prepared = await self._prepare_claimed_task_job(job=job)
+        if prepared is None:
             return "claimed"
+        canonical_payload, runtime_mode = prepared
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
@@ -2637,7 +2658,7 @@ class CodexWorker:
             heartbeat_stop.set()
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
-                await heartbeat_task
+                _ = await heartbeat_task
             await self._teardown_live_session(job_id=job.id)
 
         return "claimed"
@@ -2981,103 +3002,13 @@ class CodexWorker:
     async def _start_jules_software_run(self, *, job: ClaimedJob) -> None:
         """Admit one claimed queue job into the software-managed Jules in-flight set."""
 
-        supported_types = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
-        if job.type not in supported_types:
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Unsupported job type",
-                payload={"jobType": job.type},
-            )
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=f"unsupported job type: {job.type}",
-                retryable=False,
-            )
-            return
-        if (
-            not self._config.legacy_job_types_enabled
-            and job.type in LEGACY_TASK_JOB_TYPES
-        ):
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Legacy queue job types are disabled for this worker",
-                payload={"jobType": job.type},
-            )
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=f"legacy job type disabled: {job.type}",
-                retryable=False,
-            )
-            return
-
-        try:
-            canonical_payload = build_canonical_task_view(
-                job_type=job.type,
-                payload=job.payload,
-            )
-        except TaskContractError as exc:
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Job payload failed task-contract normalization",
-                payload={"jobType": job.type, "error": str(exc)},
-            )
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=f"invalid job payload: {exc}",
-                retryable=False,
-            )
-            return
-
-        runtime_mode = (
-            str(canonical_payload.get("targetRuntime") or "codex").strip().lower()
+        prepared = await self._prepare_claimed_task_job(
+            job=job,
+            require_runtime_mode="jules",
         )
-        if runtime_mode != "jules":
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Task runtime is not executable by this worker runtime mode",
-                payload={
-                    "jobType": job.type,
-                    "targetRuntime": runtime_mode,
-                    "workerRuntime": self._config.worker_runtime,
-                },
-            )
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=(
-                    "unsupported task runtime for worker "
-                    f"({self._config.worker_runtime}): {runtime_mode}"
-                ),
-                retryable=False,
-            )
+        if prepared is None:
             return
-
-        policy_error = self._validate_required_job_policy(canonical_payload)
-        if policy_error is not None:
-            await self._emit_event(
-                job_id=job.id,
-                level="error",
-                message="Task rejected by worker policy requirements",
-                payload={
-                    "jobType": job.type,
-                    "targetRuntime": runtime_mode,
-                    "error": policy_error,
-                },
-            )
-            await self._queue_client.fail_job(
-                job_id=job.id,
-                worker_id=self._config.worker_id,
-                error_message=policy_error,
-                retryable=False,
-            )
-            return
+        canonical_payload, runtime_mode = prepared
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
@@ -3316,7 +3247,6 @@ class CodexWorker:
                         lease_seconds=self._config.lease_seconds,
                     )
                     self._handle_system_metadata(heartbeat.system)
-                    worked = True
                 except Exception:
                     logger.warning(
                         "Failed Jules heartbeat for job %s", job_id, exc_info=True
@@ -3339,6 +3269,7 @@ class CodexWorker:
                         cancelled=True,
                     )
                     self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
                     continue
 
                 if (
@@ -3353,6 +3284,7 @@ class CodexWorker:
                         failure_reason=state.jules_error,
                     )
                     self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
                     continue
 
                 if now_monotonic < state.next_poll_monotonic:
@@ -3371,18 +3303,21 @@ class CodexWorker:
                         failure_reason=state.jules_error,
                     )
                     self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
                     continue
 
-                worked = True
                 polled_at = datetime.now(UTC).isoformat()
                 state.jules_last_polled_at = polled_at
                 polled_url = str(polled.url or "").strip() or None
+                status_changed = False
+                url_changed = polled_url is not None and polled_url != state.jules_task_url
                 if polled_url is not None:
                     state.jules_task_url = polled_url
                 current_status = self._normalize_jules_status(polled.status)
                 if current_status != state.jules_status:
                     state.jules_status = current_status
                     state.jules_status_history.append(current_status)
+                    status_changed = True
                     await self._emit_jules_runtime_event(
                         job_id=job_id,
                         level="info",
@@ -3399,6 +3334,8 @@ class CodexWorker:
                     time.monotonic() + self._config.jules_poll_interval_seconds
                 )
                 await self._persist_jules_runtime_checkpoint(state=state)
+                if status_changed or url_changed:
+                    worked = True
 
                 if (
                     current_status in _JULES_TERMINAL_SUCCESS_STATUSES
@@ -3446,6 +3383,7 @@ class CodexWorker:
                         failure_reason=state.jules_error,
                     )
                     self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
         finally:
             await client.aclose()
         return worked

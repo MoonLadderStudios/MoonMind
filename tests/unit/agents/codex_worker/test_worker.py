@@ -6188,6 +6188,106 @@ async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
     assert len(queue.runtime_state_updates) >= 4
 
 
+async def test_jules_worker_heartbeat_only_tick_returns_inflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Heartbeat-only Jules ticks should not report claimed work."""
+
+    class _FakeJulesTask:
+        def __init__(self, *, task_id: str, status: str, url: str | None) -> None:
+            self.task_id = task_id
+            self.status = status
+            self.url = url
+
+    class _FakeJulesClient:
+        get_calls = 0
+
+        def __init__(self, **kwargs) -> None:
+            _ = kwargs
+
+        async def create_task(self, request):
+            _ = request
+            return _FakeJulesTask(
+                task_id="task-1",
+                status="pending",
+                url="https://jules.example.test/tasks/task-1",
+            )
+
+        async def get_task(self, request):
+            _ = request
+            type(self).get_calls += 1
+            return _FakeJulesTask(
+                task_id="task-1",
+                status="running",
+                url="https://jules.example.test/tasks/task-1",
+            )
+
+        async def resolve_task(self, request):
+            _ = request
+            return _FakeJulesTask(task_id="task-1", status="cancelled", url=None)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.JulesClient",
+        _FakeJulesClient,
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "jules",
+            "task": {
+                "instructions": "Long running task",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "jules"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job, None])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-jules",
+            worker_token=None,
+            poll_interval_ms=1,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="jules",
+            worker_capabilities=("jules", "git", "gh"),
+            allowed_types=("task",),
+            jules_enabled=True,
+            jules_api_url="https://jules.example.test",
+            jules_api_key="test-key",
+            jules_poll_interval_seconds=30.0,
+            jules_max_inflight=15,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    first_tick = await worker.run_once()
+    assert first_tick is True
+
+    state = worker._jules_inflight_runs[job.id]
+    state.next_poll_monotonic = asyncio.get_running_loop().time() + 60.0
+
+    second_tick = await worker.run_once()
+    assert second_tick is False
+    assert worker._last_run_outcome == "inflight"
+    assert _FakeJulesClient.get_calls == 0
+    assert queue.heartbeats == [str(job.id)]
+
+
 async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
