@@ -15,7 +15,9 @@ async def test_get_user_github_token():
     user = User()
     user.id = "test_user_id"
 
-    with patch("api_service.api.routers.summarization.profile_service") as mock_profile_service:
+    with patch(
+        "api_service.api.routers.summarization.profile_service"
+    ) as mock_profile_service:
         profile = MagicMock()
         profile.github_token_encrypted = "test_github_token"
         mock_profile_service.get_profile_by_user_id = AsyncMock(return_value=profile)
@@ -30,7 +32,9 @@ async def test_get_user_llm_api_key():
     user = User()
     user.id = "test_user_id"
 
-    with patch("api_service.api.routers.summarization.profile_service") as mock_profile_service:
+    with patch(
+        "api_service.api.routers.summarization.profile_service"
+    ) as mock_profile_service:
         profile = MagicMock()
         profile.openai_api_key_encrypted = "test_openai_key"
         mock_profile_service.get_profile_by_user_id = AsyncMock(return_value=profile)
@@ -55,7 +59,9 @@ async def test_get_user_llm_api_key_no_profile():
     user = User()
     user.id = "test_user_id"
 
-    with patch("api_service.api.routers.summarization.profile_service") as mock_profile_service:
+    with patch(
+        "api_service.api.routers.summarization.profile_service"
+    ) as mock_profile_service:
         mock_profile_service.get_profile_by_user_id = AsyncMock(return_value=None)
 
         token = await get_user_llm_api_key(user, "anthropic", db)
@@ -68,7 +74,9 @@ async def test_get_user_llm_api_key_no_key_for_provider():
     user = User()
     user.id = "test_user_id"
 
-    with patch("api_service.api.routers.summarization.profile_service") as mock_profile_service:
+    with patch(
+        "api_service.api.routers.summarization.profile_service"
+    ) as mock_profile_service:
         profile = MagicMock()
         profile.openai_api_key_encrypted = "other_key"
         profile.anthropic_api_key_encrypted = None
