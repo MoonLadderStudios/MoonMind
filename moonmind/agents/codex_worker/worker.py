@@ -114,6 +114,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
+_PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
@@ -6749,7 +6750,7 @@ class CodexWorker:
                 "repository": str(canonical_payload.get("repository") or "").strip(),
                 "targetRuntime": runtime_mode,
                 "task": {
-                    "instructions": "<OBJECTIVE>",
+                    "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
                         "mode": runtime_mode,
