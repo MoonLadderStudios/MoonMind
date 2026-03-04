@@ -162,6 +162,15 @@ class AppendJobEventRequest(BaseModel):
     payload: Optional[dict[str, Any]] = Field(None, alias="payload")
 
 
+class WorkerRuntimeStateRequest(BaseModel):
+    """Worker-authenticated payload for runtime checkpoint persistence."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(..., alias="workerId")
+    runtime_state: Optional[dict[str, Any]] = Field(None, alias="runtimeState")
+
+
 class CreateTaskRunLiveSessionRequest(BaseModel):
     """Request body for creating/enabling task-run live sessions."""
 

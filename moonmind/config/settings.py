@@ -6,12 +6,16 @@ from urllib.parse import urlsplit
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from moonmind.claude.runtime import CLAUDE_RUNTIME_DISABLED_MESSAGE
 from moonmind.claude.runtime import (
-    CLAUDE_RUNTIME_DISABLED_MESSAGE,
-    build_runtime_gate_state,
+    build_runtime_gate_state as build_claude_runtime_gate_state,
 )
 from moonmind.config.jules_settings import JulesSettings
 from moonmind.config.paths import ENV_FILE
+from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
+from moonmind.jules.runtime import (
+    build_runtime_gate_state as build_jules_runtime_gate_state,
+)
 
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
@@ -975,7 +979,7 @@ class SpecWorkflowSettings(BaseSettings):
         """Normalize queue runtime fallback and reject unknown values."""
 
         normalized = str(value or "").strip().lower() or "codex"
-        allowed = {"codex", "gemini", "claude"}
+        allowed = {"codex", "gemini", "claude", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_task_runtime must be one of: {supported}")
@@ -1819,10 +1823,22 @@ class AppSettings(BaseSettings):
     def claude_runtime_gate(self):
         """Return reusable Claude gate state for API surfaces."""
 
-        return build_runtime_gate_state(
+        return build_claude_runtime_gate_state(
             env=os.environ,
             api_key=self.anthropic.anthropic_api_key,
             error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
+        )
+
+    @property
+    def jules_runtime_gate(self):
+        """Return reusable Jules gate state for API surfaces."""
+
+        return build_jules_runtime_gate_state(
+            env=os.environ,
+            enabled=self.jules.jules_enabled,
+            api_url=self.jules.jules_api_url,
+            api_key=self.jules.jules_api_key,
+            error_message=JULES_RUNTIME_DISABLED_MESSAGE,
         )
 
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
@@ -1869,10 +1885,20 @@ class AppSettings(BaseSettings):
             str(self.spec_workflow.default_task_runtime or "").strip().lower()
         )
         if configured_default == "claude":
-            default_runtime_gate = build_runtime_gate_state(
+            default_runtime_gate = build_claude_runtime_gate_state(
                 env=os.environ,
                 api_key=self.anthropic.anthropic_api_key,
                 error_message="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY to be configured",
+            )
+            if not default_runtime_gate.enabled:
+                raise ValueError(default_runtime_gate.error_message)
+        if configured_default == "jules":
+            default_runtime_gate = build_jules_runtime_gate_state(
+                env=os.environ,
+                enabled=self.jules.jules_enabled,
+                api_url=self.jules.jules_api_url,
+                api_key=self.jules.jules_api_key,
+                error_message="default_task_runtime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured",
             )
             if not default_runtime_gate.enabled:
                 raise ValueError(default_runtime_gate.error_message)
@@ -1880,7 +1906,7 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        extra="forbid",
+        extra="ignore",
     )
 
 
