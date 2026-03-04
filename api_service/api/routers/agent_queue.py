@@ -688,7 +688,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     break
                 cause = getattr(cause, "__cause__", None)
 
-        detail: dict[str, Any] = {
+        detail = {
             "code": code,
             "message": message,
             "debugMessage": raw_message,
