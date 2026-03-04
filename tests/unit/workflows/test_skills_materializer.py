@@ -359,7 +359,9 @@ def test_download_remote_bundle_disables_proxy_usage(monkeypatch, tmp_path):
     output = tmp_path / "bundle.zip"
     _download_remote_bundle("https://example.com/bundle.zip", output)
 
-    proxy_handlers = [handler for handler in handlers if isinstance(handler, ProxyHandler)]
+    proxy_handlers = [
+        handler for handler in handlers if isinstance(handler, ProxyHandler)
+    ]
     assert proxy_handlers
     assert proxy_handlers[0].proxies == {}
     assert output.read_bytes() == b"bundle-bytes"

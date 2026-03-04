@@ -19,7 +19,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
-from urllib.request import HTTPHandler, HTTPSHandler, ProxyHandler, Request, build_opener
+from urllib.request import (
+    HTTPHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
 from .workspace_links import (
@@ -253,7 +259,10 @@ def _safe_create_connection(
                 f"Unable to parse resolved bundle host IP for '{host}'",
             ) from exc
 
-        if any(getattr(ip, property_name) for property_name in _PUBLIC_ADDRESS_REJECTION_PROPERTIES):
+        if any(
+            getattr(ip, property_name)
+            for property_name in _PUBLIC_ADDRESS_REJECTION_PROPERTIES
+        ):
             raise SkillMaterializationError(
                 "bundle_fetch_failed",
                 f"Skill bundle source host resolves to a non-public address: {host} ({ip})",
@@ -335,7 +344,10 @@ def _validate_public_host(
                 f"Unable to parse resolved {source_label} host IP for '{hostname}'",
             ) from exc
 
-        if any(getattr(ip, property_name) for property_name in _PUBLIC_ADDRESS_REJECTION_PROPERTIES):
+        if any(
+            getattr(ip, property_name)
+            for property_name in _PUBLIC_ADDRESS_REJECTION_PROPERTIES
+        ):
             raise SkillMaterializationError(
                 error_code,
                 f"{source_label} host resolves to a non-public address: {hostname}",
