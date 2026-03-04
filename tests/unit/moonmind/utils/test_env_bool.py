@@ -65,9 +65,15 @@ class TestEnvToBool:
         """Test that unparsable values return the specified default."""
         assert env_to_bool(value, default=default) is expected
 
-    def test_env_to_bool_default_argument(self):
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "invalid",
+            None,
+            "",
+        ],
+    )
+    def test_env_to_bool_default_argument(self, value):
         """Test the default value of the default argument."""
         # By default, default=False
-        assert env_to_bool("invalid") is False
-        assert env_to_bool(None) is False
-        assert env_to_bool("") is False
+        assert env_to_bool(value) is False
