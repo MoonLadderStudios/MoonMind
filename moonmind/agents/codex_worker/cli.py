@@ -35,8 +35,8 @@ from moonmind.claude.runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state,
 )
+from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
-    JULES_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready

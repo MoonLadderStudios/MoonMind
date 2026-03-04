@@ -6,14 +6,14 @@ from urllib.parse import urlsplit
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from moonmind.claude.runtime import CLAUDE_RUNTIME_DISABLED_MESSAGE
 from moonmind.claude.runtime import (
-    CLAUDE_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state as build_claude_runtime_gate_state,
 )
 from moonmind.config.jules_settings import JulesSettings
 from moonmind.config.paths import ENV_FILE
+from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
-    JULES_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
 

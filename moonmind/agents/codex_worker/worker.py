@@ -52,17 +52,18 @@ from moonmind.agents.codex_worker.self_heal import (
     StepTimeoutExceeded,
     is_failure_retryable,
 )
+from moonmind.config.settings import settings
+from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
-    JULES_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
-from moonmind.config.settings import settings
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
     JulesResolveTaskRequest,
 )
+from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
@@ -74,7 +75,6 @@ from moonmind.workflows.agent_queue.task_contract import (
     build_task_stage_plan,
     is_self_managed_publish_skill,
 )
-from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
     materialize_run_skill_workspace,
@@ -681,9 +681,11 @@ class CodexWorkerConfig:
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
         )
-        jules_enabled_raw = str(
-            source.get("JULES_ENABLED", str(settings.jules.jules_enabled))
-        ).strip().lower()
+        jules_enabled_raw = (
+            str(source.get("JULES_ENABLED", str(settings.jules.jules_enabled)))
+            .strip()
+            .lower()
+        )
         jules_enabled = jules_enabled_raw in {"1", "true", "yes", "on"}
         jules_api_url = (
             str(source.get("JULES_API_URL", settings.jules.jules_api_url or "")).strip()
@@ -2692,9 +2694,7 @@ class CodexWorker:
         return (
             "MOONMIND TASK OBJECTIVE:\n"
             f"{objective}\n\n"
-            "EXECUTION PLAN:\n"
-            + "\n".join(step_lines)
-            + "\n\n"
+            "EXECUTION PLAN:\n" + "\n".join(step_lines) + "\n\n"
             "RUNTIME ADAPTER: jules"
         )
 
@@ -2804,7 +2804,9 @@ class CodexWorker:
             )
         except JulesClientError:
             logger.warning(
-                "Best-effort Jules cancellation failed for task %s", task_id, exc_info=True
+                "Best-effort Jules cancellation failed for task %s",
+                task_id,
+                exc_info=True,
             )
         finally:
             await client.aclose()
@@ -3142,7 +3144,9 @@ class CodexWorker:
             jules_task_id = str(checkpoint.get("externalTaskId") or "").strip()
             jules_status = self._normalize_jules_status(checkpoint.get("status"))
             jules_task_url = str(checkpoint.get("url") or "").strip() or None
-            submitted_at = str(checkpoint.get("submittedAt") or "").strip() or checkpoint_now
+            submitted_at = (
+                str(checkpoint.get("submittedAt") or "").strip() or checkpoint_now
+            )
             last_polled_at = (
                 str(checkpoint.get("lastPolledAt") or "").strip() or submitted_at
             )
@@ -7987,9 +7991,7 @@ class CodexWorker:
         prepared: PreparedTaskWorkspace,
         task_result: WorkerExecutionResult,
         selected_skills: Sequence[str],
-        jules_record_callback: (
-            Callable[[JulesRuntimeTaskRecord], None] | None
-        ) = None,
+        jules_record_callback: Callable[[JulesRuntimeTaskRecord], None] | None = None,
     ) -> list[ArtifactUpload]:
         """Execute post-run proposal skills and collect generated artifacts."""
 
@@ -9099,9 +9101,7 @@ class CodexWorker:
         artifact_callback: (
             Callable[[Sequence[ArtifactUpload]], Awaitable[None]] | None
         ) = None,
-        jules_record_callback: (
-            Callable[[JulesRuntimeTaskRecord], None] | None
-        ) = None,
+        jules_record_callback: Callable[[JulesRuntimeTaskRecord], None] | None = None,
     ) -> WorkerExecutionResult:
         """Execute resolved task steps via selected runtime adapter."""
 
@@ -10064,7 +10064,9 @@ class CodexWorker:
         self,
         records: Sequence[JulesRuntimeTaskRecord],
     ) -> dict[str, Any]:
-        tasks = [self._serialize_jules_runtime_task_record(record) for record in records]
+        tasks = [
+            self._serialize_jules_runtime_task_record(record) for record in records
+        ]
         latest_status = tasks[-1]["status"] if tasks else None
         return {
             "schemaVersion": "v1",
@@ -10203,9 +10205,7 @@ class CodexWorker:
                     failure_message = (
                         f"Jules task '{task_id}' timed out waiting for terminal status"
                     )
-                    raise RuntimeError(
-                        failure_message
-                    )
+                    raise RuntimeError(failure_message)
                 await asyncio.sleep(self._config.jules_poll_interval_seconds)
                 polled = await client.get_task(JulesGetTaskRequest(task_id=task_id))
                 last_polled_at = datetime.now(UTC).isoformat()
@@ -10237,9 +10237,7 @@ class CodexWorker:
                 failure_message = (
                     f"Jules task '{task_id}' failed with status '{current_status}'"
                 )
-                raise RuntimeError(
-                    failure_message
-                )
+                raise RuntimeError(failure_message)
 
             completed_at = datetime.now(UTC).isoformat()
             self._append_stage_log(

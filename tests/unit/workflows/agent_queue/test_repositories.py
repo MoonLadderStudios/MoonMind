@@ -961,7 +961,9 @@ async def test_set_job_runtime_state_sets_and_clears_runtime_checkpoint(tmp_path
             assert isinstance(updated.payload, dict)
             assert updated.payload["runtimeState"]["externalTaskId"] == "task-123"
 
-            cleared = await repo.set_job_runtime_state(job_id=job.id, runtime_state=None)
+            cleared = await repo.set_job_runtime_state(
+                job_id=job.id, runtime_state=None
+            )
             await repo.commit()
 
     assert isinstance(cleared.payload, dict)

@@ -6,9 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-JULES_RUNTIME_DISABLED_MESSAGE = (
-    "targetRuntime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured"
-)
+JULES_RUNTIME_DISABLED_MESSAGE = "targetRuntime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured"
 """Canonical error text for disabled Jules runtime configuration."""
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
