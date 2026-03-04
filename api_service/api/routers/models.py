@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,7 +22,8 @@ async def models(_user: User = Depends(get_current_user())):  # Protected
     try:
         # Get all models from the cache
         # The data is already formatted by the cache's _fetch_all_models method
-        all_cached_models = model_cache.get_all_models()
+        # Using asyncio.to_thread to avoid blocking the event loop since get_all_models does sync I/O when refreshing
+        all_cached_models = await asyncio.to_thread(model_cache.get_all_models)
 
         if not all_cached_models:
             logger.warning(
