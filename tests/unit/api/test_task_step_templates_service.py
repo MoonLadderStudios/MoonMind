@@ -44,6 +44,13 @@ async def template_db(tmp_path):
         await engine.dispose()
 
 
+def _write_seed_template(seed_dir, seed_data: dict) -> None:
+    seed_dir.mkdir(exist_ok=True)
+    seed_file = seed_dir / f"{seed_data['slug']}.yaml"
+    with open(seed_file, "w") as f:
+        yaml.dump(seed_data, f)
+
+
 async def test_create_and_expand_template_deterministic_ids(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
@@ -312,11 +319,7 @@ async def test_soft_delete_template_marks_inactive(tmp_path):
                 description="Template for deletion",
                 scope="personal",
                 scope_ref=str(user_id),
-                tags=[],
-                inputs_schema=[],
                 steps=[{"instructions": "Do nothing"}],
-                annotations={},
-                required_capabilities=[],
                 created_by=user_id,
             )
 
@@ -358,8 +361,6 @@ async def test_soft_delete_template_not_found(tmp_path):
 
 async def test_import_seed_templates_success(tmp_path):
     seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-    seed_file = seed_dir / "my-seed.yaml"
     seed_data = {
         "slug": "seed-test",
         "title": "Seed Test",
@@ -368,8 +369,7 @@ async def test_import_seed_templates_success(tmp_path):
         "version": "1.0.0",
         "steps": [{"instructions": "seed step"}],
     }
-    with open(seed_file, "w") as f:
-        yaml.dump(seed_data, f)
+    _write_seed_template(seed_dir, seed_data)
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -391,8 +391,6 @@ async def test_import_seed_templates_success(tmp_path):
 
 async def test_import_seed_templates_skips_existing(tmp_path):
     seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
-    seed_file = seed_dir / "my-seed.yaml"
     seed_data = {
         "slug": "seed-test-conflict",
         "title": "Seed Test Conflict",
@@ -400,8 +398,7 @@ async def test_import_seed_templates_skips_existing(tmp_path):
         "version": "1.0.0",
         "steps": [{"instructions": "seed step"}],
     }
-    with open(seed_file, "w") as f:
-        yaml.dump(seed_data, f)
+    _write_seed_template(seed_dir, seed_data)
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
