@@ -319,6 +319,8 @@ async def test_soft_delete_template_marks_inactive(tmp_path):
                 description="Template for deletion",
                 scope="personal",
                 scope_ref=str(user_id),
+                tags=[],
+                inputs_schema=[],
                 steps=[{"instructions": "Do nothing"}],
                 created_by=user_id,
             )
