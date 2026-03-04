@@ -51,7 +51,9 @@ async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
     if profile and profile.github_token_encrypted:
         return profile.github_token_encrypted
 
-    logger.warning(f"No GitHub token configured for user {user.id}.")
+    logger.warning(
+        f"No GitHub token configured for user {user.id}."
+    )
     return None
 
 
