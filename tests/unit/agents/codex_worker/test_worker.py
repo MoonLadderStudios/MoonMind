@@ -5735,6 +5735,7 @@ async def test_config_from_env_accepts_jules_runtime_when_configured(
     monkeypatch.setenv("JULES_API_KEY", "test-key")
     monkeypatch.setenv("MOONMIND_JULES_MODEL", "jules-pro")
     monkeypatch.setenv("MOONMIND_JULES_EFFORT", "medium")
+    monkeypatch.delenv("MOONMIND_WORKER_CAPABILITIES", raising=False)
 
     config = CodexWorkerConfig.from_env()
 
