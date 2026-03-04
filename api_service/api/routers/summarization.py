@@ -170,6 +170,7 @@ async def summarize_repository(
 
     # 2. Temporary Directory and Cloning
     repo_url_str = str(request.repo_url)  # Convert HttpUrl to string for git operations
+    github_token = None
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             logger.info(f"Created temporary directory: {temp_dir}")
@@ -203,12 +204,19 @@ async def summarize_repository(
                             )
                             cloned_successfully = True
                         except git.exc.GitCommandError as e_auth_clone:
+                            error_msg = (
+                                str(e_auth_clone).replace(
+                                    github_token, "***REDACTED***"
+                                )
+                                if github_token
+                                else str(e_auth_clone)
+                            )
                             logger.error(
-                                f"Authenticated clone failed for {repo_url_str}: {e_auth_clone}"
+                                f"Authenticated clone failed for {repo_url_str}: {error_msg}"
                             )
                             raise HTTPException(
                                 status_code=400,
-                                detail=f"Failed to clone repository (even with authentication): {e_auth_clone}",
+                                detail=f"Failed to clone repository (even with authentication): {error_msg}",
                             )
                     else:
                         logger.warning(
@@ -295,15 +303,23 @@ async def summarize_repository(
     except HTTPException:  # Re-raise HTTPExceptions directly
         raise
     except git.exc.GitCommandError as e:  # Catch specific git errors not handled above
-        logger.exception(
-            f"A GitCommandError occurred during repository operation for {repo_url_str}: {e}"
-        )
-        raise HTTPException(status_code=500, detail=f"A Git error occurred: {e}")
-    except Exception as e:
-        logger.exception(
-            f"An unexpected error occurred while summarizing repository {repo_url_str}: {e}"
+        error_msg = str(e)
+        if github_token:
+            error_msg = error_msg.replace(github_token, "***REDACTED***")
+        logger.error(
+            f"A GitCommandError occurred during repository operation for {repo_url_str}: {error_msg}"
         )
         raise HTTPException(
-            status_code=500, detail=f"An unexpected error occurred: {str(e)}"
+            status_code=500, detail=f"A Git error occurred: {error_msg}"
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if github_token:
+            error_msg = error_msg.replace(github_token, "***REDACTED***")
+        logger.exception(
+            f"An unexpected error occurred while summarizing repository {repo_url_str}: {error_msg}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"An unexpected error occurred: {error_msg}"
         )
     # Temporary directory 'temp_dir' is automatically cleaned up here due to 'with' statement
