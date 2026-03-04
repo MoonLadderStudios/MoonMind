@@ -286,15 +286,3 @@ Why this matters:
 * Task queue design includes explicit rules to prevent leaking secrets into payloads and to avoid confusing user inputs with worker outputs. ([GitHub][2])
 * Orchestrator/docker-outside-of-docker is powerful but sensitive; MoonMind recognizes this explicitly and recommends policy/safety measures around Docker socket access. ([GitHub][9])
 * Optional OIDC via Keycloak exists for stronger identity management. ([GitHub][3])
-
-[1]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/MemoryArchitecture.md "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/MemoryArchitecture.md"
-[2]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/TaskQueueSystem.md "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/TaskQueueSystem.md"
-[3]: https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/refs/heads/main/docker-compose.yaml "https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/refs/heads/main/docker-compose.yaml"
-[4]: https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/refs/heads/main/docker-compose.job.yaml "https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/refs/heads/main/docker-compose.job.yaml"
-[5]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docker-compose.downloader.yaml "https://github.com/MoonLadderStudios/MoonMind/blob/main/docker-compose.downloader.yaml"
-[6]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docker-compose.test.yaml "https://github.com/MoonLadderStudios/MoonMind/blob/main/docker-compose.test.yaml"
-[7]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/model_context_protocol.md "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/model_context_protocol.md"
-[8]: https://github.com/MoonLadderStudios/MoonMind/raw/refs/heads/main/pyproject.toml "https://github.com/MoonLadderStudios/MoonMind/raw/refs/heads/main/pyproject.toml"
-[9]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/OrchestratorArchitecture.md "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/OrchestratorArchitecture.md"
-[10]: https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/LlamaIndexManifestSystem.md "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/LlamaIndexManifestSystem.md"
-[11]: https://github.com/MoonLadderStudios/MoonMind/blob/main/api_service/Dockerfile "https://github.com/MoonLadderStudios/MoonMind/blob/main/api_service/Dockerfile"
