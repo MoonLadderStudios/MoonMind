@@ -27,6 +27,46 @@ def test_read_text_file_not_found(tmp_path):
     assert content is None
 
 
+def test_read_text_file_path_traversal_blocked(tmp_path):
+    base_dir = tmp_path / "safe_dir"
+    base_dir.mkdir()
+
+    outside_file = tmp_path / "secret.txt"
+    outside_file.write_text("secret content", encoding="utf-8")
+
+    # Attempting to read outside the base_dir
+    content = read_text_file(str(outside_file), safe_base_dir=str(base_dir))
+
+    assert content is None
+
+
+def test_read_text_file_path_traversal_with_dot_dot_blocked(tmp_path):
+    base_dir = tmp_path / "safe_dir"
+    base_dir.mkdir()
+
+    outside_file = tmp_path / "secret.txt"
+    outside_file.write_text("secret content", encoding="utf-8")
+
+    # Constructing a path using .. to break out
+    traversal_path = base_dir / ".." / "secret.txt"
+
+    content = read_text_file(str(traversal_path), safe_base_dir=str(base_dir))
+
+    assert content is None
+
+
+def test_read_text_file_within_safe_dir(tmp_path):
+    base_dir = tmp_path / "safe_dir"
+    base_dir.mkdir()
+
+    inside_file = base_dir / "public.txt"
+    inside_file.write_text("public content", encoding="utf-8")
+
+    content = read_text_file(str(inside_file), safe_base_dir=str(base_dir))
+
+    assert content == "public content"
+
+
 def test_read_text_file_is_directory(tmp_path):
     directory = tmp_path / "subdir"
     directory.mkdir()

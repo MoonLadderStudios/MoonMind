@@ -76,7 +76,10 @@ def update_summaries(
         return
 
     try:
-        base_prompt = read_text_file(prompt_file_path)
+        # Assuming the prompt file is relative to a known secure directory or its own directory is the secure boundary
+        base_prompt = read_text_file(
+            prompt_file_path, safe_base_dir=os.path.dirname(prompt_file_path)
+        )
         if not base_prompt:
             logger.error(
                 f"Failed to load base prompt or prompt is empty from {prompt_file_path}. Aborting summary generation."
@@ -150,7 +153,9 @@ def update_summaries(
                 continue
 
             try:
-                input_text_content = read_text_file(input_file_path)
+                input_text_content = read_text_file(
+                    input_file_path, safe_base_dir=input_dir
+                )
                 if not input_text_content:
                     logger.error(
                         f"Failed to load input text or file is empty from {input_file_path}. Skipping summarization for this file."
