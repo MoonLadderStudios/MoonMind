@@ -58,7 +58,7 @@ _ATTACHMENT_EXTENSION_MAP = {
     "image/jpeg": ".jpg",
     "image/webp": ".webp",
 }
-_RUNTIME_CAPABILITY_RUNTIMES = {"codex", "gemini", "claude"}
+_RUNTIME_CAPABILITY_RUNTIMES = {"codex", "gemini", "claude", "jules"}
 _PUBLISH_PREFLIGHT_VERIFICATION_GAP_TEXT = (
     "publish preflight failed: source-code changes detected but no "
     "verification command result was captured in artifacts"
@@ -429,6 +429,10 @@ class AgentQueueService:
         )
         if target_runtime == "claude":
             gate_state = settings.claude_runtime_gate
+            if not gate_state.enabled:
+                raise AgentQueueValidationError(gate_state.error_message)
+        if target_runtime == "jules":
+            gate_state = settings.jules_runtime_gate
             if not gate_state.enabled:
                 raise AgentQueueValidationError(gate_state.error_message)
         try:
@@ -1176,6 +1180,40 @@ class AgentQueueService:
         await self._repository.commit()
         metadata = await self._load_system_metadata()
         return QueueSystemResponse(job=job, system=metadata)
+
+    async def update_runtime_state(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        runtime_state: dict[str, Any] | None,
+    ) -> models.AgentJob:
+        """Persist worker-owned runtime checkpoint state for a running job."""
+
+        worker = worker_id.strip()
+        if not worker:
+            raise AgentQueueValidationError("workerId must be a non-empty string")
+        if runtime_state is not None and not isinstance(runtime_state, dict):
+            raise AgentQueueValidationError("runtimeState must be an object")
+        if runtime_state is not None:
+            try:
+                encoded = json.dumps(runtime_state, separators=(",", ":"))
+            except TypeError as exc:
+                raise AgentQueueValidationError(
+                    "runtimeState must be JSON-serializable"
+                ) from exc
+            if len(encoded.encode("utf-8")) > 64 * 1024:
+                raise AgentQueueValidationError(
+                    "runtimeState exceeds max bytes (65536)"
+                )
+
+        await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker)
+        job = await self._repository.set_job_runtime_state(
+            job_id=job_id,
+            runtime_state=(dict(runtime_state) if runtime_state is not None else None),
+        )
+        await self._repository.commit()
+        return job
 
     async def get_worker_pause_snapshot(
         self,

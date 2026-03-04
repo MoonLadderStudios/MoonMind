@@ -47,16 +47,14 @@ def app_settings_defaults():
 
 # Test that the removed fields are indeed gone
 def test_default_model_fields_removed(app_settings_defaults):
-    with pytest.raises(ValidationError):
-        AppSettings(
-            **app_settings_defaults, default_chat_model="some-model"
-        )  # This should fail
-    with pytest.raises(ValidationError):
-        AppSettings(
-            **app_settings_defaults, default_embed_model="some-model"
-        )  # This should fail
+    # Since extra="ignore", these should just be ignored, not raise ValidationError
+    s1 = AppSettings(**app_settings_defaults, default_chat_model="some-model")
+    s2 = AppSettings(**app_settings_defaults, default_embed_model="some-model")
 
-    # Check that they are not present as attributes either
+    # Check that they are not present as attributes
+    assert not hasattr(s1, "default_chat_model")
+    assert not hasattr(s2, "default_embed_model")
+
     settings = AppSettings(**app_settings_defaults)
     assert not hasattr(settings, "default_chat_model")
     assert not hasattr(settings, "default_embed_model")
@@ -886,3 +884,44 @@ class TestAppSettingsRuntimeValidation:
 
         settings = AppSettings(**defaults)
         assert settings.spec_workflow.default_task_runtime == "claude"
+
+    def test_app_settings_rejects_jules_default_without_runtime_config(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "JULES_ENABLED",
+            "JULES_API_URL",
+            "JULES_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["spec_workflow"] = {"default_task_runtime": "jules"}
+
+        with pytest.raises(
+            ValueError,
+            match="default_task_runtime=jules requires JULES_ENABLED=true",
+        ):
+            AppSettings(_env_file=None, **defaults)
+
+    def test_app_settings_allows_jules_default_with_runtime_config(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["spec_workflow"] = {"default_task_runtime": "jules"}
+        defaults["jules"] = {
+            "jules_enabled": True,
+            "jules_api_url": "https://jules.example.test",
+            "jules_api_key": "test-key",
+        }
+
+        settings = AppSettings(_env_file=None, **defaults)
+        assert settings.spec_workflow.default_task_runtime == "jules"

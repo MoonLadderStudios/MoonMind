@@ -555,6 +555,8 @@ textarea {
   color: rgb(var(--mm-ink));
   background: rgb(var(--mm-panel));
   transition: border-color 140ms ease, box-shadow 140ms ease;
+  max-width: 100%;
+  min-width: 0;
 }
 
 input:focus-visible,
