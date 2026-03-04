@@ -661,7 +661,7 @@ const helpers = loadSubmitRuntimeHelpers();
   const circular = {};
   circular.self = circular;
   const rendered = helpers.stringifySkillArgs(circular);
-  assert.strictEqual(rendered, "[unserializable skill args]");
+  assert.strictEqual(rendered, "{\n  \"self\": \"[Circular]\"\n}");
 })();
 
 (function testBuildQueueSubmissionDraftFromJobKeepsTemplateBoundFirstStep() {

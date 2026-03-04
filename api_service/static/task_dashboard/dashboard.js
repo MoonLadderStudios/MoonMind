@@ -1249,8 +1249,21 @@
     if (keys.length === 0) {
       return "";
     }
+
+    // Custom replacer to handle circular references
+    const cache = new Set();
+    const replacer = (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (cache.has(value)) {
+          return '[Circular]';
+        }
+        cache.add(value);
+      }
+      return value;
+    };
+
     try {
-      return JSON.stringify(args, null, 2);
+      return JSON.stringify(args, replacer, 2);
     } catch (error) {
       console.warn("Failed to format skill args for dashboard draft", error);
       return "[unserializable skill args]";
