@@ -32,46 +32,40 @@ class TestConfluenceIndexer(unittest.TestCase):
         self.assertEqual(self.indexer.base_url, "http://fake-confluence.com")
         self.assertIsInstance(self.indexer.reader, MagicMock)
 
-    def test_init_missing_base_url(self):
-        with self.assertRaises(ValueError) as context:
-            ConfluenceIndexer(
-                base_url="",
-                api_token="fake_token",
-                user_name="fake_user",
-                logger=MagicMock(),
-            )
-        self.assertEqual(
-            str(context.exception), "Confluence URL is required to set up Confluence"
-        )
-
-    def test_init_missing_api_token(self):
-        with self.assertRaises(ValueError) as context:
-            ConfluenceIndexer(
-                base_url="http://fake-confluence.com",
-                api_token="",
-                user_name="fake_user",
-                logger=MagicMock(),
-            )
-        self.assertEqual(
-            str(context.exception),
-            "Confluence API key is required to set up Confluence",
-        )
-
-    def test_init_missing_user_name(self):
-        with self.assertRaises(ValueError) as context:
-            ConfluenceIndexer(
-                base_url="http://fake-confluence.com",
-                api_token="fake_token",
-                user_name="",
-                logger=MagicMock(),
-            )
-        self.assertEqual(
-            str(context.exception),
-            "Confluence username is required to set up Confluence",
-        )
+    def test_init_missing_required_parameters(self):
+        test_cases = [
+            (
+                "missing_base_url",
+                {"base_url": "", "api_token": "fake_token", "user_name": "fake_user"},
+                "Confluence URL is required to set up Confluence",
+            ),
+            (
+                "missing_api_token",
+                {
+                    "base_url": "http://fake-confluence.com",
+                    "api_token": "",
+                    "user_name": "fake_user",
+                },
+                "Confluence API key is required to set up Confluence",
+            ),
+            (
+                "missing_user_name",
+                {
+                    "base_url": "http://fake-confluence.com",
+                    "api_token": "fake_token",
+                    "user_name": "",
+                },
+                "Confluence username is required to set up Confluence",
+            ),
+        ]
+        for name, kwargs, error_message in test_cases:
+            with self.subTest(case=name):
+                with self.assertRaises(ValueError) as context:
+                    ConfluenceIndexer(logger=MagicMock(), **kwargs)
+                self.assertEqual(str(context.exception), error_message)
 
     @patch("llama_index.core.VectorStoreIndex.from_documents")
-    def test_index_missing_parameters(self, mock_from_documents):
+    def test_index_missing_parameters(self, _mock_from_documents):
         with self.assertRaises(ValueError) as context:
             self.indexer.index(
                 storage_context=self.mock_storage_context,
