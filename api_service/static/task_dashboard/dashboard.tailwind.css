@@ -356,10 +356,20 @@ tr[data-proposal-id].proposal-consuming td {
   align-items: flex-start;
 }
 
+.queue-card-header > div:first-child {
+  min-width: 0;
+}
+
+.queue-card-header > .queue-card-status {
+  flex-shrink: 0;
+}
+
 .queue-card-title {
   font-weight: 600;
   text-decoration: none;
   color: inherit;
+  display: block;
+  word-break: break-word;
 }
 
 .queue-card-title:hover {
@@ -370,6 +380,7 @@ tr[data-proposal-id].proposal-consuming td {
   margin: 0.2rem 0 0;
   color: rgb(var(--mm-muted));
   font-size: 0.85rem;
+  word-break: break-word;
 }
 
 .queue-card-fields {
@@ -408,6 +419,7 @@ tr[data-proposal-id].proposal-consuming td {
   margin-top: 0.25rem;
   display: flex;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .queue-card-actions .button,
@@ -603,12 +615,12 @@ button {
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary) {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):hover {
   background: rgb(var(--mm-accent) / 0.88);
   border-color: rgb(255 255 255 / 0.82);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 30px -16px rgb(var(--mm-accent) / 0.94);
@@ -618,6 +630,14 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
 button:focus-visible {
   outline: 2px solid rgb(var(--mm-accent-2));
   outline-offset: 3px;
+}
+
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):active {
+  background: rgb(var(--mm-accent));
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.8), 0 0 20px 4px rgb(var(--mm-accent) / 0.9);
+  border-color: rgb(255 255 255 / 1);
+  transform: scale(1.01);
+  filter: brightness(1.15);
 }
 
 button.secondary {
@@ -662,6 +682,14 @@ button.secondary:hover {
   outline-offset: 3px;
 }
 
+.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):active {
+  background: rgb(var(--mm-accent));
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.8), 0 0 20px 4px rgb(var(--mm-accent) / 0.9);
+  border-color: rgb(255 255 255 / 1);
+  transform: scale(1.01);
+  filter: brightness(1.15);
+}
+
 .button.secondary {
   background: rgb(var(--mm-panel));
   color: rgb(var(--mm-ink));
@@ -697,6 +725,15 @@ button.secondary:hover {
 .queue-submit-primary:focus-visible {
   outline: 2px solid rgb(var(--queue-action-color));
   outline-offset: 3px;
+}
+
+.queue-action:active,
+.queue-submit-primary:active {
+  background: linear-gradient(150deg, rgb(var(--queue-action-color) / 1) 0%, rgb(var(--queue-action-color) / 0.9) 100%);
+  border-color: rgb(255 255 255 / 1);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.8), 0 0 20px 4px rgb(var(--queue-action-color) / 0.9);
+  transform: scale(1.01);
+  filter: brightness(1.15);
 }
 
 .proposal-action {
@@ -760,6 +797,13 @@ button.secondary:hover {
   border-color: rgb(var(--mm-accent));
 }
 
+.queue-step-icon-button:active {
+  background: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.5), 0 0 15px 2px rgb(var(--mm-accent) / 0.6);
+  filter: brightness(1.15);
+  transform: scale(0.98);
+}
+
 .queue-step-icon-button.destructive {
   color: rgb(var(--mm-danger));
   border-color: rgb(var(--mm-danger) / 0.7);
@@ -768,6 +812,13 @@ button.secondary:hover {
 .queue-step-icon-button.destructive:hover {
   background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.25), rgb(var(--mm-accent-warm) / 0.2));
   border-color: rgb(var(--mm-danger));
+}
+
+.queue-step-icon-button.destructive:active {
+  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.4), rgb(var(--mm-accent-warm) / 0.35));
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.5), 0 0 15px 2px rgb(var(--mm-danger) / 0.6);
+  filter: brightness(1.15);
+  transform: scale(0.98);
 }
 
 .queue-step-icon-button:disabled,
