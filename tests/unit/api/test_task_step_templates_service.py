@@ -412,7 +412,5 @@ async def test_import_seed_templates_skips_existing(tmp_path):
             assert created_count_first == 1
 
             # Second import should skip and return 0
-            created_count_second = await service.import_seed_templates(
-                seed_dir=seed_dir
-            )
+            created_count_second = await service.import_seed_templates(seed_dir=seed_dir)
             assert created_count_second == 0
