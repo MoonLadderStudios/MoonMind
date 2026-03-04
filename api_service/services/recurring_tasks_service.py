@@ -909,8 +909,9 @@ class RecurringTasksService:
             # Consider adding an expression index on this JSON path for very large
             # agent_jobs tables; keep current semantics unchanged in this patch.
             job_stmt = job_stmt.where(
-                queue_models.AgentJob.payload["system"]["recurrence"]["runId"]
-                .astext.in_(run_ids)
+                queue_models.AgentJob.payload["system"]["recurrence"][
+                    "runId"
+                ].astext.in_(run_ids)
             )
         else:
             job_stmt = job_stmt.where(
@@ -924,9 +925,9 @@ class RecurringTasksService:
         )
 
         jobs = (await self._session.execute(job_stmt)).scalars().all()
-        existing_jobs_by_run_and_type: dict[
-            tuple[UUID, str], queue_models.AgentJob
-        ] = {}
+        existing_jobs_by_run_and_type: dict[tuple[UUID, str], queue_models.AgentJob] = (
+            {}
+        )
         for job in jobs:
             payload = dict(job.payload or {})
             system_node = payload.get("system")
