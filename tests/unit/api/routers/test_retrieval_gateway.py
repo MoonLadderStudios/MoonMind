@@ -178,7 +178,9 @@ async def test_authorize_missing_capability() -> None:
         )
 
     assert excinfo.value.status_code == 403
-    assert excinfo.value.detail == "Worker token does not have RAG retrieval capability."
+    assert (
+        excinfo.value.detail == "Worker token does not have RAG retrieval capability."
+    )
 
 
 @pytest.mark.asyncio
