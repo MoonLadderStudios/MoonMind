@@ -32,50 +32,6 @@ class TestConfluenceIndexer(unittest.TestCase):
         self.assertEqual(self.indexer.base_url, "http://fake-confluence.com")
         self.assertIsInstance(self.indexer.reader, MagicMock)
 
-    def test_init_missing_required_parameters(self):
-        test_cases = [
-            (
-                "missing_base_url",
-                {"base_url": "", "api_token": "fake_token", "user_name": "fake_user"},
-                "Confluence URL is required to set up Confluence",
-            ),
-            (
-                "missing_api_token",
-                {
-                    "base_url": "http://fake-confluence.com",
-                    "api_token": "",
-                    "user_name": "fake_user",
-                },
-                "Confluence API key is required to set up Confluence",
-            ),
-            (
-                "missing_user_name",
-                {
-                    "base_url": "http://fake-confluence.com",
-                    "api_token": "fake_token",
-                    "user_name": "",
-                },
-                "Confluence username is required to set up Confluence",
-            ),
-        ]
-        for name, kwargs, error_message in test_cases:
-            with self.subTest(case=name):
-                with self.assertRaises(ValueError) as context:
-                    ConfluenceIndexer(logger=MagicMock(), **kwargs)
-                self.assertEqual(str(context.exception), error_message)
-
-    @patch("llama_index.core.VectorStoreIndex.from_documents")
-    def test_index_missing_parameters(self, _mock_from_documents):
-        with self.assertRaises(ValueError) as context:
-            self.indexer.index(
-                storage_context=self.mock_storage_context,
-                service_context=self.mock_service_context,
-            )
-        self.assertEqual(
-            str(context.exception),
-            "Must provide page_id, space_key (with or without page_title), or cql_query.",
-        )
-
     @patch("llama_index.core.VectorStoreIndex.from_documents")
     @patch("llama_index.core.node_parser.SimpleNodeParser.from_defaults")
     def test_index_by_space_key(

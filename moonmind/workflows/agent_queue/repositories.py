@@ -956,26 +956,6 @@ class AgentQueueRepository:
         await self._session.flush()
         return job
 
-    async def set_job_runtime_state(
-        self,
-        *,
-        job_id: UUID,
-        runtime_state: dict[str, Any] | None,
-    ) -> models.AgentJob:
-        """Upsert runtime-state checkpoint payload for worker resume semantics."""
-
-        now = datetime.now(UTC)
-        job = await self.require_job_for_update(job_id)
-        payload = dict(job.payload or {})
-        if runtime_state is None:
-            payload.pop("runtimeState", None)
-        else:
-            payload["runtimeState"] = dict(runtime_state)
-        job.payload = payload
-        job.updated_at = now
-        await self._session.flush()
-        return job
-
     async def list_jobs_for_telemetry(
         self,
         *,

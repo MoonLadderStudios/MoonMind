@@ -630,51 +630,6 @@ def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> 
     ]
 
 
-def test_run_preflight_jules_runtime_requires_configuration(monkeypatch) -> None:
-    """Jules runtime should fail fast when Jules API settings are missing."""
-
-    with pytest.raises(RuntimeError, match="targetRuntime=jules requires"):
-        cli.run_preflight(
-            env={
-                "MOONMIND_WORKER_RUNTIME": "jules",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-            }
-        )
-
-
-def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) -> None:
-    """Jules runtime should pass preflight when Jules API settings are present."""
-
-    calls: list[list[str]] = []
-    verifications: list[str] = []
-
-    def fake_verify(name: str) -> str:
-        verifications.append(name)
-        return f"/usr/bin/{name}"
-
-    def fake_run(command, *args, **kwargs):
-        calls.append(list(command))
-        return subprocess.CompletedProcess(
-            args=command, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    cli.run_preflight(
-        env={
-            "MOONMIND_WORKER_RUNTIME": "jules",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-            "JULES_ENABLED": "true",
-            "JULES_API_URL": "https://jules.example.test",
-            "JULES_API_KEY": "test-key",
-        }
-    )
-
-    assert verifications == ["speckit"]
-    assert calls == [["/usr/bin/speckit", "--version"]]
-
-
 def test_run_preflight_universal_without_claude_capability_skips_checks(
     monkeypatch,
 ) -> None:

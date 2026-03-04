@@ -14,7 +14,7 @@ _POLL_INTERVALS_MS = {
     "events": 1000,
 }
 
-_SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "jules", "universal")
+_SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "universal")
 _DEFAULT_TASK_RUNTIME = "codex"
 _DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
 _DEFAULT_CODEX_EFFORT = "high"
@@ -85,8 +85,6 @@ def _build_supported_task_runtimes() -> list[str]:
     supported: list[str] = ["codex", "gemini"]
     if settings.claude_runtime_gate.enabled:
         supported.append("claude")
-    if settings.jules_runtime_gate.enabled:
-        supported.append("jules")
     return supported
 
 

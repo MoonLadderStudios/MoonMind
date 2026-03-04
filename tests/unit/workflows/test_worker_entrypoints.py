@@ -192,15 +192,6 @@ def test_resolve_worker_runtime_accepts_universal(monkeypatch):
     assert ai_cli == "universal"
 
 
-def test_resolve_worker_runtime_accepts_jules(monkeypatch):
-    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "jules")
-
-    runtime, ai_cli = resolve_worker_runtime(default_runtime="codex")
-
-    assert runtime == "jules"
-    assert ai_cli == "jules"
-
-
 def test_resolve_worker_runtime_rejects_invalid_value(monkeypatch):
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "invalid-runtime")
 

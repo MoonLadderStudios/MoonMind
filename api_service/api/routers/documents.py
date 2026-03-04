@@ -19,6 +19,8 @@ from moonmind.schemas.documents_models import (  # Updated import path with Goog
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# TODO: There should be a way to load specific documents or load a space
+
 
 @router.post("/confluence/load")  # Path relative to the /v1/documents prefix
 async def load_confluence_documents(

@@ -170,7 +170,7 @@
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
     systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
-      : ["codex", "gemini", "claude", "jules", "universal"];
+      : ["codex", "gemini", "claude", "universal"];
 
   function normalizeRuntimeIdentifier(value) {
     return String(value || "").trim().toLowerCase();
@@ -208,7 +208,7 @@
       ? configuredTaskRuntimes
       : inferredTaskRuntimes.length > 0
         ? inferredTaskRuntimes
-        : ["codex", "gemini", "claude", "jules"];
+        : ["codex", "gemini", "claude"];
   const normalizedDefaultTaskRuntime = normalizeRuntimeIdentifier(
     systemConfig.defaultTaskRuntime,
   );
@@ -265,7 +265,6 @@
     codex: "Codex worker",
     gemini: "Gemini worker",
     claude: "Claude worker",
-    jules: "Jules worker",
     [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 
@@ -4735,7 +4734,9 @@
           const skillPlaceholder = isPrimaryStep
             ? "auto (default), speckit-orchestrate, ..."
             : "inherit primary step skill";
-          const instructionsLabel = "Instructions";
+          const instructionsLabel = isPrimaryStep
+            ? "Instructions (optional when a primary skill is selected)"
+            : "Instructions (optional)";
           const instructionsPlaceholder = isPrimaryStep
             ? "Describe the task to execute against the repository."
             : "Step-specific instructions (leave blank to continue from the task objective).";

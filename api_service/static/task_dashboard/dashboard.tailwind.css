@@ -567,8 +567,6 @@ textarea {
   color: rgb(var(--mm-ink));
   background: rgb(var(--mm-panel));
   transition: border-color 140ms ease, box-shadow 140ms ease;
-  max-width: 100%;
-  min-width: 0;
 }
 
 input:focus-visible,
@@ -619,12 +617,12 @@ button {
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button) {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):hover {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
   background: rgb(var(--mm-accent) / 0.88);
   border-color: rgb(255 255 255 / 0.82);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 30px -16px rgb(var(--mm-accent) / 0.94);
@@ -636,7 +634,7 @@ button:focus-visible {
   outline-offset: 3px;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):active {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):active {
   background: rgb(var(--mm-accent));
   box-shadow: 0 0 0 2px rgb(255 255 255 / 0.8), 0 0 20px 4px rgb(var(--mm-accent) / 0.9);
   border-color: rgb(255 255 255 / 1);

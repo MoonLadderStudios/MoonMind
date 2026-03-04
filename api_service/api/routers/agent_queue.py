@@ -78,7 +78,6 @@ from moonmind.schemas.agent_queue_models import (
     UpdateQueuedJobRequest,
     WorkerRuntimeCapabilitiesRequest,
     WorkerRuntimeCapabilitiesResponse,
-    WorkerRuntimeStateRequest,
     WorkerTokenCreateResponse,
     WorkerTokenListResponse,
     WorkerTokenModel,
@@ -115,7 +114,7 @@ from moonmind.workflows.agent_queue.service import (
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
 
-_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude", "jules")
+_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude")
 
 _QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
 
@@ -649,11 +648,6 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         code = "invalid_queue_payload"
         message = "Queue request payload is invalid."
         raw_message = str(exc).strip()
-        detail: dict[str, Any] = {
-            "code": code,
-            "message": message,
-            "debugMessage": raw_message,
-        }
         lowered = str(exc).lower()
         if "targetruntime=claude requires anthropic_api_key" in lowered:
             return HTTPException(
@@ -663,49 +657,28 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     "message": "targetRuntime=claude is not available in the current server configuration",
                 },
             )
-        if "targetruntime=jules requires jules_enabled=true" in lowered:
-            return HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "jules_runtime_disabled",
-                    "message": "targetRuntime=jules is not available in the current server configuration",
-                },
-            )
         if "attachments exceed max count" in lowered:
             code = "attachments_too_many"
             message = "Too many attachments were provided."
-            detail["code"] = code
         elif "attachments exceed max total bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "attachment_total_too_large"
             message = "Combined attachment size exceeds the maximum allowed total."
-            detail["code"] = code
         elif "attachment exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "attachment_too_large"
             message = "Attachment exceeds the maximum allowed size."
-            detail["code"] = code
-        elif (
-            "attachment content type" in lowered
-            or "attachment type" in lowered
-            or "attachment format" in lowered
-            or "attachment content type must be" in lowered
-            or "content type must be" in lowered
-        ):
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        elif "attachment content type" in lowered:
             code = "attachment_type_not_allowed"
             message = "Attachment content type is not allowed."
-            detail["code"] = code
-        elif "artifact exceeds max bytes" in lowered or "exceeds max bytes" in lowered:
+        elif "exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
             message = "Artifact exceeds the maximum allowed size."
-            detail["code"] = code
         elif "does not exist on disk" in lowered:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
-            detail["code"] = code
         else:
             cause = getattr(exc, "__cause__", None)
             while isinstance(cause, Exception):
@@ -715,9 +688,11 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     break
                 cause = getattr(cause, "__cause__", None)
 
-        detail["code"] = code
-        detail["message"] = message
-        detail["code"] = code
+        detail = {
+            "code": code,
+            "message": message,
+            "debugMessage": raw_message,
+        }
         return HTTPException(status_code=status_code, detail=detail)
     logger.exception("Unhandled agent queue exception")
     return HTTPException(
@@ -1247,27 +1222,6 @@ async def heartbeat_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(heartbeat_result.job, heartbeat_result.system)
-
-
-@router.post("/jobs/{job_id}/runtime-state", response_model=JobModel)
-async def update_job_runtime_state(
-    job_id: UUID,
-    payload: WorkerRuntimeStateRequest,
-    service: AgentQueueService = Depends(_get_service),
-    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
-) -> JobModel:
-    """Persist worker runtime checkpoint state for a running claimed job."""
-
-    try:
-        _ensure_worker_identity(payload.worker_id, worker_auth)
-        job = await service.update_runtime_state(
-            job_id=job_id,
-            worker_id=payload.worker_id,
-            runtime_state=payload.runtime_state,
-        )
-    except Exception as exc:  # pragma: no cover - thin mapping layer
-        raise _to_http_exception(exc) from exc
-    return _serialize_job(job)
 
 
 @router.post(

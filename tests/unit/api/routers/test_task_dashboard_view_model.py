@@ -36,9 +36,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
-    monkeypatch.setattr(settings.jules, "jules_enabled", False)
-    monkeypatch.setattr(settings.jules, "jules_api_url", None)
-    monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
@@ -185,9 +182,6 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude")
     monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
-    monkeypatch.setattr(settings.jules, "jules_enabled", False)
-    monkeypatch.setattr(settings.jules, "jules_api_url", None)
-    monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
     config = build_runtime_config("/tasks")
 
@@ -213,27 +207,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
 
 def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "enabled")
-    monkeypatch.setattr(settings.jules, "jules_enabled", False)
-    monkeypatch.setattr(settings.jules, "jules_api_url", None)
-    monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
     config = build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
-
-
-def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
-    monkeypatch.setattr(settings.jules, "jules_enabled", True)
-    monkeypatch.setattr(settings.jules, "jules_api_url", "https://jules.example.test")
-    monkeypatch.setattr(settings.jules, "jules_api_key", "test-key")
-
-    config = build_runtime_config("/tasks")
-
-    assert config["system"]["supportedTaskRuntimes"] == [
-        "codex",
-        "gemini",
-        "jules",
-    ]
