@@ -1,7 +1,13 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from api_service.api.routers.summarization import get_user_github_token, get_user_llm_api_key
+
+from api_service.api.routers.summarization import (
+    get_user_github_token,
+    get_user_llm_api_key,
+)
 from api_service.db.models import User
+
 
 @pytest.mark.asyncio
 async def test_get_user_github_token():
@@ -18,6 +24,7 @@ async def test_get_user_github_token():
         token = await get_user_github_token(user, db)
         assert token == "test_github_token"
 
+
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key():
     db = AsyncMock()
@@ -33,6 +40,7 @@ async def test_get_user_llm_api_key():
         token = await get_user_llm_api_key(user, "openai", db)
         assert token == "test_openai_key"
 
+
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key_ollama():
     db = AsyncMock()
@@ -41,6 +49,7 @@ async def test_get_user_llm_api_key_ollama():
 
     token = await get_user_llm_api_key(user, "ollama", db)
     assert token is None
+
 
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key_no_profile():
