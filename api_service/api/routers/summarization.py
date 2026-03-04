@@ -30,14 +30,15 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import User  # Assuming User model path
+from api_service.services.profile_service import ProfileService
 
 logger = logging.getLogger(__name__)
+profile_service = ProfileService()
 
 
 async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
     """
     Retrieves the user's GitHub token.
-    Placeholder logic: This should eventually fetch from user.profile and decrypt.
     """
     if not isinstance(user, User):
         logger.warning(
@@ -45,16 +46,12 @@ async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
         )
         return None
     logger.info(f"Attempting to retrieve GitHub token for user {user.id}")
-    # Simulate checking user profile; replace with actual db/profile access
-    # Example: if hasattr(user, 'profile') and user.profile.github_access_token_encrypted:
-    #     # Decrypt logic here
-    #     return "decrypted_github_token_placeholder"
-    if user.email == "user_with_gh_token@example.com":  # Example condition
-        logger.warning("Using placeholder logic for GitHub token retrieval.")
-        return "ghp_placeholder_github_token"
-    logger.warning(
-        f"No GitHub token configured for user {user.id} in placeholder logic."
-    )
+
+    profile = await profile_service.get_profile_by_user_id(db, user.id)
+    if profile and profile.github_token_encrypted:
+        return profile.github_token_encrypted
+
+    logger.warning(f"No GitHub token configured for user {user.id}.")
     return None
 
 
@@ -63,7 +60,6 @@ async def get_user_llm_api_key(
 ) -> Optional[str]:
     """
     Retrieves the API key for a given user and LLM provider.
-    Placeholder logic: This should eventually fetch from user.profile and decrypt.
     """
     if not hasattr(user, "id"):
         logger.warning(
@@ -75,31 +71,21 @@ async def get_user_llm_api_key(
         f"Attempting to retrieve API key for user {user.id} and provider {provider}"
     )
     provider_lower = provider.lower()
-    # Simulate checking user profile; replace with actual db/profile access
-    # Example: if hasattr(user, 'profile'):
-    #     if provider_lower == "openai" and user.profile.openai_api_key_encrypted:
-    #         return "decrypted_openai_key_placeholder"
-    #     elif provider_lower == "google" and user.profile.google_api_key_encrypted:
-    #         return "decrypted_google_key_placeholder"
-    #     # etc. for other providers
 
-    # Placeholder keys based on provider for testing
-    if provider_lower == "openai":
-        logger.warning("Using placeholder logic for OpenAI API key retrieval.")
-        return "sk-placeholder-openai-key-summarization"
-    elif provider_lower == "google":
-        logger.warning("Using placeholder logic for Google API key retrieval.")
-        return "google-placeholder-api-key-summarization"
-    elif provider_lower == "anthropic":
-        logger.warning("Using placeholder logic for Anthropic API key retrieval.")
-        return "anthropic-placeholder-api-key-summarization"
     # Ollama typically doesn't require an API key, so return None or a specific marker if needed.
-    elif provider_lower == "ollama":
+    if provider_lower == "ollama":
         logger.info(f"No API key needed for Ollama provider for user {user.id}.")
         return None  # Or some other indicator if your logic expects it, e.g. "ollama_no_key"
 
+    profile = await profile_service.get_profile_by_user_id(db, user.id)
+
+    if profile:
+        field_name = f"{provider_lower}_api_key_encrypted"
+        if hasattr(profile, field_name) and getattr(profile, field_name):
+            return getattr(profile, field_name)
+
     logger.warning(
-        f"No API key logic defined for provider: {provider} in placeholder function for user {user.id}."
+        f"No API key configured for provider: {provider} for user {user.id}."
     )
     return None
 
@@ -275,8 +261,13 @@ async def summarize_repository(
                     )
 
                 generator = ReadmeAiGenerator(config=readme_config)
+                debug_readme_config = dict(readme_config)
+                if "api_key" in debug_readme_config:
+                    debug_readme_config["api_key"] = "***REDACTED***"
+
                 logger.debug(
-                    f"ReadmeAiGenerator instantiated with config: {readme_config}"
+                    "ReadmeAiGenerator instantiated with config: %s",
+                    debug_readme_config,
                 )
 
                 summary_content = await generator.generate(repo_path=temp_dir)

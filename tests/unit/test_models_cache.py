@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import unittest
@@ -7,7 +8,11 @@ from moonmind.config import settings  # To mock API keys
 from moonmind.config.settings import (  # Import AppSettings class for patching
     AppSettings,
 )
-from moonmind.models_cache import ModelCache, force_refresh_model_cache
+from moonmind.models_cache import (
+    ModelCache,
+    force_refresh_model_cache,
+    refresh_model_cache_for_user,
+)
 
 # Configure basic logging for tests to see warnings/errors if needed
 logging.basicConfig(level=logging.INFO)
@@ -433,6 +438,25 @@ class TestModelCache(unittest.TestCase):
         self.assertEqual(self.mock_list_google_models.call_count, 2)
         self.assertEqual(self.mock_list_openai_models.call_count, 2)
         self.assertEqual(self.mock_list_ollama_models.call_count, 2)
+
+    def test_refresh_model_cache_for_user_does_not_mutate_singleton_keys(self):
+        cache = ModelCache(refresh_interval_seconds=36000)
+        cache.google_api_key = "global_google_key"
+        cache.openai_api_key = "global_openai_key"
+
+        with patch(
+            "api_service.api.routers.chat.get_user_api_key",
+            new=AsyncMock(side_effect=["user_google_key", "user_openai_key"]),
+        ):
+            user_models = asyncio.run(
+                refresh_model_cache_for_user(user=MagicMock(), db_session=MagicMock())
+            )
+
+        self.assertIsInstance(user_models, list)
+        self.assertEqual(cache.google_api_key, "global_google_key")
+        self.assertEqual(cache.openai_api_key, "global_openai_key")
+        self.mock_list_google_models.assert_called_with(api_key="user_google_key")
+        self.mock_list_openai_models.assert_called_with(api_key="user_openai_key")
 
     def test_periodic_refresh_thread_execution(self):
         # This test verifies that the periodic refresh thread executes at least the initial refresh

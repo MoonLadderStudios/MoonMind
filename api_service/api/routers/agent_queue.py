@@ -78,6 +78,7 @@ from moonmind.schemas.agent_queue_models import (
     UpdateQueuedJobRequest,
     WorkerRuntimeCapabilitiesRequest,
     WorkerRuntimeCapabilitiesResponse,
+    WorkerRuntimeStateRequest,
     WorkerTokenCreateResponse,
     WorkerTokenListResponse,
     WorkerTokenModel,
@@ -114,7 +115,7 @@ from moonmind.workflows.agent_queue.service import (
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
 
-_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude")
+_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude", "jules")
 
 _QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
 
@@ -662,7 +663,15 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     "message": "targetRuntime=claude is not available in the current server configuration",
                 },
             )
-        elif "attachments exceed max count" in lowered:
+        if "targetruntime=jules requires jules_enabled=true" in lowered:
+            return HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "jules_runtime_disabled",
+                    "message": "targetRuntime=jules is not available in the current server configuration",
+                },
+            )
+        if "attachments exceed max count" in lowered:
             code = "attachments_too_many"
             message = "Too many attachments were provided."
             detail["code"] = code
@@ -703,10 +712,10 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                 if isinstance(cause, ManifestContractError):
                     # Surface actionable manifest contract failures to API clients.
                     message = raw_message
-                    detail["message"] = message
                     break
                 cause = getattr(cause, "__cause__", None)
 
+        detail["code"] = code
         detail["message"] = message
         return HTTPException(status_code=status_code, detail=detail)
     logger.exception("Unhandled agent queue exception")
@@ -1237,6 +1246,27 @@ async def heartbeat_job(
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
     return _serialize_job(heartbeat_result.job, heartbeat_result.system)
+
+
+@router.post("/jobs/{job_id}/runtime-state", response_model=JobModel)
+async def update_job_runtime_state(
+    job_id: UUID,
+    payload: WorkerRuntimeStateRequest,
+    service: AgentQueueService = Depends(_get_service),
+    worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> JobModel:
+    """Persist worker runtime checkpoint state for a running claimed job."""
+
+    try:
+        _ensure_worker_identity(payload.worker_id, worker_auth)
+        job = await service.update_runtime_state(
+            job_id=job_id,
+            worker_id=payload.worker_id,
+            runtime_state=payload.runtime_state,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        raise _to_http_exception(exc) from exc
+    return _serialize_job(job)
 
 
 @router.post(
