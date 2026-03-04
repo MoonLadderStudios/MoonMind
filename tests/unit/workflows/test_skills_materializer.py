@@ -8,6 +8,7 @@ import tarfile
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from urllib.request import ProxyHandler
 
 import pytest
 
@@ -323,6 +324,47 @@ def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path)
     assert "resolves to a non-public address: example.com" in str(exc.value)
 
 
+def test_download_remote_bundle_disables_proxy_usage(monkeypatch, tmp_path):
+    handlers: list[object] = []
+
+    class FakeResponse(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+        def geturl(self):
+            return "https://example.com/bundle.zip"
+
+    class FakeOpener:
+        def open(self, _request, timeout):
+            assert timeout > 0
+            return FakeResponse(b"bundle-bytes")
+
+    def fake_build_opener(*opener_handlers):
+        handlers.extend(opener_handlers)
+        return FakeOpener()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer._validate_public_remote_host",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer.build_opener",
+        fake_build_opener,
+    )
+
+    output = tmp_path / "bundle.zip"
+    _download_remote_bundle("https://example.com/bundle.zip", output)
+
+    proxy_handlers = [handler for handler in handlers if isinstance(handler, ProxyHandler)]
+    assert proxy_handlers
+    assert proxy_handlers[0].proxies == {}
+    assert output.read_bytes() == b"bundle-bytes"
+
+
 def test_resolve_source_root_uses_git_clone_end_of_options_separator(
     tmp_path, monkeypatch
 ):
@@ -336,6 +378,12 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
         "moonmind.workflows.skills.materializer.subprocess.run",
         fake_run,
     )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))
+        ],
+    )
 
     entry = ResolvedSkill(
         skill_name="speckit",
@@ -347,3 +395,37 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
 
     assert calls
     assert calls[0][:5] == ["git", "clone", "--depth", "1", "--"]
+
+
+def test_resolve_source_root_rejects_git_ext_transport(tmp_path):
+    entry = ResolvedSkill(
+        skill_name="speckit",
+        version="1.0.0",
+        source_uri="git+ext::sh -c echo pwned",
+    )
+
+    with pytest.raises(
+        SkillMaterializationError, match="Unsupported git source transport 'ext'"
+    ) as exc:
+        _resolve_source_root(entry, tmp_path)
+
+    assert exc.value.code == "git_fetch_failed"
+
+
+def test_resolve_source_root_rejects_git_private_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))
+        ],
+    )
+    entry = ResolvedSkill(
+        skill_name="speckit",
+        version="1.0.0",
+        source_uri="git+https://internal.example/repo.git",
+    )
+
+    with pytest.raises(SkillMaterializationError, match="non-public address") as exc:
+        _resolve_source_root(entry, tmp_path)
+
+    assert exc.value.code == "git_fetch_failed"

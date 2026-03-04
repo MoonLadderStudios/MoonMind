@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import ipaddress
 import os
+import re
 import shutil
 import socket
 import stat
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
-from urllib.request import HTTPHandler, HTTPSHandler, Request, build_opener
+from urllib.request import HTTPHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
 from .workspace_links import (
@@ -38,6 +39,15 @@ class SkillMaterializationError(RuntimeError):
 
 _SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _DOWNLOAD_TIMEOUT_SECONDS = 30
+_PUBLIC_ADDRESS_REJECTION_PROPERTIES = (
+    "is_private",
+    "is_loopback",
+    "is_link_local",
+    "is_multicast",
+    "is_reserved",
+    "is_unspecified",
+)
+_GIT_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443, "ssh": 22, "git": 9418}
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,8 +155,6 @@ def _validate_skill_name(skill_name: str) -> None:
             "invalid_skill_name",
             f"Skill name '{skill_name}' cannot contain '..'",
         )
-    import re
-
     if not re.fullmatch(_SKILL_NAME_PATTERN, skill_name):
         raise SkillMaterializationError(
             "invalid_skill_name",
@@ -245,14 +253,7 @@ def _safe_create_connection(
                 f"Unable to parse resolved bundle host IP for '{host}'",
             ) from exc
 
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
+        if any(getattr(ip, property_name) for property_name in _PUBLIC_ADDRESS_REJECTION_PROPERTIES):
             raise SkillMaterializationError(
                 "bundle_fetch_failed",
                 f"Skill bundle source host resolves to a non-public address: {host} ({ip})",
@@ -310,6 +311,37 @@ class _SafeHTTPSHandler(HTTPSHandler):
         return self.do_open(_SafeHTTPSConnection, req, context=self._context)
 
 
+def _validate_public_host(
+    hostname: str,
+    port: int,
+    *,
+    error_code: str,
+    source_label: str,
+) -> None:
+    try:
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise SkillMaterializationError(
+            error_code,
+            f"Unable to resolve {source_label} host '{hostname}': {exc}",
+        ) from exc
+
+    for addrinfo in addresses:
+        try:
+            ip = ipaddress.ip_address(addrinfo[4][0])
+        except ValueError as exc:
+            raise SkillMaterializationError(
+                error_code,
+                f"Unable to parse resolved {source_label} host IP for '{hostname}'",
+            ) from exc
+
+        if any(getattr(ip, property_name) for property_name in _PUBLIC_ADDRESS_REJECTION_PROPERTIES):
+            raise SkillMaterializationError(
+                error_code,
+                f"{source_label} host resolves to a non-public address: {hostname}",
+            )
+
+
 def _validate_public_remote_host(source_uri: str) -> None:
     parsed = urlparse(source_uri)
     hostname = parsed.hostname
@@ -320,40 +352,63 @@ def _validate_public_remote_host(source_uri: str) -> None:
         )
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    try:
-        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise SkillMaterializationError(
-            "bundle_fetch_failed",
-            f"Unable to resolve skill bundle host '{hostname}': {exc}",
-        ) from exc
+    _validate_public_host(
+        hostname,
+        port,
+        error_code="bundle_fetch_failed",
+        source_label="Skill bundle source",
+    )
 
-    for addrinfo in addresses:
-        try:
-            ip = ipaddress.ip_address(addrinfo[4][0])
-        except ValueError as exc:
+
+def _validate_git_source_uri(repo_uri: str) -> None:
+    parsed = urlparse(repo_uri)
+    scheme = parsed.scheme.lower()
+
+    if scheme == "ext":
+        raise SkillMaterializationError(
+            "git_fetch_failed",
+            "Unsupported git source transport 'ext' for skill materialization",
+        )
+
+    if scheme:
+        if scheme not in _GIT_SCHEME_DEFAULT_PORTS:
             raise SkillMaterializationError(
-                "bundle_fetch_failed",
-                f"Unable to parse resolved bundle host IP for '{hostname}'",
-            ) from exc
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            raise SkillMaterializationError(
-                "bundle_fetch_failed",
-                f"Skill bundle source host resolves to a non-public address: {hostname}",
+                "git_fetch_failed",
+                f"Unsupported git source URI scheme '{scheme}' for skill materialization",
             )
+        if not parsed.hostname:
+            raise SkillMaterializationError(
+                "git_fetch_failed",
+                f"Git skill source URI is missing a hostname: {repo_uri}",
+            )
+        _validate_public_host(
+            parsed.hostname,
+            parsed.port or _GIT_SCHEME_DEFAULT_PORTS[scheme],
+            error_code="git_fetch_failed",
+            source_label="Git skill source",
+        )
+        return
+
+    scp_like = re.match(r"^[^@:/\s]+@([^:/\s]+):.+$", repo_uri)
+    if not scp_like:
+        raise SkillMaterializationError(
+            "git_fetch_failed",
+            "Unsupported git source URI format for skill materialization",
+        )
+
+    _validate_public_host(
+        scp_like.group(1),
+        _GIT_SCHEME_DEFAULT_PORTS["ssh"],
+        error_code="git_fetch_failed",
+        source_label="Git skill source",
+    )
 
 
 def _download_remote_bundle(source_uri: str, destination: Path) -> Path:
     _validate_public_remote_host(source_uri)
     request = Request(source_uri, method="GET")
-    opener = build_opener(_SafeHTTPHandler(), _SafeHTTPSHandler())
+    # Prevent environment/system proxy settings from bypassing host IP validation.
+    opener = build_opener(ProxyHandler({}), _SafeHTTPHandler(), _SafeHTTPSHandler())
     try:
         with opener.open(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
             final_url = response.geturl()
@@ -388,6 +443,12 @@ def _resolve_source_root(entry: ResolvedSkill, scratch_dir: Path) -> Path:
 
     if source_uri.startswith("git+"):
         repo_uri = source_uri[len("git+") :].strip()
+        if not repo_uri:
+            raise SkillMaterializationError(
+                "git_fetch_failed",
+                f"Git skill source URI is missing repository value for {skill_name}",
+            )
+        _validate_git_source_uri(repo_uri)
         destination = scratch_dir / f"git-{skill_name}"
         try:
             subprocess.run(
