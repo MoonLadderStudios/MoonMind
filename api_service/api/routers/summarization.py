@@ -233,13 +233,11 @@ async def summarize_repository(
                             )
                             cloned_successfully = True
                         except git.exc.GitCommandError as e_auth_clone:
-                            error_msg = (
-                                redact_sensitive_git_error(
-                                    str(e_auth_clone),
-                                    repo_url_str,
-                                    sanitized_repo_url,
-                                    github_token,
-                                )
+                            error_msg = redact_sensitive_git_error(
+                                str(e_auth_clone),
+                                repo_url_str,
+                                sanitized_repo_url,
+                                github_token,
                             )
                             logger.error(
                                 f"Authenticated clone failed for {sanitized_repo_url}: {error_msg}"
@@ -322,7 +320,9 @@ async def summarize_repository(
                     raise HTTPException(
                         status_code=500, detail="Failed to generate README.md summary."
                     )
-                logger.info(f"Successfully generated README.md for {sanitized_repo_url}")
+                logger.info(
+                    f"Successfully generated README.md for {sanitized_repo_url}"
+                )
             else:
                 logger.error(
                     f"Unsupported summary_type requested: {request.summary_type}"
