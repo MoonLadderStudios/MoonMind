@@ -2,7 +2,7 @@
 # Important to ignore env file validation errors if AppSettings is accidentally loaded
 import os
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 
 os.environ["IGNORE_ENV_FILE"] = "1"
 
@@ -103,7 +103,7 @@ class TestReadmeAiGenerator(unittest.IsolatedAsyncioTestCase):
     @patch("moonmind.summarization.readme_generator.tempfile.NamedTemporaryFile")
     @patch("moonmind.summarization.readme_generator.readme_agent")
     @patch("moonmind.summarization.readme_generator.ConfigLoader")
-    async def test_generate_with_custom_config_openai(
+    async def test_generate_with_custom_config_providers(
         self,
         mock_config_loader_cls,
         mock_readme_agent,
@@ -113,98 +113,38 @@ class TestReadmeAiGenerator(unittest.IsolatedAsyncioTestCase):
         mock_exists,
         mock_unlink,
     ):
-        """Test custom configuration is applied correctly for OpenAI."""
-        mock_config_instance = MagicMock()
-        mock_config_loader_cls.return_value = mock_config_instance
+        """Test custom configuration is applied correctly for all providers."""
+        test_cases = [
+            {"model": "gpt-4", "provider": "openai", "api_key": "test_openai_key"},
+            {
+                "model": "claude-3-opus",
+                "provider": "anthropic",
+                "api_key": "test_anthropic_key",
+            },
+            {
+                "model": "gemini-1.5-pro",
+                "provider": "google",
+                "api_key": "test_google_key",
+            },
+        ]
 
-        custom_config = {
-            "model": "gpt-4",
-            "provider": "openai",
-            "api_key": "test_openai_key",
-        }
-        generator = ReadmeAiGenerator(config=custom_config)
+        for custom_config in test_cases:
+            with self.subTest(provider=custom_config["provider"]):
+                mock_config_instance = MagicMock()
+                mock_config_loader_cls.return_value = mock_config_instance
 
-        await generator.generate("/dummy/path")
+                generator = ReadmeAiGenerator(config=custom_config)
+                await generator.generate("/dummy/path")
 
-        self.assertEqual(mock_config_instance.config.llm.model, "gpt-4")
-        self.assertEqual(mock_config_instance.config.llm.api, "openai")
-        self.assertEqual(mock_config_instance.config.llm.api_key, "test_openai_key")
-
-    @patch("moonmind.summarization.readme_generator.Path.unlink")
-    @patch("moonmind.summarization.readme_generator.Path.exists")
-    @patch(
-        "moonmind.summarization.readme_generator.open",
-        new_callable=unittest.mock.mock_open,
-        read_data="# Output",
-    )
-    @patch("moonmind.summarization.readme_generator.asyncio.to_thread")
-    @patch("moonmind.summarization.readme_generator.tempfile.NamedTemporaryFile")
-    @patch("moonmind.summarization.readme_generator.readme_agent")
-    @patch("moonmind.summarization.readme_generator.ConfigLoader")
-    async def test_generate_with_custom_config_anthropic(
-        self,
-        mock_config_loader_cls,
-        mock_readme_agent,
-        mock_tempfile,
-        mock_to_thread,
-        mock_file_open,
-        mock_exists,
-        mock_unlink,
-    ):
-        """Test custom configuration is applied correctly for Anthropic."""
-        mock_config_instance = MagicMock()
-        mock_config_loader_cls.return_value = mock_config_instance
-
-        custom_config = {
-            "model": "claude-3-opus",
-            "provider": "anthropic",
-            "api_key": "test_anthropic_key",
-        }
-        generator = ReadmeAiGenerator(config=custom_config)
-
-        await generator.generate("/dummy/path")
-
-        self.assertEqual(mock_config_instance.config.llm.model, "claude-3-opus")
-        self.assertEqual(mock_config_instance.config.llm.api, "anthropic")
-        self.assertEqual(mock_config_instance.config.llm.api_key, "test_anthropic_key")
-
-    @patch("moonmind.summarization.readme_generator.Path.unlink")
-    @patch("moonmind.summarization.readme_generator.Path.exists")
-    @patch(
-        "moonmind.summarization.readme_generator.open",
-        new_callable=unittest.mock.mock_open,
-        read_data="# Output",
-    )
-    @patch("moonmind.summarization.readme_generator.asyncio.to_thread")
-    @patch("moonmind.summarization.readme_generator.tempfile.NamedTemporaryFile")
-    @patch("moonmind.summarization.readme_generator.readme_agent")
-    @patch("moonmind.summarization.readme_generator.ConfigLoader")
-    async def test_generate_with_custom_config_google(
-        self,
-        mock_config_loader_cls,
-        mock_readme_agent,
-        mock_tempfile,
-        mock_to_thread,
-        mock_file_open,
-        mock_exists,
-        mock_unlink,
-    ):
-        """Test custom configuration is applied correctly for Google."""
-        mock_config_instance = MagicMock()
-        mock_config_loader_cls.return_value = mock_config_instance
-
-        custom_config = {
-            "model": "gemini-1.5-pro",
-            "provider": "google",
-            "api_key": "test_google_key",
-        }
-        generator = ReadmeAiGenerator(config=custom_config)
-
-        await generator.generate("/dummy/path")
-
-        self.assertEqual(mock_config_instance.config.llm.model, "gemini-1.5-pro")
-        self.assertEqual(mock_config_instance.config.llm.api, "google")
-        self.assertEqual(mock_config_instance.config.llm.api_key, "test_google_key")
+                self.assertEqual(
+                    mock_config_instance.config.llm.model, custom_config["model"]
+                )
+                self.assertEqual(
+                    mock_config_instance.config.llm.api, custom_config["provider"]
+                )
+                self.assertEqual(
+                    mock_config_instance.config.llm.api_key, custom_config["api_key"]
+                )
 
     @patch("moonmind.summarization.readme_generator.logger.exception")
     @patch("moonmind.summarization.readme_generator.Path.unlink")
