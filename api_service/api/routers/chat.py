@@ -597,21 +597,40 @@ async def handle_anthropic_request(
         logger.error(f"Error calling Anthropic API for model {model_to_use}: {e}")
         raise HTTPException(status_code=500, detail=f"Anthropic API error: {str(e)}")
 
-    # Token counting for Anthropic can be complex.
-    # Anthropic provides token counts in its API response if available.
-    # For now, using a simple estimation.
-    # TODO: Use actual token counts from response if LlamaIndex surfaces them.
-    # anthropic_response_obj.raw often contains the underlying provider response.
+    # Token counting for Anthropic
+    # We estimate first, then attempt to extract actual usage from the response
     prompt_tokens_estimate = sum(
         len(msg.content.split()) for msg in messages
     )  # Based on original request messages
     completion_tokens_estimate = len(ai_message_content.split())
 
     # Check if token usage information is available in the raw response.
-    # Example:
-    # if anthropic_response_obj.raw and 'usage' in anthropic_response_obj.raw:
-    #     prompt_tokens = anthropic_response_obj.raw['usage'].get('input_tokens', prompt_tokens_estimate)
-    #     completion_tokens = anthropic_response_obj.raw['usage'].get('output_tokens', completion_tokens_estimate)
+    if anthropic_response_obj.raw:
+        raw_data = anthropic_response_obj.raw
+        usage_data = None
+
+        if isinstance(raw_data, dict) and "usage" in raw_data:
+            usage_data = raw_data["usage"]
+        elif hasattr(raw_data, "usage"):
+            usage_data = raw_data.usage
+
+        if usage_data:
+            if isinstance(usage_data, dict):
+                prompt_tokens_estimate = usage_data.get(
+                    "input_tokens", prompt_tokens_estimate
+                )
+                completion_tokens_estimate = usage_data.get(
+                    "output_tokens", completion_tokens_estimate
+                )
+            else:
+                if hasattr(usage_data, "input_tokens"):
+                    prompt_tokens_estimate = getattr(
+                        usage_data, "input_tokens", prompt_tokens_estimate
+                    )
+                if hasattr(usage_data, "output_tokens"):
+                    completion_tokens_estimate = getattr(
+                        usage_data, "output_tokens", completion_tokens_estimate
+                    )
 
     return ChatCompletionResponse(
         id=f"cmpl-anthropic-{uuid4().hex}",
