@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import logging
 import random
 from dataclasses import dataclass
@@ -10,7 +11,6 @@ from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, func, or_, select
-import collections
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -1155,7 +1155,9 @@ class RecurringTasksService:
         max_backfill = max(1, int(settings.spec_workflow.scheduler_max_backfill))
 
         # --- BULK FETCH ACTIVE COUNTS ---
-        definition_ids = list({r.definition_id for r in pending_runs if r.definition_id})
+        definition_ids = list(
+            {r.definition_id for r in pending_runs if r.definition_id}
+        )
         active_count_by_def_id: dict[UUID, int] = collections.defaultdict(int)
 
         if definition_ids:
@@ -1169,16 +1171,22 @@ class RecurringTasksService:
                     )
                 ),
             )
-            active_runs_rows = (await self._session.execute(active_runs_stmt)).scalars().all()
+            active_runs_rows = (
+                (await self._session.execute(active_runs_stmt)).scalars().all()
+            )
 
             queued_job_ids = {
-                row.queue_job_id for row in active_runs_rows
-                if row.outcome is RecurringTaskRunOutcome.ENQUEUED and row.queue_job_id is not None
+                row.queue_job_id
+                for row in active_runs_rows
+                if row.outcome is RecurringTaskRunOutcome.ENQUEUED
+                and row.queue_job_id is not None
             }
 
             queue_jobs_by_id = {}
             if queued_job_ids:
-                queue_stmt = select(queue_models.AgentJob).where(queue_models.AgentJob.id.in_(queued_job_ids))
+                queue_stmt = select(queue_models.AgentJob).where(
+                    queue_models.AgentJob.id.in_(queued_job_ids)
+                )
                 queue_rows = (await self._session.execute(queue_stmt)).scalars().all()
                 queue_jobs_by_id = {job.id: job for job in queue_rows}
 
@@ -1203,17 +1211,23 @@ class RecurringTasksService:
         existing_jobs_by_run_id: dict[UUID, queue_models.AgentJob] = {}
         run_ids = [str(r.id) for r in pending_runs]
         job_types = [CANONICAL_TASK_JOB_TYPE, MANIFEST_JOB_TYPE]
-        job_stmt = select(queue_models.AgentJob).where(queue_models.AgentJob.type.in_(job_types))
+        job_stmt = select(queue_models.AgentJob).where(
+            queue_models.AgentJob.type.in_(job_types)
+        )
 
         bind = self._session.get_bind()
         dialect_name = bind.dialect.name if bind is not None else ""
         if dialect_name == "postgresql":
             job_stmt = job_stmt.where(
-                queue_models.AgentJob.payload["system"]["recurrence"]["runId"].astext.in_(run_ids)
+                queue_models.AgentJob.payload["system"]["recurrence"][
+                    "runId"
+                ].astext.in_(run_ids)
             )
         else:
             job_stmt = job_stmt.where(
-                func.json_extract(queue_models.AgentJob.payload, "$.system.recurrence.runId").in_(run_ids)
+                func.json_extract(
+                    queue_models.AgentJob.payload, "$.system.recurrence.runId"
+                ).in_(run_ids)
             )
 
         jobs = (await self._session.execute(job_stmt)).scalars().all()
@@ -1229,8 +1243,6 @@ class RecurringTasksService:
                             existing_jobs_by_run_id[UUID(run_value)] = job
                         except ValueError:
                             pass
-
-
 
         for run in pending_runs:
             definition = run.definition
@@ -1272,11 +1284,14 @@ class RecurringTasksService:
                 if run.queue_job_id:
                     if existing_job and existing_job.id == run.queue_job_id:
                         job_status = existing_job.status
-                if job_status in {queue_models.AgentJobStatus.QUEUED, queue_models.AgentJobStatus.RUNNING}:
+                if job_status in {
+                    queue_models.AgentJobStatus.QUEUED,
+                    queue_models.AgentJobStatus.RUNNING,
+                }:
                     active_count_by_def_id[definition.id] = other_active_count + 1
                 else:
                     active_count_by_def_id[definition.id] = other_active_count
-            else: # SKIPPED
+            else:  # SKIPPED
                 active_count_by_def_id[definition.id] = other_active_count
 
         await self._session.commit()
