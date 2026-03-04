@@ -609,27 +609,24 @@ async def handle_anthropic_request(
     if raw_response:
         # LlamaIndex's Anthropic wrapper might return raw as a dictionary or a Pydantic model
         # from the Anthropic SDK (anthropic.types.Message). We handle both cases.
-        usage = None
-        if isinstance(raw_response, dict) and "usage" in raw_response:
-            usage = raw_response["usage"]
-        elif hasattr(raw_response, "usage"):
-            usage = getattr(raw_response, "usage")
+        usage = (
+            raw_response.get("usage")
+            if isinstance(raw_response, dict)
+            else getattr(raw_response, "usage", None)
+        )
 
         if usage:
-            if isinstance(usage, dict):
-                prompt_tokens_estimate = usage.get(
-                    "input_tokens", prompt_tokens_estimate
-                )
-                completion_tokens_estimate = usage.get(
-                    "output_tokens", completion_tokens_estimate
-                )
-            else:
-                prompt_tokens_estimate = getattr(
-                    usage, "input_tokens", prompt_tokens_estimate
-                )
-                completion_tokens_estimate = getattr(
-                    usage, "output_tokens", completion_tokens_estimate
-                )
+            get_usage_value = (
+                usage.get
+                if isinstance(usage, dict)
+                else lambda key, default: getattr(usage, key, default)
+            )
+            prompt_tokens_estimate = get_usage_value(
+                "input_tokens", prompt_tokens_estimate
+            )
+            completion_tokens_estimate = get_usage_value(
+                "output_tokens", completion_tokens_estimate
+            )
 
     return ChatCompletionResponse(
         id=f"cmpl-anthropic-{uuid4().hex}",
