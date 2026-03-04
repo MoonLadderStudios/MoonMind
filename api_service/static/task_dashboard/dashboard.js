@@ -170,7 +170,7 @@
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
     systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
-      : ["codex", "gemini", "claude", "universal"];
+      : ["codex", "gemini", "claude", "jules", "universal"];
 
   function normalizeRuntimeIdentifier(value) {
     return String(value || "").trim().toLowerCase();
@@ -208,7 +208,7 @@
       ? configuredTaskRuntimes
       : inferredTaskRuntimes.length > 0
         ? inferredTaskRuntimes
-        : ["codex", "gemini", "claude"];
+        : ["codex", "gemini", "claude", "jules"];
   const normalizedDefaultTaskRuntime = normalizeRuntimeIdentifier(
     systemConfig.defaultTaskRuntime,
   );
@@ -265,6 +265,7 @@
     codex: "Codex worker",
     gemini: "Gemini worker",
     claude: "Claude worker",
+    jules: "Jules worker",
     [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 

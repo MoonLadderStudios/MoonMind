@@ -35,6 +35,10 @@ from moonmind.claude.runtime import (
     CLAUDE_RUNTIME_DISABLED_MESSAGE,
     build_runtime_gate_state,
 )
+from moonmind.jules.runtime import (
+    JULES_RUNTIME_DISABLED_MESSAGE,
+    build_runtime_gate_state as build_jules_runtime_gate_state,
+)
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.workflows.skills.registry import get_stage_adapter
@@ -55,7 +59,7 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
     runtime = (
         str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
     )
-    allowed = {"codex", "gemini", "claude", "universal"}
+    allowed = {"codex", "gemini", "claude", "jules", "universal"}
     if runtime not in allowed:
         supported = ", ".join(sorted(allowed))
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
@@ -162,8 +166,20 @@ def _effective_worker_capabilities(
     if configured:
         return configured
     if runtime == "universal":
-        return ("codex", "gemini", "claude", "git", "gh")
+        capabilities = ["codex", "gemini", "claude", "git", "gh"]
+        if _jules_runtime_gate_from_env(source).enabled:
+            capabilities.insert(3, "jules")
+        return tuple(capabilities)
     return (runtime, "git", "gh")
+
+
+def _jules_runtime_gate_from_env(source: Mapping[str, str]):
+    """Return Jules runtime gate state derived from worker environment."""
+
+    return build_jules_runtime_gate_state(
+        env=source,
+        error_message=JULES_RUNTIME_DISABLED_MESSAGE,
+    )
 
 
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
@@ -294,11 +310,12 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
     capabilities = _effective_worker_capabilities(source, runtime)
-    runtime_verification_order = ("codex", "gemini", "claude")
+    runtime_verification_order = ("codex", "gemini", "claude", "jules")
     resolved_paths: dict[str, str | None] = {
         "codex": None,
         "gemini": None,
         "claude": None,
+        "jules": None,
         "rg": None,
     }
 
@@ -347,6 +364,13 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 )
             except CliVerificationError as exc:
                 raise RuntimeError(str(exc)) from exc
+            continue
+        if runtime_name == "jules":
+            if runtime_name not in capabilities:
+                continue
+            gate = _jules_runtime_gate_from_env(source)
+            if not gate.enabled:
+                raise RuntimeError(gate.error_message)
             continue
 
         if runtime_name == "codex":

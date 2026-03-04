@@ -32,7 +32,9 @@ from moonmind.workflows.task_proposals.repositories import (
 
 logger = logging.getLogger(__name__)
 _PROPOSALS_WRITE_CAPABILITY = "proposals_write"
-_LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES = frozenset({"codex", "gemini", "claude"})
+_LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES = frozenset(
+    {"codex", "gemini", "claude", "jules"}
+)
 _NOTIFICATION_CATEGORIES = {"security", "tests"}
 _DEDUP_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 _MOONMIND_SIGNAL_TAGS = frozenset(

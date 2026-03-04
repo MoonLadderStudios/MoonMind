@@ -926,6 +926,48 @@ async def test_expired_running_job_with_cancel_request_is_not_requeued(tmp_path)
     assert job.finished_at is not None
 
 
+async def test_set_job_runtime_state_sets_and_clears_runtime_checkpoint(tmp_path):
+    """Repository should persist and clear runtimeState in mutable job payload JSON."""
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            job = await _create_job(
+                repo,
+                job_type="task",
+                payload={
+                    "repository": "moon/default",
+                    "targetRuntime": "jules",
+                    "task": {"runtime": {"mode": "jules"}},
+                },
+            )
+            await repo.commit()
+            await repo.claim_job(
+                worker_id="worker-1",
+                lease_seconds=30,
+                worker_capabilities=["jules", "git", "gh"],
+            )
+            await repo.commit()
+
+            updated = await repo.set_job_runtime_state(
+                job_id=job.id,
+                runtime_state={
+                    "runtime": "jules",
+                    "externalTaskId": "task-123",
+                    "status": "running",
+                },
+            )
+            await repo.commit()
+            assert isinstance(updated.payload, dict)
+            assert updated.payload["runtimeState"]["externalTaskId"] == "task-123"
+
+            cleared = await repo.set_job_runtime_state(job_id=job.id, runtime_state=None)
+            await repo.commit()
+
+    assert isinstance(cleared.payload, dict)
+    assert "runtimeState" not in cleared.payload
+
+
 async def test_upsert_live_session_sets_ended_at_only_once(tmp_path):
     """Terminal upserts should preserve first ended_at timestamp."""
 
