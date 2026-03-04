@@ -10,6 +10,7 @@ from moonmind.factories.ollama_factory import list_ollama_models
 from moonmind.factories.openai_factory import list_openai_models
 
 logger = logging.getLogger(__name__)
+_UNSET = object()
 
 
 class ModelCache:
@@ -45,8 +46,16 @@ class ModelCache:
                 if refresh_interval_seconds is not None
                 else settings.model_cache_refresh_interval_seconds
             )
-            self.google_api_key = google_api_key
-            self.openai_api_key = openai_api_key
+            self.google_api_key = (
+                google_api_key
+                if google_api_key is not None
+                else settings.google.google_api_key
+            )
+            self.openai_api_key = (
+                openai_api_key
+                if openai_api_key is not None
+                else settings.openai.openai_api_key
+            )
             self._initialized: bool = True
             self._refresh_operation_lock = (
                 Lock()
@@ -66,16 +75,26 @@ class ModelCache:
         if openai_api_key is not None:
             self.openai_api_key = openai_api_key
 
-    def _fetch_all_models(self) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    def _fetch_all_models(
+        self,
+        google_api_key: str | None | object = _UNSET,
+        openai_api_key: str | None | object = _UNSET,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
         self.logger.info("Attempting to fetch all models for cache refresh.")
         all_models_data = []
         model_to_provider_map = {}
+        effective_google_api_key = (
+            self.google_api_key if google_api_key is _UNSET else google_api_key
+        )
+        effective_openai_api_key = (
+            self.openai_api_key if openai_api_key is _UNSET else openai_api_key
+        )
 
         # Fetch Google Models
         try:
-            if settings.is_provider_enabled("google"):
+            if settings.google.google_enabled and bool(effective_google_api_key):
                 google_models_list = list(
-                    list_google_models(api_key=self.google_api_key)
+                    list_google_models(api_key=effective_google_api_key)
                 )  # Ensure it's a list
                 self.logger.info(
                     f"Fetched {len(google_models_list)} raw Google models."
@@ -122,8 +141,8 @@ class ModelCache:
 
         # Fetch OpenAI Models
         try:
-            if settings.is_provider_enabled("openai"):
-                openai_models_raw = list_openai_models(api_key=self.openai_api_key)
+            if settings.openai.openai_enabled and bool(effective_openai_api_key):
+                openai_models_raw = list_openai_models(api_key=effective_openai_api_key)
                 self.logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
                 for (
                     model
@@ -350,6 +369,20 @@ class ModelCache:
 
         return all_models_data, model_to_provider_map
 
+    def get_models_for_keys(
+        self, google_api_key: str | None = None, openai_api_key: str | None = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve models for explicit provider keys without mutating singleton cache state.
+
+        This prevents per-user key refreshes from contaminating globally cached model data.
+        """
+        user_models, _ = self._fetch_all_models(
+            google_api_key=google_api_key,
+            openai_api_key=openai_api_key,
+        )
+        return user_models
+
     def refresh_models_sync(self):
         with self._refresh_operation_lock:  # Changed to use new instance lock
             if self._refresh_in_progress:
@@ -439,15 +472,24 @@ model_cache = ModelCache(
 def force_refresh_model_cache():
     """Utility function to manually trigger a cache refresh."""
     logger.info("Force refresh of model cache requested.")
+    # Keep singleton keys aligned with current settings before refreshing.
+    model_cache.update_keys(
+        google_api_key=settings.google.google_api_key,
+        openai_api_key=settings.openai.openai_api_key,
+    )
     model_cache.refresh_models_sync()
 
 
 async def refresh_model_cache_for_user(user, db_session):
-    """Refresh the model cache using API keys from the given user profile."""
+    """
+    Retrieve models using API keys from the given user profile without mutating global cache.
+    """
     from api_service.api.routers.chat import get_user_api_key
 
     google_key = await get_user_api_key(user, "google", db_session)
     openai_key = await get_user_api_key(user, "openai", db_session)
 
-    model_cache.update_keys(google_api_key=google_key, openai_api_key=openai_key)
-    model_cache.refresh_models_sync()
+    return model_cache.get_models_for_keys(
+        google_api_key=google_key,
+        openai_api_key=openai_key,
+    )

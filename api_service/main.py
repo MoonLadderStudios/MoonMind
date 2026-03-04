@@ -428,14 +428,9 @@ async def startup_event():
                             logger.info(
                                 f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
                             )
-                        import asyncio
-
                         from moonmind.models_cache import refresh_model_cache_for_user
 
-                        loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(
-                            None, refresh_model_cache_for_user, default_user, db_session
-                        )
+                        await refresh_model_cache_for_user(default_user, db_session)
                     else:
                         logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:
