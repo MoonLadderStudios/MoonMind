@@ -4734,9 +4734,7 @@
           const skillPlaceholder = isPrimaryStep
             ? "auto (default), speckit-orchestrate, ..."
             : "inherit primary step skill";
-          const instructionsLabel = isPrimaryStep
-            ? "Instructions (optional when a primary skill is selected)"
-            : "Instructions (optional)";
+          const instructionsLabel = "Instructions";
           const instructionsPlaceholder = isPrimaryStep
             ? "Describe the task to execute against the repository."
             : "Step-specific instructions (leave blank to continue from the task objective).";
