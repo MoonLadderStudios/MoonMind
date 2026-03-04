@@ -23,6 +23,11 @@ from api_service.services.recurring_tasks_service import (
     RecurringTasksService,
     RecurringTaskValidationError,
 )
+from moonmind.workflows.agent_queue import models as queue_models
+from moonmind.workflows.agent_queue.job_types import (
+    CANONICAL_TASK_JOB_TYPE,
+    MANIFEST_JOB_TYPE,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -324,6 +329,82 @@ async def test_dispatch_pending_runs_applies_zero_misfire_grace(tmp_path: Path) 
             assert run is not None
             assert run.outcome is RecurringTaskRunOutcome.SKIPPED
             assert run.message == "Skipped due to misfire grace threshold"
+
+
+async def test_dispatch_pending_runs_matches_existing_job_by_type(
+    tmp_path: Path,
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringTasksService(session)
+            definition = await service.create_definition(
+                name="Typed Existing Job Match",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="* * * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "kind": "queue_task",
+                    "job": {
+                        "type": "task",
+                        "payload": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "targetRuntime": "codex",
+                            "task": {
+                                "instructions": "Queue job",
+                                "publish": {"mode": "none"},
+                                "skill": {"id": "auto", "args": {}},
+                            },
+                        },
+                    },
+                },
+                policy={},
+            )
+
+            now = datetime.now(UTC).replace(second=30, microsecond=0)
+            definition.next_run_at = now - timedelta(minutes=1)
+            await session.commit()
+
+            scheduled = await service.schedule_due_definitions(now=now, batch_size=10)
+            assert scheduled == 1
+            run = (
+                (
+                    await session.execute(
+                        select(RecurringTaskRun).where(
+                            RecurringTaskRun.definition_id == definition.id
+                        )
+                    )
+                )
+                .scalars()
+                .one()
+            )
+
+            mismatched_job = queue_models.AgentJob(
+                id=uuid4(),
+                type=MANIFEST_JOB_TYPE,
+                status=queue_models.AgentJobStatus.QUEUED,
+                priority=0,
+                payload={"system": {"recurrence": {"runId": str(run.id)}}},
+            )
+            session.add(mismatched_job)
+            await session.commit()
+
+            dispatched = await service.dispatch_pending_runs(now=now, batch_size=10)
+            assert dispatched == 1
+
+            await session.refresh(run)
+            assert run.outcome is RecurringTaskRunOutcome.ENQUEUED
+            assert run.queue_job_id is not None
+            assert run.queue_job_id != mismatched_job.id
+            assert run.queue_job_type == CANONICAL_TASK_JOB_TYPE
+
+            queued_job = await session.get(queue_models.AgentJob, run.queue_job_id)
+            assert queued_job is not None
+            assert queued_job.type == CANONICAL_TASK_JOB_TYPE
 
 
 async def test_target_kind_housekeeping_is_rejected(tmp_path: Path) -> None:

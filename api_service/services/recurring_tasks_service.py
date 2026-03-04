@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import collections
 import logging
 import random
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -801,6 +802,162 @@ class RecurringTasksService:
                 return job
         return None
 
+    @staticmethod
+    def _expected_job_type_for_target_kind(kind: str) -> str | None:
+        normalized_kind = str(kind or "").strip().lower()
+        if normalized_kind in {"queue_task", "queue_task_template"}:
+            return CANONICAL_TASK_JOB_TYPE
+        if normalized_kind == "manifest_run":
+            return MANIFEST_JOB_TYPE
+        return None
+
+    def _expected_job_type_for_definition(
+        self,
+        definition: RecurringTaskDefinition | None,
+    ) -> str | None:
+        if definition is None:
+            return None
+        target_payload = definition.target
+        target = dict(target_payload) if isinstance(target_payload, Mapping) else {}
+        kind = str(target.get("kind") or "").strip().lower()
+        return self._expected_job_type_for_target_kind(kind)
+
+    async def _bulk_fetch_active_counts(
+        self,
+        definition_ids: Sequence[UUID],
+    ) -> dict[UUID, int]:
+        active_count_by_def_id: dict[UUID, int] = collections.defaultdict(int)
+        if not definition_ids:
+            return active_count_by_def_id
+
+        active_runs_stmt = select(RecurringTaskRun).where(
+            RecurringTaskRun.definition_id.in_(definition_ids),
+            RecurringTaskRun.outcome.in_(
+                (
+                    RecurringTaskRunOutcome.PENDING_DISPATCH,
+                    RecurringTaskRunOutcome.DISPATCH_ERROR,
+                    RecurringTaskRunOutcome.ENQUEUED,
+                )
+            ),
+        )
+        active_runs_rows = (
+            (await self._session.execute(active_runs_stmt)).scalars().all()
+        )
+
+        queued_job_ids = {
+            row.queue_job_id
+            for row in active_runs_rows
+            if row.outcome is RecurringTaskRunOutcome.ENQUEUED
+            and row.queue_job_id is not None
+        }
+
+        queue_jobs_by_id: dict[UUID, queue_models.AgentJob] = {}
+        if queued_job_ids:
+            queue_stmt = select(queue_models.AgentJob).where(
+                queue_models.AgentJob.id.in_(queued_job_ids)
+            )
+            queue_rows = (await self._session.execute(queue_stmt)).scalars().all()
+            queue_jobs_by_id = {job.id: job for job in queue_rows}
+
+        for row in active_runs_rows:
+            if row.outcome in {
+                RecurringTaskRunOutcome.PENDING_DISPATCH,
+                RecurringTaskRunOutcome.DISPATCH_ERROR,
+            }:
+                active_count_by_def_id[row.definition_id] += 1
+            elif row.outcome == RecurringTaskRunOutcome.ENQUEUED:
+                if row.queue_job_id is None:
+                    active_count_by_def_id[row.definition_id] += 1
+                else:
+                    queue_job = queue_jobs_by_id.get(row.queue_job_id)
+                    if queue_job is not None and queue_job.status in {
+                        queue_models.AgentJobStatus.QUEUED,
+                        queue_models.AgentJobStatus.RUNNING,
+                    }:
+                        active_count_by_def_id[row.definition_id] += 1
+
+        return active_count_by_def_id
+
+    async def _bulk_fetch_existing_jobs(
+        self,
+        pending_runs: Sequence[RecurringTaskRun],
+    ) -> dict[tuple[UUID, str], queue_models.AgentJob]:
+        run_ids = [str(run.id) for run in pending_runs]
+        if not run_ids:
+            return {}
+
+        expected_job_types = sorted(
+            {
+                expected_job_type
+                for run in pending_runs
+                for expected_job_type in [
+                    self._expected_job_type_for_definition(run.definition)
+                ]
+                if expected_job_type is not None
+            }
+        )
+        if not expected_job_types:
+            return {}
+
+        job_stmt = select(queue_models.AgentJob).where(
+            queue_models.AgentJob.type.in_(expected_job_types)
+        )
+
+        bind = self._session.get_bind()
+        dialect_name = bind.dialect.name if bind is not None else ""
+        if dialect_name == "postgresql":
+            # Consider adding an expression index on this JSON path for very large
+            # agent_jobs tables; keep current semantics unchanged in this patch.
+            job_stmt = job_stmt.where(
+                queue_models.AgentJob.payload["system"]["recurrence"][
+                    "runId"
+                ].astext.in_(run_ids)
+            )
+        else:
+            job_stmt = job_stmt.where(
+                func.json_extract(
+                    queue_models.AgentJob.payload, "$.system.recurrence.runId"
+                ).in_(run_ids)
+            )
+        job_stmt = job_stmt.order_by(
+            queue_models.AgentJob.created_at.desc(),
+            queue_models.AgentJob.id.desc(),
+        )
+
+        jobs = (await self._session.execute(job_stmt)).scalars().all()
+        existing_jobs_by_run_and_type: dict[tuple[UUID, str], queue_models.AgentJob] = (
+            {}
+        )
+        for job in jobs:
+            payload = dict(job.payload or {})
+            system_node = payload.get("system")
+            if not isinstance(system_node, Mapping):
+                continue
+            recurrence_node = system_node.get("recurrence")
+            if not isinstance(recurrence_node, Mapping):
+                continue
+            run_value = str(recurrence_node.get("runId") or "").strip()
+            if not run_value:
+                continue
+            try:
+                run_id = UUID(run_value)
+            except ValueError:
+                logger.debug(
+                    "Skipping recurring job with malformed runId in payload",
+                    extra={
+                        "job_id": str(job.id),
+                        "job_type": job.type,
+                        "run_id": run_value,
+                    },
+                )
+                continue
+
+            key = (run_id, job.type)
+            if key not in existing_jobs_by_run_and_type:
+                existing_jobs_by_run_and_type[key] = job
+
+        return existing_jobs_by_run_and_type
+
     async def _dispatch_queue_task(
         self,
         *,
@@ -988,6 +1145,9 @@ class RecurringTasksService:
         run: RecurringTaskRun,
         now: datetime,
         policy: RecurringPolicy,
+        active_count: int | None = None,
+        existing_job: queue_models.AgentJob | None = None,
+        existing_job_queried: bool = False,
     ) -> int:
         scheduled_for = _coerce_utc(run.scheduled_for)
         if now - scheduled_for > timedelta(
@@ -1001,10 +1161,12 @@ class RecurringTasksService:
             definition.updated_at = now
             return 1
 
-        active_count = await self._count_active_runs(
-            definition_id=definition.id,
-            current_run_id=run.id,
-        )
+        if active_count is None:
+            active_count = await self._count_active_runs(
+                definition_id=definition.id,
+                current_run_id=run.id,
+            )
+
         if active_count >= policy.max_concurrent_runs:
             run.outcome = RecurringTaskRunOutcome.SKIPPED
             run.message = "Skipped due to overlap policy"
@@ -1016,14 +1178,8 @@ class RecurringTasksService:
 
         target = dict(definition.target or {})
         kind = str(target.get("kind") or "").strip().lower()
-
-        if kind == "queue_task":
-            expected_job_type = CANONICAL_TASK_JOB_TYPE
-        elif kind == "queue_task_template":
-            expected_job_type = CANONICAL_TASK_JOB_TYPE
-        elif kind == "manifest_run":
-            expected_job_type = MANIFEST_JOB_TYPE
-        else:
+        expected_job_type = self._expected_job_type_for_target_kind(kind)
+        if expected_job_type is None:
             run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
             run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
             run.dispatch_after = now + timedelta(seconds=60)
@@ -1034,10 +1190,12 @@ class RecurringTasksService:
             definition.updated_at = now
             return 1
 
-        existing_job = await self._find_existing_queue_job_for_run(
-            run_id=run.id,
-            job_type=expected_job_type,
-        )
+        if not existing_job_queried:
+            existing_job = await self._find_existing_queue_job_for_run(
+                run_id=run.id,
+                job_type=expected_job_type,
+            )
+
         if existing_job is not None:
             run.outcome = RecurringTaskRunOutcome.ENQUEUED
             run.queue_job_id = existing_job.id
@@ -1141,7 +1299,19 @@ class RecurringTasksService:
         pending_runs = list(result.scalars().all())
 
         dispatched = 0
+        if not pending_runs:
+            return dispatched
+
         max_backfill = max(1, int(settings.spec_workflow.scheduler_max_backfill))
+
+        definition_ids = list(
+            {r.definition_id for r in pending_runs if r.definition_id}
+        )
+        active_count_by_def_id = await self._bulk_fetch_active_counts(definition_ids)
+        existing_jobs_by_run_and_type = await self._bulk_fetch_existing_jobs(
+            pending_runs
+        )
+
         for run in pending_runs:
             definition = run.definition
             if definition is None:
@@ -1157,12 +1327,46 @@ class RecurringTasksService:
                 definition.policy,
                 global_max_backfill=max_backfill,
             )
+
+            other_active_count = max(0, active_count_by_def_id[definition.id] - 1)
+            expected_job_type = self._expected_job_type_for_definition(definition)
+            existing_job = (
+                existing_jobs_by_run_and_type.get((run.id, expected_job_type))
+                if expected_job_type is not None
+                else None
+            )
+
             dispatched += await self._dispatch_run(
                 definition=definition,
                 run=run,
                 now=reference_now,
                 policy=policy,
+                active_count=other_active_count,
+                existing_job=existing_job,
+                existing_job_queried=True,
             )
+
+            # Keep this in-memory count synchronized for later runs in the same
+            # batch so overlap policy checks stay accurate without re-querying.
+            if run.outcome in {
+                RecurringTaskRunOutcome.PENDING_DISPATCH,
+                RecurringTaskRunOutcome.DISPATCH_ERROR,
+            }:
+                active_count_by_def_id[definition.id] = other_active_count + 1
+            elif run.outcome == RecurringTaskRunOutcome.ENQUEUED:
+                job_status = queue_models.AgentJobStatus.QUEUED
+                if run.queue_job_id:
+                    if existing_job and existing_job.id == run.queue_job_id:
+                        job_status = existing_job.status
+                if job_status in {
+                    queue_models.AgentJobStatus.QUEUED,
+                    queue_models.AgentJobStatus.RUNNING,
+                }:
+                    active_count_by_def_id[definition.id] = other_active_count + 1
+                else:
+                    active_count_by_def_id[definition.id] = other_active_count
+            else:  # SKIPPED
+                active_count_by_def_id[definition.id] = other_active_count
 
         await self._session.commit()
         return dispatched
