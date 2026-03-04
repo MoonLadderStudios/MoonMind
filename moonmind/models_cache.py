@@ -10,7 +10,6 @@ from moonmind.factories.ollama_factory import list_ollama_models
 from moonmind.factories.openai_factory import list_openai_models
 
 logger = logging.getLogger(__name__)
-_UNSET = object()
 
 
 class ModelCache:
@@ -46,16 +45,6 @@ class ModelCache:
                 if refresh_interval_seconds is not None
                 else settings.model_cache_refresh_interval_seconds
             )
-            self.google_api_key = (
-                google_api_key
-                if google_api_key is not None
-                else settings.google.google_api_key
-            )
-            self.openai_api_key = (
-                openai_api_key
-                if openai_api_key is not None
-                else settings.openai.openai_api_key
-            )
             self._initialized: bool = True
             self._refresh_operation_lock = (
                 Lock()
@@ -70,31 +59,42 @@ class ModelCache:
     def update_keys(
         self, google_api_key: str | None = None, openai_api_key: str | None = None
     ) -> None:
-        if google_api_key is not None:
-            self.google_api_key = google_api_key
-        if openai_api_key is not None:
-            self.openai_api_key = openai_api_key
+        # Keys are intentionally not cached on the singleton instance anymore.
+        if google_api_key is not None or openai_api_key is not None:
+            self.logger.debug(
+                "Ignoring singleton credential update; use per-request lookup instead."
+            )
+
+    def _provider_credentials(
+        self, google_api_key: str | None = None, openai_api_key: str | None = None
+    ) -> tuple[str | None, str | None]:
+        resolved_google_api_key = (
+            google_api_key
+            if google_api_key is not None
+            else settings.google.google_api_key
+        )
+        resolved_openai_api_key = (
+            openai_api_key
+            if openai_api_key is not None
+            else settings.openai.openai_api_key
+        )
+        return resolved_google_api_key, resolved_openai_api_key
 
     def _fetch_all_models(
-        self,
-        google_api_key: str | None | object = _UNSET,
-        openai_api_key: str | None | object = _UNSET,
+        self, google_api_key: str | None = None, openai_api_key: str | None = None
     ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
         self.logger.info("Attempting to fetch all models for cache refresh.")
         all_models_data = []
         model_to_provider_map = {}
-        effective_google_api_key = (
-            self.google_api_key if google_api_key is _UNSET else google_api_key
-        )
-        effective_openai_api_key = (
-            self.openai_api_key if openai_api_key is _UNSET else openai_api_key
+        resolved_google_api_key, resolved_openai_api_key = self._provider_credentials(
+            google_api_key=google_api_key, openai_api_key=openai_api_key
         )
 
         # Fetch Google Models
         try:
-            if settings.google.google_enabled and bool(effective_google_api_key):
+            if settings.google.google_enabled and bool(resolved_google_api_key):
                 google_models_list = list(
-                    list_google_models(api_key=effective_google_api_key)
+                    list_google_models(api_key=resolved_google_api_key)
                 )  # Ensure it's a list
                 self.logger.info(
                     f"Fetched {len(google_models_list)} raw Google models."
@@ -141,8 +141,8 @@ class ModelCache:
 
         # Fetch OpenAI Models
         try:
-            if settings.openai.openai_enabled and bool(effective_openai_api_key):
-                openai_models_raw = list_openai_models(api_key=effective_openai_api_key)
+            if settings.openai.openai_enabled and bool(resolved_openai_api_key):
+                openai_models_raw = list_openai_models(api_key=resolved_openai_api_key)
                 self.logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
                 for (
                     model
@@ -240,7 +240,9 @@ class ModelCache:
         # Models are typically known and specified directly.
         # We will add the configured Anthropic model if the provider is enabled.
         try:
-            if settings.is_provider_enabled("anthropic"):
+            if settings.anthropic.anthropic_enabled and bool(
+                settings.anthropic.anthropic_api_key
+            ):
                 # Using the model name from settings directly
                 anthropic_model_name = settings.anthropic.anthropic_chat_model
                 if anthropic_model_name:
@@ -437,6 +439,15 @@ class ModelCache:
             self.refresh_models_sync()
         return self.models_data
 
+    def get_all_models_for_user(
+        self, google_api_key: str | None = None, openai_api_key: str | None = None
+    ) -> List[Dict[str, Any]]:
+        """Return user-specific models without writing credentials or results to shared state."""
+        models_data, _ = self._fetch_all_models(
+            google_api_key=google_api_key, openai_api_key=openai_api_key
+        )
+        return models_data
+
     def get_model_provider(self, model_id: str) -> Optional[str]:
         if not self.model_to_provider or (
             time.time() - self.last_refresh_time > self.refresh_interval_seconds
@@ -489,7 +500,6 @@ async def refresh_model_cache_for_user(user, db_session):
     google_key = await get_user_api_key(user, "google", db_session)
     openai_key = await get_user_api_key(user, "openai", db_session)
 
-    return model_cache.get_models_for_keys(
-        google_api_key=google_key,
-        openai_api_key=openai_key,
+    return model_cache.get_all_models_for_user(
+        google_api_key=google_key, openai_api_key=openai_key
     )
