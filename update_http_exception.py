@@ -1,4 +1,3 @@
-
 filepath = "api_service/api/routers/agent_queue.py"
 with open(filepath, "r") as f:
     lines = f.readlines()
