@@ -96,6 +96,7 @@ def test_read_text_file_symlink_traversal_blocked(tmp_path):
 
     assert content is None
 
+
 def test_read_text_file_is_directory(tmp_path):
     directory = tmp_path / "subdir"
     directory.mkdir()
