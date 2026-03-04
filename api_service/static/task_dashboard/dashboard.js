@@ -257,6 +257,16 @@
   }
 
   const ORCHESTRATOR_RUNTIME = "orchestrator";
+  const CLICK_GLOW_CLASS = "is-clicked";
+  const CLICK_GLOW_DURATION_MS = 180;
+  const CLICK_GLOW_SELECTOR = [
+    "button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button)",
+    ".button:not(.secondary):not(.queue-action):not(.queue-submit-primary)",
+    ".queue-action",
+    ".queue-submit-primary",
+    ".queue-step-icon-button",
+  ].join(", ");
+  const clickGlowTimers = new WeakMap();
 
   const listSubmitRuntimes = () =>
     Array.from(new Set([...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME]));
@@ -881,6 +891,49 @@
         mediaQueryList.removeEventListener("change", handleSystemPreferenceChange);
       }
     };
+  }
+
+  function triggerClickGlow(node) {
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+
+    const existingTimer = clickGlowTimers.get(node);
+    if (existingTimer) {
+      window.clearTimeout(existingTimer);
+    }
+
+    node.classList.remove(CLICK_GLOW_CLASS);
+    // Force style recalculation so repeated clicks retrigger the effect.
+    void node.offsetWidth;
+    node.classList.add(CLICK_GLOW_CLASS);
+
+    const timer = window.setTimeout(() => {
+      node.classList.remove(CLICK_GLOW_CLASS);
+      clickGlowTimers.delete(node);
+    }, CLICK_GLOW_DURATION_MS);
+    clickGlowTimers.set(node, timer);
+  }
+
+  function initButtonClickGlow() {
+    if (typeof document.addEventListener !== "function") {
+      return;
+    }
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const glowTarget = target.closest(CLICK_GLOW_SELECTOR);
+      if (!(glowTarget instanceof HTMLElement)) {
+        return;
+      }
+      if (glowTarget.hasAttribute("disabled") || glowTarget.getAttribute("aria-disabled") === "true") {
+        return;
+      }
+      triggerClickGlow(glowTarget);
+    });
   }
 
   function activateNav(pathname) {
@@ -8704,6 +8757,7 @@
   }
 
   const disposeTheme = initTheme();
+  initButtonClickGlow();
   if (typeof window.addEventListener === "function") {
     window.addEventListener("beforeunload", () => {
       stopPolling();
