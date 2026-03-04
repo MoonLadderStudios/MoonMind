@@ -33,6 +33,7 @@ from api_service.db.models import User  # Assuming User model path
 from api_service.services.profile_service import ProfileService
 
 logger = logging.getLogger(__name__)
+profile_service = ProfileService()
 
 
 async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
@@ -46,7 +47,6 @@ async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
         return None
     logger.info(f"Attempting to retrieve GitHub token for user {user.id}")
 
-    profile_service = ProfileService()
     profile = await profile_service.get_profile_by_user_id(db, user.id)
     if profile and profile.github_token_encrypted:
         return profile.github_token_encrypted
@@ -77,7 +77,6 @@ async def get_user_llm_api_key(
         logger.info(f"No API key needed for Ollama provider for user {user.id}.")
         return None  # Or some other indicator if your logic expects it, e.g. "ollama_no_key"
 
-    profile_service = ProfileService()
     profile = await profile_service.get_profile_by_user_id(db, user.id)
 
     if profile:
@@ -262,8 +261,13 @@ async def summarize_repository(
                     )
 
                 generator = ReadmeAiGenerator(config=readme_config)
+                debug_readme_config = dict(readme_config)
+                if "api_key" in debug_readme_config:
+                    debug_readme_config["api_key"] = "***REDACTED***"
+
                 logger.debug(
-                    f"ReadmeAiGenerator instantiated with config: {readme_config}"
+                    "ReadmeAiGenerator instantiated with config: %s",
+                    debug_readme_config,
                 )
 
                 summary_content = await generator.generate(repo_path=temp_dir)
