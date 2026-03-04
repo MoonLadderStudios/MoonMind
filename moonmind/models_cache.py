@@ -371,6 +371,20 @@ class ModelCache:
 
         return all_models_data, model_to_provider_map
 
+    def get_models_for_keys(
+        self, google_api_key: str | None = None, openai_api_key: str | None = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve models for explicit provider keys without mutating singleton cache state.
+
+        This prevents per-user key refreshes from contaminating globally cached model data.
+        """
+        user_models, _ = self._fetch_all_models(
+            google_api_key=google_api_key,
+            openai_api_key=openai_api_key,
+        )
+        return user_models
+
     def refresh_models_sync(self):
         with self._refresh_operation_lock:  # Changed to use new instance lock
             if self._refresh_in_progress:
@@ -469,16 +483,23 @@ model_cache = ModelCache(
 def force_refresh_model_cache():
     """Utility function to manually trigger a cache refresh."""
     logger.info("Force refresh of model cache requested.")
+    # Keep singleton keys aligned with current settings before refreshing.
+    model_cache.update_keys(
+        google_api_key=settings.google.google_api_key,
+        openai_api_key=settings.openai.openai_api_key,
+    )
     model_cache.refresh_models_sync()
 
 
 async def refresh_model_cache_for_user(user, db_session):
-    """Refresh the model cache using API keys from the given user profile."""
+    """
+    Retrieve models using API keys from the given user profile without mutating global cache.
+    """
     from api_service.api.routers.chat import get_user_api_key
 
     google_key = await get_user_api_key(user, "google", db_session)
     openai_key = await get_user_api_key(user, "openai", db_session)
 
-    model_cache.get_all_models_for_user(
+    return model_cache.get_all_models_for_user(
         google_api_key=google_key, openai_api_key=openai_key
     )

@@ -36,8 +36,7 @@ async def models(_user: User = Depends(get_current_user())):  # Protected
                 "Falling back to system model provider keys for /v1/models: %s", exc
             )
 
-        # Get all models from the cache
-        # The data is already formatted by the cache's _fetch_all_models method
+        # Get all models from the cache.
         # Using asyncio.to_thread to avoid blocking the event loop, as
         # get_all_models does sync I/O when refreshing.
         all_cached_models = await asyncio.to_thread(
