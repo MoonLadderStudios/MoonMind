@@ -192,12 +192,10 @@ async def test_list_manifests_filters_by_search_pattern(
             service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
 
             await service.upsert_manifest(
-                name="app-demo",
-                content=REGISTRY_MANIFEST.replace('"demo"', '"app-demo"'),
+                name="app-demo", content=REGISTRY_MANIFEST.replace('"demo"', '"app-demo"')
             )
             await service.upsert_manifest(
-                name="app-test",
-                content=REGISTRY_MANIFEST.replace('"demo"', '"app-test"'),
+                name="app-test", content=REGISTRY_MANIFEST.replace('"demo"', '"app-test"')
             )
             await service.upsert_manifest(
                 name="backend", content=REGISTRY_MANIFEST.replace('"demo"', '"backend"')
@@ -229,6 +227,4 @@ async def test_require_manifest_raises_not_found_for_missing_entry(
             with pytest.raises(ManifestRegistryNotFoundError) as exc_info:
                 await service.require_manifest("nonexistent-manifest")
 
-            assert "Manifest 'nonexistent-manifest' was not found" in str(
-                exc_info.value
-            )
+            assert "Manifest 'nonexistent-manifest' was not found" in str(exc_info.value)

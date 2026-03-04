@@ -694,6 +694,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     break
                 cause = getattr(cause, "__cause__", None)
 
+        detail["code"] = code
         detail["message"] = message
         return HTTPException(status_code=status_code, detail=detail)
     logger.exception("Unhandled agent queue exception")
