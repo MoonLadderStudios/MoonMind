@@ -615,22 +615,19 @@ async def handle_anthropic_request(
             usage_data = raw_data.usage
 
         if usage_data:
+            prompt_tokens = None
+            completion_tokens = None
             if isinstance(usage_data, dict):
-                prompt_tokens_estimate = usage_data.get(
-                    "input_tokens", prompt_tokens_estimate
-                )
-                completion_tokens_estimate = usage_data.get(
-                    "output_tokens", completion_tokens_estimate
-                )
+                prompt_tokens = usage_data.get("input_tokens")
+                completion_tokens = usage_data.get("output_tokens")
             else:
-                if hasattr(usage_data, "input_tokens"):
-                    prompt_tokens_estimate = getattr(
-                        usage_data, "input_tokens", prompt_tokens_estimate
-                    )
-                if hasattr(usage_data, "output_tokens"):
-                    completion_tokens_estimate = getattr(
-                        usage_data, "output_tokens", completion_tokens_estimate
-                    )
+                prompt_tokens = getattr(usage_data, "input_tokens", None)
+                completion_tokens = getattr(usage_data, "output_tokens", None)
+
+            if prompt_tokens is not None:
+                prompt_tokens_estimate = prompt_tokens
+            if completion_tokens is not None:
+                completion_tokens_estimate = completion_tokens
 
     return ChatCompletionResponse(
         id=f"cmpl-anthropic-{uuid4().hex}",
