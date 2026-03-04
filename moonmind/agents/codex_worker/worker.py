@@ -53,7 +53,17 @@ from moonmind.agents.codex_worker.self_heal import (
     is_failure_retryable,
 )
 from moonmind.config.settings import settings
+from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
+from moonmind.jules.runtime import (
+    build_runtime_gate_state as build_jules_runtime_gate_state,
+)
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.schemas.jules_models import (
+    JulesCreateTaskRequest,
+    JulesGetTaskRequest,
+    JulesResolveTaskRequest,
+)
+from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
     LEGACY_TASK_JOB_TYPES,
@@ -114,6 +124,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
+_PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
@@ -242,6 +253,20 @@ _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
 )
 _CONFLICTING_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
 _CONFLICTING_MERGEABLE_VALUES = frozenset({"CONFLICTING", "DIRTY", "FALSE"})
+_JULES_TERMINAL_SUCCESS_STATUSES = frozenset(
+    {"completed", "succeeded", "success", "done", "resolved", "finished"}
+)
+_JULES_TERMINAL_FAILURE_STATUSES = frozenset(
+    {
+        "cancelled",
+        "canceled",
+        "error",
+        "failed",
+        "rejected",
+        "timed_out",
+        "timeout",
+    }
+)
 
 
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
@@ -370,9 +395,19 @@ class CodexWorkerConfig:
     default_gemini_effort: str | None = None
     default_claude_model: str | None = None
     default_claude_effort: str | None = None
+    default_jules_model: str | None = None
+    default_jules_effort: str | None = None
     gemini_binary: str = "gemini"
     gemini_cli_auth_mode: str = "api_key"
     claude_binary: str = "claude"
+    jules_enabled: bool = False
+    jules_api_url: str | None = None
+    jules_api_key: str | None = None
+    jules_timeout_seconds: float = 30.0
+    jules_retry_attempts: int = 3
+    jules_retry_delay_seconds: float = 1.0
+    jules_poll_interval_seconds: float = 10.0
+    jules_max_inflight: int = 15
     worker_capabilities: tuple[str, ...] = ("codex", "git", "gh")
     docker_binary: str = "docker"
     container_workspace_volume: str | None = None
@@ -440,6 +475,15 @@ class CodexWorkerConfig:
                 ),
                 "efforts": self._normalize_runtime_option_values(
                     self.default_claude_effort,
+                ),
+            }
+        if self.worker_runtime in {"jules", "universal"} and self.jules_enabled:
+            runtime_capabilities["jules"] = {
+                "models": self._normalize_runtime_option_values(
+                    self.default_jules_model,
+                ),
+                "efforts": self._normalize_runtime_option_values(
+                    self.default_jules_effort,
                 ),
             }
         return runtime_capabilities
@@ -563,10 +607,12 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower()
             or "codex"
         )
-        allowed_worker_runtimes = {"codex", "gemini", "claude", "universal"}
+        allowed_worker_runtimes = {"codex", "gemini", "claude", "jules", "universal"}
         if worker_runtime not in allowed_worker_runtimes:
             supported = ", ".join(sorted(allowed_worker_runtimes))
             raise ValueError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
+        if worker_runtime == "jules":
+            allowed_types = ("task",)
 
         default_gemini_model = (
             str(
@@ -604,6 +650,24 @@ class CodexWorkerConfig:
             ).strip()
             or None
         )
+        default_jules_model = (
+            str(
+                source.get(
+                    "MOONMIND_JULES_MODEL",
+                    source.get("JULES_MODEL", ""),
+                )
+            ).strip()
+            or None
+        )
+        default_jules_effort = (
+            str(
+                source.get(
+                    "MOONMIND_JULES_EFFORT",
+                    source.get("JULES_REASONING_EFFORT", ""),
+                )
+            ).strip()
+            or None
+        )
         gemini_binary = (
             str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
         )
@@ -618,6 +682,72 @@ class CodexWorkerConfig:
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
         )
+        jules_enabled_raw = (
+            str(source.get("JULES_ENABLED", str(settings.jules.jules_enabled)))
+            .strip()
+            .lower()
+        )
+        jules_enabled = jules_enabled_raw in {"1", "true", "yes", "on"}
+        jules_api_url = (
+            str(source.get("JULES_API_URL", settings.jules.jules_api_url or "")).strip()
+            or None
+        )
+        jules_api_key = (
+            str(source.get("JULES_API_KEY", settings.jules.jules_api_key or "")).strip()
+            or None
+        )
+        jules_timeout_seconds = float(
+            str(
+                source.get(
+                    "JULES_TIMEOUT_SECONDS",
+                    str(settings.jules.jules_timeout_seconds),
+                )
+            ).strip()
+            or "30.0"
+        )
+        if jules_timeout_seconds <= 0:
+            raise ValueError("JULES_TIMEOUT_SECONDS must be > 0")
+        jules_retry_attempts = int(
+            str(
+                source.get(
+                    "JULES_RETRY_ATTEMPTS",
+                    str(settings.jules.jules_retry_attempts),
+                )
+            ).strip()
+            or "3"
+        )
+        if jules_retry_attempts < 1:
+            raise ValueError("JULES_RETRY_ATTEMPTS must be >= 1")
+        jules_retry_delay_seconds = float(
+            str(
+                source.get(
+                    "JULES_RETRY_DELAY_SECONDS",
+                    str(settings.jules.jules_retry_delay_seconds),
+                )
+            ).strip()
+            or "1.0"
+        )
+        if jules_retry_delay_seconds < 0:
+            raise ValueError("JULES_RETRY_DELAY_SECONDS must be >= 0")
+        jules_poll_interval_seconds = float(
+            str(source.get("MOONMIND_JULES_POLL_INTERVAL_SECONDS", "10.0")).strip()
+            or "10.0"
+        )
+        if jules_poll_interval_seconds <= 0:
+            raise ValueError("MOONMIND_JULES_POLL_INTERVAL_SECONDS must be > 0")
+        jules_max_inflight = int(
+            str(source.get("MOONMIND_JULES_MAX_INFLIGHT", "15")).strip() or "15"
+        )
+        if jules_max_inflight < 1:
+            raise ValueError("MOONMIND_JULES_MAX_INFLIGHT must be >= 1")
+        jules_gate = build_jules_runtime_gate_state(
+            enabled=jules_enabled,
+            api_url=jules_api_url,
+            api_key=jules_api_key,
+            error_message=JULES_RUNTIME_DISABLED_MESSAGE,
+        )
+        if worker_runtime == "jules" and not jules_gate.enabled:
+            raise ValueError(jules_gate.error_message)
 
         capability_csv = str(source.get("MOONMIND_WORKER_CAPABILITIES", "")).strip()
         if capability_csv:
@@ -628,7 +758,10 @@ class CodexWorkerConfig:
             )
         else:
             if worker_runtime == "universal":
-                worker_capabilities = ("codex", "gemini", "claude", "git", "gh")
+                runtime_caps = ["codex", "gemini", "claude"]
+                if jules_gate.enabled:
+                    runtime_caps.append("jules")
+                worker_capabilities = tuple([*runtime_caps, "git", "gh"])
             else:
                 worker_capabilities = (worker_runtime, "git", "gh")
 
@@ -912,9 +1045,19 @@ class CodexWorkerConfig:
             default_gemini_effort=default_gemini_effort,
             default_claude_model=default_claude_model,
             default_claude_effort=default_claude_effort,
+            default_jules_model=default_jules_model,
+            default_jules_effort=default_jules_effort,
             gemini_binary=gemini_binary,
             gemini_cli_auth_mode=gemini_cli_auth_mode,
             claude_binary=claude_binary,
+            jules_enabled=jules_gate.enabled,
+            jules_api_url=jules_api_url,
+            jules_api_key=jules_api_key,
+            jules_timeout_seconds=jules_timeout_seconds,
+            jules_retry_attempts=jules_retry_attempts,
+            jules_retry_delay_seconds=jules_retry_delay_seconds,
+            jules_poll_interval_seconds=jules_poll_interval_seconds,
+            jules_max_inflight=jules_max_inflight,
             worker_capabilities=worker_capabilities,
             docker_binary=docker_binary,
             container_workspace_volume=container_workspace_volume,
@@ -1022,6 +1165,54 @@ class FinishOutcome:
     code: str
     stage: str
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class JulesRuntimeTaskRecord:
+    """Structured runtime metadata for one delegated Jules task."""
+
+    stage: str
+    step_id: str | None
+    step_index: int | None
+    total_steps: int | None
+    task_id: str
+    status: str
+    url: str | None
+    submitted_at: str
+    last_polled_at: str
+    completed_at: str | None
+    failed: bool
+    error: str | None
+    status_history: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class JulesSoftwareRunState:
+    """In-memory state for one claimed Jules task managed by control-loop polling."""
+
+    job: ClaimedJob
+    canonical_payload: dict[str, Any]
+    skill_meta: dict[str, Any]
+    runtime_mode: str
+    run_started_at: datetime
+    finish_stages: dict[str, dict[str, Any]]
+    stage_starts: dict[str, float]
+    publish_mode: str
+    publish_status: str
+    publish_reason: str | None
+    publish_pr_url: str | None
+    publish_base_branch: str | None
+    publish_working_branch: str | None
+    proposal_report: ProposalSubmissionReport
+    jules_task_id: str
+    jules_task_url: str | None
+    jules_status: str
+    jules_status_history: list[str]
+    jules_submitted_at: str
+    jules_last_polled_at: str
+    jules_completed_at: str | None
+    jules_error: str | None
+    next_poll_monotonic: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -1227,6 +1418,22 @@ class QueueApiClient:
         )
         system = self._parse_system_metadata(data.get("system"))
         return QueueHeartbeatResult(job=data, system=system)
+
+    async def set_runtime_state(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        runtime_state: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist runtime checkpoint state for a running worker-owned job."""
+
+        payload: dict[str, Any] = {"workerId": worker_id}
+        payload["runtimeState"] = runtime_state
+        return await self._post_json(
+            f"/api/queue/jobs/{job_id}/runtime-state",
+            json=payload,
+        )
 
     async def ack_cancel(
         self,
@@ -1554,6 +1761,7 @@ class CodexWorker:
         self._active_pause_event: asyncio.Event | None = None
         self._active_live_session: LiveSessionHandle | None = None
         self._live_session_start_lock = asyncio.Lock()
+        self._jules_inflight_runs: dict[UUID, JulesSoftwareRunState] = {}
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
             self._vault_secret_resolver = VaultSecretResolver(
@@ -1594,17 +1802,13 @@ class CodexWorker:
         self._last_run_outcome = outcome
         return outcome == "claimed"
 
-    async def _run_once_internal(self) -> str:
-        """Internal implementation that returns a descriptive outcome."""
-
-        claim_result = await self._claim_next_job()
-        metadata = claim_result.system
-        self._handle_system_metadata(metadata)
-        job = claim_result.job
-        if job is None:
-            if metadata.workers_paused:
-                return "paused"
-            return "idle"
+    async def _prepare_claimed_task_job(
+        self,
+        *,
+        job: ClaimedJob,
+        require_runtime_mode: str | None = None,
+    ) -> tuple[Mapping[str, Any], str] | None:
+        """Validate and normalize one claimed task-like queue job."""
 
         supported_types = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
         if job.type not in supported_types:
@@ -1620,7 +1824,7 @@ class CodexWorker:
                 error_message=f"unsupported job type: {job.type}",
                 retryable=False,
             )
-            return "claimed"
+            return None
         if (
             not self._config.legacy_job_types_enabled
             and job.type in LEGACY_TASK_JOB_TYPES
@@ -1637,7 +1841,7 @@ class CodexWorker:
                 error_message=f"legacy job type disabled: {job.type}",
                 retryable=False,
             )
-            return "claimed"
+            return None
 
         try:
             canonical_payload = build_canonical_task_view(
@@ -1657,7 +1861,7 @@ class CodexWorker:
                 error_message=f"invalid job payload: {exc}",
                 retryable=False,
             )
-            return "claimed"
+            return None
 
         runtime_mode = (
             str(canonical_payload.get("targetRuntime") or "codex").strip().lower()
@@ -1678,8 +1882,14 @@ class CodexWorker:
                 error_message=f"unsupported task runtime: {runtime_mode}",
                 retryable=False,
             )
-            return "claimed"
-        if not self._runtime_can_execute(runtime_mode):
+            return None
+
+        runtime_supported = (
+            runtime_mode == require_runtime_mode
+            if require_runtime_mode is not None
+            else self._runtime_can_execute(runtime_mode)
+        )
+        if not runtime_supported:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
@@ -1699,7 +1909,7 @@ class CodexWorker:
                 ),
                 retryable=False,
             )
-            return "claimed"
+            return None
 
         policy_error = self._validate_required_job_policy(canonical_payload)
         if policy_error is not None:
@@ -1719,7 +1929,29 @@ class CodexWorker:
                 error_message=policy_error,
                 retryable=False,
             )
+            return None
+
+        return canonical_payload, runtime_mode
+
+    async def _run_once_internal(self) -> str:
+        """Internal implementation that returns a descriptive outcome."""
+
+        if self._config.worker_runtime == "jules":
+            return await self._run_jules_software_tick()
+
+        claim_result = await self._claim_next_job()
+        metadata = claim_result.system
+        self._handle_system_metadata(metadata)
+        job = claim_result.job
+        if job is None:
+            if metadata.workers_paused:
+                return "paused"
+            return "idle"
+
+        prepared = await self._prepare_claimed_task_job(job=job)
+        if prepared is None:
             return "claimed"
+        canonical_payload, runtime_mode = prepared
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
@@ -1819,6 +2051,11 @@ class CodexWorker:
         run_started_at = datetime.now(UTC)
         stage_starts: dict[str, float] = {}
         finish_stages = self._new_finish_stages()
+        jules_runtime_records: list[JulesRuntimeTaskRecord] = []
+
+        def _record_jules_runtime_task(record: JulesRuntimeTaskRecord) -> None:
+            jules_runtime_records.append(record)
+
         prepared: PreparedTaskWorkspace | None = None
         result: WorkerExecutionResult | None = None
         failure_stage: str | None = None
@@ -1917,6 +2154,7 @@ class CodexWorker:
                 publish_base_branch=publish_base_branch,
                 publish_working_branch=publish_working_branch,
                 proposal_report=proposal_report,
+                jules_runtime_records=jules_runtime_records,
                 run_quality_reason=(
                     dict(result.run_quality_reason)
                     if result is not None and result.run_quality_reason is not None
@@ -1934,6 +2172,7 @@ class CodexWorker:
                         artifacts_dir=artifacts_dir,
                         finish_summary=finish_summary,
                         finish_outcome=finish_outcome,
+                        jules_runtime_records=jules_runtime_records,
                     )
                 )
                 await _flush_staged_artifacts()
@@ -1962,6 +2201,7 @@ class CodexWorker:
                     publish_base_branch=publish_base_branch,
                     publish_working_branch=publish_working_branch,
                     proposal_report=proposal_report,
+                    jules_runtime_records=jules_runtime_records,
                     run_quality_reason=(
                         dict(result.run_quality_reason)
                         if result is not None and result.run_quality_reason is not None
@@ -2102,6 +2342,7 @@ class CodexWorker:
                     resolved_steps=resolved_steps,
                     prepared=prepared,
                     artifact_callback=_handle_incremental_artifacts,
+                    jules_record_callback=_record_jules_runtime_task,
                 )
             except Exception as exc:
                 self._finish_stage(
@@ -2293,6 +2534,7 @@ class CodexWorker:
                         prepared=prepared,
                         task_result=result,
                         selected_skills=selected_skills,
+                        jules_record_callback=_record_jules_runtime_task,
                     )
                 except CommandCancelledError:
                     raise
@@ -2417,7 +2659,7 @@ class CodexWorker:
             heartbeat_stop.set()
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
-                await heartbeat_task
+                _ = await heartbeat_task
             await self._teardown_live_session(job_id=job.id)
 
         return "claimed"
@@ -2431,6 +2673,749 @@ class CodexWorker:
             allowed_types=self._config.allowed_types,
             worker_capabilities=self._config.worker_capabilities,
         )
+
+    @staticmethod
+    def _jules_publish_stage_status(publish_status: str) -> str:
+        if publish_status == "published":
+            return "succeeded"
+        if publish_status == "failed":
+            return "failed"
+        if publish_status == "skipped":
+            return "skipped"
+        return "not_run"
+
+    def _compose_jules_control_instruction(
+        self,
+        *,
+        canonical_payload: Mapping[str, Any],
+        resolved_steps: Sequence[ResolvedTaskStep],
+    ) -> str:
+        """Compose one delegated Jules instruction for software-managed polling."""
+
+        if len(resolved_steps) == 1:
+            return self._compose_step_instruction_for_runtime(
+                canonical_payload=canonical_payload,
+                runtime_mode="jules",
+                step=resolved_steps[0],
+                total_steps=1,
+            )
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        objective = str(task.get("instructions") or "").strip() or "(missing objective)"
+        step_lines: list[str] = []
+        for step in resolved_steps:
+            title = f" ({step.title})" if step.title else ""
+            instructions = (
+                str(step.instructions).strip()
+                if step.instructions is not None
+                else "(no step-specific instructions)"
+            )
+            step_lines.append(
+                f"- {step.step_index + 1}. {step.step_id}{title}: {instructions}"
+            )
+        return (
+            "MOONMIND TASK OBJECTIVE:\n"
+            f"{objective}\n\n"
+            "EXECUTION PLAN:\n" + "\n".join(step_lines) + "\n\n"
+            "RUNTIME ADAPTER: jules"
+        )
+
+    @staticmethod
+    def _jules_artifacts_dir(*, workdir: Path, job_id: UUID) -> Path:
+        return workdir / str(job_id) / "artifacts"
+
+    @staticmethod
+    def _extract_jules_runtime_checkpoint(
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Extract persisted Jules runtime checkpoint from job payload."""
+
+        runtime_state_node = payload.get("runtimeState")
+        runtime_state = (
+            runtime_state_node if isinstance(runtime_state_node, Mapping) else None
+        )
+        if runtime_state is None:
+            return None
+        runtime_name = str(runtime_state.get("runtime") or "").strip().lower()
+        if runtime_name != "jules":
+            return None
+        task_id = str(runtime_state.get("externalTaskId") or "").strip()
+        if not task_id:
+            return None
+        return dict(runtime_state)
+
+    @staticmethod
+    def _build_jules_runtime_checkpoint_payload(
+        *,
+        state: JulesSoftwareRunState,
+    ) -> dict[str, Any]:
+        """Build stable persisted runtime checkpoint payload for one Jules run."""
+
+        return {
+            "runtime": "jules",
+            "externalTaskId": state.jules_task_id,
+            "status": state.jules_status,
+            "url": state.jules_task_url,
+            "submittedAt": state.jules_submitted_at,
+            "lastPolledAt": state.jules_last_polled_at,
+            "completedAt": state.jules_completed_at,
+            "error": state.jules_error,
+            "statusHistory": list(state.jules_status_history),
+        }
+
+    async def _persist_jules_runtime_checkpoint(
+        self,
+        *,
+        state: JulesSoftwareRunState,
+    ) -> None:
+        """Best-effort persist of Jules runtime checkpoint for crash-safe resume."""
+
+        try:
+            await self._queue_client.set_runtime_state(
+                job_id=state.job.id,
+                worker_id=self._config.worker_id,
+                runtime_state=self._build_jules_runtime_checkpoint_payload(state=state),
+            )
+        except Exception:
+            logger.warning(
+                "Failed persisting Jules runtime checkpoint for job %s",
+                state.job.id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _build_jules_runtime_record_from_state(
+        state: JulesSoftwareRunState,
+    ) -> JulesRuntimeTaskRecord:
+        return JulesRuntimeTaskRecord(
+            stage="moonmind.task.execute",
+            step_id=None,
+            step_index=None,
+            total_steps=None,
+            task_id=state.jules_task_id,
+            status=state.jules_status,
+            url=state.jules_task_url,
+            submitted_at=state.jules_submitted_at,
+            last_polled_at=state.jules_last_polled_at,
+            completed_at=state.jules_completed_at,
+            failed=(
+                state.jules_status in _JULES_TERMINAL_FAILURE_STATUSES
+                or state.jules_error is not None
+            ),
+            error=state.jules_error,
+            status_history=tuple(state.jules_status_history),
+        )
+
+    async def _try_cancel_jules_task(self, *, task_id: str) -> None:
+        """Best-effort remote cancellation for a delegated Jules task."""
+
+        client = JulesClient(
+            base_url=str(self._config.jules_api_url),
+            api_key=str(self._config.jules_api_key),
+            timeout=self._config.jules_timeout_seconds,
+            retry_attempts=self._config.jules_retry_attempts,
+            retry_delay_seconds=self._config.jules_retry_delay_seconds,
+        )
+        try:
+            await client.resolve_task(
+                JulesResolveTaskRequest(
+                    task_id=task_id,
+                    resolution_notes="Cancelled by MoonMind worker",
+                    status="cancelled",
+                )
+            )
+        except JulesClientError:
+            logger.warning(
+                "Best-effort Jules cancellation failed for task %s",
+                task_id,
+                exc_info=True,
+            )
+        finally:
+            await client.aclose()
+
+    async def _finalize_jules_software_run(
+        self,
+        *,
+        state: JulesSoftwareRunState,
+        cancelled: bool,
+        failure_reason: str | None = None,
+    ) -> None:
+        """Finalize one software-managed Jules run into queue terminal state."""
+
+        finished_at = datetime.now(UTC)
+        succeeded = (
+            not cancelled
+            and failure_reason is None
+            and state.jules_status in _JULES_TERMINAL_SUCCESS_STATUSES
+        )
+        if succeeded and self._is_probable_pr_url(state.jules_task_url):
+            state.publish_status = "published"
+            state.publish_reason = None
+            state.publish_pr_url = state.jules_task_url
+        elif succeeded:
+            state.publish_status = "not_run"
+            state.publish_reason = "completed by external runtime"
+        elif cancelled:
+            state.publish_status = "not_run"
+            state.publish_reason = "cancellation requested"
+        else:
+            state.publish_status = "not_run"
+            state.publish_reason = failure_reason or state.jules_error or "jules failed"
+
+        await self._persist_jules_runtime_checkpoint(state=state)
+
+        self._finish_stage(
+            state.finish_stages,
+            state.stage_starts,
+            stage="execute",
+            status="succeeded" if succeeded else "failed",
+        )
+        state.finish_stages["publish"] = {
+            "status": self._jules_publish_stage_status(state.publish_status)
+        }
+        self._start_finish_stage(state.stage_starts, stage="finalize")
+        self._finish_stage(
+            state.finish_stages,
+            state.stage_starts,
+            stage="finalize",
+            status="succeeded",
+        )
+
+        jules_record = self._build_jules_runtime_record_from_state(state)
+        failure_stage = None if succeeded or cancelled else "execute"
+        finish_outcome = self._determine_finish_outcome(
+            succeeded=succeeded,
+            cancelled=cancelled,
+            cancel_reason="cancellation requested" if cancelled else None,
+            failure_stage=failure_stage,
+            failure_reason=failure_reason or state.jules_error,
+            publish_mode=state.publish_mode,
+            publish_status=state.publish_status,
+            publish_reason=state.publish_reason,
+            publish_pr_url=state.publish_pr_url,
+            publish_branch=state.publish_working_branch,
+        )
+        finish_summary = self._build_finish_summary(
+            job=state.job,
+            canonical_payload=state.canonical_payload,
+            runtime_mode=state.runtime_mode,
+            started_at=state.run_started_at,
+            finished_at=finished_at,
+            stages=state.finish_stages,
+            finish_outcome=finish_outcome,
+            prepared=None,
+            publish_mode=state.publish_mode,
+            publish_status=state.publish_status,
+            publish_reason=state.publish_reason,
+            publish_pr_url=state.publish_pr_url,
+            publish_base_branch=state.publish_base_branch,
+            publish_working_branch=state.publish_working_branch,
+            proposal_report=state.proposal_report,
+            jules_runtime_records=(jules_record,),
+        )
+
+        artifacts_dir = self._jules_artifacts_dir(
+            workdir=self._config.workdir, job_id=state.job.id
+        )
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_artifact_names: set[str] = set()
+        try:
+            artifacts = self._write_finish_reports(
+                artifacts_dir=artifacts_dir,
+                finish_summary=finish_summary,
+                finish_outcome=finish_outcome,
+                jules_runtime_records=(jules_record,),
+            )
+            optional_failures = await self._upload_artifacts(
+                job_id=state.job.id,
+                artifacts=artifacts,
+                uploaded_artifact_names=uploaded_artifact_names,
+            )
+            if optional_failures:
+                await self._emit_event(
+                    job_id=state.job.id,
+                    level="warn",
+                    message="Optional artifact uploads failed",
+                    payload={
+                        "failedCount": len(optional_failures),
+                        "artifacts": sorted(optional_failures),
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "Failed to persist Jules finish reports for job %s",
+                state.job.id,
+                exc_info=True,
+            )
+
+        if cancelled:
+            await self._acknowledge_cancellation(
+                job_id=state.job.id,
+                message="cancellation requested",
+                finish_outcome=finish_outcome,
+                finish_summary=finish_summary,
+            )
+            return
+
+        if succeeded:
+            result_summary = (
+                f"Jules task completed: {state.publish_pr_url}"
+                if state.publish_pr_url
+                else "Jules task completed"
+            )
+            await self._queue_client.complete_job(
+                job_id=state.job.id,
+                worker_id=self._config.worker_id,
+                result_summary=result_summary,
+                finish_outcome_code=finish_outcome.code,
+                finish_outcome_stage=finish_outcome.stage,
+                finish_outcome_reason=finish_outcome.reason,
+                finish_summary=finish_summary,
+            )
+            await self._emit_event(
+                job_id=state.job.id,
+                level="info",
+                message="Job completed",
+                payload={"summary": result_summary, "jobType": state.job.type},
+            )
+            return
+
+        terminal_error = self._redact_text(
+            failure_reason or state.jules_error or "jules execution failed"
+        )
+        await self._queue_client.fail_job(
+            job_id=state.job.id,
+            worker_id=self._config.worker_id,
+            error_message=terminal_error,
+            retryable=False,
+            finish_outcome_code=finish_outcome.code,
+            finish_outcome_stage=finish_outcome.stage,
+            finish_outcome_reason=finish_outcome.reason,
+            finish_summary=finish_summary,
+        )
+        await self._emit_event(
+            job_id=state.job.id,
+            level="error",
+            message="Job failed",
+            payload={"error": terminal_error, "jobType": state.job.type},
+        )
+
+    async def _start_jules_software_run(self, *, job: ClaimedJob) -> None:
+        """Admit one claimed queue job into the software-managed Jules in-flight set."""
+
+        prepared = await self._prepare_claimed_task_job(
+            job=job,
+            require_runtime_mode="jules",
+        )
+        if prepared is None:
+            return
+        canonical_payload, runtime_mode = prepared
+
+        resolved_steps = self._resolve_task_steps(canonical_payload)
+        skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
+        selected_skills = tuple(
+            sorted(
+                {
+                    step.effective_skill_id
+                    for step in resolved_steps
+                    if step.effective_skill_id != "auto"
+                }
+            )
+        )
+        if self._config.skill_policy_mode == "allowlist":
+            disallowed = sorted(
+                skill
+                for skill in selected_skills
+                if skill not in self._config.allowed_skills
+            )
+            if disallowed:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="error",
+                    message="Skill is not allowlisted for this worker",
+                    payload={
+                        "jobType": job.type,
+                        "selectedSkills": disallowed,
+                        **skill_meta,
+                    },
+                )
+                await self._queue_client.fail_job(
+                    job_id=job.id,
+                    worker_id=self._config.worker_id,
+                    error_message=f"skill not allowlisted: {', '.join(disallowed)}",
+                    retryable=False,
+                )
+                return
+
+        await self._emit_event(
+            job_id=job.id,
+            level="info",
+            message="Worker claimed job",
+            payload={"jobType": job.type, "targetRuntime": runtime_mode, **skill_meta},
+        )
+        stage_plan = build_task_stage_plan(canonical_payload)
+        await self._emit_event(
+            job_id=job.id,
+            level="info",
+            message="moonmind.task.plan",
+            payload={"jobType": job.type, "stages": stage_plan, **skill_meta},
+        )
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = publish_node if isinstance(publish_node, Mapping) else {}
+        publish_mode = str(publish.get("mode") or "none").strip().lower() or "none"
+        publish_base_branch = str(publish.get("prBaseBranch") or "").strip() or None
+        git_node = task.get("git")
+        git = git_node if isinstance(git_node, Mapping) else {}
+        publish_working_branch = str(git.get("newBranch") or "").strip() or None
+        checkpoint = self._extract_jules_runtime_checkpoint(job.payload)
+        checkpoint_now = datetime.now(UTC).isoformat()
+        if checkpoint is not None:
+            jules_task_id = str(checkpoint.get("externalTaskId") or "").strip()
+            jules_status = self._normalize_jules_status(checkpoint.get("status"))
+            jules_task_url = str(checkpoint.get("url") or "").strip() or None
+            submitted_at = (
+                str(checkpoint.get("submittedAt") or "").strip() or checkpoint_now
+            )
+            last_polled_at = (
+                str(checkpoint.get("lastPolledAt") or "").strip() or submitted_at
+            )
+            completed_at = str(checkpoint.get("completedAt") or "").strip() or None
+            jules_error = str(checkpoint.get("error") or "").strip() or None
+            history_raw = checkpoint.get("statusHistory")
+            history = (
+                [
+                    self._normalize_jules_status(value)
+                    for value in history_raw
+                    if str(value or "").strip()
+                ]
+                if isinstance(history_raw, list)
+                else []
+            )
+            if not history:
+                history = [jules_status]
+            await self._emit_jules_runtime_event(
+                job_id=job.id,
+                level="info",
+                canonical_message="runtime.jules.resumed",
+                payload={
+                    "stage": "moonmind.task.execute",
+                    "taskId": jules_task_id,
+                    "status": jules_status,
+                    "url": jules_task_url,
+                },
+            )
+        else:
+            instruction = self._compose_jules_control_instruction(
+                canonical_payload=canonical_payload,
+                resolved_steps=resolved_steps,
+            )
+            runtime_model, runtime_effort = self._resolve_runtime_overrides(
+                canonical_payload=canonical_payload,
+                runtime_mode=runtime_mode,
+            )
+            repository = str(canonical_payload.get("repository") or "").strip()
+            runtime_meta: dict[str, Any] = {
+                "source": "moonmind",
+                "stage": "moonmind.task.execute",
+                "repository": repository,
+                "runtime": "jules",
+                "jobId": str(job.id),
+            }
+            if runtime_model:
+                runtime_meta["model"] = runtime_model
+            if runtime_effort:
+                runtime_meta["effort"] = runtime_effort
+            client = JulesClient(
+                base_url=str(self._config.jules_api_url),
+                api_key=str(self._config.jules_api_key),
+                timeout=self._config.jules_timeout_seconds,
+                retry_attempts=self._config.jules_retry_attempts,
+                retry_delay_seconds=self._config.jules_retry_delay_seconds,
+            )
+            try:
+                created = await client.create_task(
+                    JulesCreateTaskRequest(
+                        title=f"MoonMind Queue Task {job.id}",
+                        description=instruction,
+                        metadata=runtime_meta,
+                    )
+                )
+            except JulesClientError as exc:
+                await self._emit_event(
+                    job_id=job.id,
+                    level="error",
+                    message="runtime.jules.submit.failed",
+                    payload={"error": str(exc)},
+                )
+                await self._queue_client.fail_job(
+                    job_id=job.id,
+                    worker_id=self._config.worker_id,
+                    error_message=self._redact_text(str(exc)),
+                    retryable=False,
+                )
+                await client.aclose()
+                return
+            finally:
+                with suppress(Exception):
+                    await client.aclose()
+
+            submitted_at = checkpoint_now
+            jules_status = self._normalize_jules_status(created.status)
+            jules_task_id = str(created.task_id)
+            jules_task_url = str(created.url or "").strip() or None
+            last_polled_at = submitted_at
+            completed_at = None
+            jules_error = None
+            history = [jules_status]
+            await self._emit_jules_runtime_event(
+                job_id=job.id,
+                level="info",
+                canonical_message="runtime.jules.submitted",
+                legacy_message="task.jules.submitted",
+                payload={
+                    "stage": "moonmind.task.execute",
+                    "taskId": jules_task_id,
+                    "status": jules_status,
+                    "url": jules_task_url,
+                },
+            )
+
+        finish_stages = self._new_finish_stages()
+        stage_starts: dict[str, float] = {}
+        self._start_finish_stage(stage_starts, stage="prepare")
+        self._finish_stage(
+            finish_stages, stage_starts, stage="prepare", status="succeeded"
+        )
+        self._start_finish_stage(stage_starts, stage="execute")
+        self._jules_inflight_runs[job.id] = JulesSoftwareRunState(
+            job=job,
+            canonical_payload=dict(canonical_payload),
+            skill_meta=dict(skill_meta),
+            runtime_mode=runtime_mode,
+            run_started_at=datetime.now(UTC),
+            finish_stages=finish_stages,
+            stage_starts=stage_starts,
+            publish_mode=publish_mode,
+            publish_status="not_run",
+            publish_reason="delegated to external runtime",
+            publish_pr_url=None,
+            publish_base_branch=publish_base_branch,
+            publish_working_branch=publish_working_branch,
+            proposal_report=ProposalSubmissionReport(
+                requested=False,
+                hook_skills=[],
+                generated_count=0,
+                submitted_count=0,
+                errors=[],
+            ),
+            jules_task_id=jules_task_id,
+            jules_task_url=jules_task_url,
+            jules_status=jules_status,
+            jules_status_history=history,
+            jules_submitted_at=submitted_at,
+            jules_last_polled_at=last_polled_at,
+            jules_completed_at=completed_at,
+            jules_error=jules_error,
+            next_poll_monotonic=time.monotonic(),
+        )
+        await self._persist_jules_runtime_checkpoint(
+            state=self._jules_inflight_runs[job.id]
+        )
+
+    async def _poll_jules_software_runs(self) -> bool:
+        """Heartbeat and poll one status interval across active Jules runs."""
+
+        if not self._jules_inflight_runs:
+            return False
+        worked = False
+        now_monotonic = time.monotonic()
+        client = JulesClient(
+            base_url=str(self._config.jules_api_url),
+            api_key=str(self._config.jules_api_key),
+            timeout=self._config.jules_timeout_seconds,
+            retry_attempts=self._config.jules_retry_attempts,
+            retry_delay_seconds=self._config.jules_retry_delay_seconds,
+        )
+        try:
+            for job_id, state in list(self._jules_inflight_runs.items()):
+                try:
+                    heartbeat = await self._queue_client.heartbeat(
+                        job_id=job_id,
+                        worker_id=self._config.worker_id,
+                        lease_seconds=self._config.lease_seconds,
+                    )
+                    self._handle_system_metadata(heartbeat.system)
+                except Exception:
+                    logger.warning(
+                        "Failed Jules heartbeat for job %s", job_id, exc_info=True
+                    )
+                    continue
+
+                payload = heartbeat.job
+                if payload.get("cancelRequestedAt"):
+                    await self._emit_event(
+                        job_id=job_id,
+                        level="warn",
+                        message="task.control.cancel.requested",
+                        payload={"status": "cancel_requested"},
+                    )
+                    await self._try_cancel_jules_task(task_id=state.jules_task_id)
+                    state.jules_error = "cancellation requested"
+                    state.jules_completed_at = datetime.now(UTC).isoformat()
+                    await self._finalize_jules_software_run(
+                        state=state,
+                        cancelled=True,
+                    )
+                    self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
+                    continue
+
+                if (
+                    state.jules_status in _JULES_TERMINAL_SUCCESS_STATUSES
+                    or state.jules_status in _JULES_TERMINAL_FAILURE_STATUSES
+                ):
+                    if state.jules_completed_at is None:
+                        state.jules_completed_at = datetime.now(UTC).isoformat()
+                    await self._finalize_jules_software_run(
+                        state=state,
+                        cancelled=False,
+                        failure_reason=state.jules_error,
+                    )
+                    self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
+                    continue
+
+                if now_monotonic < state.next_poll_monotonic:
+                    continue
+
+                try:
+                    polled = await client.get_task(
+                        JulesGetTaskRequest(task_id=state.jules_task_id)
+                    )
+                except JulesClientError as exc:
+                    state.jules_error = str(exc)
+                    state.jules_completed_at = datetime.now(UTC).isoformat()
+                    await self._finalize_jules_software_run(
+                        state=state,
+                        cancelled=False,
+                        failure_reason=state.jules_error,
+                    )
+                    self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
+                    continue
+
+                polled_at = datetime.now(UTC).isoformat()
+                state.jules_last_polled_at = polled_at
+                polled_url = str(polled.url or "").strip() or None
+                status_changed = False
+                url_changed = (
+                    polled_url is not None and polled_url != state.jules_task_url
+                )
+                if polled_url is not None:
+                    state.jules_task_url = polled_url
+                current_status = self._normalize_jules_status(polled.status)
+                if current_status != state.jules_status:
+                    state.jules_status = current_status
+                    state.jules_status_history.append(current_status)
+                    status_changed = True
+                    await self._emit_jules_runtime_event(
+                        job_id=job_id,
+                        level="info",
+                        canonical_message="runtime.jules.status",
+                        legacy_message="task.jules.status",
+                        payload={
+                            "stage": "moonmind.task.execute",
+                            "taskId": state.jules_task_id,
+                            "status": current_status,
+                            "url": state.jules_task_url,
+                        },
+                    )
+                state.next_poll_monotonic = (
+                    time.monotonic() + self._config.jules_poll_interval_seconds
+                )
+                await self._persist_jules_runtime_checkpoint(state=state)
+                if status_changed or url_changed:
+                    worked = True
+
+                if (
+                    current_status in _JULES_TERMINAL_SUCCESS_STATUSES
+                    or current_status in _JULES_TERMINAL_FAILURE_STATUSES
+                ):
+                    state.jules_completed_at = polled_at
+                    await self._emit_jules_runtime_event(
+                        job_id=job_id,
+                        level="info",
+                        canonical_message="runtime.jules.result.received",
+                        legacy_message=(
+                            "task.jules.completed"
+                            if current_status in _JULES_TERMINAL_SUCCESS_STATUSES
+                            else None
+                        ),
+                        payload={
+                            "stage": "moonmind.task.execute",
+                            "taskId": state.jules_task_id,
+                            "status": current_status,
+                            "url": state.jules_task_url,
+                        },
+                    )
+                    if (
+                        current_status in _JULES_TERMINAL_SUCCESS_STATUSES
+                        and self._is_probable_pr_url(state.jules_task_url)
+                    ):
+                        await self._emit_jules_runtime_event(
+                            job_id=job_id,
+                            level="info",
+                            canonical_message="runtime.jules.pr.created",
+                            payload={
+                                "stage": "moonmind.task.execute",
+                                "taskId": state.jules_task_id,
+                                "url": state.jules_task_url,
+                            },
+                        )
+                    if current_status in _JULES_TERMINAL_FAILURE_STATUSES:
+                        state.jules_error = (
+                            f"Jules task '{state.jules_task_id}' failed with "
+                            f"status '{current_status}'"
+                        )
+                    await self._finalize_jules_software_run(
+                        state=state,
+                        cancelled=False,
+                        failure_reason=state.jules_error,
+                    )
+                    self._jules_inflight_runs.pop(job_id, None)
+                    worked = True
+        finally:
+            await client.aclose()
+        return worked
+
+    async def _run_jules_software_tick(self) -> str:
+        """Run one control-plane tick for software-managed Jules execution."""
+
+        worked = False
+        saw_paused = False
+        if self._jules_inflight_runs:
+            worked = await self._poll_jules_software_runs()
+        while len(self._jules_inflight_runs) < self._config.jules_max_inflight:
+            claim_result = await self._claim_next_job()
+            self._handle_system_metadata(claim_result.system)
+            saw_paused = saw_paused or claim_result.system.workers_paused
+            job = claim_result.job
+            if job is None:
+                break
+            worked = True
+            await self._start_jules_software_run(job=job)
+        if worked:
+            return "claimed"
+        if self._jules_inflight_runs:
+            return "inflight"
+        if saw_paused:
+            return "paused"
+        if self._latest_system_metadata and self._latest_system_metadata.workers_paused:
+            return "paused"
+        return "idle"
 
     def _handle_system_metadata(self, metadata: QueueSystemStatus) -> None:
         """Log pause status changes once per version."""
@@ -2604,6 +3589,7 @@ class CodexWorker:
         publish_base_branch: str | None,
         publish_working_branch: str | None,
         proposal_report: ProposalSubmissionReport,
+        jules_runtime_records: Sequence[JulesRuntimeTaskRecord] = (),
         run_quality_reason: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         repository = str(canonical_payload.get("repository") or "").strip()
@@ -2660,6 +3646,10 @@ class CodexWorker:
                 "errors": proposal_report.errors,
             },
         }
+        if jules_runtime_records:
+            summary["externalRuntime"] = self._build_jules_runtime_report_payload(
+                jules_runtime_records
+            )
         if run_quality_reason is not None:
             summary["runQuality"] = dict(run_quality_reason)
         redacted = self._redact_payload(summary)
@@ -2671,6 +3661,7 @@ class CodexWorker:
         artifacts_dir: Path,
         finish_summary: dict[str, Any],
         finish_outcome: FinishOutcome,
+        jules_runtime_records: Sequence[JulesRuntimeTaskRecord] = (),
     ) -> list[ArtifactUpload]:
         reports_dir = artifacts_dir / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
@@ -2705,6 +3696,24 @@ class CodexWorker:
                 ArtifactUpload(
                     path=errors_path,
                     name="reports/errors.json",
+                    content_type="application/json",
+                    required=False,
+                )
+            )
+        if jules_runtime_records:
+            jules_runtime_path = reports_dir / "jules_runtime.json"
+            jules_payload = self._build_jules_runtime_report_payload(
+                jules_runtime_records
+            )
+            redacted_jules_payload = self._redact_payload(jules_payload)
+            jules_runtime_path.write_text(
+                json.dumps(redacted_jules_payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            artifacts.append(
+                ArtifactUpload(
+                    path=jules_runtime_path,
+                    name="reports/jules_runtime.json",
                     content_type="application/json",
                     required=False,
                 )
@@ -6749,7 +7758,7 @@ class CodexWorker:
                 "repository": str(canonical_payload.get("repository") or "").strip(),
                 "targetRuntime": runtime_mode,
                 "task": {
-                    "instructions": "TODO: replace with the proposed follow-up task objective",
+                    "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
                         "mode": runtime_mode,
@@ -6923,6 +7932,7 @@ class CodexWorker:
         prepared: PreparedTaskWorkspace,
         task_result: WorkerExecutionResult,
         selected_skills: Sequence[str],
+        jules_record_callback: Callable[[JulesRuntimeTaskRecord], None] | None = None,
     ) -> list[ArtifactUpload]:
         """Execute post-run proposal skills and collect generated artifacts."""
 
@@ -7050,22 +8060,37 @@ class CodexWorker:
                         canonical_payload=canonical_payload,
                         runtime_mode=runtime_mode,
                     )
-                    command = self._build_non_codex_runtime_command(
-                        runtime_mode=runtime_mode,
-                        instruction=instruction,
-                        model=runtime_model,
-                        effort=runtime_effort,
-                    )
-                    runtime_env = self._build_non_codex_runtime_env(
-                        runtime_mode=runtime_mode
-                    )
                     proposal_log_path = prepared.artifacts_dir / "codex_exec.log"
-                    await self._run_stage_command(
-                        command,
-                        cwd=prepared.repo_dir,
-                        log_path=proposal_log_path,
-                        env=runtime_env,
-                    )
+                    if runtime_mode == "jules":
+                        await self._run_jules_runtime_instruction(
+                            job_id=job.id,
+                            canonical_payload=canonical_payload,
+                            instruction=instruction,
+                            model=runtime_model,
+                            effort=runtime_effort,
+                            log_path=proposal_log_path,
+                            stage="moonmind.task.proposals",
+                            step_id=skill_id,
+                            step_index=skill_index,
+                            total_steps=len(hook_skill_ids),
+                            record_callback=jules_record_callback,
+                        )
+                    else:
+                        command = self._build_non_codex_runtime_command(
+                            runtime_mode=runtime_mode,
+                            instruction=instruction,
+                            model=runtime_model,
+                            effort=runtime_effort,
+                        )
+                        runtime_env = self._build_non_codex_runtime_env(
+                            runtime_mode=runtime_mode
+                        )
+                        await self._run_stage_command(
+                            command,
+                            cwd=prepared.repo_dir,
+                            log_path=proposal_log_path,
+                            env=runtime_env,
+                        )
                     skill_result = WorkerExecutionResult(
                         succeeded=True,
                         summary=f"{runtime_mode} proposal skill execution completed",
@@ -8017,6 +9042,7 @@ class CodexWorker:
         artifact_callback: (
             Callable[[Sequence[ArtifactUpload]], Awaitable[None]] | None
         ) = None,
+        jules_record_callback: Callable[[JulesRuntimeTaskRecord], None] | None = None,
     ) -> WorkerExecutionResult:
         """Execute resolved task steps via selected runtime adapter."""
 
@@ -8122,21 +9148,36 @@ class CodexWorker:
                         step=step,
                         total_steps=len(resolved_steps),
                     )
-                    command = self._build_non_codex_runtime_command(
-                        runtime_mode=runtime_mode,
-                        instruction=instruction,
-                        model=runtime_model,
-                        effort=runtime_effort,
-                    )
-                    runtime_env = self._build_non_codex_runtime_env(
-                        runtime_mode=runtime_mode
-                    )
-                    await self._run_stage_command(
-                        command,
-                        cwd=prepared.repo_dir,
-                        log_path=step_log_path,
-                        env=runtime_env,
-                    )
+                    if runtime_mode == "jules":
+                        await self._run_jules_runtime_instruction(
+                            job_id=job_id,
+                            canonical_payload=canonical_payload,
+                            instruction=instruction,
+                            model=runtime_model,
+                            effort=runtime_effort,
+                            log_path=step_log_path,
+                            stage="moonmind.task.execute",
+                            step_id=step.step_id,
+                            step_index=step.step_index,
+                            total_steps=len(resolved_steps),
+                            record_callback=jules_record_callback,
+                        )
+                    else:
+                        command = self._build_non_codex_runtime_command(
+                            runtime_mode=runtime_mode,
+                            instruction=instruction,
+                            model=runtime_model,
+                            effort=runtime_effort,
+                        )
+                        runtime_env = self._build_non_codex_runtime_env(
+                            runtime_mode=runtime_mode
+                        )
+                        await self._run_stage_command(
+                            command,
+                            cwd=prepared.repo_dir,
+                            log_path=step_log_path,
+                            env=runtime_env,
+                        )
                     patch_result = await self._run_stage_command(
                         ["git", "diff"],
                         cwd=prepared.repo_dir,
@@ -8909,6 +9950,295 @@ class CodexWorker:
         env.pop("GOOGLE_API_KEY", None)
         return env
 
+    def _ensure_jules_runtime_enabled(self) -> None:
+        """Validate Jules runtime settings before executing delegated steps."""
+
+        if (
+            self._config.jules_enabled
+            and self._config.jules_api_url
+            and self._config.jules_api_key
+        ):
+            return
+        raise RuntimeError(JULES_RUNTIME_DISABLED_MESSAGE)
+
+    @staticmethod
+    def _normalize_jules_status(raw_status: str | None) -> str:
+        """Return normalized lowercase Jules status token."""
+
+        normalized = str(raw_status or "").strip().lower()
+        return normalized or "pending"
+
+    @staticmethod
+    def _is_probable_pr_url(value: str | None) -> bool:
+        """Return True when URL likely points to a pull request."""
+
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return False
+        return "/pull/" in normalized or "/pulls/" in normalized
+
+    @staticmethod
+    def _serialize_jules_runtime_task_record(
+        record: JulesRuntimeTaskRecord,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "stage": record.stage,
+            "taskId": record.task_id,
+            "status": record.status,
+            "url": record.url,
+            "submittedAt": record.submitted_at,
+            "lastPolledAt": record.last_polled_at,
+            "completedAt": record.completed_at,
+            "failed": record.failed,
+            "error": record.error,
+            "statusHistory": list(record.status_history),
+        }
+        if record.step_id is not None:
+            payload["stepId"] = record.step_id
+        if record.step_index is not None:
+            payload["stepIndex"] = record.step_index
+        if record.total_steps is not None:
+            payload["totalSteps"] = record.total_steps
+        return payload
+
+    def _build_jules_runtime_report_payload(
+        self,
+        records: Sequence[JulesRuntimeTaskRecord],
+    ) -> dict[str, Any]:
+        tasks = [
+            self._serialize_jules_runtime_task_record(record) for record in records
+        ]
+        latest_status = tasks[-1]["status"] if tasks else None
+        return {
+            "schemaVersion": "v1",
+            "provider": "jules",
+            "taskCount": len(tasks),
+            "latestStatus": latest_status,
+            "tasks": tasks,
+        }
+
+    async def _emit_jules_runtime_event(
+        self,
+        *,
+        job_id: UUID,
+        level: str,
+        canonical_message: str,
+        payload: Mapping[str, Any],
+        legacy_message: str | None = None,
+    ) -> None:
+        """Emit canonical Jules runtime events with optional legacy aliases."""
+
+        event_payload = dict(payload)
+        await self._emit_event(
+            job_id=job_id,
+            level=level,
+            message=canonical_message,
+            payload=event_payload,
+        )
+        if legacy_message:
+            await self._emit_event(
+                job_id=job_id,
+                level=level,
+                message=legacy_message,
+                payload=event_payload,
+            )
+
+    async def _run_jules_runtime_instruction(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        instruction: str,
+        model: str | None,
+        effort: str | None,
+        log_path: Path,
+        stage: str,
+        step_id: str | None = None,
+        step_index: int | None = None,
+        total_steps: int | None = None,
+        record_callback: Callable[[JulesRuntimeTaskRecord], None] | None = None,
+    ) -> None:
+        """Submit instruction to Jules and poll until completion/failure."""
+
+        self._ensure_jules_runtime_enabled()
+        repository = str(canonical_payload.get("repository") or "").strip()
+        runtime_meta: dict[str, Any] = {
+            "source": "moonmind",
+            "stage": stage,
+            "repository": repository,
+            "runtime": "jules",
+            "jobId": str(job_id),
+        }
+        if step_id:
+            runtime_meta["stepId"] = step_id
+        if step_index is not None:
+            runtime_meta["stepIndex"] = step_index
+        if total_steps is not None:
+            runtime_meta["totalSteps"] = total_steps
+        if model:
+            runtime_meta["model"] = model
+        if effort:
+            runtime_meta["effort"] = effort
+
+        title_bits = ["MoonMind", "Queue Task", str(job_id)]
+        if step_id:
+            title_bits.append(step_id)
+        title = " ".join(title_bits)
+        submitted_at = datetime.now(UTC).isoformat()
+        last_polled_at = submitted_at
+        completed_at: str | None = None
+        task_id: str | None = None
+        task_url: str | None = None
+        current_status = "pending"
+        status_history: list[str] = []
+        failure_message: str | None = None
+        event_context: dict[str, Any] = {"stage": stage}
+        if step_id is not None:
+            event_context["stepId"] = step_id
+        if step_index is not None:
+            event_context["stepIndex"] = step_index
+        if total_steps is not None:
+            event_context["totalSteps"] = total_steps
+
+        client = JulesClient(
+            base_url=str(self._config.jules_api_url),
+            api_key=str(self._config.jules_api_key),
+            timeout=self._config.jules_timeout_seconds,
+            retry_attempts=self._config.jules_retry_attempts,
+            retry_delay_seconds=self._config.jules_retry_delay_seconds,
+        )
+        try:
+            created = await client.create_task(
+                JulesCreateTaskRequest(
+                    title=title,
+                    description=instruction,
+                    metadata=runtime_meta,
+                )
+            )
+            task_id = str(created.task_id)
+            task_url = str(created.url or "").strip() or None
+            current_status = self._normalize_jules_status(created.status)
+            status_history.append(current_status)
+            self._append_stage_log(
+                log_path,
+                f"jules task submitted: task_id={task_id} status={current_status}",
+            )
+            await self._emit_jules_runtime_event(
+                job_id=job_id,
+                level="info",
+                canonical_message="runtime.jules.submitted",
+                legacy_message="task.jules.submitted",
+                payload={
+                    **event_context,
+                    "taskId": task_id,
+                    "status": current_status,
+                    "url": task_url,
+                },
+            )
+
+            deadline = time.monotonic() + self._config.stage_command_timeout_seconds
+            last_status = current_status
+            while (
+                current_status not in _JULES_TERMINAL_SUCCESS_STATUSES
+                and current_status not in _JULES_TERMINAL_FAILURE_STATUSES
+            ):
+                if time.monotonic() >= deadline:
+                    failure_message = (
+                        f"Jules task '{task_id}' timed out waiting for terminal status"
+                    )
+                    raise RuntimeError(failure_message)
+                await asyncio.sleep(self._config.jules_poll_interval_seconds)
+                polled = await client.get_task(JulesGetTaskRequest(task_id=task_id))
+                last_polled_at = datetime.now(UTC).isoformat()
+                polled_url = str(polled.url or "").strip() or None
+                if polled_url is not None:
+                    task_url = polled_url
+                current_status = self._normalize_jules_status(polled.status)
+                if current_status != last_status:
+                    status_history.append(current_status)
+                    self._append_stage_log(
+                        log_path,
+                        f"jules task status changed: task_id={task_id} status={current_status}",
+                    )
+                    await self._emit_jules_runtime_event(
+                        job_id=job_id,
+                        level="info",
+                        canonical_message="runtime.jules.status",
+                        legacy_message="task.jules.status",
+                        payload={
+                            **event_context,
+                            "taskId": task_id,
+                            "status": current_status,
+                            "url": task_url,
+                        },
+                    )
+                    last_status = current_status
+
+            if current_status in _JULES_TERMINAL_FAILURE_STATUSES:
+                failure_message = (
+                    f"Jules task '{task_id}' failed with status '{current_status}'"
+                )
+                raise RuntimeError(failure_message)
+
+            completed_at = datetime.now(UTC).isoformat()
+            self._append_stage_log(
+                log_path,
+                f"jules task completed: task_id={task_id} status={current_status}",
+            )
+            await self._emit_jules_runtime_event(
+                job_id=job_id,
+                level="info",
+                canonical_message="runtime.jules.result.received",
+                legacy_message="task.jules.completed",
+                payload={
+                    **event_context,
+                    "taskId": task_id,
+                    "status": current_status,
+                    "url": task_url,
+                },
+            )
+            if self._is_probable_pr_url(task_url):
+                await self._emit_jules_runtime_event(
+                    job_id=job_id,
+                    level="info",
+                    canonical_message="runtime.jules.pr.created",
+                    payload={
+                        **event_context,
+                        "taskId": task_id,
+                        "url": task_url,
+                    },
+                )
+        except JulesClientError as exc:
+            failure_message = str(exc)
+            raise RuntimeError(failure_message) from exc
+        except Exception as exc:
+            if failure_message is None:
+                failure_message = str(exc)
+            raise
+        finally:
+            if task_id is not None and record_callback is not None:
+                record_callback(
+                    JulesRuntimeTaskRecord(
+                        stage=stage,
+                        step_id=step_id,
+                        step_index=step_index,
+                        total_steps=total_steps,
+                        task_id=task_id,
+                        status=current_status,
+                        url=task_url,
+                        submitted_at=submitted_at,
+                        last_polled_at=last_polled_at,
+                        completed_at=completed_at,
+                        failed=(
+                            current_status in _JULES_TERMINAL_FAILURE_STATUSES
+                            or failure_message is not None
+                        ),
+                        error=failure_message,
+                        status_history=tuple(status_history),
+                    )
+                )
+            await client.aclose()
+
     def _resolve_runtime_overrides(
         self,
         *,
@@ -8936,6 +10266,11 @@ class CodexWorker:
             return (
                 model_override or self._config.default_claude_model,
                 effort_override or self._config.default_claude_effort,
+            )
+        if runtime_mode == "jules":
+            return (
+                model_override or self._config.default_jules_model,
+                effort_override or self._config.default_jules_effort,
             )
         return (model_override, effort_override)
 

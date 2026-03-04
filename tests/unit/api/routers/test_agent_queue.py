@@ -685,6 +685,37 @@ def test_create_job_rejects_claude_runtime_without_api_key(
     service.create_job.assert_awaited_once()
 
 
+def test_create_job_rejects_jules_runtime_without_config(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Jules runtime requests should map to HTTP 400 when Jules is disabled."""
+
+    test_client, service = client
+    service.create_job.side_effect = AgentQueueValidationError(
+        "targetRuntime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured"
+    )
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "jules",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    body = response.json()
+    assert body["detail"]["code"] == "jules_runtime_disabled"
+    assert (
+        body["detail"]["message"]
+        == "targetRuntime=jules is not available in the current server configuration"
+    )
+    service.create_job.assert_awaited_once()
+
+
 def test_create_job_with_attachments_success(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1053,6 +1084,68 @@ def test_heartbeat_job_includes_system_metadata(
     assert payload["system"]["workersPaused"] is True
     assert payload["system"]["mode"] == "quiesce"
     service.heartbeat.assert_awaited_once()
+
+
+def test_update_job_runtime_state_success(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Runtime-state endpoint should forward worker-owned checkpoint payloads."""
+
+    test_client, service = client
+    job = _build_job(status=models.AgentJobStatus.RUNNING)
+    job.payload = {
+        "targetRuntime": "jules",
+        "runtimeState": {
+            "runtime": "jules",
+            "externalTaskId": "task-123",
+            "status": "running",
+        },
+    }
+    service.update_runtime_state.return_value = job
+
+    response = test_client.post(
+        f"/api/queue/jobs/{job.id}/runtime-state",
+        json={
+            "workerId": "worker-1",
+            "runtimeState": {
+                "runtime": "jules",
+                "externalTaskId": "task-123",
+                "status": "running",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    payload = response.json()
+    assert payload["payload"]["runtimeState"]["externalTaskId"] == "task-123"
+    service.update_runtime_state.assert_awaited_once_with(
+        job_id=job.id,
+        worker_id="worker-1",
+        runtime_state={
+            "runtime": "jules",
+            "externalTaskId": "task-123",
+            "status": "running",
+        },
+    )
+
+
+def test_update_job_runtime_state_worker_mismatch_maps_403(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Runtime-state endpoint should reject worker ids that mismatch token policy."""
+
+    test_client, service = client
+    response = test_client.post(
+        f"/api/queue/jobs/{uuid4()}/runtime-state",
+        json={
+            "workerId": "worker-2",
+            "runtimeState": {"runtime": "jules", "externalTaskId": "task-999"},
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
+    service.update_runtime_state.assert_not_awaited()
 
 
 def test_claim_job_worker_mismatch_maps_403(
