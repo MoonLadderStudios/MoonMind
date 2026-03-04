@@ -1778,9 +1778,6 @@
     }
     return rows
       .map((row) => {
-        if (row.source !== "queue") {
-          return "";
-        }
         const fieldItems = queueFieldDefinitions
           .map(
             (definition) => `
@@ -1836,16 +1833,13 @@
     if (!rows || rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
     }
-    const hasQueueRows = rows.some((row) => row.source === "queue");
-    const hasNonQueueRows = rows.some((row) => row.source !== "queue");
+
     const tableAttributes = [
       'class="queue-table-wrapper"',
       'data-layout="table"',
-      `data-sticky-table="${hasNonQueueRows ? "true" : "false"}"`,
     ].join(" ");
-    const cardsHtml = hasQueueRows
-      ? `<ul class="queue-card-list" data-layout="card" role="list">${renderQueueCards(rows)}</ul>`
-      : "";
+    const cardsHtml = `<ul class="queue-card-list" data-layout="card" role="list">${renderQueueCards(rows)}</ul>`;
+
     return `
       <div class="queue-layouts">
         <div ${tableAttributes}>${renderQueueTable(rows)}</div>
