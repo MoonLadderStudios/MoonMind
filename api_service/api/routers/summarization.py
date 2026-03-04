@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -90,6 +90,32 @@ async def get_user_llm_api_key(
     return None
 
 
+def sanitize_repo_url(repo_url: str) -> str:
+    """Redact URL credentials before logging or returning errors."""
+    parsed = urlparse(repo_url)
+    if "@" not in parsed.netloc:
+        return repo_url
+
+    host = parsed.netloc.rsplit("@", 1)[1]
+    sanitized_netloc = f"***REDACTED***@{host}"
+    return urlunparse(parsed._replace(netloc=sanitized_netloc))
+
+
+def redact_sensitive_git_error(
+    error_message: str,
+    repo_url: str,
+    sanitized_repo_url: str,
+    github_token: Optional[str],
+) -> str:
+    """Redact known secrets from git-related error messages."""
+    sanitized_error = error_message
+    if repo_url != sanitized_repo_url:
+        sanitized_error = sanitized_error.replace(repo_url, sanitized_repo_url)
+    if github_token:
+        sanitized_error = sanitized_error.replace(github_token, "***REDACTED***")
+    return sanitized_error
+
+
 import os
 import tempfile
 
@@ -133,8 +159,10 @@ async def summarize_repository(
     Currently supports generating a README.md file.
     """
     user_id = user.id if hasattr(user, "id") else "unauthenticated_user"
+    repo_url_str = str(request.repo_url)  # Convert HttpUrl to string for git operations
+    sanitized_repo_url = sanitize_repo_url(repo_url_str)
     logger.info(
-        f"Received repository summarization request for URL: {request.repo_url}, type: {request.summary_type}, model: {request.model} by user {user_id}"
+        f"Received repository summarization request for URL: {sanitized_repo_url}, type: {request.summary_type}, model: {request.model} by user {user_id}"
     )
 
     # 1. Model and Provider Resolution
@@ -169,22 +197,23 @@ async def summarize_repository(
         )
 
     # 2. Temporary Directory and Cloning
-    repo_url_str = str(request.repo_url)  # Convert HttpUrl to string for git operations
-    github_token = None
+    github_token = await get_user_github_token(user, db)
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             logger.info(f"Created temporary directory: {temp_dir}")
             cloned_successfully = False
             try:
-                logger.info(f"Attempting to clone {repo_url_str} into {temp_dir}")
+                logger.info(f"Attempting to clone {sanitized_repo_url} into {temp_dir}")
                 git.Repo.clone_from(repo_url_str, temp_dir)
-                logger.info(f"Successfully cloned {repo_url_str} anonymously.")
+                logger.info(f"Successfully cloned {sanitized_repo_url} anonymously.")
                 cloned_successfully = True
             except git.exc.GitCommandError as e_clone:
-                logger.warning(
-                    f"Anonymous clone failed for {repo_url_str}: {e_clone}. Attempting with token."
+                error_msg = redact_sensitive_git_error(
+                    str(e_clone), repo_url_str, sanitized_repo_url, github_token
                 )
-                github_token = await get_user_github_token(user, db)
+                logger.warning(
+                    f"Anonymous clone failed for {sanitized_repo_url}: {error_msg}. Attempting with token."
+                )
                 if github_token:
                     # Construct authenticated URL: https://oauth2:{token}@github.com/owner/repo.git
                     # This format is common for GitHub. Other providers might vary.
@@ -205,34 +234,41 @@ async def summarize_repository(
                             cloned_successfully = True
                         except git.exc.GitCommandError as e_auth_clone:
                             error_msg = (
-                                str(e_auth_clone).replace(
-                                    github_token, "***REDACTED***"
+                                redact_sensitive_git_error(
+                                    str(e_auth_clone),
+                                    repo_url_str,
+                                    sanitized_repo_url,
+                                    github_token,
                                 )
-                                if github_token
-                                else str(e_auth_clone)
                             )
                             logger.error(
-                                f"Authenticated clone failed for {repo_url_str}: {error_msg}"
+                                f"Authenticated clone failed for {sanitized_repo_url}: {error_msg}"
                             )
                             raise HTTPException(
                                 status_code=400,
                                 detail=f"Failed to clone repository (even with authentication): {error_msg}",
                             )
                     else:
+                        error_msg = redact_sensitive_git_error(
+                            str(e_clone), repo_url_str, sanitized_repo_url, github_token
+                        )
                         logger.warning(
                             "Cannot construct authenticated URL for non-GitHub repo automatically."
                         )
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Failed to clone repository. Non-GitHub URL, cannot use token auth automatically: {e_clone}",
+                            detail=f"Failed to clone repository. Non-GitHub URL, cannot use token auth automatically: {error_msg}",
                         )
                 else:
+                    error_msg = redact_sensitive_git_error(
+                        str(e_clone), repo_url_str, sanitized_repo_url, github_token
+                    )
                     logger.error(
                         f"Anonymous clone failed and no GitHub token found for user {user_id}."
                     )
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Failed to clone repository. Anonymous access failed and no GitHub token available: {e_clone}",
+                        detail=f"Failed to clone repository. Anonymous access failed and no GitHub token available: {error_msg}",
                     )
 
             if (
@@ -281,12 +317,12 @@ async def summarize_repository(
                 summary_content = await generator.generate(repo_path=temp_dir)
                 if summary_content is None:
                     logger.error(
-                        f"README.md generation failed for {repo_url_str} in {temp_dir}"
+                        f"README.md generation failed for {sanitized_repo_url} in {temp_dir}"
                     )
                     raise HTTPException(
                         status_code=500, detail="Failed to generate README.md summary."
                     )
-                logger.info(f"Successfully generated README.md for {repo_url_str}")
+                logger.info(f"Successfully generated README.md for {sanitized_repo_url}")
             else:
                 logger.error(
                     f"Unsupported summary_type requested: {request.summary_type}"
@@ -303,21 +339,21 @@ async def summarize_repository(
     except HTTPException:  # Re-raise HTTPExceptions directly
         raise
     except git.exc.GitCommandError as e:  # Catch specific git errors not handled above
-        error_msg = str(e)
-        if github_token:
-            error_msg = error_msg.replace(github_token, "***REDACTED***")
+        error_msg = redact_sensitive_git_error(
+            str(e), repo_url_str, sanitized_repo_url, github_token
+        )
         logger.error(
-            f"A GitCommandError occurred during repository operation for {repo_url_str}: {error_msg}"
+            f"A GitCommandError occurred during repository operation for {sanitized_repo_url}: {error_msg}"
         )
         raise HTTPException(
             status_code=500, detail=f"A Git error occurred: {error_msg}"
         )
     except Exception as e:
-        error_msg = str(e)
-        if github_token:
-            error_msg = error_msg.replace(github_token, "***REDACTED***")
-        logger.exception(
-            f"An unexpected error occurred while summarizing repository {repo_url_str}: {error_msg}"
+        error_msg = redact_sensitive_git_error(
+            str(e), repo_url_str, sanitized_repo_url, github_token
+        )
+        logger.error(
+            f"An unexpected error occurred while summarizing repository {sanitized_repo_url}: {error_msg}"
         )
         raise HTTPException(
             status_code=500, detail=f"An unexpected error occurred: {error_msg}"
