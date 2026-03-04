@@ -42,6 +42,11 @@ if __name__ == "__main__":
         help="Path to the prompt file inside the container.",
     )
     parser.add_argument(
+        "--prompt-safe-base-dir",
+        default="/app/prompts",
+        help="Trusted prompt directory boundary. Prompt files outside this directory are blocked.",
+    )
+    parser.add_argument(
         "--replace-existing",
         action="store_true",
         help="Replace existing summary files if they are found.",
@@ -53,6 +58,7 @@ if __name__ == "__main__":
     logger.info(f"Input directory suffix: {args.input_dir_suffix}")
     logger.info(f"Output directory suffix: {args.output_dir_suffix}")
     logger.info(f"Prompt file: {args.prompt_file}")
+    logger.info(f"Prompt safe base directory: {args.prompt_safe_base_dir}")
     logger.info(f"Replace existing summaries: {args.replace_existing}")
 
     input_directory = os.path.join(args.base_data_path, args.input_dir_suffix)
@@ -78,6 +84,7 @@ if __name__ == "__main__":
             prompt_file_path=args.prompt_file,
             model_factory=lambda: get_google_model(api_key=google_key),
             text_summarizer=summarize_text_gemini,
+            prompt_safe_base_dir=args.prompt_safe_base_dir,
             replace_existing=args.replace_existing,
         )
         logger.info("Summarizer job process completed.")

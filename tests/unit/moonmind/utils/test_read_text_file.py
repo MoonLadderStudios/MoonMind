@@ -67,6 +67,24 @@ def test_read_text_file_within_safe_dir(tmp_path):
     assert content == "public content"
 
 
+def test_read_text_file_symlink_traversal_blocked(tmp_path):
+    base_dir = tmp_path / "safe_dir"
+    base_dir.mkdir()
+
+    outside_file = tmp_path / "secret.txt"
+    outside_file.write_text("secret content", encoding="utf-8")
+
+    symlink_in_safe_dir = base_dir / "link_to_secret"
+    try:
+        symlink_in_safe_dir.symlink_to(outside_file)
+    except (NotImplementedError, OSError):
+        pytest.skip("Symlink creation is not supported in this environment")
+
+    content = read_text_file(str(symlink_in_safe_dir), safe_base_dir=str(base_dir))
+
+    assert content is None
+
+
 def test_read_text_file_is_directory(tmp_path):
     directory = tmp_path / "subdir"
     directory.mkdir()
