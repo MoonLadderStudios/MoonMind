@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from typing import Any
+
+import pytest
 
 from moonmind.workflows.skills import registry
 
