@@ -665,25 +665,31 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         if "attachments exceed max count" in lowered:
             code = "attachments_too_many"
             message = "Too many attachments were provided."
+            detail["code"] = code
         elif "attachments exceed max total bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "attachment_total_too_large"
             message = "Combined attachment size exceeds the maximum allowed total."
+            detail["code"] = code
         elif "attachment exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "attachment_too_large"
             message = "Attachment exceeds the maximum allowed size."
+            detail["code"] = code
         elif "attachment content type" in lowered:
             code = "attachment_type_not_allowed"
             message = "Attachment content type is not allowed."
+            detail["code"] = code
         elif "exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
             message = "Artifact exceeds the maximum allowed size."
+            detail["code"] = code
         elif "does not exist on disk" in lowered:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
+            detail["code"] = code
         else:
             cause = getattr(exc, "__cause__", None)
             while isinstance(cause, Exception):
