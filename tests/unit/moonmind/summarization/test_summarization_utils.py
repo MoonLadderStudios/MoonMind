@@ -276,14 +276,7 @@ class TestUpdateSummaries(unittest.TestCase):
         mock_read_text_file.side_effect = ["Base prompt text", "Input text content"]
         mock_find_files.return_value = ["/input/file1.copy"]
 
-        def exists_side_effect(path):
-            if path == "/output":
-                return True
-            if path == "/output/file1.rst":
-                return True
-            return True
-
-        mock_exists.side_effect = exists_side_effect
+        mock_exists.return_value = True
 
         update_summaries(
             self.input_dir,
