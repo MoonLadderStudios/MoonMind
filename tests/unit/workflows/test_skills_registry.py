@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any
 
 from moonmind.workflows.skills import registry
 
 
 @pytest.fixture
 def mock_settings(monkeypatch):
-    def _set_setting(name: str, value: any):
+    def _set_setting(name: str, value: Any):
         monkeypatch.setattr(
             f"moonmind.workflows.skills.registry.settings.spec_workflow.{name}",
             value,
