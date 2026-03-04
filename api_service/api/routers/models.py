@@ -29,7 +29,9 @@ async def models(_user: User = Depends(get_current_user())):  # Protected
 
                 google_api_key = await get_user_api_key(_user, "google", db_session)
                 openai_api_key = await get_user_api_key(_user, "openai", db_session)
-        except Exception as exc:  # pragma: no cover - DB optional in many test/dev paths
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - DB optional in many test/dev paths
             logger.debug(
                 "Falling back to system model provider keys for /v1/models: %s", exc
             )
