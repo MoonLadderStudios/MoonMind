@@ -31,6 +31,8 @@ async def test_env_provider_handles_kwargs(monkeypatch):
     provider = EnvAuthProvider()
 
     # Passing user and extra kwargs should not raise any error and still return the value
-    secret = await provider.get_secret(key="ANOTHER_KEY", user=None, extra="extra_kwarg")
+    secret = await provider.get_secret(
+        key="ANOTHER_KEY", user=None, extra="extra_kwarg"
+    )
 
     assert secret == "anothervalue"
