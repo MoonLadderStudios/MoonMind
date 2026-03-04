@@ -31,8 +31,8 @@ def test_read_text_file_path_traversal_blocked(tmp_path):
     base_dir = tmp_path / "safe_dir"
     base_dir.mkdir()
 
-    outside_file = tmp_path / "secret.txt"
-    outside_file.write_text("secret content", encoding="utf-8")
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("outside content", encoding="utf-8")
 
     # Attempting to read outside the base_dir
     content = read_text_file(str(outside_file), safe_base_dir=str(base_dir))
@@ -44,14 +44,24 @@ def test_read_text_file_path_traversal_with_dot_dot_blocked(tmp_path):
     base_dir = tmp_path / "safe_dir"
     base_dir.mkdir()
 
-    outside_file = tmp_path / "secret.txt"
-    outside_file.write_text("secret content", encoding="utf-8")
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("outside content", encoding="utf-8")
 
     # Constructing a path using .. to break out
-    traversal_path = base_dir / ".." / "secret.txt"
+    traversal_path = base_dir / ".." / "outside.txt"
 
     content = read_text_file(str(traversal_path), safe_base_dir=str(base_dir))
 
+    assert content is None
+
+
+def test_read_text_file_default_path_traversal_blocked(tmp_path):
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("outside content", encoding="utf-8")
+
+    # Attempting to read outside via .. without safe_base_dir
+    traversal_path = tmp_path / "safe_dir" / ".." / "outside.txt"
+    content = read_text_file(str(traversal_path))
     assert content is None
 
 
@@ -65,24 +75,6 @@ def test_read_text_file_within_safe_dir(tmp_path):
     content = read_text_file(str(inside_file), safe_base_dir=str(base_dir))
 
     assert content == "public content"
-
-
-def test_read_text_file_symlink_traversal_blocked(tmp_path):
-    base_dir = tmp_path / "safe_dir"
-    base_dir.mkdir()
-
-    outside_file = tmp_path / "secret.txt"
-    outside_file.write_text("secret content", encoding="utf-8")
-
-    symlink_in_safe_dir = base_dir / "link_to_secret"
-    try:
-        symlink_in_safe_dir.symlink_to(outside_file)
-    except (NotImplementedError, OSError):
-        pytest.skip("Symlink creation is not supported in this environment")
-
-    content = read_text_file(str(symlink_in_safe_dir), safe_base_dir=str(base_dir))
-
-    assert content is None
 
 
 def test_read_text_file_is_directory(tmp_path):

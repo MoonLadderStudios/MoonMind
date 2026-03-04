@@ -1,12 +1,9 @@
 import logging
 import os
 import time
-from pathlib import Path
 
 from moonmind.utils.find_files import find_files
 from moonmind.utils.read_text_file import read_text_file
-
-DEFAULT_PROMPT_SAFE_BASE_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
 
 def summarize_text_gemini(base_prompt: str, input_text: str, model: any):
@@ -57,7 +54,6 @@ def update_summaries(
     prompt_file_path: str,
     model_factory: callable,
     text_summarizer: callable,
-    prompt_safe_base_dir: str | None = None,
     input_ext: str = ".copy",
     output_ext: str = ".rst",
     request_delay: int = 15,
@@ -66,11 +62,10 @@ def update_summaries(
     logger = logging.getLogger(
         __name__
     )  # Define logger for this function's scope or use a module-level one
+
     logger.info(
         f"Starting summary generation process for input_dir='{input_dir}', output_dir='{output_dir}', prompt_file='{prompt_file_path}', replace_existing={replace_existing}."
     )
-    trusted_prompt_dir = prompt_safe_base_dir or str(DEFAULT_PROMPT_SAFE_BASE_DIR)
-    logger.info("Using configured trusted prompt base directory.")
 
     try:
         # Use the passed model_factory to get the model
@@ -82,8 +77,7 @@ def update_summaries(
         return
 
     try:
-        # Enforce a trusted prompt boundary; never derive it from untrusted input.
-        base_prompt = read_text_file(prompt_file_path, safe_base_dir=trusted_prompt_dir)
+        base_prompt = read_text_file(prompt_file_path)
         if not base_prompt:
             logger.error(
                 f"Failed to load base prompt or prompt is empty from {prompt_file_path}. Aborting summary generation."
