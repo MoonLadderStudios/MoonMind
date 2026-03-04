@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from moonmind.workflows.skills.materializer import (
-    _download_remote_bundle,
     SkillMaterializationError,
+    _download_remote_bundle,
     _extract_archive,
     _resolve_source_root,
     _validate_public_remote_host,
@@ -254,7 +254,6 @@ def test_extract_archive_rejects_tar_path_traversal(tmp_path):
     assert not (tmp_path / "evil.txt").exists()
 
 
-
 def test_validate_public_remote_host_rejects_private_ip(monkeypatch):
     monkeypatch.setattr(
         "moonmind.workflows.skills.materializer.socket.getaddrinfo",
@@ -272,6 +271,7 @@ def test_validate_public_remote_host_rejects_private_ip(monkeypatch):
 def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path):
     # Setup mock to first return a valid public IP, then a private IP (for the redirect)
     call_count = 0
+
     def mock_getaddrinfo(host, port, *args, **kwargs):
         nonlocal call_count
         call_count += 1
@@ -282,8 +282,7 @@ def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path)
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", port))]
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.materializer.socket.getaddrinfo",
-        mock_getaddrinfo
+        "moonmind.workflows.skills.materializer.socket.getaddrinfo", mock_getaddrinfo
     )
 
     # We mock opener.open to simulate what happens during the actual urllib call
@@ -295,12 +294,22 @@ def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path)
 
     # Let's mock socket.socket so it doesn't actually connect
     class MockSocket:
-        def settimeout(self, t): pass
-        def bind(self, a): pass
-        def connect(self, a): pass
-        def close(self): pass
+        def settimeout(self, t):
+            pass
 
-    monkeypatch.setattr("moonmind.workflows.skills.materializer.socket.socket", lambda *args, **kwargs: MockSocket())
+        def bind(self, a):
+            pass
+
+        def connect(self, a):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.materializer.socket.socket",
+        lambda *args, **kwargs: MockSocket(),
+    )
 
     with pytest.raises(SkillMaterializationError, match="non-public address") as exc:
         # We need the first validation to pass, and the second connection to fail.
@@ -312,7 +321,6 @@ def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path)
 
     assert exc.value.code == "bundle_fetch_failed"
     assert "resolves to a non-public address: example.com" in str(exc.value)
-
 
 
 def test_resolve_source_root_uses_git_clone_end_of_options_separator(

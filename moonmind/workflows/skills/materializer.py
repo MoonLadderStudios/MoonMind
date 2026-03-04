@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import os
 import shutil
@@ -15,10 +16,9 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-import http.client
-from typing import Optional, Tuple, Any
+from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
-from urllib.request import Request, HTTPHandler, HTTPSHandler, build_opener
+from urllib.request import HTTPHandler, HTTPSHandler, Request, build_opener
 
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
 from .workspace_links import (
