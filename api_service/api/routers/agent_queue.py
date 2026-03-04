@@ -696,7 +696,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             code = "attachment_type_not_allowed"
             message = "Attachment content type is not allowed."
             detail["code"] = code
-        elif "artifact exceeds max bytes" in lowered:
+        elif "artifact exceeds max bytes" in lowered or "exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
             message = "Artifact exceeds the maximum allowed size."
