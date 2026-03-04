@@ -1,5 +1,7 @@
 from unittest.mock import mock_open, patch
 
+import pytest
+
 from moonmind.utils.read_text_file import read_text_file
 
 
@@ -12,9 +14,9 @@ def test_read_text_file_valid(tmp_path):
     assert content == "Hello, World!"
 
 
-def test_read_text_file_empty_path():
-    assert read_text_file(None) is None
-    assert read_text_file("") is None
+@pytest.mark.parametrize("path", [None, ""])
+def test_read_text_file_empty_path(path):
+    assert read_text_file(path) is None
 
 
 def test_read_text_file_not_found(tmp_path):
