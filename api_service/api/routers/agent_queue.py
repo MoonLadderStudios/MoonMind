@@ -662,28 +662,35 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     "message": "targetRuntime=claude is not available in the current server configuration",
                 },
             )
-        if "attachments exceed max count" in lowered:
+        elif "attachments exceed max count" in lowered:
             code = "attachments_too_many"
             message = "Too many attachments were provided."
+            detail["code"] = code
         elif "attachments exceed max total bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "attachment_total_too_large"
             message = "Combined attachment size exceeds the maximum allowed total."
+            detail["code"] = code
         elif "attachment exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "attachment_too_large"
             message = "Attachment exceeds the maximum allowed size."
-        elif "attachment content type" in lowered:
+            detail["code"] = code
+        elif "attachment content type" in lowered or "attachment type" in lowered or "attachment format" in lowered or "attachment content type must be" in lowered or "content type must be" in lowered:
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
             code = "attachment_type_not_allowed"
             message = "Attachment content type is not allowed."
-        elif "exceeds max bytes" in lowered:
+            detail["code"] = code
+        elif "artifact exceeds max bytes" in lowered:
             status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             code = "artifact_too_large"
             message = "Artifact exceeds the maximum allowed size."
+            detail["code"] = code
         elif "does not exist on disk" in lowered:
             status_code = status.HTTP_404_NOT_FOUND
             code = "artifact_file_missing"
             message = "Artifact file is missing from storage."
+            detail["code"] = code
         else:
             cause = getattr(exc, "__cause__", None)
             while isinstance(cause, Exception):

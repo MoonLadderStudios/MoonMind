@@ -1,4 +1,4 @@
-from unittest.mock import mock_open, patch
+from unittest.mock import patch, mock_open
 
 from moonmind.utils.read_text_file import read_text_file
 
