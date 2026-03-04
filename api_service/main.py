@@ -163,7 +163,7 @@ async def _initialize_oidc_provider(app: FastAPI):
                 f"{settings.oidc.OIDC_ISSUER_URL}/.well-known/openid-configuration"
             )
             async with httpx.AsyncClient() as client:
-                response = await client.get(discovery_url)
+                response = await client.get(discovery_url, follow_redirects=True)
             response.raise_for_status()
             discovery_doc = response.json()
             jwks_uri = discovery_doc.get("jwks_uri")
@@ -174,14 +174,18 @@ async def _initialize_oidc_provider(app: FastAPI):
                 )
             app.state.jwks_uri = jwks_uri
             logger.info("Successfully fetched and stored Google JWKS URI.")
-        except httpx.RequestError as e:
-            logger.error(f"Failed to fetch Google OIDC discovery document: {e}")
-            raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
         except httpx.HTTPStatusError as e:
             logger.error(
-                f"Failed to fetch Google OIDC discovery document, status code {e.response.status_code}: {e}"
+                "Failed to fetch Google OIDC discovery document, status code %s: %s",
+                e.response.status_code,
+                e,
             )
-            raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}")
+            raise RuntimeError(
+                f"Failed to fetch Google OIDC discovery document: {e}"
+            ) from e
+        except httpx.RequestError as e:
+            logger.error("Failed to fetch Google OIDC discovery document: %s", e)
+            raise RuntimeError(f"Failed to fetch Google OIDC discovery document: {e}") from e
         except Exception as e:
             logger.error(f"Error processing Google OIDC discovery document: {e}")
             raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
