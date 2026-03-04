@@ -249,7 +249,7 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(paginationState.pageEnd, 0);
 })();
 
-(function testRenderQueueCardsRendersOnlyQueueRows() {
+(function testRenderQueueCardsRendersAllRows() {
   const rows = [
     createQueueRow(),
     createQueueRow({ id: "job-456", source: "manifests", sourceLabel: "Manifests" }),
@@ -257,7 +257,7 @@ function createProposalRow(overrides = {}) {
   const cardsHtml = renderQueueCards(rows);
   assert(cardsHtml.includes("queue-card"));
   assert(cardsHtml.includes(baseQueueRow.id));
-  assert(!cardsHtml.includes("job-456"));
+  assert(cardsHtml.includes("job-456"), "Cards should contain non-queue rows");
   queueFieldDefinitions.forEach((definition) => {
     assert(cardsHtml.includes(`<dt>${definition.label}</dt>`), `${definition.label} missing in card`);
   });
@@ -271,7 +271,6 @@ function createProposalRow(overrides = {}) {
   const html = renderQueueLayouts(rows);
   assert(html.includes("queue-table-wrapper"));
   assert(html.includes("queue-card-list"));
-  assert(html.includes('data-sticky-table="true"'));
 })();
 
 (function testRenderQueueLayoutsEmptyState() {
@@ -282,12 +281,11 @@ function createProposalRow(overrides = {}) {
 (function testActivePageContentKeepsTablesForMixedSources() {
   const rows = createMixedRows();
   const html = renderActivePageContent(rows, ["queue-running"]);
-  assert(html.includes('data-sticky-table="true"'));
   assert(html.includes("queue-card-list"));
   assert(html.includes(rows[0].id));
   const cardSectionMatch = html.match(/<ul class="queue-card-list"[^>]*>([\s\S]*?)<\/ul>/);
   assert(cardSectionMatch, "Expected queue-card-list markup");
-  assert(!cardSectionMatch[1].includes(rows[2].id), "Non-queue rows must stay out of cards");
+  assert(cardSectionMatch[1].includes(rows[2].id), "Non-queue rows should be in cards");
   assert(html.includes("Unable to load queue-running data source."));
 })();
 

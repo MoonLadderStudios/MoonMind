@@ -257,6 +257,16 @@
   }
 
   const ORCHESTRATOR_RUNTIME = "orchestrator";
+  const CLICK_GLOW_CLASS = "is-clicked";
+  const CLICK_GLOW_DURATION_MS = 180;
+  const CLICK_GLOW_SELECTOR = [
+    "button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button)",
+    ".button:not(.secondary):not(.queue-action):not(.queue-submit-primary)",
+    ".queue-action",
+    ".queue-submit-primary",
+    ".queue-step-icon-button",
+  ].join(", ");
+  const clickGlowTimers = new WeakMap();
 
   const listSubmitRuntimes = () =>
     Array.from(new Set([...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME]));
@@ -883,6 +893,49 @@
     };
   }
 
+  function triggerClickGlow(node) {
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+
+    const existingTimer = clickGlowTimers.get(node);
+    if (existingTimer) {
+      window.clearTimeout(existingTimer);
+    }
+
+    node.classList.remove(CLICK_GLOW_CLASS);
+    // Force style recalculation so repeated clicks retrigger the effect.
+    void node.offsetWidth;
+    node.classList.add(CLICK_GLOW_CLASS);
+
+    const timer = window.setTimeout(() => {
+      node.classList.remove(CLICK_GLOW_CLASS);
+      clickGlowTimers.delete(node);
+    }, CLICK_GLOW_DURATION_MS);
+    clickGlowTimers.set(node, timer);
+  }
+
+  function initButtonClickGlow() {
+    if (typeof document.addEventListener !== "function") {
+      return;
+    }
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const glowTarget = target.closest(CLICK_GLOW_SELECTOR);
+      if (!(glowTarget instanceof HTMLElement)) {
+        return;
+      }
+      if (glowTarget.hasAttribute("disabled") || glowTarget.getAttribute("aria-disabled") === "true") {
+        return;
+      }
+      triggerClickGlow(glowTarget);
+    });
+  }
+
   function activateNav(pathname) {
     const activePath =
       pathname === "/tasks/queue/new" ||
@@ -1249,8 +1302,21 @@
     if (keys.length === 0) {
       return "";
     }
+
+    // Custom replacer to handle circular references
+    const cache = new Set();
+    const replacer = (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (cache.has(value)) {
+          return '[Circular]';
+        }
+        cache.add(value);
+      }
+      return value;
+    };
+
     try {
-      return JSON.stringify(args, null, 2);
+      return JSON.stringify(args, replacer, 2);
     } catch (error) {
       console.warn("Failed to format skill args for dashboard draft", error);
       return "[unserializable skill args]";
@@ -1778,9 +1844,6 @@
     }
     return rows
       .map((row) => {
-        if (row.source !== "queue") {
-          return "";
-        }
         const fieldItems = queueFieldDefinitions
           .map(
             (definition) => `
@@ -1836,16 +1899,13 @@
     if (!rows || rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
     }
-    const hasQueueRows = rows.some((row) => row.source === "queue");
-    const hasNonQueueRows = rows.some((row) => row.source !== "queue");
+
     const tableAttributes = [
       'class="queue-table-wrapper"',
       'data-layout="table"',
-      `data-sticky-table="${hasNonQueueRows ? "true" : "false"}"`,
     ].join(" ");
-    const cardsHtml = hasQueueRows
-      ? `<ul class="queue-card-list" data-layout="card" role="list">${renderQueueCards(rows)}</ul>`
-      : "";
+    const cardsHtml = `<ul class="queue-card-list" data-layout="card" role="list">${renderQueueCards(rows)}</ul>`;
+
     return `
       <div class="queue-layouts">
         <div ${tableAttributes}>${renderQueueTable(rows)}</div>
@@ -8697,6 +8757,7 @@
   }
 
   const disposeTheme = initTheme();
+  initButtonClickGlow();
   if (typeof window.addEventListener === "function") {
     window.addEventListener("beforeunload", () => {
       stopPolling();

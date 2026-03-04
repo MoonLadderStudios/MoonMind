@@ -597,22 +597,23 @@ async def handle_anthropic_request(
         logger.error(f"Error calling Anthropic API for model {model_to_use}: {e}")
         raise HTTPException(status_code=500, detail=f"Anthropic API error: {str(e)}")
 
-    # Token counting for Anthropic
-    # We estimate first, then attempt to extract actual usage from the response
+    # Token counting for Anthropic can be complex.
+    # We estimate first, then use actual token counts from the response if available.
     prompt_tokens_estimate = sum(
         len(msg.content.split()) for msg in messages
     )  # Based on original request messages
     completion_tokens_estimate = len(ai_message_content.split())
 
     # Check if token usage information is available in the raw response.
-    if anthropic_response_obj.raw:
-        raw_data = anthropic_response_obj.raw
-        usage_data = None
-
-        if isinstance(raw_data, dict) and "usage" in raw_data:
-            usage_data = raw_data["usage"]
-        elif hasattr(raw_data, "usage"):
-            usage_data = raw_data.usage
+    raw_response = getattr(anthropic_response_obj, "raw", None)
+    if raw_response:
+        # LlamaIndex's Anthropic wrapper might return raw as a dictionary or a Pydantic model
+        # from the Anthropic SDK (anthropic.types.Message). We handle both cases.
+        usage_data = (
+            raw_response.get("usage")
+            if isinstance(raw_response, dict)
+            else getattr(raw_response, "usage", None)
+        )
 
         if usage_data:
             prompt_tokens = None
