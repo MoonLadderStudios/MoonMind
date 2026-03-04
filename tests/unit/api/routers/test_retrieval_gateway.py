@@ -145,6 +145,47 @@ async def test_authorize_with_bearer_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_authorize_prefers_worker_token_over_bearer() -> None:
+    policy = SimpleNamespace(
+        auth_source="worker_token",
+        allowed_repositories=("repo4",),
+        capabilities=("rag",),
+    )
+    service = MockQueueService(policy=policy)
+
+    result = await authorize_retrieval_request(
+        worker_token_header="worker_token_abc",
+        authorization_header="Bearer bearer_token_xyz",
+        queue_service=service,  # type: ignore
+        user=None,
+    )
+
+    assert result.auth_source == "worker_token"
+    assert service.called_with_token == "worker_token_abc"
+
+
+@pytest.mark.asyncio
+async def test_authorize_prefers_token_over_user() -> None:
+    policy = SimpleNamespace(
+        auth_source="worker_token",
+        allowed_repositories=("repo5",),
+        capabilities=("rag",),
+    )
+    service = MockQueueService(policy=policy)
+    user = SimpleNamespace(id="user_1")
+
+    result = await authorize_retrieval_request(
+        worker_token_header=None,
+        authorization_header="Bearer bearer_token_456",
+        queue_service=service,  # type: ignore
+        user=user,  # type: ignore
+    )
+
+    assert result.auth_source == "worker_token"
+    assert service.called_with_token == "bearer_token_456"
+
+
+@pytest.mark.asyncio
 async def test_authorize_invalid_worker_token() -> None:
     service = MockQueueService(error=AgentQueueAuthenticationError("invalid"))
 
