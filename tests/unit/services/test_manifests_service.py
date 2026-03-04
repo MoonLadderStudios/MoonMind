@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -34,6 +36,15 @@ def _tests_root() -> Path:
 
 FIXTURE_ROOT = _tests_root() / "fixtures" / "manifests" / "phase0"
 REGISTRY_MANIFEST = (FIXTURE_ROOT / "registry.yaml").read_text()
+REGISTRY_MANIFEST_OBJ = yaml.safe_load(REGISTRY_MANIFEST)
+
+
+def _manifest_with_name(name: str) -> str:
+    """Return a copy of the fixture manifest with an updated metadata name."""
+
+    manifest = deepcopy(REGISTRY_MANIFEST_OBJ)
+    manifest["metadata"]["name"] = name
+    return yaml.safe_dump(manifest, sort_keys=False)
 
 
 @asynccontextmanager
@@ -163,13 +174,13 @@ async def test_list_manifests_returns_ordered_and_limited_results(
             # Insert manifests in a random order
             # Note: upsert_manifest validates that the YAML metadata.name matches the arg.
             await service.upsert_manifest(
-                name="zebra", content=REGISTRY_MANIFEST.replace('"demo"', '"zebra"')
+                name="zebra", content=_manifest_with_name("zebra")
             )
             await service.upsert_manifest(
-                name="apple", content=REGISTRY_MANIFEST.replace('"demo"', '"apple"')
+                name="apple", content=_manifest_with_name("apple")
             )
             await service.upsert_manifest(
-                name="mango", content=REGISTRY_MANIFEST.replace('"demo"', '"mango"')
+                name="mango", content=_manifest_with_name("mango")
             )
 
             # Test basic listing and ordering
@@ -192,15 +203,13 @@ async def test_list_manifests_filters_by_search_pattern(
             service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
 
             await service.upsert_manifest(
-                name="app-demo",
-                content=REGISTRY_MANIFEST.replace('"demo"', '"app-demo"'),
+                name="app-demo", content=_manifest_with_name("app-demo")
             )
             await service.upsert_manifest(
-                name="app-test",
-                content=REGISTRY_MANIFEST.replace('"demo"', '"app-test"'),
+                name="app-test", content=_manifest_with_name("app-test")
             )
             await service.upsert_manifest(
-                name="backend", content=REGISTRY_MANIFEST.replace('"demo"', '"backend"')
+                name="backend", content=_manifest_with_name("backend")
             )
 
             # Test exact prefix search
