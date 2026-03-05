@@ -6500,7 +6500,9 @@ class CodexWorker:
                 0, unscoped_start_count - unscoped_complete_count
             )
             if extra_unscoped_start_count > 0:
-                unmatched_positions = unscoped_start_positions[-extra_unscoped_start_count:]
+                unmatched_positions = unscoped_start_positions[
+                    -extra_unscoped_start_count:
+                ]
                 for line_index in unmatched_positions:
                     if line_index <= last_complete_position:
                         ignored_unmatched_unscoped_start += 1
@@ -6557,7 +6559,9 @@ class CodexWorker:
                 extra_start_count = start_count - complete_count
                 stale_start_positions = start_marker_positions[-extra_start_count:]
                 ignored_stale_starts = sum(
-                    1 for line_index in stale_start_positions if line_index <= last_complete_position
+                    1
+                    for line_index in stale_start_positions
+                    if line_index <= last_complete_position
                 )
                 if ignored_stale_starts > 0:
                     start_count = max(0, start_count - ignored_stale_starts)
