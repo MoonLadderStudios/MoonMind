@@ -5,7 +5,6 @@ workflow stages resolve a selected skill while preserving compatibility with the
 existing direct execution path.
 """
 
-from .contracts import StageExecutionDecision, StageExecutionOutcome
 from .artifact_store import (
     ArtifactStore,
     ArtifactStoreError,
@@ -28,6 +27,8 @@ from .contracts import (
     SkillPolicyRetries,
     SkillPolicyTimeouts,
     SkillResult,
+    StageExecutionDecision,
+    StageExecutionOutcome,
     parse_plan_definition,
     parse_skill_definition,
     parse_skill_invocation,

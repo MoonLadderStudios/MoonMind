@@ -97,7 +97,9 @@ def parse_skill_registry(payload: Mapping[str, Any]) -> tuple[SkillDefinition, .
     if isinstance(raw_skills, Mapping):
         raise SkillRegistryError("Registry 'skills' must be an array")
     if not isinstance(raw_skills, list):
-        raise SkillRegistryError("Registry payload must be an object with a skills array")
+        raise SkillRegistryError(
+            "Registry payload must be an object with a skills array"
+        )
 
     parsed: list[SkillDefinition] = []
     for entry in raw_skills:
@@ -151,7 +153,9 @@ def create_registry_snapshot(
         },
     )
 
-    return SkillRegistrySnapshot(digest=digest, artifact_ref=artifact.artifact_ref, skills=skills)
+    return SkillRegistrySnapshot(
+        digest=digest, artifact_ref=artifact.artifact_ref, skills=skills
+    )
 
 
 def load_registry_snapshot_from_artifact(
@@ -167,7 +171,9 @@ def load_registry_snapshot_from_artifact(
 
     skills = parse_skill_registry(payload)
     digest = _digest_registry_doc(_canonical_registry_doc(skills))
-    return SkillRegistrySnapshot(digest=digest, artifact_ref=artifact_ref, skills=skills)
+    return SkillRegistrySnapshot(
+        digest=digest, artifact_ref=artifact_ref, skills=skills
+    )
 
 
 __all__ = [

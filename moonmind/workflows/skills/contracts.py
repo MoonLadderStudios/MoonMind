@@ -30,6 +30,7 @@ from .skill_plan_contracts import (
     parse_skill_invocation,
 )
 
+
 @dataclass(frozen=True, slots=True)
 class StageExecutionDecision:
     """Resolved execution policy for one workflow stage."""

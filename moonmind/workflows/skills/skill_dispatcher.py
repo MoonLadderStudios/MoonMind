@@ -19,7 +19,9 @@ ActivityHandler = Callable[
     [SkillInvocation, Mapping[str, Any] | None],
     SkillResult | Awaitable[SkillResult],
 ]
-SkillHandler = Callable[[Mapping[str, Any], Mapping[str, Any] | None], SkillResult | Awaitable[SkillResult]]
+SkillHandler = Callable[
+    [Mapping[str, Any], Mapping[str, Any] | None], SkillResult | Awaitable[SkillResult]
+]
 
 
 class SkillDispatchError(RuntimeError):
@@ -37,7 +39,9 @@ class SkillActivityDispatcher:
     _activity_handlers: dict[str, ActivityHandler] = field(default_factory=dict)
     _skill_handlers: dict[tuple[str, str], SkillHandler] = field(default_factory=dict)
 
-    def register_activity(self, *, activity_type: str, handler: ActivityHandler) -> None:
+    def register_activity(
+        self, *, activity_type: str, handler: ActivityHandler
+    ) -> None:
         normalized = str(activity_type or "").strip()
         if not normalized:
             raise SkillDispatchError(

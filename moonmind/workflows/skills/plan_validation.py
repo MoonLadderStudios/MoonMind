@@ -209,7 +209,9 @@ def _validate_json_value(
     if schema_type == "integer" and not (
         isinstance(value, int) and not isinstance(value, bool)
     ):
-        raise PlanValidationError("invalid_input", f"Value at {path} must be an integer")
+        raise PlanValidationError(
+            "invalid_input", f"Value at {path} must be an integer"
+        )
     if schema_type == "number" and not (
         (isinstance(value, int) and not isinstance(value, bool))
         or isinstance(value, float)
@@ -251,7 +253,9 @@ def _topological_sort(
         in_degree[to_node] += 1
         outgoing[from_node].append(to_node)
 
-    ready = deque(sorted(node_id for node_id, degree in in_degree.items() if degree == 0))
+    ready = deque(
+        sorted(node_id for node_id, degree in in_degree.items() if degree == 0)
+    )
     order: list[str] = []
 
     while ready:
@@ -311,7 +315,8 @@ def validate_plan(
     for edge in plan.edges:
         if edge.from_node not in node_map:
             raise PlanValidationError(
-                "invalid_plan", f"Edge references unknown source node '{edge.from_node}'"
+                "invalid_plan",
+                f"Edge references unknown source node '{edge.from_node}'",
             )
         if edge.to_node not in node_map:
             raise PlanValidationError(
@@ -401,4 +406,9 @@ def validate_plan_payload(
     return validate_plan(plan=parsed, registry_snapshot=registry_snapshot)
 
 
-__all__ = ["PlanValidationError", "ValidatedPlan", "validate_plan", "validate_plan_payload"]
+__all__ = [
+    "PlanValidationError",
+    "ValidatedPlan",
+    "validate_plan",
+    "validate_plan_payload",
+]

@@ -10,15 +10,16 @@ from moonmind.config.settings import settings
 
 from .artifact_store import ArtifactStore
 from .contracts import StageExecutionDecision
+from .skill_registry import SkillRegistryError, SkillRegistrySnapshot
 from .skill_registry import (
-    SkillRegistryError,
-    SkillRegistrySnapshot,
     create_registry_snapshot as create_contract_registry_snapshot,
-    load_registry_snapshot_from_artifact as load_contract_registry_snapshot_from_artifact,
-    load_skill_registry as load_contract_skill_registry,
-    parse_skill_registry as parse_contract_skill_registry,
-    validate_skill_registry as validate_contract_skill_registry,
 )
+from .skill_registry import (
+    load_registry_snapshot_from_artifact as load_contract_registry_snapshot_from_artifact,
+)
+from .skill_registry import load_skill_registry as load_contract_skill_registry
+from .skill_registry import parse_skill_registry as parse_contract_skill_registry
+from .skill_registry import validate_skill_registry as validate_contract_skill_registry
 
 _SPECKIT_ADAPTER_ID = "speckit"
 _SKILL_ADAPTERS: dict[str, str] = {
@@ -155,7 +156,9 @@ def create_registry_snapshot(
 ) -> SkillRegistrySnapshot:
     """Create immutable registry snapshot artifact for plan pinning."""
 
-    return create_contract_registry_snapshot(skills=skills, artifact_store=artifact_store)
+    return create_contract_registry_snapshot(
+        skills=skills, artifact_store=artifact_store
+    )
 
 
 def load_registry_snapshot_from_artifact(

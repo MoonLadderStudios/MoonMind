@@ -151,7 +151,9 @@ class SkillPolicyRetries:
     non_retryable_error_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _ensure_positive_int(self.max_attempts, field_name="policies.retries.max_attempts")
+        _ensure_positive_int(
+            self.max_attempts, field_name="policies.retries.max_attempts"
+        )
         _ensure_non_empty(self.backoff, field_name="policies.retries.backoff")
         for code in self.non_retryable_error_codes:
             _ensure_non_empty(code, field_name="non_retryable_error_codes[]")
@@ -260,7 +262,9 @@ class SkillInvocation:
         _ensure_non_empty(self.skill_name, field_name="node.skill.name")
         _ensure_non_empty(self.skill_version, field_name="node.skill.version")
         if not isinstance(self.inputs, Mapping):
-            raise ContractValidationError("invalid_plan", "node.inputs must be an object")
+            raise ContractValidationError(
+                "invalid_plan", "node.inputs must be an object"
+            )
         if not isinstance(self.options, Mapping):
             raise ContractValidationError(
                 "invalid_plan", "node.options must be an object"
@@ -325,7 +329,9 @@ class SkillResult:
         if not isinstance(self.outputs, Mapping):
             raise ContractValidationError("invalid_result", "outputs must be an object")
         if not isinstance(self.progress, Mapping):
-            raise ContractValidationError("invalid_result", "progress must be an object")
+            raise ContractValidationError(
+                "invalid_result", "progress must be an object"
+            )
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -348,7 +354,9 @@ class PlanRegistrySnapshot:
     artifact_ref: str
 
     def __post_init__(self) -> None:
-        digest = _ensure_non_empty(self.digest, field_name="metadata.registry_snapshot.digest")
+        digest = _ensure_non_empty(
+            self.digest, field_name="metadata.registry_snapshot.digest"
+        )
         if not digest.startswith(REGISTRY_DIGEST_PREFIX):
             raise ContractValidationError(
                 "invalid_plan",
@@ -447,7 +455,9 @@ class PlanDefinition:
                 f"Unsupported plan_version '{self.plan_version}'",
             )
         if not self.nodes:
-            raise ContractValidationError("invalid_plan", "plan must define at least one node")
+            raise ContractValidationError(
+                "invalid_plan", "plan must define at least one node"
+            )
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -470,8 +480,14 @@ def parse_skill_invocation(payload: Mapping[str, Any]) -> SkillInvocation:
         id=str(payload.get("id") or "").strip(),
         skill_name=str(skill.get("name") or "").strip(),
         skill_version=str(skill.get("version") or "").strip(),
-        inputs=payload.get("inputs") if isinstance(payload.get("inputs"), Mapping) else {},
-        options=payload.get("options") if isinstance(payload.get("options"), Mapping) else {},
+        inputs=(
+            payload.get("inputs") if isinstance(payload.get("inputs"), Mapping) else {}
+        ),
+        options=(
+            payload.get("options")
+            if isinstance(payload.get("options"), Mapping)
+            else {}
+        ),
     )
 
 
@@ -507,7 +523,9 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
     parsed_edges: list[PlanEdge] = []
     for edge in edges_raw:
         if not isinstance(edge, Mapping):
-            raise ContractValidationError("invalid_plan", "edge entries must be objects")
+            raise ContractValidationError(
+                "invalid_plan", "edge entries must be objects"
+            )
         parsed_edges.append(
             PlanEdge(
                 from_node=str(edge.get("from") or "").strip(),
@@ -555,7 +573,9 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
 
     if not isinstance(inputs, Mapping) or not isinstance(inputs.get("schema"), Mapping):
         raise ContractValidationError("invalid_registry", "inputs.schema is required")
-    if not isinstance(outputs, Mapping) or not isinstance(outputs.get("schema"), Mapping):
+    if not isinstance(outputs, Mapping) or not isinstance(
+        outputs.get("schema"), Mapping
+    ):
         raise ContractValidationError("invalid_registry", "outputs.schema is required")
     if not isinstance(executor, Mapping):
         raise ContractValidationError("invalid_registry", "executor is required")
@@ -567,9 +587,13 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
     timeout_payload = policies.get("timeouts")
     retry_payload = policies.get("retries")
     if not isinstance(timeout_payload, Mapping):
-        raise ContractValidationError("invalid_registry", "policies.timeouts is required")
+        raise ContractValidationError(
+            "invalid_registry", "policies.timeouts is required"
+        )
     if not isinstance(retry_payload, Mapping):
-        raise ContractValidationError("invalid_registry", "policies.retries is required")
+        raise ContractValidationError(
+            "invalid_registry", "policies.retries is required"
+        )
 
     caps_raw = requirements.get("capabilities")
     if not isinstance(caps_raw, list) or not caps_raw:
@@ -581,7 +605,9 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
     if isinstance(security, Mapping):
         roles = security.get("allowed_roles")
         if isinstance(roles, list):
-            allowed_roles = tuple(str(role).strip() for role in roles if str(role).strip())
+            allowed_roles = tuple(
+                str(role).strip() for role in roles if str(role).strip()
+            )
 
     non_retryable = retry_payload.get("non_retryable_error_codes", [])
     if not isinstance(non_retryable, list):
@@ -608,7 +634,9 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
             ).strip(),
         ),
         required_capabilities=tuple(
-            str(capability).strip() for capability in caps_raw if str(capability).strip()
+            str(capability).strip()
+            for capability in caps_raw
+            if str(capability).strip()
         ),
         policies=SkillPolicies(
             timeouts=SkillPolicyTimeouts(
@@ -623,9 +651,7 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
                 max_attempts=int(retry_payload.get("max_attempts") or 0),
                 backoff=str(retry_payload.get("backoff") or "exponential").strip(),
                 non_retryable_error_codes=tuple(
-                    str(code).strip()
-                    for code in non_retryable
-                    if str(code).strip()
+                    str(code).strip() for code in non_retryable if str(code).strip()
                 ),
             ),
         ),

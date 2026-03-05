@@ -86,11 +86,15 @@ class PlanExecutionSummary:
             "status": self.status,
             "results": {
                 node_id: result.to_payload()
-                for node_id, result in sorted(self.results.items(), key=lambda item: item[0])
+                for node_id, result in sorted(
+                    self.results.items(), key=lambda item: item[0]
+                )
             },
             "failures": {
                 node_id: failure.to_payload()
-                for node_id, failure in sorted(self.failures.items(), key=lambda item: item[0])
+                for node_id, failure in sorted(
+                    self.failures.items(), key=lambda item: item[0]
+                )
             },
             "skipped": list(self.skipped),
             "progress": self.progress.to_payload(),
@@ -306,7 +310,9 @@ class PlanInterpreter:
                 node_id = ready.pop(0)
                 node = nodes[node_id]
                 try:
-                    resolved_inputs = self._resolve_inputs(node.inputs, results=succeeded)
+                    resolved_inputs = self._resolve_inputs(
+                        node.inputs, results=succeeded
+                    )
                 except PlanExecutionError as exc:
                     failures[node_id] = SkillFailure(
                         error_code=exc.code.upper(),

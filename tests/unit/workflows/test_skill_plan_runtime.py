@@ -12,14 +12,20 @@ from moonmind.workflows.skills.artifact_store import (
     InMemoryArtifactStore,
 )
 from moonmind.workflows.skills.plan_interpreter import create_validated_interpreter
-from moonmind.workflows.skills.plan_validation import PlanValidationError, validate_plan_payload
+from moonmind.workflows.skills.plan_validation import (
+    PlanValidationError,
+    validate_plan_payload,
+)
 from moonmind.workflows.skills.skill_dispatcher import (
     SkillActivityDispatcher,
     SkillDispatchError,
     execute_skill_activity,
     plan_validate_activity,
 )
-from moonmind.workflows.skills.skill_plan_contracts import SkillResult, parse_plan_definition
+from moonmind.workflows.skills.skill_plan_contracts import (
+    SkillResult,
+    parse_plan_definition,
+)
 from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
     parse_skill_registry,
@@ -112,9 +118,11 @@ def _registry_payload() -> dict:
     }
 
 
-def _plan_payload(*, snapshot_digest: str, snapshot_ref: str, failure_mode: str = "FAIL_FAST") -> dict:
-    created_at = datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
+def _plan_payload(
+    *, snapshot_digest: str, snapshot_ref: str, failure_mode: str = "FAIL_FAST"
+) -> dict:
+    created_at = (
+        datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
     return {
         "plan_version": "1.0",
@@ -252,7 +260,9 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
             progress={"percent": 100},
         )
 
-    dispatcher.register_skill(skill_name="repo.run_tests", version="1.0.0", handler=mm_handler)
+    dispatcher.register_skill(
+        skill_name="repo.run_tests", version="1.0.0", handler=mm_handler
+    )
     dispatcher.register_activity(activity_type="sandbox.exec", handler=sandbox_handler)
 
     result_a = asyncio.run(
@@ -310,7 +320,9 @@ def test_plan_interpreter_fail_fast_skips_dependents():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
     plan = parse_plan_definition(
-        _plan_payload(snapshot_digest=snapshot.digest, snapshot_ref=snapshot.artifact_ref)
+        _plan_payload(
+            snapshot_digest=snapshot.digest, snapshot_ref=snapshot.artifact_ref
+        )
     )
 
     async def executor(invocation):
