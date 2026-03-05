@@ -1,6 +1,6 @@
 # MoonMind
 
-**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Celery-based orchestrator that can run skills-based workflows across your code and infrastructure.**
+**MoonMind is a Dockerized agent orchestrator compatible with Claude Code, Gemini CLI, and Codex CLI. It is in the process of migrating to Temporal for durable execution.**
 
 ## What is MoonMind?
 
