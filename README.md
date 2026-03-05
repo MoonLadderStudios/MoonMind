@@ -87,6 +87,45 @@ docker-compose down
 
 This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration, you might use other specific compose files (for example `docker-compose.test.yaml`).
 
+### Temporal Platform Foundation (Docker Compose)
+
+MoonMind now includes a self-hosted Temporal foundation in `docker-compose.yaml`:
+
+- `temporal-db` (PostgreSQL persistence + SQL visibility backend)
+- `temporal` (Temporal server via `temporalio/auto-setup`)
+- `temporal-namespace-init` (idempotent bootstrap for namespace and retention policy)
+
+Bring up the Temporal foundation:
+
+```bash
+docker compose up -d temporal-db temporal temporal-namespace-init
+```
+
+Optional operator services:
+
+```bash
+docker compose --profile temporal-ui up -d temporal-ui
+docker compose --profile temporal-tools up -d temporal-admin-tools
+```
+
+Visibility schema rehearsal (required before upgrades):
+
+```bash
+TEMPORAL_SHARD_DECISION_ACK=acknowledged \
+docker compose --profile temporal-tools run --rm temporal-visibility-rehearsal
+```
+
+Default foundation settings are provided in `.env-template`:
+
+- `TEMPORAL_NAMESPACE=moonmind`
+- `TEMPORAL_NUM_HISTORY_SHARDS=1`
+- `TEMPORAL_SHARD_DECISION_ACK=""` (set to `acknowledged` during upgrade rehearsal)
+- `TEMPORAL_RETENTION_MAX_STORAGE_GB=100`
+- `TEMPORAL_NAMESPACE_RETENTION_DAYS=36500`
+- `TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR=Auto-Upgrade`
+
+Temporal gRPC is internal (`temporal:7233`) and not published on a host port. The UI is opt-in via the `temporal-ui` profile (`http://localhost:${TEMPORAL_UI_HOST_PORT:-8088}`).
+
 ### Private skills for worker jobs
 
 MoonMind now supports run-scoped worker skills, including private skill definitions.
