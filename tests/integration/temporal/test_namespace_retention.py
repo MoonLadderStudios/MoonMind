@@ -51,8 +51,9 @@ exit 0
     env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
     env["TEMPORAL_ADDRESS"] = "temporal:7233"
     env["TEMPORAL_NAMESPACE"] = "moonmind"
-    env["TEMPORAL_NAMESPACE_RETENTION_DAYS"] = "36500"
-    env.pop("TEMPORAL_RETENTION_MAX_STORAGE_GB", None)
+    env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
+    env["TEMPORAL_RETENTION_MAX_STORAGE_GB"] = "24"
+    env["TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY"] = "6"
 
     first_run = subprocess.run(
         ["sh", str(BOOTSTRAP_SCRIPT)],
@@ -63,8 +64,9 @@ exit 0
         check=False,
     )
     assert first_run.returncode == 0, first_run.stderr
+    assert "Derived namespace retention 4 day(s) from storage cap 24 GB at 6 GB/day." in first_run.stdout
     assert "Namespace does not exist; creating" in first_run.stdout
-    assert "Storage cap guardrail is 100 GB." in first_run.stdout
+    assert "Storage cap guardrail is 24 GB with retention 4 day(s)." in first_run.stdout
 
     second_run = subprocess.run(
         ["sh", str(BOOTSTRAP_SCRIPT)],
@@ -78,5 +80,6 @@ exit 0
     assert "Namespace exists; updating retention" in second_run.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
+    assert "--retention 96h" in calls
     assert "namespace create" in calls
     assert "namespace update" in calls

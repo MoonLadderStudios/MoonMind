@@ -70,6 +70,9 @@ def test_temporal_persistence_and_visibility_environment_defaults():
     assert namespace_env["TEMPORAL_RETENTION_MAX_STORAGE_GB"] == (
         "${TEMPORAL_RETENTION_MAX_STORAGE_GB:-100}"
     )
+    assert namespace_env["TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY"] == (
+        "${TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY:-1}"
+    )
 
 
 def test_visibility_schema_rehearsal_service_is_wired():
