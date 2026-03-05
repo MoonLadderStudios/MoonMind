@@ -185,6 +185,14 @@ def _require_queue_operator(user: User) -> None:
         )
 
 
+def _has_operator_override(user: User) -> bool:
+    """Treat disabled-auth mode as operator-equivalent for queue mutations."""
+
+    return settings.oidc.AUTH_PROVIDER == "disabled" or bool(
+        getattr(user, "is_superuser", False)
+    )
+
+
 def _serialize_job(
     job: models.AgentJob,
     system: QueueSystemMetadata | None = None,
@@ -800,7 +808,7 @@ async def update_queued_job(
         job = await service.update_queued_job(
             job_id=job_id,
             actor_user_id=user_id,
-            actor_is_superuser=bool(getattr(user, "is_superuser", False)),
+            actor_is_superuser=_has_operator_override(user),
             job_type=payload.type,
             payload=payload.payload,
             priority=payload.priority,
@@ -832,7 +840,7 @@ async def resubmit_job(
         job = await service.resubmit_job(
             job_id=job_id,
             actor_user_id=user_id,
-            actor_is_superuser=bool(getattr(user, "is_superuser", False)),
+            actor_is_superuser=_has_operator_override(user),
             job_type=payload.type,
             payload=payload.payload,
             priority=payload.priority,

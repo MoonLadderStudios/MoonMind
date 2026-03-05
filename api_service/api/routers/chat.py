@@ -598,20 +598,37 @@ async def handle_anthropic_request(
         raise HTTPException(status_code=500, detail=f"Anthropic API error: {str(e)}")
 
     # Token counting for Anthropic can be complex.
-    # Anthropic provides token counts in its API response if available.
-    # For now, using a simple estimation.
-    # TODO: Use actual token counts from response if LlamaIndex surfaces them.
-    # anthropic_response_obj.raw often contains the underlying provider response.
+    # We estimate first, then use actual token counts from the response if available.
     prompt_tokens_estimate = sum(
         len(msg.content.split()) for msg in messages
     )  # Based on original request messages
     completion_tokens_estimate = len(ai_message_content.split())
 
     # Check if token usage information is available in the raw response.
-    # Example:
-    # if anthropic_response_obj.raw and 'usage' in anthropic_response_obj.raw:
-    #     prompt_tokens = anthropic_response_obj.raw['usage'].get('input_tokens', prompt_tokens_estimate)
-    #     completion_tokens = anthropic_response_obj.raw['usage'].get('output_tokens', completion_tokens_estimate)
+    raw_response = getattr(anthropic_response_obj, "raw", None)
+    if raw_response:
+        # LlamaIndex's Anthropic wrapper might return raw as a dictionary or a Pydantic model
+        # from the Anthropic SDK (anthropic.types.Message). We handle both cases.
+        usage_data = (
+            raw_response.get("usage")
+            if isinstance(raw_response, dict)
+            else getattr(raw_response, "usage", None)
+        )
+
+        if usage_data:
+            prompt_tokens = None
+            completion_tokens = None
+            if isinstance(usage_data, dict):
+                prompt_tokens = usage_data.get("input_tokens")
+                completion_tokens = usage_data.get("output_tokens")
+            else:
+                prompt_tokens = getattr(usage_data, "input_tokens", None)
+                completion_tokens = getattr(usage_data, "output_tokens", None)
+
+            if prompt_tokens is not None:
+                prompt_tokens_estimate = prompt_tokens
+            if completion_tokens is not None:
+                completion_tokens_estimate = completion_tokens
 
     return ChatCompletionResponse(
         id=f"cmpl-anthropic-{uuid4().hex}",

@@ -62,6 +62,7 @@ def update_summaries(
     logger = logging.getLogger(
         __name__
     )  # Define logger for this function's scope or use a module-level one
+
     logger.info(
         f"Starting summary generation process for input_dir='{input_dir}', output_dir='{output_dir}', prompt_file='{prompt_file_path}', replace_existing={replace_existing}."
     )
@@ -150,7 +151,9 @@ def update_summaries(
                 continue
 
             try:
-                input_text_content = read_text_file(input_file_path)
+                input_text_content = read_text_file(
+                    input_file_path, safe_base_dir=input_dir
+                )
                 if not input_text_content:
                     logger.error(
                         f"Failed to load input text or file is empty from {input_file_path}. Skipping summarization for this file."
