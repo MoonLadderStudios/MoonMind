@@ -64,7 +64,10 @@ exit 0
         check=False,
     )
     assert first_run.returncode == 0, first_run.stderr
-    assert "Derived namespace retention 4 day(s) from storage cap 24 GB at 6 GB/day." in first_run.stdout
+    assert (
+        "Derived namespace retention 4 day(s) from storage cap 24 GB at 6 GB/day."
+        in first_run.stdout
+    )
     assert "Namespace does not exist; creating" in first_run.stdout
     assert "Storage cap guardrail is 24 GB with retention 4 day(s)." in first_run.stdout
 
