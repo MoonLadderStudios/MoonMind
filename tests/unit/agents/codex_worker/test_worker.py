@@ -1895,6 +1895,424 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     assert any(event["message"] == "task.step.finished" for event in queue.events)
 
 
+async def test_run_once_task_step_transcript_with_multiple_codex_exec_cycles_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A step log with multiple codex exec cycles should accept matching completion markers."""
+
+    codex_exec_id_one = str(uuid4())
+    codex_exec_id_two = str(uuid4())
+    git_diff_id_one = str(uuid4())
+    git_diff_id_two = str(uuid4())
+    step_log = tmp_path / "multi-codex-step.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check one; "
+            f"id={codex_exec_id_one}; control=worker\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id_one}; control=worker\n"
+            f"[command] $ git diff; id={git_diff_id_one}; control=worker\n"
+            "[command] complete: rc=0; cmd=git diff; stdoutChars=3; stderrChars=0; "
+            f"id={git_diff_id_one}; control=worker\n"
+            "[command] $ codex exec run integrity check two; "
+            f"id={codex_exec_id_two}; control=worker\n"
+            "[moonmind] completion-event key=2222222222222222222222222222222222222222222222222222222222222222; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id_two}; control=worker\n"
+            f"[command] $ git diff; id={git_diff_id_two}; control=worker\n"
+            "[command] complete: rc=0; cmd=git diff; stdoutChars=3; stderrChars=0; "
+            f"id={git_diff_id_two}; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+
+
+async def test_run_once_task_step_transcript_with_missing_multi_cycle_completion_marker_fails(
+    tmp_path: Path,
+) -> None:
+    """A missing completion marker for one codex exec cycle should fail integrity checks."""
+
+    codex_exec_id_one = str(uuid4())
+    codex_exec_id_two = str(uuid4())
+    step_log = tmp_path / "multi-codex-missing-completion-marker.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check one; "
+            f"id={codex_exec_id_one}; control=worker\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id_one}; control=worker\n"
+            "[command] $ codex exec run integrity check two; "
+            f"id={codex_exec_id_two}; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id_two}; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert queue.failed_retryable == [True]
+    step_failed_event = next(
+        event for event in queue.events if event["message"] == "task.step.failed"
+    )
+    run_quality = step_failed_event["payload"]["runQuality"]
+    assert run_quality["code"] == "step_transcript_invalid_completion_marker_count"
+
+
+async def test_run_once_task_step_transcript_ignores_stale_unmatched_starts_before_later_completions(
+    tmp_path: Path,
+) -> None:
+    """Stale echoed command starts that precede later real completions should be ignored."""
+
+    stale_id = str(uuid4())
+    codex_exec_id = str(uuid4())
+    git_diff_id = str(uuid4())
+    step_log = tmp_path / "stale-unmatched-starts.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check; "
+            f"id={codex_exec_id}; control=worker\n"
+            "[command] $ codex exec stale echoed start; "
+            f"id={stale_id}; control=worker\n"
+            "[command] $ codex exec stale echoed start duplicate; "
+            f"id={stale_id}; control=worker\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id}; control=worker\n"
+            f"[command] $ git diff; id={git_diff_id}; control=worker\n"
+            "[command] complete: rc=0; cmd=git diff; stdoutChars=3; stderrChars=0; "
+            f"id={git_diff_id}; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+
+
+async def test_run_once_task_step_transcript_ignores_stale_cross_step_start_markers(
+    tmp_path: Path,
+) -> None:
+    """Quoted command starts for other step numbers should not fail integrity checks."""
+
+    codex_exec_id = str(uuid4())
+    git_diff_id = str(uuid4())
+    stale_step_id = str(uuid4())
+    step_log = tmp_path / "stale-cross-step-start.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check STEP 1/1 step-1: active; "
+            f"id={codex_exec_id}; control=worker\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id}; control=worker\n"
+            f"[command] $ git diff; id={git_diff_id}; control=worker\n"
+            "[command] complete: rc=0; cmd=git diff; stdoutChars=3; stderrChars=0; "
+            f"id={git_diff_id}; control=worker\n"
+            "[command] $ codex exec stale quoted header STEP 2/16 step-2: prior; "
+            f"id={stale_step_id}; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+
+
+async def test_run_once_task_step_transcript_unmatched_start_after_last_complete_fails(
+    tmp_path: Path,
+) -> None:
+    """A start marker that remains open at the end of transcript must still fail."""
+
+    codex_exec_id = str(uuid4())
+    git_diff_id = str(uuid4())
+    trailing_start_id = str(uuid4())
+    step_log = tmp_path / "unmatched-trailing-start.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check; "
+            f"id={codex_exec_id}; control=worker\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; "
+            f"id={codex_exec_id}; control=worker\n"
+            f"[command] $ git diff; id={git_diff_id}; control=worker\n"
+            "[command] complete: rc=0; cmd=git diff; stdoutChars=3; stderrChars=0; "
+            f"id={git_diff_id}; control=worker\n"
+            "[command] $ codex exec trailing unmatched; "
+            f"id={trailing_start_id}; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert queue.completed == []
+    assert len(queue.failed) == 1
+    assert queue.failed_retryable == [True]
+    step_failed_event = next(
+        event for event in queue.events if event["message"] == "task.step.failed"
+    )
+    run_quality = step_failed_event["payload"]["runQuality"]
+    assert run_quality["code"] == "step_transcript_truncated_mid_command"
+
+
+async def test_run_once_task_step_transcript_ignores_stale_legacy_unmatched_starts(
+    tmp_path: Path,
+) -> None:
+    """Legacy starts without IDs should ignore stale unmatched entries before later completes."""
+
+    step_log = tmp_path / "stale-legacy-unmatched-starts.log"
+    step_log.write_text(
+        (
+            "[command] $ codex exec run integrity check; control=worker\n"
+            "[command] $ codex exec stale echoed start; control=worker\n"
+            "[moonmind] completion-event key=1111111111111111111111111111111111111111111111111111111111111111; control=worker\n"
+            "[command] complete: rc=0; cmd=codex exec; stdoutChars=5; stderrChars=0; control=worker\n"
+            "[command] $ git diff; control=worker\n"
+            "[command] complete: rc=0; cmd=git diff; stdoutChars=3; stderrChars=0; control=worker\n"
+        ),
+        encoding="utf-8",
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+                "steps": [{"id": "step-1", "instructions": "Do step 1"}],
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="step ok",
+            error_message=None,
+            artifacts=(ArtifactUpload(path=step_log, name="logs/codex_exec.log"),),
+        )
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.completed) == 1
+    assert queue.failed == []
+    assert queue.failed_retryable == []
+
+
 async def test_run_once_task_step_transcript_ignores_untrusted_completion_marker_like_output(
     tmp_path: Path,
 ) -> None:

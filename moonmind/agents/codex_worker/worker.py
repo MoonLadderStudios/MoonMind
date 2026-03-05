@@ -15,7 +15,7 @@ import shutil
 import socket
 import stat
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -157,6 +157,9 @@ _LEGACY_COMMAND_COMPLETE_PATTERN = re.compile(
 _CONTROLLED_COMMAND_MARKER_ID_PATTERN = re.compile(
     r";\s*id=(?P<marker_id>[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}"
     r"[0-9a-fA-F]{12})\s*;"
+)
+_CONTROLLED_COMMAND_STEP_NUMBER_PATTERN = re.compile(
+    r"\bSTEP\s+(?P<step_number>\d+)\s*/\s*(?P<step_total>\d+)\b"
 )
 _STEP_TRANSCRIPT_RETRYABLE_CODES = frozenset(
     {
@@ -6308,6 +6311,40 @@ class CodexWorker:
         marker_id = str(marker_match.group("marker_id") or "").strip()
         return marker_id or None
 
+    @staticmethod
+    def _extract_step_transcript_command_step_number(line: str) -> int | None:
+        """Extract embedded STEP X/Y index from controlled command-start lines."""
+
+        step_match = _CONTROLLED_COMMAND_STEP_NUMBER_PATTERN.search(line)
+        if step_match is None:
+            return None
+        raw_step_number = str(step_match.group("step_number") or "").strip()
+        if not raw_step_number:
+            return None
+        try:
+            parsed = int(raw_step_number)
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+
+    @staticmethod
+    def _resolve_step_transcript_marker_positions(
+        *,
+        lines: Sequence[str],
+        markers: Sequence[str],
+    ) -> list[int]:
+        """Resolve stable source-line indexes for marker lists preserving order."""
+
+        positions: list[int] = []
+        search_start = 0
+        for marker in markers:
+            for line_index in range(search_start, len(lines)):
+                if lines[line_index] == marker:
+                    positions.append(line_index)
+                    search_start = line_index + 1
+                    break
+        return positions
+
     def _evaluate_step_transcript_integrity(
         self,
         *,
@@ -6339,11 +6376,34 @@ class CodexWorker:
         start_markers, complete_markers = self._classify_step_transcript_control_lines(
             non_empty_lines
         )
+        expected_step_number = step.step_index + 1
+        filtered_start_markers: list[str] = []
+        for marker_line in start_markers:
+            marker_step_number = self._extract_step_transcript_command_step_number(
+                marker_line
+            )
+            if (
+                marker_step_number is not None
+                and marker_step_number != expected_step_number
+            ):
+                # Model/tool output can quote prior step command headers verbatim.
+                # Ignore starts that explicitly identify a different step.
+                continue
+            filtered_start_markers.append(marker_line)
+        start_markers = filtered_start_markers
         completion_markers = [
             line
             for line in non_empty_lines
             if _CONTROLLED_COMPLETION_EVENT_PATTERN.match(line)
         ]
+        start_marker_positions = self._resolve_step_transcript_marker_positions(
+            lines=non_empty_lines,
+            markers=start_markers,
+        )
+        complete_marker_positions = self._resolve_step_transcript_marker_positions(
+            lines=non_empty_lines,
+            markers=complete_markers,
+        )
         start_count = len(start_markers)
         complete_count = len(complete_markers)
         terminal_line = (
@@ -6366,6 +6426,8 @@ class CodexWorker:
             for line in complete_markers
             if (marker_id := self._extract_step_transcript_control_marker_id(line))
         ]
+        start_marker_entries = list(zip(start_markers, start_marker_positions))
+        complete_marker_entries = list(zip(complete_markers, complete_marker_positions))
         if (
             has_controlled_markers
             and complete_count > start_count
@@ -6380,34 +6442,79 @@ class CodexWorker:
                 start_count = min(legacy_start_count, complete_count)
         if start_count == 0 and complete_count == 0:
             return StepTranscriptIntegrityResult(passed=True)
-        has_codex_exec_start = any(
-            line.startswith(f"{_COMMAND_START_PREFIX}codex exec")
+        codex_exec_start_count = sum(
+            1
             for line in start_markers
+            if line.startswith(f"{_COMMAND_START_PREFIX}codex exec")
+        )
+        codex_exec_complete_count = sum(
+            1 for line in complete_markers if "; cmd=codex exec;" in line
         )
 
         if has_controlled_markers and (start_marker_ids or complete_marker_ids):
             start_id_counts = Counter(start_marker_ids)
             complete_id_counts = Counter(complete_marker_ids)
+            start_positions_by_id: dict[str, list[int]] = defaultdict(list)
+            unscoped_start_positions: list[int] = []
+            unscoped_complete_positions: list[int] = []
+            for line, line_index in start_marker_entries:
+                marker_id = self._extract_step_transcript_control_marker_id(line)
+                if marker_id:
+                    start_positions_by_id[marker_id].append(line_index)
+                else:
+                    unscoped_start_positions.append(line_index)
+            for line, line_index in complete_marker_entries:
+                marker_id = self._extract_step_transcript_control_marker_id(line)
+                if not marker_id:
+                    unscoped_complete_positions.append(line_index)
+            last_complete_position = (
+                max(complete_marker_positions) if complete_marker_positions else -1
+            )
             unmatched_complete_with_ids = sum(
                 max(
                     0, complete_id_counts[marker_id] - start_id_counts.get(marker_id, 0)
                 )
                 for marker_id in complete_id_counts
             )
-            unmatched_start_with_ids = sum(
-                max(
+            unmatched_start_with_ids = 0
+            ignored_unmatched_start_with_ids = 0
+            for marker_id in start_id_counts:
+                extra_start_count = max(
                     0, start_id_counts[marker_id] - complete_id_counts.get(marker_id, 0)
                 )
-                for marker_id in start_id_counts
+                if extra_start_count == 0:
+                    continue
+                unmatched_positions = start_positions_by_id.get(marker_id, [])[
+                    -extra_start_count:
+                ]
+                for line_index in unmatched_positions:
+                    if line_index <= last_complete_position:
+                        ignored_unmatched_start_with_ids += 1
+                    else:
+                        unmatched_start_with_ids += 1
+            unscoped_start_count = len(unscoped_start_positions)
+            unscoped_complete_count = len(unscoped_complete_positions)
+            unmatched_unscoped_start = 0
+            ignored_unmatched_unscoped_start = 0
+            extra_unscoped_start_count = max(
+                0, unscoped_start_count - unscoped_complete_count
             )
-            unscoped_start_count = max(0, start_count - len(start_marker_ids))
-            unscoped_complete_count = max(0, complete_count - len(complete_marker_ids))
+            if extra_unscoped_start_count > 0:
+                unmatched_positions = unscoped_start_positions[-extra_unscoped_start_count:]
+                for line_index in unmatched_positions:
+                    if line_index <= last_complete_position:
+                        ignored_unmatched_unscoped_start += 1
+                    else:
+                        unmatched_unscoped_start += 1
             unmatched_complete_count = unmatched_complete_with_ids + max(
                 0, unscoped_complete_count - unscoped_start_count
             )
-            unmatched_start_count = unmatched_start_with_ids + max(
-                0, unscoped_start_count - unscoped_complete_count
+            unmatched_start_count = unmatched_start_with_ids + unmatched_unscoped_start
+            ignored_unmatched_start_count = (
+                ignored_unmatched_start_with_ids + ignored_unmatched_unscoped_start
             )
+            if ignored_unmatched_start_count > 0:
+                start_count = max(0, start_count - ignored_unmatched_start_count)
             if unmatched_complete_count > 0:
                 detail = (
                     "step transcript marker counts are invalid "
@@ -6442,44 +6549,65 @@ class CodexWorker:
                         terminal_line=terminal_line,
                     ),
                 )
-        if complete_count > start_count:
-            detail = (
-                "step transcript marker counts are invalid "
-                f"(startMarkers={start_count}, completeMarkers={complete_count})"
-            )
-            return StepTranscriptIntegrityResult(
-                passed=False,
-                message=f"[run_quality] {detail}",
-                run_quality_reason=self._build_step_transcript_run_quality_reason(
-                    code="step_transcript_invalid_marker_balance",
-                    step=step,
-                    detail=detail,
-                    start_markers=start_count,
-                    complete_markers=complete_count,
-                    terminal_line=terminal_line,
-                ),
-            )
-        if complete_count < start_count:
-            detail = (
-                "step transcript ended mid-command "
-                f"(startMarkers={start_count}, completeMarkers={complete_count})"
-            )
-            return StepTranscriptIntegrityResult(
-                passed=False,
-                message=f"[run_quality] {detail}",
-                run_quality_reason=self._build_step_transcript_run_quality_reason(
-                    code="step_transcript_truncated_mid_command",
-                    step=step,
-                    detail=detail,
-                    start_markers=start_count,
-                    complete_markers=complete_count,
-                    terminal_line=terminal_line,
-                ),
-            )
-        if has_codex_exec_start and len(completion_markers) != 1:
+        else:
+            if complete_count < start_count and complete_marker_positions:
+                # Legacy/no-ID transcripts can still include echoed stale starts;
+                # drop unmatched starts that occur before a later completion.
+                last_complete_position = max(complete_marker_positions)
+                extra_start_count = start_count - complete_count
+                stale_start_positions = start_marker_positions[-extra_start_count:]
+                ignored_stale_starts = sum(
+                    1 for line_index in stale_start_positions if line_index <= last_complete_position
+                )
+                if ignored_stale_starts > 0:
+                    start_count = max(0, start_count - ignored_stale_starts)
+            if complete_count > start_count:
+                detail = (
+                    "step transcript marker counts are invalid "
+                    f"(startMarkers={start_count}, completeMarkers={complete_count})"
+                )
+                return StepTranscriptIntegrityResult(
+                    passed=False,
+                    message=f"[run_quality] {detail}",
+                    run_quality_reason=self._build_step_transcript_run_quality_reason(
+                        code="step_transcript_invalid_marker_balance",
+                        step=step,
+                        detail=detail,
+                        start_markers=start_count,
+                        complete_markers=complete_count,
+                        terminal_line=terminal_line,
+                    ),
+                )
+            if complete_count < start_count:
+                detail = (
+                    "step transcript ended mid-command "
+                    f"(startMarkers={start_count}, completeMarkers={complete_count})"
+                )
+                return StepTranscriptIntegrityResult(
+                    passed=False,
+                    message=f"[run_quality] {detail}",
+                    run_quality_reason=self._build_step_transcript_run_quality_reason(
+                        code="step_transcript_truncated_mid_command",
+                        step=step,
+                        detail=detail,
+                        start_markers=start_count,
+                        complete_markers=complete_count,
+                        terminal_line=terminal_line,
+                    ),
+                )
+        expected_completion_markers = (
+            codex_exec_complete_count or codex_exec_start_count
+        )
+        unique_completion_marker_count = len(set(completion_markers))
+        if (
+            has_controlled_markers
+            and expected_completion_markers > 0
+            and unique_completion_marker_count != expected_completion_markers
+        ):
             detail = (
                 "step transcript completion marker count is invalid "
-                f"(completionMarkers={len(completion_markers)})"
+                f"(completionMarkers={unique_completion_marker_count}, "
+                f"expected={expected_completion_markers})"
             )
             return StepTranscriptIntegrityResult(
                 passed=False,
