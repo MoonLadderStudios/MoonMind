@@ -219,9 +219,7 @@ def test_validate_plan_payload_rejects_registry_snapshot_digest_mismatch():
         snapshot_digest=snapshot.digest,
         snapshot_ref=snapshot.artifact_ref,
     )
-    plan_payload["metadata"]["registry_snapshot"]["digest"] = (
-        "reg:sha256:" + ("0" * 64)
-    )
+    plan_payload["metadata"]["registry_snapshot"]["digest"] = "reg:sha256:" + ("0" * 64)
 
     with pytest.raises(
         PlanValidationError,
