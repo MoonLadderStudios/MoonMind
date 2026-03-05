@@ -1,0 +1,475 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Skills and Plans Runtime API
+  version: 0.1.0
+  description: >
+    Contract surface for skills registry snapshotting, plan validation, plan
+    execution, and structured progress/summary retrieval.
+servers:
+  - url: /
+paths:
+  /api/skills/registry/snapshots:
+    post:
+      summary: Create an immutable skill registry snapshot
+      operationId: createSkillRegistrySnapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnapshotRequest"
+      responses:
+        "201":
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistrySnapshot"
+        "422":
+          description: Invalid skill registry payload
+
+  /api/plans/validate:
+    post:
+      summary: Perform deep validation for a plan against pinned registry snapshot
+      operationId: validatePlanArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidatePlanRequest"
+      responses:
+        "200":
+          description: Plan validated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidatePlanResponse"
+        "422":
+          description: Plan validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillFailure"
+
+  /api/plans/executions:
+    post:
+      summary: Start deterministic execution for a validated plan artifact
+      operationId: executePlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecutePlanRequest"
+      responses:
+        "202":
+          description: Execution accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanExecutionAccepted"
+        "422":
+          description: Request contract failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillFailure"
+
+  /api/plans/executions/{executionId}/progress:
+    get:
+      summary: Retrieve structured progress for a running execution
+      operationId: getPlanExecutionProgress
+      parameters:
+        - in: path
+          name: executionId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current progress snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanProgress"
+        "404":
+          description: Execution not found
+
+  /api/plans/executions/{executionId}/summary:
+    get:
+      summary: Retrieve terminal summary and artifact references
+      operationId: getPlanExecutionSummary
+      parameters:
+        - in: path
+          name: executionId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanExecutionSummary"
+        "404":
+          description: Execution not found
+
+components:
+  schemas:
+    ArtifactRef:
+      type: object
+      required: [artifact_ref, content_type, bytes, created_at]
+      properties:
+        artifact_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+        content_type:
+          type: string
+        bytes:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+    SkillRef:
+      type: object
+      required: [name, version]
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+
+    SkillInvocation:
+      type: object
+      required: [id, skill, inputs]
+      properties:
+        id:
+          type: string
+        skill:
+          $ref: "#/components/schemas/SkillRef"
+        inputs:
+          type: object
+          additionalProperties: true
+        options:
+          type: object
+          additionalProperties: true
+
+    PlanPolicy:
+      type: object
+      required: [failure_mode, max_concurrency]
+      properties:
+        failure_mode:
+          type: string
+          enum: [FAIL_FAST, CONTINUE]
+        max_concurrency:
+          type: integer
+          minimum: 1
+
+    PlanEdge:
+      type: object
+      required: [from, to]
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+
+    PlanMetadata:
+      type: object
+      required: [title, created_at, registry_snapshot]
+      properties:
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        registry_snapshot:
+          $ref: "#/components/schemas/RegistrySnapshotRef"
+
+    RegistrySnapshotRef:
+      type: object
+      required: [digest, artifact_ref]
+      properties:
+        digest:
+          type: string
+          pattern: "^reg:sha256:[a-fA-F0-9]{64}$"
+        artifact_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+
+    PlanDefinition:
+      type: object
+      required: [plan_version, metadata, policy, nodes, edges]
+      properties:
+        plan_version:
+          type: string
+          enum: ["1.0"]
+        metadata:
+          $ref: "#/components/schemas/PlanMetadata"
+        policy:
+          $ref: "#/components/schemas/PlanPolicy"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillInvocation"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanEdge"
+
+    SkillFailure:
+      type: object
+      required: [error_code, message, retryable]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - INVALID_INPUT
+            - PERMISSION_DENIED
+            - NOT_FOUND
+            - CONFLICT
+            - RATE_LIMITED
+            - TRANSIENT
+            - TIMEOUT
+            - EXTERNAL_FAILED
+            - CANCELLED
+            - INTERNAL
+        message:
+          type: string
+        retryable:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+        cause:
+          $ref: "#/components/schemas/SkillFailure"
+
+    SkillResult:
+      type: object
+      required: [status, outputs]
+      properties:
+        status:
+          type: string
+          enum: [SUCCEEDED, FAILED, CANCELLED]
+        outputs:
+          type: object
+          additionalProperties: true
+        output_artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactRef"
+        progress:
+          type: object
+          additionalProperties: true
+
+    PlanProgress:
+      type: object
+      required: [total_nodes, pending, running, succeeded, failed, last_event, updated_at]
+      properties:
+        total_nodes:
+          type: integer
+          minimum: 0
+        pending:
+          type: integer
+          minimum: 0
+        running:
+          type: integer
+          minimum: 0
+        succeeded:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        last_event:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    RegistrySkillDefinition:
+      type: object
+      required:
+        - name
+        - version
+        - inputs
+        - outputs
+        - executor
+        - requirements
+        - policies
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        inputs:
+          type: object
+          required: [schema]
+          properties:
+            schema:
+              type: object
+              additionalProperties: true
+        outputs:
+          type: object
+          required: [schema]
+          properties:
+            schema:
+              type: object
+              additionalProperties: true
+        executor:
+          type: object
+          required: [activity_type]
+          properties:
+            activity_type:
+              type: string
+            selector:
+              type: object
+              additionalProperties: true
+        requirements:
+          type: object
+          required: [capabilities]
+          properties:
+            capabilities:
+              type: array
+              minItems: 1
+              items:
+                type: string
+        policies:
+          type: object
+          required: [timeouts, retries]
+          properties:
+            timeouts:
+              type: object
+              required: [start_to_close_seconds, schedule_to_close_seconds]
+              properties:
+                start_to_close_seconds:
+                  type: integer
+                  minimum: 1
+                schedule_to_close_seconds:
+                  type: integer
+                  minimum: 1
+            retries:
+              type: object
+              required: [max_attempts, backoff]
+              properties:
+                max_attempts:
+                  type: integer
+                  minimum: 1
+                backoff:
+                  type: string
+                non_retryable_error_codes:
+                  type: array
+                  items:
+                    type: string
+        security:
+          type: object
+          properties:
+            allowed_roles:
+              type: array
+              items:
+                type: string
+
+    CreateSnapshotRequest:
+      type: object
+      required: [skills]
+      properties:
+        skills:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/RegistrySkillDefinition"
+
+    RegistrySnapshot:
+      type: object
+      required: [digest, artifact_ref]
+      properties:
+        digest:
+          type: string
+          pattern: "^reg:sha256:[a-fA-F0-9]{64}$"
+        artifact_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistrySkillDefinition"
+
+    ValidatePlanRequest:
+      type: object
+      required: [plan_artifact_ref, registry_snapshot_ref]
+      properties:
+        plan_artifact_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+        registry_snapshot_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+
+    ValidatePlanResponse:
+      type: object
+      required: [validated_plan_ref]
+      properties:
+        validated_plan_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+
+    ExecutePlanRequest:
+      type: object
+      required: [plan_artifact_ref, registry_snapshot_ref]
+      properties:
+        plan_artifact_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+        registry_snapshot_ref:
+          type: string
+          pattern: "^art:sha256:[a-fA-F0-9]{64}$"
+        write_progress_artifact:
+          type: boolean
+          default: false
+
+    PlanExecutionAccepted:
+      type: object
+      required: [execution_id, status]
+      properties:
+        execution_id:
+          type: string
+        status:
+          type: string
+          enum: [ACCEPTED]
+
+    PlanExecutionSummary:
+      type: object
+      required: [status, results, failures, skipped, progress]
+      properties:
+        status:
+          type: string
+          enum: [SUCCEEDED, FAILED, PARTIAL]
+        results:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SkillResult"
+        failures:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SkillFailure"
+        skipped:
+          type: array
+          items:
+            type: string
+        progress:
+          $ref: "#/components/schemas/PlanProgress"
+        progress_artifact_ref:
+          type: string
+          nullable: true
+        summary_artifact_ref:
+          type: string
+          nullable: true
