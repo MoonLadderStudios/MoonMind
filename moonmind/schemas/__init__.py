@@ -26,6 +26,15 @@ from .manifest_models import (
     Spec,
     export_schema,
 )
+from .temporal_models import (
+    CancelExecutionRequest,
+    CreateExecutionRequest,
+    ExecutionListResponse,
+    ExecutionModel,
+    SignalExecutionRequest,
+    UpdateExecutionRequest,
+    UpdateExecutionResponse,
+)
 from .workflow_models import (
     CreateWorkflowRunRequest,
     SpecWorkflowRunModel,
@@ -43,6 +52,13 @@ __all__ = [
     "Spec",
     "Manifest",
     "export_schema",
+    "CreateExecutionRequest",
+    "UpdateExecutionRequest",
+    "UpdateExecutionResponse",
+    "SignalExecutionRequest",
+    "CancelExecutionRequest",
+    "ExecutionModel",
+    "ExecutionListResponse",
     "CreateJobRequest",
     "CreateWorkerTokenRequest",
     "AppendJobEventRequest",

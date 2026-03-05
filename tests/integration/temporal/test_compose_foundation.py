@@ -91,3 +91,18 @@ def test_visibility_schema_rehearsal_service_is_wired():
     assert rehearsal_env["TEMPORAL_SHARD_DECISION_ACK"] == (
         "${TEMPORAL_SHARD_DECISION_ACK:-}"
     )
+
+
+def test_runtime_services_receive_temporal_namespace_and_address():
+    compose = _load_compose()
+    services = compose["services"]
+
+    api_env = _env_map(services["api"]["environment"])
+    assert api_env["TEMPORAL_ADDRESS"] == "${TEMPORAL_ADDRESS:-temporal:7233}"
+    assert api_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-moonmind}"
+
+    namespace_init_env = _env_map(services["temporal-namespace-init"]["environment"])
+    assert (
+        namespace_init_env["TEMPORAL_ADDRESS"] == "${TEMPORAL_ADDRESS:-temporal:7233}"
+    )
+    assert namespace_init_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-moonmind}"

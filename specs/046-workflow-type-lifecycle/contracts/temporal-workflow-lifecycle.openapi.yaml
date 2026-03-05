@@ -1,0 +1,449 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Temporal Workflow Lifecycle API
+  version: 0.1.0
+  description: >
+    Contract surface for workflow type catalog lifecycle operations, including
+    execution creation, list/detail visibility, updates, signals, and cancellation.
+servers:
+  - url: /
+paths:
+  /api/executions:
+    post:
+      summary: Start a workflow execution for the v1 catalog
+      operationId: createExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExecutionRequest"
+      responses:
+        "201":
+          description: Execution created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "422":
+          description: Invalid execution request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      summary: List executions by visibility attributes
+      operationId: listExecutions
+      parameters:
+        - in: query
+          name: workflowType
+          schema:
+            $ref: "#/components/schemas/WorkflowType"
+        - in: query
+          name: state
+          schema:
+            $ref: "#/components/schemas/MoonMindState"
+        - in: query
+          name: ownerId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: nextPageToken
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated execution list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionListResponse"
+        "403":
+          description: Forbidden for owner scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Invalid state or page token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/executions/{workflowId}:
+    get:
+      summary: Describe one execution by workflow identity
+      operationId: describeExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+      responses:
+        "200":
+          description: Execution model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "404":
+          description: Execution not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Apply synchronous lifecycle update request
+      operationId: updateExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateExecutionRequest"
+      responses:
+        "200":
+          description: Update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateExecutionResponse"
+        "404":
+          description: Execution not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Invalid update request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/executions/{workflowId}/signal:
+    post:
+      summary: Deliver asynchronous signal event to a running execution
+      operationId: signalExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalExecutionRequest"
+      responses:
+        "202":
+          description: Signal accepted and applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "404":
+          description: Execution not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Signal rejected by lifecycle invariants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/executions/{workflowId}/cancel:
+    post:
+      summary: Cancel or terminate an execution
+      operationId: cancelExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelExecutionRequest"
+      responses:
+        "202":
+          description: Cancel request applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "404":
+          description: Execution not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    WorkflowType:
+      type: string
+      enum: [MoonMind.Run, MoonMind.ManifestIngest]
+
+    MoonMindState:
+      type: string
+      enum:
+        - initializing
+        - planning
+        - executing
+        - awaiting_external
+        - finalizing
+        - succeeded
+        - failed
+        - canceled
+
+    TemporalStatus:
+      type: string
+      enum: [running, completed, failed, canceled]
+
+    TemporalCloseStatus:
+      type: string
+      enum: [completed, failed, canceled, terminated, timed_out, continued_as_new]
+
+    FailurePolicy:
+      type: string
+      enum: [fail_fast, continue_and_report, best_effort]
+
+    UpdateName:
+      type: string
+      enum: [UpdateInputs, SetTitle, RequestRerun]
+
+    UpdateApplyMode:
+      type: string
+      enum: [immediate, next_safe_point, continue_as_new]
+
+    SignalName:
+      type: string
+      enum: [ExternalEvent, Approve, Pause, Resume]
+
+    VisibilityAttributes:
+      type: object
+      required: [mm_owner_id, mm_state, mm_updated_at]
+      properties:
+        mm_owner_id:
+          type: string
+        mm_state:
+          $ref: "#/components/schemas/MoonMindState"
+        mm_updated_at:
+          type: string
+          format: date-time
+        mm_entry:
+          type: string
+          enum: [run, manifest]
+      additionalProperties: true
+
+    ExecutionMemo:
+      type: object
+      required: [title, summary]
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        input_ref:
+          type: string
+        manifest_ref:
+          type: string
+        error_category:
+          type: string
+          enum: [user_error, integration_error, execution_error, system_error]
+      additionalProperties: true
+
+    Execution:
+      type: object
+      required:
+        - namespace
+        - workflowId
+        - runId
+        - workflowType
+        - state
+        - temporalStatus
+        - searchAttributes
+        - memo
+        - artifactRefs
+        - startedAt
+        - updatedAt
+      properties:
+        namespace:
+          type: string
+        workflowId:
+          type: string
+          pattern: "^mm:[A-Za-z0-9-]+$"
+        runId:
+          type: string
+        workflowType:
+          $ref: "#/components/schemas/WorkflowType"
+        state:
+          $ref: "#/components/schemas/MoonMindState"
+        temporalStatus:
+          $ref: "#/components/schemas/TemporalStatus"
+        closeStatus:
+          oneOf:
+            - $ref: "#/components/schemas/TemporalCloseStatus"
+            - type: "null"
+        searchAttributes:
+          $ref: "#/components/schemas/VisibilityAttributes"
+        memo:
+          $ref: "#/components/schemas/ExecutionMemo"
+        artifactRefs:
+          type: array
+          items:
+            type: string
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+
+    CreateExecutionRequest:
+      type: object
+      required: [workflowType]
+      properties:
+        workflowType:
+          $ref: "#/components/schemas/WorkflowType"
+        title:
+          type: string
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        manifestArtifactRef:
+          type: string
+        failurePolicy:
+          $ref: "#/components/schemas/FailurePolicy"
+        initialParameters:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+      additionalProperties: false
+
+    UpdateExecutionRequest:
+      type: object
+      properties:
+        updateName:
+          $ref: "#/components/schemas/UpdateName"
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        parametersPatch:
+          type: object
+          additionalProperties: true
+        title:
+          type: string
+        idempotencyKey:
+          type: string
+      additionalProperties: false
+
+    UpdateExecutionResponse:
+      type: object
+      required: [accepted, applied, message]
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          $ref: "#/components/schemas/UpdateApplyMode"
+        message:
+          type: string
+
+    SignalExecutionRequest:
+      type: object
+      required: [signalName]
+      properties:
+        signalName:
+          $ref: "#/components/schemas/SignalName"
+        payload:
+          type: object
+          additionalProperties: true
+        payloadArtifactRef:
+          type: string
+      additionalProperties: false
+
+    CancelExecutionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+        graceful:
+          type: boolean
+          default: true
+      additionalProperties: false
+
+    ExecutionListResponse:
+      type: object
+      required: [items, countMode]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Execution"
+        nextPageToken:
+          oneOf:
+            - type: string
+            - type: "null"
+        count:
+          oneOf:
+            - type: integer
+            - type: "null"
+        countMode:
+          type: string
+          enum: [exact, estimated_or_unknown]
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          $ref: "#/components/schemas/ErrorBody"

@@ -123,6 +123,31 @@ class CelerySettings(BaseSettings):
         return value
 
 
+class TemporalSettings(BaseSettings):
+    """Temporal runtime lifecycle settings."""
+
+    address: str = Field("temporal:7233", env="TEMPORAL_ADDRESS")
+    namespace: str = Field("moonmind", env="TEMPORAL_NAMESPACE")
+    workflow_task_queue: str = Field("mm.workflow", env="TEMPORAL_WORKFLOW_TASK_QUEUE")
+    run_continue_as_new_step_threshold: int = Field(
+        500,
+        env="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
+        ge=1,
+    )
+    manifest_continue_as_new_phase_threshold: int = Field(
+        5,
+        env="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
+        ge=1,
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class SpecWorkflowSettings(BaseSettings):
     """Settings specific to Spec Kit Celery workflows."""
 
@@ -1632,6 +1657,7 @@ class AppSettings(BaseSettings):
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
+    temporal: TemporalSettings = Field(default_factory=TemporalSettings)
     spec_workflow: AppSpecWorkflowSettings = Field(
         default_factory=AppSpecWorkflowSettings
     )

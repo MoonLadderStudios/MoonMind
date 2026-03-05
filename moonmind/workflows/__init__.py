@@ -23,6 +23,7 @@ from moonmind.workflows.task_proposals.service import TaskProposalService
 from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalExecutionService,
 )
 
 
@@ -67,6 +68,12 @@ def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
     )
 
 
+def get_temporal_execution_service(session: AsyncSession) -> TemporalExecutionService:
+    """Factory helper returning the Temporal execution lifecycle service."""
+
+    return TemporalExecutionService(session)
+
+
 def get_temporal_artifact_repository(
     session: AsyncSession,
 ) -> TemporalArtifactRepository:
@@ -91,6 +98,7 @@ __all__ = sorted(
         "TaskProposalService",
         "TemporalArtifactRepository",
         "TemporalArtifactService",
+        "TemporalExecutionService",
         "TriggeredWorkflow",
         "WorkflowConflictError",
         "WorkflowRetryError",
@@ -103,6 +111,7 @@ __all__ = sorted(
         "get_task_proposal_service",
         "get_temporal_artifact_repository",
         "get_temporal_artifact_service",
+        "get_temporal_execution_service",
         "retry_spec_workflow_run",
         "trigger_spec_workflow_run",
     ]

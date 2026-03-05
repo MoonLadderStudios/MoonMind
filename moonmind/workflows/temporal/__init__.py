@@ -20,6 +20,13 @@ from moonmind.workflows.temporal.artifacts import (
     build_artifact_ref,
     generate_artifact_id,
 )
+from moonmind.workflows.temporal.service import (
+    TemporalExecutionError,
+    TemporalExecutionListResult,
+    TemporalExecutionNotFoundError,
+    TemporalExecutionService,
+    TemporalExecutionValidationError,
+)
 
 __all__ = [
     "ArtifactRef",
@@ -38,6 +45,11 @@ __all__ = [
     "TemporalArtifactService",
     "TemporalArtifactStateError",
     "TemporalArtifactValidationError",
+    "TemporalExecutionError",
+    "TemporalExecutionListResult",
+    "TemporalExecutionNotFoundError",
+    "TemporalExecutionService",
+    "TemporalExecutionValidationError",
     "build_artifact_ref",
     "generate_artifact_id",
 ]
