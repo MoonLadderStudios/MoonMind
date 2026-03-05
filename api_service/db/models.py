@@ -378,6 +378,10 @@ __all__ = [
     "OrchestratorRunArtifactType",
     "OrchestratorTaskState",
     "OrchestratorTaskStepStatus",
+    "TemporalWorkflowType",
+    "MoonMindWorkflowState",
+    "TemporalExecutionCloseStatus",
+    "TemporalExecutionRecord",
     "SpecWorkflowRun",
     "SpecWorkflowRunStatus",
     "SpecWorkflowRunPhase",
@@ -798,6 +802,150 @@ class OrchestratorTaskStepStatus(str, enum.Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class TemporalWorkflowType(str, enum.Enum):
+    """Supported root workflow type catalog entries."""
+
+    RUN = "MoonMind.Run"
+    MANIFEST_INGEST = "MoonMind.ManifestIngest"
+
+
+class MoonMindWorkflowState(str, enum.Enum):
+    """Domain lifecycle states exposed for dashboard filtering."""
+
+    INITIALIZING = "initializing"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    AWAITING_EXTERNAL = "awaiting_external"
+    FINALIZING = "finalizing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class TemporalExecutionCloseStatus(str, enum.Enum):
+    """Terminal Temporal close statuses tracked for invariant checks."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    TERMINATED = "terminated"
+    TIMED_OUT = "timed_out"
+    CONTINUED_AS_NEW = "continued_as_new"
+
+
+class TemporalExecutionRecord(Base):
+    """Temporal execution projection used for lifecycle APIs and filtering."""
+
+    __tablename__ = "temporal_executions"
+    __table_args__ = (
+        Index(
+            "ix_temporal_executions_state_updated_at",
+            "state",
+            "updated_at",
+        ),
+        Index(
+            "ix_temporal_executions_owner_state",
+            "owner_id",
+            "state",
+        ),
+        Index(
+            "ix_temporal_executions_type_updated_at",
+            "workflow_type",
+            "updated_at",
+        ),
+        UniqueConstraint(
+            "create_idempotency_key",
+            "owner_id",
+            "workflow_type",
+            name="uq_temporal_executions_create_idempotency_owner_type",
+        ),
+    )
+
+    workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    namespace: Mapped[str] = mapped_column(String(128), nullable=False, default="moonmind")
+    workflow_type: Mapped[TemporalWorkflowType] = mapped_column(
+        Enum(
+            TemporalWorkflowType,
+            name="temporalworkflowtype",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    owner_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    state: Mapped[MoonMindWorkflowState] = mapped_column(
+        Enum(
+            MoonMindWorkflowState,
+            name="moonmindworkflowstate",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=MoonMindWorkflowState.INITIALIZING,
+        server_default=MoonMindWorkflowState.INITIALIZING.value,
+    )
+    close_status: Mapped[Optional[TemporalExecutionCloseStatus]] = mapped_column(
+        Enum(
+            TemporalExecutionCloseStatus,
+            name="temporalexecutionclosestatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+    )
+    entry: Mapped[str] = mapped_column(String(16), nullable=False)
+    search_attributes: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    memo: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    artifact_refs: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), nullable=False, default=list
+    )
+    input_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    plan_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    manifest_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    parameters: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    pending_parameters_patch: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    awaiting_external: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    wait_cycle_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rerun_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    create_idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    last_update_idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    last_update_response: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    closed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ApprovalGate(Base):

@@ -20,6 +20,7 @@ from moonmind.workflows.speckit_celery.repositories import (
 )
 from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
 from moonmind.workflows.task_proposals.service import TaskProposalService
+from moonmind.workflows.temporal.service import TemporalExecutionService
 
 
 def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepository:
@@ -63,6 +64,12 @@ def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
     )
 
 
+def get_temporal_execution_service(session: AsyncSession) -> TemporalExecutionService:
+    """Factory helper returning the Temporal execution lifecycle service."""
+
+    return TemporalExecutionService(session)
+
+
 __all__ = sorted(
     [
         "AgentQueueRepository",
@@ -71,6 +78,7 @@ __all__ = sorted(
         "SpecWorkflowRepository",
         "TaskProposalRepository",
         "TaskProposalService",
+        "TemporalExecutionService",
         "TriggeredWorkflow",
         "WorkflowConflictError",
         "WorkflowRetryError",
@@ -81,6 +89,7 @@ __all__ = sorted(
         "get_spec_workflow_repository",
         "get_task_proposal_repository",
         "get_task_proposal_service",
+        "get_temporal_execution_service",
         "retry_spec_workflow_run",
         "trigger_spec_workflow_run",
     ]
