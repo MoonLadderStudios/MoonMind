@@ -354,7 +354,9 @@ async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
 @pytest.mark.asyncio
 async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_path):
     async with temporal_db(tmp_path) as session:
-        service = TemporalExecutionService(session, run_continue_as_new_step_threshold=2)
+        service = TemporalExecutionService(
+            session, run_continue_as_new_step_threshold=2
+        )
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",

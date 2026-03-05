@@ -914,7 +914,9 @@ class TemporalExecutionRecord(Base):
 
     workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    namespace: Mapped[str] = mapped_column(String(128), nullable=False, default="moonmind")
+    namespace: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="moonmind"
+    )
     workflow_type: Mapped[TemporalWorkflowType] = mapped_column(
         Enum(
             TemporalWorkflowType,

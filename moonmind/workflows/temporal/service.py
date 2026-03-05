@@ -39,7 +39,9 @@ NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FINALIZING,
 }
 
-TERMINAL_STATE_TO_CLOSE_STATUS: dict[MoonMindWorkflowState, TemporalExecutionCloseStatus] = {
+TERMINAL_STATE_TO_CLOSE_STATUS: dict[
+    MoonMindWorkflowState, TemporalExecutionCloseStatus
+] = {
     MoonMindWorkflowState.SUCCEEDED: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
     MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
@@ -241,9 +243,7 @@ class TemporalExecutionService:
         has_more = len(rows) > page_size
         items = rows[:page_size]
 
-        next_token = (
-            self._encode_page_token(offset + page_size) if has_more else None
-        )
+        next_token = self._encode_page_token(offset + page_size) if has_more else None
 
         count_stmt = select(func.count()).select_from(TemporalExecutionRecord)
         count_stmt = self._apply_filters(
@@ -688,7 +688,9 @@ class TemporalExecutionService:
             "message": "Rerun requested. Execution continued as new run.",
         }
 
-    def _continue_as_new(self, record: TemporalExecutionRecord, *, summary: str) -> None:
+    def _continue_as_new(
+        self, record: TemporalExecutionRecord, *, summary: str
+    ) -> None:
         record.run_id = str(uuid4())
         record.rerun_count = int(record.rerun_count or 0) + 1
         record.step_count = 0
@@ -769,9 +771,7 @@ class TemporalExecutionService:
         try:
             return MoonMindWorkflowState(raw)
         except ValueError as exc:
-            raise TemporalExecutionValidationError(
-                f"Unsupported state: {raw}"
-            ) from exc
+            raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
         if workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
@@ -838,7 +838,9 @@ class TemporalExecutionService:
 
     def _should_continue_as_new(self, record: TemporalExecutionRecord) -> bool:
         if record.workflow_type is TemporalWorkflowType.RUN:
-            return int(record.step_count or 0) >= self._run_continue_as_new_step_threshold
+            return (
+                int(record.step_count or 0) >= self._run_continue_as_new_step_threshold
+            )
         if record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
             return (
                 int(record.wait_cycle_count or 0)

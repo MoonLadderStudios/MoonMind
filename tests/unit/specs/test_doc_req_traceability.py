@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
 _FEATURE_SPEC = Path("specs/046-workflow-type-lifecycle/spec.md")
@@ -21,8 +20,7 @@ def test_workflow_type_lifecycle_doc_req_traceability_contract() -> None:
     assert doc_req_ids, "Expected DOC-REQ entries in 046 spec.md"
 
     assert _FEATURE_TRACEABILITY.exists(), (
-        "Missing traceability file for DOC-REQ feature: "
-        f"{_FEATURE_TRACEABILITY}"
+        "Missing traceability file for DOC-REQ feature: " f"{_FEATURE_TRACEABILITY}"
     )
 
     traceability_rows = _parse_traceability_rows(_FEATURE_TRACEABILITY)
@@ -46,8 +44,7 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
 
     table_start = _find_header_line(lines)
     assert table_start is not None, (
-        "Traceability table header missing required columns "
-        f"in {traceability_path}"
+        "Traceability table header missing required columns " f"in {traceability_path}"
     )
 
     header = _split_row(lines[table_start])
