@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -62,6 +63,79 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_create_execution_returns_existing_record_after_idempotency_race(
+    tmp_path, monkeypatch
+):
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_lifecycle_race.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as winner_session, session_factory() as loser_session:
+            winner_service = TemporalExecutionService(winner_session)
+            loser_service = TemporalExecutionService(loser_session)
+            owner_id = uuid4()
+            key = "create-race"
+
+            async def race_precheck(*, idempotency_key, owner_id, workflow_type):
+                if idempotency_key == key:
+                    await winner_service.create_execution(
+                        workflow_type="MoonMind.Run",
+                        owner_id=owner_id,
+                        title="winner",
+                        input_artifact_ref=None,
+                        plan_artifact_ref=None,
+                        manifest_artifact_ref=None,
+                        failure_policy=None,
+                        initial_parameters={},
+                        idempotency_key=key,
+                    )
+                    monkeypatch.setattr(
+                        loser_service,
+                        "_find_by_create_idempotency",
+                        original_find,
+                    )
+                return None
+
+            original_find = loser_service._find_by_create_idempotency
+            monkeypatch.setattr(
+                loser_service,
+                "_find_by_create_idempotency",
+                race_precheck,
+            )
+
+            original_commit = loser_session.commit
+
+            async def race_commit():
+                await loser_session.flush()
+                raise IntegrityError("insert", {}, Exception("duplicate"))
+
+            monkeypatch.setattr(loser_session, "commit", race_commit)
+
+            record = await loser_service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="loser",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={},
+                idempotency_key=key,
+            )
+
+            assert record.memo["title"] == "winner"
+            assert record.create_idempotency_key == key
+
+            monkeypatch.setattr(loser_session, "commit", original_commit)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
@@ -96,6 +170,47 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         assert refreshed.workflow_id == workflow_id
         assert refreshed.run_id != original_run_id
         assert refreshed.rerun_count == 1
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="Pause",
+            payload=None,
+            payload_artifact_ref=None,
+        )
+
+        rerun = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            idempotency_key="rerun-clears-pause",
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+
+        assert rerun["applied"] == "continue_as_new"
+        assert refreshed.state is MoonMindWorkflowState.EXECUTING
+        assert refreshed.paused is False
+        assert refreshed.awaiting_external is False
 
 
 @pytest.mark.asyncio
@@ -319,6 +434,37 @@ async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
                 error_category="unknown",
                 message="boom",
             )
+
+
+@pytest.mark.asyncio
+async def test_mark_execution_succeeded_rejects_terminal_execution(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="stop",
+            graceful=True,
+        )
+
+        with pytest.raises(TemporalExecutionValidationError):
+            await service.mark_execution_succeeded(workflow_id=created.workflow_id)
+
+        canceled = await service.describe_execution(created.workflow_id)
+        assert canceled.state is MoonMindWorkflowState.CANCELED
+        assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
 
 
 @pytest.mark.asyncio

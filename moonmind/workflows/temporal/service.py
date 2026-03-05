@@ -11,10 +11,11 @@ import binascii
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -189,7 +190,20 @@ class TemporalExecutionService:
             closed_at=None,
         )
         self._session.add(record)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if not idempotency_key:
+                raise
+            existing = await self._find_by_create_idempotency(
+                idempotency_key=idempotency_key,
+                owner_id=owner,
+                workflow_type=workflow_type_enum,
+            )
+            if existing is None:
+                raise exc
+            return existing
         await self._session.refresh(record)
         return record
 
@@ -419,6 +433,7 @@ class TemporalExecutionService:
         summary: str | None = None,
     ) -> TemporalExecutionRecord:
         record = await self.describe_execution(workflow_id)
+        self._ensure_non_terminal(record)
         self._set_state(record, MoonMindWorkflowState.FINALIZING)
         self._set_state(
             record,
@@ -678,6 +693,8 @@ class TemporalExecutionService:
         record.rerun_count = int(record.rerun_count or 0) + 1
         record.step_count = 0
         record.wait_cycle_count = 0
+        record.paused = False
+        record.awaiting_external = False
         record.closed_at = None
         record.close_status = None
         record.pending_parameters_patch = None
@@ -772,7 +789,9 @@ class TemporalExecutionService:
             TemporalExecutionRecord.create_idempotency_key == idempotency_key,
             TemporalExecutionRecord.workflow_type == workflow_type,
         )
-        if owner_id is not None:
+        if owner_id is None:
+            stmt = stmt.where(TemporalExecutionRecord.owner_id.is_(None))
+        else:
             stmt = stmt.where(TemporalExecutionRecord.owner_id == owner_id)
         return (await self._session.execute(stmt.limit(1))).scalars().first()
 
