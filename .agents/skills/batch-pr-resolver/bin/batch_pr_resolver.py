@@ -80,17 +80,62 @@ def _infer_repo_from_remote() -> str | None:
     return None
 
 
-def _resolve_repo(raw_repo: str | None) -> str:
+def _repo_context_candidates(task_context_path: str | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    if task_context_path:
+        candidates.append(Path(task_context_path))
+    for env_key in ("MOONMIND_TASK_CONTEXT_PATH", "TASK_CONTEXT_PATH"):
+        env_value = str(os.getenv(env_key, "")).strip()
+        if env_value:
+            candidates.append(Path(env_value))
+    candidates.extend(
+        [Path("../artifacts/task_context.json"), Path("artifacts/task_context.json")]
+    )
+    return candidates
+
+
+def _load_parent_repository(task_context_path: str | None = None) -> str | None:
+    seen: set[str] = set()
+    for candidate in _repo_context_candidates(task_context_path):
+        identity = str(candidate.expanduser())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        normalized = _normalize_repo(payload.get("repository"))
+        if normalized:
+            return normalized
+    return None
+
+
+def _resolve_repo(raw_repo: str | None, task_context_path: str | None = None) -> str:
     if raw_repo is not None:
         normalized = _normalize_repo(raw_repo)
         if normalized:
             return normalized
         raise RuntimeError("Invalid --repo value; expected owner/repo format.")
+
+    from_context = _load_parent_repository(task_context_path)
+    if from_context:
+        return from_context
+
+    inferred_repo = _infer_repo_from_remote()
+    if inferred_repo:
+        return inferred_repo
+
     for env_key in ("WORKFLOW_GITHUB_REPOSITORY", "GITHUB_REPOSITORY", "MOONMIND_REPO"):
         normalized = _normalize_repo(os.getenv(env_key, ""))
         if normalized:
             return normalized
-    return _infer_repo_from_remote() or ""
+    return ""
 
 
 def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
@@ -454,7 +499,7 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
 
 async def main() -> int:
     args = _parse_args()
-    repo = _resolve_repo(args.repo)
+    repo = _resolve_repo(args.repo, args.task_context_path)
     if not repo:
         raise RuntimeError("No repository provided and none could be inferred.")
     if args.state.strip() != "open":

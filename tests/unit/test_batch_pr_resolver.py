@@ -112,6 +112,55 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     assert normalized["task"]["publish"]["mode"] == "none"
 
 
+def test_load_parent_repository_reads_task_context(tmp_path: Path):
+    module = _load_module()
+    load_parent_repository = module["_load_parent_repository"]
+
+    task_context = tmp_path / "task_context.json"
+    task_context.write_text(
+        '{"repository":"MoonLadderStudios/Tactics"}',
+        encoding="utf-8",
+    )
+
+    assert load_parent_repository(str(task_context)) == "MoonLadderStudios/Tactics"
+
+
+def test_resolve_repo_prefers_task_context_over_env(monkeypatch, tmp_path: Path):
+    module = _load_module()
+    resolve_repo = module["_resolve_repo"]
+
+    monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "MoonLadderStudios/MoonMind")
+    task_context = tmp_path / "task_context.json"
+    task_context.write_text(
+        '{"repository":"MoonLadderStudios/Tactics"}',
+        encoding="utf-8",
+    )
+
+    assert (
+        resolve_repo(raw_repo=None, task_context_path=str(task_context))
+        == "MoonLadderStudios/Tactics"
+    )
+
+
+def test_resolve_repo_prefers_remote_over_env(monkeypatch):
+    module = _load_module()
+    resolve_repo = module["_resolve_repo"]
+
+    monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "MoonLadderStudios/MoonMind")
+    monkeypatch.setitem(
+        resolve_repo.__globals__, "_load_parent_repository", lambda _path=None: None
+    )
+    monkeypatch.setitem(
+        resolve_repo.__globals__,
+        "_infer_repo_from_remote",
+        lambda: "MoonLadderStudios/Tactics",
+    )
+
+    assert resolve_repo(raw_repo=None, task_context_path=None) == (
+        "MoonLadderStudios/Tactics"
+    )
+
+
 def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
     module = _load_module()
     load_parent_runtime_selection = module["_load_parent_runtime_selection"]
