@@ -9,6 +9,7 @@ import pytest
 
 from moonmind.workflows.skills.artifact_store import (
     ArtifactStoreError,
+    FileArtifactStore,
     InMemoryArtifactStore,
 )
 from moonmind.workflows.skills.plan_interpreter import create_validated_interpreter
@@ -176,6 +177,13 @@ def test_artifact_store_is_content_addressed_and_immutable():
         store.get_bytes("art:sha256:does-not-exist")
 
 
+def test_file_artifact_store_rejects_non_digest_artifact_refs(tmp_path):
+    store = FileArtifactStore(root=tmp_path)
+
+    with pytest.raises(ArtifactStoreError, match="Unsupported artifact ref"):
+        store.get_bytes("art:sha256:../../etc/passwd")
+
+
 def test_validate_plan_payload_accepts_dag_and_refs():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -201,6 +209,24 @@ def test_validate_plan_payload_rejects_invalid_reference_pointer():
     ] = "/outputs/missing_key"
 
     with pytest.raises(PlanValidationError, match="invalid output path"):
+        validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
+
+
+def test_validate_plan_payload_rejects_registry_snapshot_digest_mismatch():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+    )
+    plan_payload["metadata"]["registry_snapshot"]["digest"] = (
+        "reg:sha256:" + ("0" * 64)
+    )
+
+    with pytest.raises(
+        PlanValidationError,
+        match="registry snapshot digest does not match provided registry snapshot",
+    ):
         validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
 
 
@@ -379,3 +405,41 @@ def test_plan_interpreter_continue_executes_independent_nodes():
 
     assert summary.status == "PARTIAL"
     assert "n2" in summary.results
+
+
+def test_plan_interpreter_fail_fast_records_cancelled_in_flight_nodes():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+        failure_mode="FAIL_FAST",
+    )
+    plan_payload["edges"] = []
+    plan_payload["nodes"][1]["inputs"]["patch_artifact"] = "art:sha256:feed"
+    plan = parse_plan_definition(plan_payload)
+
+    async def executor(invocation):
+        if invocation.id == "n1":
+            await asyncio.sleep(0)
+            return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
+        await asyncio.sleep(30)
+        return SkillResult(
+            status="SUCCEEDED",
+            outputs={"files_changed": 2},
+            progress={"percent": 100},
+        )
+
+    summary = asyncio.run(
+        create_validated_interpreter(
+            plan=plan,
+            registry_snapshot=snapshot,
+            executor=executor,
+            artifact_store=store,
+            write_progress_artifact=False,
+        ).run()
+    )
+
+    assert summary.status == "FAILED"
+    assert "n2" in summary.failures
+    assert summary.failures["n2"].error_code == "CANCELLED"

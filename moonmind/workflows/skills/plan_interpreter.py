@@ -260,6 +260,52 @@ class PlanInterpreter:
             )
         return resolved
 
+    @staticmethod
+    def _record_task_outcome(
+        *,
+        task: asyncio.Task[SkillResult],
+        node_id: str,
+        succeeded: dict[str, SkillResult],
+        failures: dict[str, SkillFailure],
+    ) -> None:
+        if node_id in succeeded or node_id in failures:
+            return
+        try:
+            result = task.result()
+        except asyncio.CancelledError:
+            failures[node_id] = SkillFailure(
+                error_code="CANCELLED",
+                message=f"Node '{node_id}' was cancelled",
+                retryable=False,
+            )
+            return
+        except SkillFailure as failure:
+            failures[node_id] = failure
+            return
+        except Exception as exc:
+            failures[node_id] = SkillFailure(
+                error_code="INTERNAL",
+                message=f"Node '{node_id}' raised: {exc}",
+                retryable=True,
+            )
+            return
+
+        if result.status == "SUCCEEDED":
+            succeeded[node_id] = result
+        elif result.status == "CANCELLED":
+            failures[node_id] = SkillFailure(
+                error_code="CANCELLED",
+                message=f"Node '{node_id}' returned CANCELLED",
+                retryable=False,
+            )
+        else:
+            failures[node_id] = SkillFailure(
+                error_code="EXTERNAL_FAILED",
+                message=f"Node '{node_id}' returned status {result.status}",
+                retryable=False,
+                details={"status": result.status},
+            )
+
     async def run(self) -> PlanExecutionSummary:
         """Execute plan nodes according to dependency and policy semantics."""
 
@@ -285,13 +331,27 @@ class PlanInterpreter:
 
         while pending or running:
             if failure_mode == "FAIL_FAST" and failures:
-                for task in list(running.keys()):
+                for task in running:
                     task.cancel()
                 if running:
                     await asyncio.gather(*running.keys(), return_exceptions=True)
+                    for task, node_id in list(running.items()):
+                        self._record_task_outcome(
+                            task=task,
+                            node_id=node_id,
+                            succeeded=succeeded,
+                            failures=failures,
+                        )
                     running.clear()
                 skipped.update(sorted(pending))
                 pending.clear()
+                self._set_progress(
+                    pending=len(pending),
+                    running=0,
+                    succeeded=len(succeeded),
+                    failed=len(failures),
+                    last_event="Fail-fast cancelled in-flight nodes",
+                )
                 break
 
             ready = sorted(
@@ -358,38 +418,12 @@ class PlanInterpreter:
 
             for task in done:
                 node_id = running.pop(task)
-                try:
-                    result = task.result()
-                except asyncio.CancelledError:
-                    failures[node_id] = SkillFailure(
-                        error_code="CANCELLED",
-                        message=f"Node '{node_id}' was cancelled",
-                        retryable=False,
-                    )
-                except SkillFailure as failure:
-                    failures[node_id] = failure
-                except Exception as exc:
-                    failures[node_id] = SkillFailure(
-                        error_code="INTERNAL",
-                        message=f"Node '{node_id}' raised: {exc}",
-                        retryable=True,
-                    )
-                else:
-                    if result.status == "SUCCEEDED":
-                        succeeded[node_id] = result
-                    elif result.status == "CANCELLED":
-                        failures[node_id] = SkillFailure(
-                            error_code="CANCELLED",
-                            message=f"Node '{node_id}' returned CANCELLED",
-                            retryable=False,
-                        )
-                    else:
-                        failures[node_id] = SkillFailure(
-                            error_code="EXTERNAL_FAILED",
-                            message=f"Node '{node_id}' returned status {result.status}",
-                            retryable=False,
-                            details={"status": result.status},
-                        )
+                self._record_task_outcome(
+                    task=task,
+                    node_id=node_id,
+                    succeeded=succeeded,
+                    failures=failures,
+                )
 
                 self._set_progress(
                     pending=len(pending),

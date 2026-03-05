@@ -72,9 +72,6 @@ class StageExecutionOutcome:
 
 __all__ = [
     "ARTIFACT_REF_PREFIX",
-    "REGISTRY_DIGEST_PREFIX",
-    "SUPPORTED_FAILURE_MODES",
-    "SUPPORTED_PLAN_VERSIONS",
     "ArtifactRef",
     "ContractValidationError",
     "PlanDefinition",
@@ -82,6 +79,7 @@ __all__ = [
     "PlanMetadata",
     "PlanPolicy",
     "PlanRegistrySnapshot",
+    "REGISTRY_DIGEST_PREFIX",
     "SkillDefinition",
     "SkillExecutorBinding",
     "SkillFailure",
@@ -92,6 +90,8 @@ __all__ = [
     "SkillResult",
     "StageExecutionDecision",
     "StageExecutionOutcome",
+    "SUPPORTED_FAILURE_MODES",
+    "SUPPORTED_PLAN_VERSIONS",
     "parse_plan_definition",
     "parse_skill_definition",
     "parse_skill_invocation",

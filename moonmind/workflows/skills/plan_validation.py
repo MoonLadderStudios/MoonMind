@@ -302,6 +302,18 @@ def validate_plan(
 ) -> ValidatedPlan:
     """Validate a parsed plan against the pinned registry snapshot."""
 
+    expected_snapshot = plan.metadata.registry_snapshot
+    if registry_snapshot.digest != expected_snapshot.digest:
+        raise PlanValidationError(
+            "invalid_plan",
+            "Plan metadata registry snapshot digest does not match provided registry snapshot",
+        )
+    if registry_snapshot.artifact_ref != expected_snapshot.artifact_ref:
+        raise PlanValidationError(
+            "invalid_plan",
+            "Plan metadata registry snapshot artifact_ref does not match provided registry snapshot",
+        )
+
     node_map: dict[str, SkillInvocation] = {}
     for node in plan.nodes:
         if node.id in node_map:

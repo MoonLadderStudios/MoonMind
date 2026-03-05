@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -24,18 +25,22 @@ class ArtifactStore(Protocol):
         *,
         content_type: str,
         metadata: Mapping[str, Any] | None = None,
-    ) -> ArtifactRef: ...
+    ) -> ArtifactRef:
+        pass
 
-    def get_bytes(self, artifact_ref: str) -> bytes: ...
+    def get_bytes(self, artifact_ref: str) -> bytes:
+        pass
 
     def put_json(
         self,
         payload: Mapping[str, Any] | list[Any],
         *,
         metadata: Mapping[str, Any] | None = None,
-    ) -> ArtifactRef: ...
+    ) -> ArtifactRef:
+        pass
 
-    def get_json(self, artifact_ref: str) -> Any: ...
+    def get_json(self, artifact_ref: str) -> Any:
+        pass
 
 
 @dataclass(slots=True)
@@ -114,6 +119,7 @@ class FileArtifactStore:
     """
 
     root: Path
+    _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()
@@ -123,6 +129,8 @@ class FileArtifactStore:
         if not artifact_ref.startswith(ARTIFACT_REF_PREFIX):
             raise ArtifactStoreError(f"Unsupported artifact ref: {artifact_ref}")
         digest = artifact_ref.removeprefix(ARTIFACT_REF_PREFIX)
+        if not self._DIGEST_PATTERN.fullmatch(digest):
+            raise ArtifactStoreError(f"Unsupported artifact ref: {artifact_ref}")
         return self.root / f"{digest}.bin", self.root / f"{digest}.meta.json"
 
     @staticmethod
