@@ -20,7 +20,11 @@ from moonmind.workflows.speckit_celery.repositories import (
 )
 from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
 from moonmind.workflows.task_proposals.service import TaskProposalService
-from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.workflows.temporal import (
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+    TemporalExecutionService,
+)
 
 
 def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepository:
@@ -70,6 +74,20 @@ def get_temporal_execution_service(session: AsyncSession) -> TemporalExecutionSe
     return TemporalExecutionService(session)
 
 
+def get_temporal_artifact_repository(
+    session: AsyncSession,
+) -> TemporalArtifactRepository:
+    """Factory helper returning Temporal artifact repository for one session."""
+
+    return TemporalArtifactRepository(session)
+
+
+def get_temporal_artifact_service(session: AsyncSession) -> TemporalArtifactService:
+    """Factory helper returning Temporal artifact service for one session."""
+
+    return TemporalArtifactService(get_temporal_artifact_repository(session))
+
+
 __all__ = sorted(
     [
         "AgentQueueRepository",
@@ -78,6 +96,8 @@ __all__ = sorted(
         "SpecWorkflowRepository",
         "TaskProposalRepository",
         "TaskProposalService",
+        "TemporalArtifactRepository",
+        "TemporalArtifactService",
         "TemporalExecutionService",
         "TriggeredWorkflow",
         "WorkflowConflictError",
@@ -89,6 +109,8 @@ __all__ = sorted(
         "get_spec_workflow_repository",
         "get_task_proposal_repository",
         "get_task_proposal_service",
+        "get_temporal_artifact_repository",
+        "get_temporal_artifact_service",
         "get_temporal_execution_service",
         "retry_spec_workflow_run",
         "trigger_spec_workflow_run",

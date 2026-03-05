@@ -757,6 +757,55 @@ class WorkflowArtifactType(str, enum.Enum):
     RETRY_CONTEXT = "retry_context"
 
 
+class TemporalArtifactStorageBackend(str, enum.Enum):
+    """Supported backing stores for Temporal artifact bytes."""
+
+    S3 = "s3"
+    LOCAL_FS = "local_fs"
+
+
+class TemporalArtifactEncryption(str, enum.Enum):
+    """Encryption mode metadata recorded for each artifact."""
+
+    SSE_KMS = "sse-kms"
+    SSE_S3 = "sse-s3"
+    NONE = "none"
+    ENVELOPE = "envelope"
+
+
+class TemporalArtifactStatus(str, enum.Enum):
+    """Lifecycle status for immutable Temporal artifacts."""
+
+    PENDING_UPLOAD = "pending_upload"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    DELETED = "deleted"
+
+
+class TemporalArtifactRetentionClass(str, enum.Enum):
+    """Retention policy classes for Temporal artifact lifecycle management."""
+
+    EPHEMERAL = "ephemeral"
+    STANDARD = "standard"
+    LONG = "long"
+    PINNED = "pinned"
+
+
+class TemporalArtifactRedactionLevel(str, enum.Enum):
+    """Sensitivity/redaction classification for artifact reads."""
+
+    NONE = "none"
+    PREVIEW_ONLY = "preview_only"
+    RESTRICTED = "restricted"
+
+
+class TemporalArtifactUploadMode(str, enum.Enum):
+    """Upload mode selected when creating an artifact session."""
+
+    SINGLE_PUT = "single_put"
+    MULTIPART = "multipart"
+
+
 class OrchestratorPlanOrigin(str, enum.Enum):
     """Source responsible for generating an ActionPlan."""
 
@@ -1335,6 +1384,225 @@ class WorkflowCredentialAudit(Base):
         "SpecWorkflowRun",
         back_populates="credential_audit",
         foreign_keys=[workflow_run_id],
+    )
+
+
+class TemporalArtifact(Base):
+    """Metadata index row for one Temporal artifact blob."""
+
+    __tablename__ = "temporal_artifacts"
+    __table_args__ = (
+        Index("ix_temporal_artifacts_created_at", "created_at"),
+        Index("ix_temporal_artifacts_status", "status"),
+        Index("ix_temporal_artifacts_expires_at", "expires_at"),
+        Index("ix_temporal_artifacts_deleted_at", "deleted_at"),
+        Index("ix_temporal_artifacts_hard_deleted_at", "hard_deleted_at"),
+    )
+
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_by_principal: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    sha256: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    storage_backend: Mapped[TemporalArtifactStorageBackend] = mapped_column(
+        Enum(
+            TemporalArtifactStorageBackend,
+            name="temporalartifactstoragebackend",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TemporalArtifactStorageBackend.S3,
+        server_default=TemporalArtifactStorageBackend.S3.value,
+    )
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    encryption: Mapped[TemporalArtifactEncryption] = mapped_column(
+        Enum(
+            TemporalArtifactEncryption,
+            name="temporalartifactencryption",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TemporalArtifactEncryption.NONE,
+        server_default=TemporalArtifactEncryption.NONE.value,
+    )
+    status: Mapped[TemporalArtifactStatus] = mapped_column(
+        Enum(
+            TemporalArtifactStatus,
+            name="temporalartifactstatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TemporalArtifactStatus.PENDING_UPLOAD,
+        server_default=TemporalArtifactStatus.PENDING_UPLOAD.value,
+    )
+    retention_class: Mapped[TemporalArtifactRetentionClass] = mapped_column(
+        Enum(
+            TemporalArtifactRetentionClass,
+            name="temporalartifactretentionclass",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TemporalArtifactRetentionClass.STANDARD,
+        server_default=TemporalArtifactRetentionClass.STANDARD.value,
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    redaction_level: Mapped[TemporalArtifactRedactionLevel] = mapped_column(
+        Enum(
+            TemporalArtifactRedactionLevel,
+            name="temporalartifactredactionlevel",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TemporalArtifactRedactionLevel.NONE,
+        server_default=TemporalArtifactRedactionLevel.NONE.value,
+    )
+    upload_mode: Mapped[TemporalArtifactUploadMode] = mapped_column(
+        Enum(
+            TemporalArtifactUploadMode,
+            name="temporalartifactuploadmode",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=TemporalArtifactUploadMode.SINGLE_PUT,
+        server_default=TemporalArtifactUploadMode.SINGLE_PUT.value,
+    )
+    upload_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    upload_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    hard_deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    tombstoned_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_lifecycle_run_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        mutable_json_dict(),
+        nullable=False,
+        default=dict,
+    )
+
+    links: Mapped[list["TemporalArtifactLink"]] = relationship(
+        "TemporalArtifactLink",
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+        order_by="TemporalArtifactLink.created_at",
+    )
+    pins: Mapped[list["TemporalArtifactPin"]] = relationship(
+        "TemporalArtifactPin",
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+        order_by="TemporalArtifactPin.pinned_at",
+    )
+
+
+class TemporalArtifactLink(Base):
+    """Execution linkage row giving an artifact semantic meaning."""
+
+    __tablename__ = "temporal_artifact_links"
+    __table_args__ = (
+        Index(
+            "ix_temporal_artifact_links_execution",
+            "namespace",
+            "workflow_id",
+            "run_id",
+            "link_type",
+            "created_at",
+        ),
+        Index(
+            "ix_temporal_artifact_links_artifact_id",
+            "artifact_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    namespace: Mapped[str] = mapped_column(String(255), nullable=False)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    link_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_by_activity_type: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    created_by_worker: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    artifact: Mapped[TemporalArtifact] = relationship(
+        "TemporalArtifact",
+        back_populates="links",
+    )
+
+
+class TemporalArtifactPin(Base):
+    """Optional explicit pin row for artifacts exempt from lifecycle cleanup."""
+
+    __tablename__ = "temporal_artifact_pins"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", name="uq_temporal_artifact_pins_artifact_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pinned_by_principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    pinned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    artifact: Mapped[TemporalArtifact] = relationship(
+        "TemporalArtifact",
+        back_populates="pins",
     )
 
 
