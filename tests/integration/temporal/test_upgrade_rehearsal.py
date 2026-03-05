@@ -4,7 +4,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REHEARSAL_SCRIPT = (
     REPO_ROOT / "services/temporal/scripts/rehearse-visibility-schema-upgrade.sh"
@@ -101,4 +100,3 @@ exit 0
     calls = (state_dir / "sql-tool-calls.log").read_text(encoding="utf-8")
     assert "setup-schema -v 0.0" in calls
     assert "update-schema -d /tmp/fake-visibility-schema" in calls
-

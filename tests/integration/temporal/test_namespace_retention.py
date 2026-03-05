@@ -4,7 +4,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "services/temporal/scripts/bootstrap-namespace.sh"
 
@@ -81,4 +80,3 @@ exit 0
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
     assert "namespace create" in calls
     assert "namespace update" in calls
-

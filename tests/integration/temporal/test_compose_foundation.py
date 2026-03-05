@@ -2,7 +2,6 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -89,4 +88,3 @@ def test_visibility_schema_rehearsal_service_is_wired():
     assert rehearsal_env["TEMPORAL_SHARD_DECISION_ACK"] == (
         "${TEMPORAL_SHARD_DECISION_ACK:-}"
     )
-
